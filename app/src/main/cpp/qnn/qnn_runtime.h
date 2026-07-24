@@ -180,6 +180,26 @@ public:
                                  std::vector<float>& dPrediction,
                                  std::vector<float>& weightNext,
                                  std::string& error);
+    bool prepareLayerNorm(uint32_t batch, uint32_t tokens, uint32_t dimension,
+                          float epsilon, std::string& error);
+    bool executeLayerNorm(const std::vector<float>& input,
+                          std::vector<float>& output, std::string& error);
+    bool prepareSoftmax(uint32_t rows, uint32_t columns, std::string& error);
+    bool executeSoftmax(const std::vector<float>& input,
+                        std::vector<float>& output, std::string& error);
+    bool prepareAttention(uint32_t tokens, uint32_t headDimension, std::string& error);
+    bool executeAttention(const std::vector<float>& query,
+                          const std::vector<float>& key,
+                          const std::vector<float>& value,
+                          const std::vector<float>& causalMask,
+                          std::vector<float>& output,
+                          std::vector<float>& probabilities,
+                          std::string& error);
+    bool prepareTinyTransformer(uint32_t tokens, uint32_t dimension,
+                                uint32_t feedForwardDimension, float epsilon,
+                                std::string& error);
+    bool executeTinyTransformer(const std::vector<float>& input,
+                                std::vector<float>& output, std::string& error);
     bool prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
                             uint32_t hiddenDimension, uint32_t outputDimension,
                             bool diagnosticOutputs, std::string& error);

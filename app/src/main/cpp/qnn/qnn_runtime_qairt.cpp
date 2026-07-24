@@ -186,6 +186,55 @@ struct Runtime::Impl {
         std::vector<float> zeroData;
         bool diagnosticOutputs = false;
     } mlpFullStep;
+    struct UnaryTransformerGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t input = QNN_TENSOR_INIT;
+        Qnn_Tensor_t output = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gamma = QNN_TENSOR_INIT;
+        Qnn_Tensor_t beta = QNN_TENSOR_INIT;
+        Qnn_Tensor_t axes = QNN_TENSOR_INIT;
+        uint32_t dims[3]{};
+        uint32_t normDims[1]{};
+        uint32_t axesDims[1]{1};
+        uint32_t axesData[1]{};
+        uint32_t rank = 0;
+        uint32_t elements = 0;
+        float epsilon = 1.0e-5f;
+        std::vector<float> gammaData;
+        std::vector<float> betaData;
+    } layerNorm, softmax;
+    struct AttentionGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t query = QNN_TENSOR_INIT, key = QNN_TENSOR_INIT;
+        Qnn_Tensor_t value = QNN_TENSOR_INIT, mask = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scores = QNN_TENSOR_INIT, scaled = QNN_TENSOR_INIT;
+        Qnn_Tensor_t masked = QNN_TENSOR_INIT, probabilities = QNN_TENSOR_INIT;
+        Qnn_Tensor_t output = QNN_TENSOR_INIT, scale = QNN_TENSOR_INIT;
+        uint32_t activationDims[2]{}, scoreDims[2]{}, scalarDims[2]{1, 1};
+        uint32_t tokens = 0, headDimension = 0;
+        float scaleData = 1.0f;
+    } attention;
+    struct TinyTransformerGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t input = QNN_TENSOR_INIT, output = QNN_TENSOR_INIT;
+        Qnn_Tensor_t ln1 = QNN_TENSOR_INIT, q = QNN_TENSOR_INIT, k = QNN_TENSOR_INIT, v = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scores = QNN_TENSOR_INIT, scaled = QNN_TENSOR_INIT, masked = QNN_TENSOR_INIT;
+        Qnn_Tensor_t probabilities = QNN_TENSOR_INIT, context = QNN_TENSOR_INIT;
+        Qnn_Tensor_t projected = QNN_TENSOR_INIT, residual1 = QNN_TENSOR_INIT, ln2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t ff1 = QNN_TENSOR_INIT, relu = QNN_TENSOR_INIT, ff2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gamma1 = QNN_TENSOR_INIT, beta1 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gamma2 = QNN_TENSOR_INIT, beta2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t wq = QNN_TENSOR_INIT, wk = QNN_TENSOR_INIT, wv = QNN_TENSOR_INIT;
+        Qnn_Tensor_t wo = QNN_TENSOR_INIT, w1 = QNN_TENSOR_INIT, w2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t mask = QNN_TENSOR_INIT, scale = QNN_TENSOR_INIT, axes = QNN_TENSOR_INIT;
+        uint32_t activationDims[2]{}, scoreDims[2]{}, ffDims[2]{};
+        uint32_t weightDdDims[2]{}, weightDfDims[2]{}, weightFdDims[2]{};
+        uint32_t normDims[1]{}, scalarDims[2]{1, 1}, axesDims[1]{1}, axesData[1]{1};
+        uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
+        float epsilon = 1.0e-5f, scaleData = 1.0f;
+        std::vector<float> gammaData, betaData, wqData, wkData, wvData, woData;
+        std::vector<float> w1Data, w2Data, maskData;
+    } tinyTransformer;
 };
 
 const char* backendKindName(QnnBackendKind kind) {
@@ -684,4 +733,5 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 }
 #include "qnn_runtime_mlp.inc"
 #include "qnn_runtime_full_step.inc"
+#include "qnn_runtime_transformer.inc"
 }

@@ -5,6 +5,7 @@
 #include "qnn/qnn_backend_info.h"
 #include "qnn/qnn_linear_training.h"
 #include "qnn/qnn_mlp_training.h"
+#include "qnn/qnn_transformer.h"
 
 #include <cmath>
 #include <iomanip>
@@ -99,6 +100,10 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE: return "QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE";
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE: return "QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE";
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE: return "QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE";
+        case ExecutionMode::QNN_HTP_LAYER_NORM_CHECK: return "QNN_HTP_LAYER_NORM_CHECK";
+        case ExecutionMode::QNN_HTP_SOFTMAX_CHECK: return "QNN_HTP_SOFTMAX_CHECK";
+        case ExecutionMode::QNN_HTP_ATTENTION_FORWARD_CHECK: return "QNN_HTP_ATTENTION_FORWARD_CHECK";
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK: return "QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK";
         default: return "UNKNOWN";
     }
 }
@@ -160,6 +165,11 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE:
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE:
             return qnn::runMlpExperiment(mode, config, stopRequested, log);
+        case ExecutionMode::QNN_HTP_LAYER_NORM_CHECK:
+        case ExecutionMode::QNN_HTP_SOFTMAX_CHECK:
+        case ExecutionMode::QNN_HTP_ATTENTION_FORWARD_CHECK:
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK:
+            return qnn::runTransformerExperiment(mode);
         default: {
             const std::string report =
                 "status=NOT_IMPLEMENTED\nerror=unknown execution mode";

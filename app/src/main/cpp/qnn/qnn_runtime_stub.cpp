@@ -76,6 +76,14 @@ bool Runtime::prepareMlpFusedBackward(bool,std::string&e){e="QNN_DISABLED: fused
 bool Runtime::executeMlpFusedBackward(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,std::vector<float>&,std::vector<float>&,std::vector<std::uint8_t>&,std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: fused backward unavailable";return false;}
 bool Runtime::prepareTrainingOpsMicro(uint32_t,uint32_t,uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: training ops micro unavailable";return false;}
 bool Runtime::executeTrainingOpsMicro(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,float&,std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: training ops micro unavailable";return false;}
+bool Runtime::prepareLayerNorm(uint32_t,uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: LayerNorm unavailable";return false;}
+bool Runtime::executeLayerNorm(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: LayerNorm unavailable";return false;}
+bool Runtime::prepareSoftmax(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}
+bool Runtime::executeSoftmax(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}
+bool Runtime::prepareAttention(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: attention unavailable";return false;}
+bool Runtime::executeAttention(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: attention unavailable";return false;}
+bool Runtime::prepareTinyTransformer(uint32_t,uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
+bool Runtime::executeTinyTransformer(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
 bool Runtime::prepareMlpFullStep(uint32_t,uint32_t,uint32_t,uint32_t,bool,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 bool Runtime::executeMlpFullStep(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,MlpFullStepOutputs&,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 }  // namespace phonelm::qnn
