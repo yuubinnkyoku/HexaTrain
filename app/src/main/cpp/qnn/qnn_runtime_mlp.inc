@@ -97,7 +97,7 @@ static bool executeSlot(I *i, RuntimeMetrics &metrics, Runtime &runtime, S &s,
   s.out.v1.clientBuf = {o.data(), uint32_t(o.size() * sizeof(float))};
   auto st = i->api.graphExecute(s.graph, s.in, 2, &s.out, 1, nullptr, nullptr);
   ++metrics.graphExecuteCount;
-  runtime.recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  runtime.recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     error = "graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
@@ -255,7 +255,7 @@ bool Runtime::executeMlpForward(const std::vector<float> &x,
   auto st = i->api.graphExecute(i->mlpForward, i->mlpInputs, 3, outs, 2,
                                 nullptr, nullptr);
   ++metrics_.graphExecuteCount;
-  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "mlp forward graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
@@ -381,7 +381,7 @@ bool Runtime::executeReluBackward(const std::vector<float> &activation,
   const auto st =
       i->api.graphExecute(r.graph, r.inputs, 3, outputs, 2, nullptr, nullptr);
   ++metrics_.graphExecuteCount;
-  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "relu backward graphExecute=" +
         std::to_string(QNN_GET_ERROR_CODE(st));
@@ -569,7 +569,7 @@ bool Runtime::executeMlpFusedBackward(
   const auto st = i->api.graphExecute(f.graph, f.inputs, 5, executeOutputs,
                                       outputCount, nullptr, nullptr);
   ++metrics_.graphExecuteCount;
-  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "fused backward graphExecute=" +
         std::to_string(QNN_GET_ERROR_CODE(st));

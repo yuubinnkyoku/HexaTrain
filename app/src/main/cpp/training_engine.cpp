@@ -96,6 +96,9 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_SGD_CHECK: return "QNN_HTP_SGD_CHECK";
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP: return "QNN_HTP_MLP_FULL_STEP";
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK: return "QNN_HTP_MLP_FULL_STEP_BENCHMARK";
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE: return "QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE";
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE: return "QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE";
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE: return "QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE";
         default: return "UNKNOWN";
     }
 }
@@ -153,6 +156,9 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_SGD_CHECK:
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP:
         case ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK:
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE:
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE:
+        case ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE:
             return qnn::runMlpExperiment(mode, config, stopRequested, log);
         default: {
             const std::string report =

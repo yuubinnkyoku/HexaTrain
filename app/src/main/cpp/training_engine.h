@@ -42,6 +42,9 @@ enum class ExecutionMode : int {
     QNN_HTP_SGD_CHECK = 31,
     QNN_HTP_MLP_FULL_STEP = 32,
     QNN_HTP_MLP_FULL_STEP_BENCHMARK = 33,
+    QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE = 34,
+    QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE = 35,
+    QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE = 36,
 };
 
 const char* executionModeName(ExecutionMode mode);

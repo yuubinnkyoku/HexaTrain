@@ -199,7 +199,7 @@ bool Runtime::executeTrainingOpsMicro(const std::vector<float>& prediction,
   const auto st = i->api.graphExecute(m.graph, m.inputs, 6, outputs, 3, nullptr, nullptr);
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
-  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "training ops micro graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st)); return false;
   }
@@ -307,6 +307,17 @@ bool Runtime::prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
   apiTrace_.fullStepGraphFinalizeResult = QNN_GET_ERROR_CODE(st);
   metrics_.graphFinalizeUs += elapsedUs(started); ++metrics_.graphFinalizeCount;
   if (st != QNN_SUCCESS) { e="full step graphFinalize="+std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
+#ifndef NDEBUG
+  if (options_.failGraphFinalize) {
+    apiTrace_.failureInjectionEnabled = true;
+    apiTrace_.failureInjectionPoint = "graphFinalize";
+    apiTrace_.failureInjectionCall = 0;
+    apiTrace_.lastQnnResult = QNN_GET_ERROR_CODE(st);
+    apiTrace_.effectiveResult = -9002;
+    e = "injected graphFinalize failure after QNN success";
+    return false;
+  }
+#endif
   diagnostics_ += "full_step_graph_create=success\nfull_step_graph_finalize=success\n"
                   "full_step_graph_name=phonelm_mlp_training_step\n"
                   "full_step_nodes=16\nfull_step_execute_count_per_step=1\n"
@@ -368,7 +379,22 @@ bool Runtime::executeMlpFullStep(const std::vector<float>& input,
   const auto started=Clock::now();
   const auto st=i->api.graphExecute(f.graph,f.inputs,5,outputs,outputCount,nullptr,nullptr);
   metrics_.executeUs.push_back(elapsedUs(started)); ++metrics_.graphExecuteCount;
-  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
+  const auto callIndex = apiTrace_.graphExecuteAttemptCount;
+#ifndef NDEBUG
+  const bool injected = st == QNN_SUCCESS && options_.failGraphExecuteAt >= 0 &&
+                        callIndex == static_cast<std::uint64_t>(options_.failGraphExecuteAt);
+#else
+  const bool injected = false;
+#endif
+  const int effectiveResult = injected ? -9001 : QNN_GET_ERROR_CODE(st);
+  if (injected) {
+    apiTrace_.failureInjectionEnabled = true;
+    apiTrace_.failureInjectionPoint = "graphExecute";
+    apiTrace_.failureInjectionCall = static_cast<std::int64_t>(callIndex);
+  }
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), effectiveResult,
+                           st == QNN_SUCCESS && !injected);
+  if (injected) { e="injected graphExecute failure after QNN success"; return false; }
   if (st!=QNN_SUCCESS) { e="full step graphExecute="+std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
   return true;
 }

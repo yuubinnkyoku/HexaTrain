@@ -611,7 +611,15 @@ double l2(const Matrix& m) {
 
 std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
                           std::atomic_bool& stop) {
-  const bool benchmark = mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK || c.benchmarkMode;
+  const bool captureBenchmark =
+      mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE;
+  const bool executeFailure =
+      mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE;
+  const bool finalizeFailure =
+      mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE;
+  const bool benchmark = mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK ||
+                         captureBenchmark || executeFailure || finalizeFailure ||
+                         c.benchmarkMode;
   const bool diagnostic = !benchmark;
   auto d = makeData(c);
   Matrix cpuW1 = d.w1, cpuW2 = d.w2;
@@ -619,6 +627,13 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
   const Matrix initialW1 = d.w1, initialW2 = d.w2;
   const float initialLoss = pass(d.x, d.y, d.w1, d.w2).loss;
   Runtime rt;
+  RuntimeOptions runtimeOptions;
+  runtimeOptions.captureQnnCallback = !benchmark || captureBenchmark ||
+                                      executeFailure || finalizeFailure;
+  runtimeOptions.qnnLogLevel = runtimeOptions.captureQnnCallback ? 4 : 2;
+  runtimeOptions.failGraphExecuteAt = executeFailure ? 37 : -1;
+  runtimeOptions.failGraphFinalize = finalizeFailure;
+  rt.setOptions(runtimeOptions);
   std::string e;
   const auto initStart = Clock::now();
   if (!rt.initialize(QnnBackendKind::HTP, e) ||
@@ -639,7 +654,7 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
   double maskMismatchMaxAbsZ1=0;
   bool nan=false, dpNonzero=false, dw1Nonzero=false, dw2Nonzero=false,
        w1Changed=false, w2Changed=false, nextPredictionChanged=false;
-  std::vector<double> fullTimes, handoffTimes;
+  std::vector<double> fullTimes, handoffTimes, batchPreparationTimes;
   std::ostringstream trajectory;
   trajectory << std::setprecision(12)
              << "trajectory_0_w1_checksum=" << checksum(initialW1)
@@ -658,8 +673,11 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
   MlpFullStepOutputs out;
   for (int st=0; st<steps && !stop.load(); ++st) {
     const auto fullStart=Clock::now();
+    const auto batchStart=Clock::now();
     Matrix x=batch(d.x,(st*c.batchSize)%c.sampleCount,c.batchSize);
     Matrix y=batch(d.y,(st*c.batchSize)%c.sampleCount,c.batchSize);
+    batchPreparationTimes.push_back(
+        std::chrono::duration<double,std::micro>(Clock::now()-batchStart).count());
     Matrix currentW1, currentW2;
     Pass ref;
     if (diagnostic) {
@@ -805,6 +823,7 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
    <<"\nnext_step_prediction_changed="<<(nextPredictionChanged?"true":"false");
   s<<"\ntraining_graph_create_us="<<rt.metrics().graphCreateUs
    <<"\ntraining_graph_finalize_us="<<rt.metrics().graphFinalizeUs;
+  emitStats(s,"batch_preparation",batchPreparationTimes);
   emitStats(s,"input_bind",rt.metrics().inputBindUs);
   emitStats(s,"output_access_bind",rt.metrics().outputBindUs);
   emitStats(s,"training_graph_execute",rt.metrics().executeUs);
@@ -837,7 +856,10 @@ std::string runMlpExperiment(ExecutionMode mode, const TrainingConfig &c,
            mode == ExecutionMode::QNN_HTP_SGD_CHECK)
     r = trainingOpsMicroCheck(mode);
   else if (mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP ||
-           mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK)
+           mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK ||
+           mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE ||
+           mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_EXECUTE ||
+           mode == ExecutionMode::QNN_HTP_MLP_FULL_STEP_FAIL_FINALIZE)
     r = trainFullStep(mode, c, stop);
   else
     r = train(mode, c, stop);

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -33,24 +34,31 @@ struct QnnCallbackCapture {
     std::mutex mutex;
     std::vector<CapturedQnnMessage> messages;
     std::size_t savedBytes = 0;
-    std::uint64_t droppedMessages = 0;
+    std::atomic<std::uint64_t> droppedMessages{0};
+    std::atomic_bool enabled{true};
+    std::atomic_bool saturated{false};
 } gQnnCallbackCapture;
-void resetQnnCallbackCapture() {
+void resetQnnCallbackCapture(bool enabled) {
     std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
     gQnnCallbackCapture.messages.clear();
     gQnnCallbackCapture.savedBytes = 0;
-    gQnnCallbackCapture.droppedMessages = 0;
+    gQnnCallbackCapture.droppedMessages.store(0, std::memory_order_relaxed);
+    gQnnCallbackCapture.saturated.store(false, std::memory_order_relaxed);
+    gQnnCallbackCapture.enabled.store(enabled, std::memory_order_release);
 }
 void qnnLogCallback(const char* format, QnnLog_Level_t level,
                     std::uint64_t timestamp, va_list arguments) {
-    va_list logcatArgs;
-    va_copy(logcatArgs, arguments);
-    __android_log_vprint(ANDROID_LOG_INFO, "PhoneLMQnn", format, logcatArgs);
-    va_end(logcatArgs);
+    if (!gQnnCallbackCapture.enabled.load(std::memory_order_acquire)) return;
+    if (gQnnCallbackCapture.saturated.load(std::memory_order_relaxed)) {
+        gQnnCallbackCapture.droppedMessages.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
+    if (!gQnnCallbackCapture.enabled.load(std::memory_order_relaxed)) return;
     if (gQnnCallbackCapture.messages.size() >= kCallbackLimitMessages ||
         gQnnCallbackCapture.savedBytes >= kCallbackLimitBytes) {
-        ++gQnnCallbackCapture.droppedMessages;
+        gQnnCallbackCapture.saturated.store(true, std::memory_order_relaxed);
+        gQnnCallbackCapture.droppedMessages.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     std::array<char, kCallbackMessageLimitBytes + 1> buffer{};
@@ -60,7 +68,7 @@ void qnnLogCallback(const char* format, QnnLog_Level_t level,
     va_end(captureArgs);
     if (required < 0 || static_cast<std::size_t>(required) > kCallbackMessageLimitBytes ||
         gQnnCallbackCapture.savedBytes + static_cast<std::size_t>(required) > kCallbackLimitBytes) {
-        ++gQnnCallbackCapture.droppedMessages;
+        gQnnCallbackCapture.droppedMessages.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     std::string message(buffer.data(), static_cast<std::size_t>(required));
@@ -77,6 +85,15 @@ std::string functionLibraryBasename(const void* function) {
     return slash ? slash + 1 : info.dli_fname;
 }
 const char* boolText(bool value) { return value ? "true" : "false"; }
+const char* logLevelText(int level) {
+    switch (level) {
+        case 1: return "ERROR";
+        case 2: return "WARN";
+        case 3: return "INFO";
+        case 4: return "VERBOSE";
+        default: return "UNKNOWN";
+    }
+}
 }
 
 struct Runtime::Impl {
@@ -190,14 +207,18 @@ const BackendInfo& Runtime::info() const { return info_; }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
 
-void Runtime::recordGraphExecuteResult(int result, bool success) {
+void Runtime::setOptions(const RuntimeOptions& options) { options_ = options; }
+
+void Runtime::recordGraphExecuteResult(int qnnResult, int effectiveResult, bool success) {
     const auto call = apiTrace_.graphExecuteAttemptCount++;
     if (call == 0) {
         apiTrace_.graphExecuteFirstCallIndex = 0;
-        apiTrace_.graphExecuteFirstResult = result;
+        apiTrace_.graphExecuteFirstResult = effectiveResult;
     }
     apiTrace_.graphExecuteLastCallIndex = static_cast<std::int64_t>(call);
-    apiTrace_.graphExecuteLastResult = result;
+    apiTrace_.graphExecuteLastResult = effectiveResult;
+    apiTrace_.lastQnnResult = qnnResult;
+    apiTrace_.effectiveResult = effectiveResult;
     if (success) ++apiTrace_.graphExecuteSuccessCount;
     else {
         ++apiTrace_.graphExecuteFailureCount;
@@ -247,6 +268,11 @@ std::string Runtime::apiTraceSummary() const {
       << "api_trace_graph_execute_last_call_index=" << t.graphExecuteLastCallIndex << '\n'
       << "api_trace_graph_execute_last_result=" << t.graphExecuteLastResult << '\n'
       << "api_trace_graph_execute_first_failure_call=" << t.graphExecuteFirstFailureCall << '\n'
+      << "api_trace_failure_injection_enabled=" << boolText(t.failureInjectionEnabled) << '\n'
+      << "api_trace_failure_injection_point=" << t.failureInjectionPoint << '\n'
+      << "api_trace_failure_injection_call=" << t.failureInjectionCall << '\n'
+      << "api_trace_last_qnn_result=" << t.lastQnnResult << '\n'
+      << "api_trace_effective_result=" << t.effectiveResult << '\n'
       << "api_trace_cpu_backend_initialized=" << boolText(t.cpuBackendInitialized) << '\n'
       << "api_trace_fallback_attempted=" << boolText(t.fallbackAttempted) << '\n'
       << "api_trace_fallback_succeeded=" << boolText(t.fallbackSucceeded) << '\n';
@@ -256,9 +282,12 @@ std::string Runtime::apiTraceSummary() const {
 std::string Runtime::qnnCallbackCaptureSummary() const {
     std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
     std::ostringstream s;
-    s << "qnn_callback_capture_enabled=true\n"
+    s << "qnn_callback_capture_enabled="
+      << boolText(gQnnCallbackCapture.enabled.load(std::memory_order_acquire)) << '\n'
+      << "qnn_callback_log_level=" << logLevelText(options_.qnnLogLevel) << '\n'
       << "qnn_callback_saved_message_count=" << gQnnCallbackCapture.messages.size() << '\n'
-      << "qnn_callback_dropped_message_count=" << gQnnCallbackCapture.droppedMessages << '\n'
+      << "qnn_callback_dropped_message_count="
+      << gQnnCallbackCapture.droppedMessages.load(std::memory_order_relaxed) << '\n'
       << "qnn_callback_saved_bytes=" << gQnnCallbackCapture.savedBytes << '\n'
       << "qnn_callback_limit_messages=" << kCallbackLimitMessages << '\n'
       << "qnn_callback_limit_bytes=" << kCallbackLimitBytes << '\n'
@@ -279,7 +308,7 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
     apiTrace_.backendLibrary =
         kind == QnnBackendKind::CPU ? "libQnnCpu.so" : "libQnnHtp.so";
     apiTrace_.cpuBackendInitialized = false;
-    resetQnnCallbackCapture();
+    resetQnnCallbackCapture(options_.captureQnnCallback);
     std::ostringstream d;
     const char* library = kind == QnnBackendKind::CPU ? "libQnnCpu.so" : "libQnnHtp.so";
     d << "requested_backend=" << backendKindName(kind) << '\n'
@@ -370,7 +399,8 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
         return false;
     }
     d << "backend_build_id_match=true\n";
-    auto status = impl_->api.logCreate(qnnLogCallback, QNN_LOG_LEVEL_VERBOSE, &impl_->log);
+    const auto configuredLogLevel = static_cast<QnnLog_Level_t>(options_.qnnLogLevel);
+    auto status = impl_->api.logCreate(qnnLogCallback, configuredLogLevel, &impl_->log);
     if (status != QNN_SUCCESS && status != QNN_COMMON_ERROR_NOT_SUPPORTED) {
         error = "log_create: logCreate=" + std::to_string(QNN_GET_ERROR_CODE(status)); diagnostics_=d.str()+"failed_api=log_create\n"; return false;
     }
@@ -593,7 +623,8 @@ bool Runtime::executeDWeight(const std::vector<float>& input,
     metrics_.dWeightExecuteUs.push_back(elapsedUs(started));
     ++metrics_.graphExecuteCount;
     ++metrics_.dWeightGraphExecuteCount;
-    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),
+                             status == QNN_SUCCESS);
     if (status != QNN_SUCCESS) {
         error = "dWeightGraphExecute=" +
                 std::to_string(QNN_GET_ERROR_CODE(status));
@@ -640,7 +671,8 @@ bool Runtime::executePrepared(const std::vector<float>& input, std::vector<float
     const auto status = impl_->api.graphExecute(impl_->graph, impl_->inputs, 2, &impl_->output, 1, nullptr, nullptr);
     metrics_.executeUs.push_back(elapsedUs(started));
     ++metrics_.graphExecuteCount;
-    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),
+                             status == QNN_SUCCESS);
     if (status != QNN_SUCCESS) { error = "graphExecute=" + std::to_string(status); return false; }
     return true;
 }

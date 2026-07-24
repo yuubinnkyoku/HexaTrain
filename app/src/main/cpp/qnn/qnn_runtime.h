@@ -80,9 +80,21 @@ struct ApiTrace {
     std::int64_t graphExecuteLastCallIndex = -1;
     int graphExecuteFirstResult = -1;
     int graphExecuteLastResult = -1;
+    bool failureInjectionEnabled = false;
+    std::string failureInjectionPoint = "NONE";
+    std::int64_t failureInjectionCall = -1;
+    int lastQnnResult = -1;
+    int effectiveResult = -1;
     bool cpuBackendInitialized = false;
     bool fallbackAttempted = false;
     bool fallbackSucceeded = false;
+};
+
+struct RuntimeOptions {
+    bool captureQnnCallback = true;
+    int qnnLogLevel = 4;
+    std::int64_t failGraphExecuteAt = -1;
+    bool failGraphFinalize = false;
 };
 
 struct MlpFullStepOutputs {
@@ -105,9 +117,10 @@ public:
     ~Runtime();
     const BackendInfo& info() const;
     const std::string& diagnostics() const;
+    void setOptions(const RuntimeOptions& options);
     std::string apiTraceSummary() const;
     std::string qnnCallbackCaptureSummary() const;
-    void recordGraphExecuteResult(int result, bool success);
+    void recordGraphExecuteResult(int qnnResult, int effectiveResult, bool success);
     bool initialize(QnnBackendKind requestedBackend, std::string& error);
     bool prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool transposeInput0,
                        std::string& error);
@@ -183,6 +196,7 @@ private:
     std::string diagnostics_;
     RuntimeMetrics metrics_;
     ApiTrace apiTrace_;
+    RuntimeOptions options_;
     struct Impl;
     Impl* impl_ = nullptr;
 };

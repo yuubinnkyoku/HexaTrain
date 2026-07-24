@@ -18,6 +18,10 @@ const BackendInfo& Runtime::info() const {
 }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
+void Runtime::setOptions(const RuntimeOptions& options) { options_ = options; }
+std::string Runtime::apiTraceSummary() const { return "api_trace_version=UNAVAILABLE\n"; }
+std::string Runtime::qnnCallbackCaptureSummary() const { return "qnn_callback_capture_enabled=false\n"; }
+void Runtime::recordGraphExecuteResult(int, int, bool) {}
 
 bool Runtime::prepareMatMul(uint32_t, uint32_t, uint32_t, bool, std::string& error) {
     error = "QNN_DISABLED: MatMul unavailable"; return false;
