@@ -81,7 +81,7 @@ static bool prepareSlot(I *i, RuntimeMetrics &metrics, S &s,
   return true;
 }
 template <class I, class S>
-static bool executeSlot(I *i, RuntimeMetrics &metrics, S &s,
+static bool executeSlot(I *i, RuntimeMetrics &metrics, Runtime &runtime, S &s,
                         const std::vector<float> &a,
                         const std::vector<float> &b, std::vector<float> &o,
                         std::string &error) {
@@ -97,6 +97,7 @@ static bool executeSlot(I *i, RuntimeMetrics &metrics, S &s,
   s.out.v1.clientBuf = {o.data(), uint32_t(o.size() * sizeof(float))};
   auto st = i->api.graphExecute(s.graph, s.in, 2, &s.out, 1, nullptr, nullptr);
   ++metrics.graphExecuteCount;
+  runtime.recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     error = "graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
@@ -116,7 +117,7 @@ bool Runtime::prepareInputGradientMatMul(uint32_t b, uint32_t in, uint32_t out,
 bool Runtime::executeInputGradient(const std::vector<float> &dp,
                                    const std::vector<float> &w,
                                    std::vector<float> &dx, std::string &e) {
-  return executeSlot(impl_, metrics_, impl_->dx, dp, w, dx, e);
+  return executeSlot(impl_, metrics_, *this, impl_->dx, dp, w, dx, e);
 }
 
 bool Runtime::prepareMlp(uint32_t b, uint32_t in, uint32_t h, uint32_t out,
@@ -254,6 +255,7 @@ bool Runtime::executeMlpForward(const std::vector<float> &x,
   auto st = i->api.graphExecute(i->mlpForward, i->mlpInputs, 3, outs, 2,
                                 nullptr, nullptr);
   ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "mlp forward graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
@@ -264,13 +266,13 @@ bool Runtime::executeMlpSecondBackward(const std::vector<float> &h,
                                        const std::vector<float> &dp,
                                        std::vector<float> &dw2,
                                        std::vector<float> &dh, std::string &e) {
-  return executeSlot(impl_, metrics_, impl_->dw2, h, dp, dw2, e) &&
-         executeSlot(impl_, metrics_, impl_->dh, dp, impl_->mlpW2, dh, e);
+  return executeSlot(impl_, metrics_, *this, impl_->dw2, h, dp, dw2, e) &&
+         executeSlot(impl_, metrics_, *this, impl_->dh, dp, impl_->mlpW2, dh, e);
 }
 bool Runtime::executeMlpFirstBackward(const std::vector<float> &x,
                                       const std::vector<float> &dz,
                                       std::vector<float> &dw1, std::string &e) {
-  return executeSlot(impl_, metrics_, impl_->dw1, x, dz, dw1, e);
+  return executeSlot(impl_, metrics_, *this, impl_->dw1, x, dz, dw1, e);
 }
 bool Runtime::prepareReluBackward(uint32_t b, uint32_t h, std::string &e) {
   auto *i = impl_;
@@ -379,6 +381,7 @@ bool Runtime::executeReluBackward(const std::vector<float> &activation,
   const auto st =
       i->api.graphExecute(r.graph, r.inputs, 3, outputs, 2, nullptr, nullptr);
   ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "relu backward graphExecute=" +
         std::to_string(QNN_GET_ERROR_CODE(st));
@@ -566,6 +569,7 @@ bool Runtime::executeMlpFusedBackward(
   const auto st = i->api.graphExecute(f.graph, f.inputs, 5, executeOutputs,
                                       outputCount, nullptr, nullptr);
   ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "fused backward graphExecute=" +
         std::to_string(QNN_GET_ERROR_CODE(st));

@@ -199,6 +199,7 @@ bool Runtime::executeTrainingOpsMicro(const std::vector<float>& prediction,
   const auto st = i->api.graphExecute(m.graph, m.inputs, 6, outputs, 3, nullptr, nullptr);
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st != QNN_SUCCESS) {
     e = "training ops micro graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st)); return false;
   }
@@ -252,6 +253,9 @@ bool Runtime::prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
   f.zero.v1.clientBuf = {f.zeroData.data(), uint32_t(f.zeroData.size() * sizeof(float))};
   auto started = Clock::now();
   auto st = i->api.graphCreate(i->context, "phonelm_mlp_training_step", nullptr, &f.graph);
+  apiTrace_.fullStepGraphCreateCalled = true;
+  apiTrace_.fullStepGraphCreateResult = QNN_GET_ERROR_CODE(st);
+  apiTrace_.fullStepGraphHandleNonnull = f.graph != nullptr;
   metrics_.graphCreateUs += elapsedUs(started); ++metrics_.graphCreateCount;
   if (st != QNN_SUCCESS) { e = "full step graphCreate=" + std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
   for (auto& input : f.inputs) {
@@ -299,6 +303,8 @@ bool Runtime::prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
   if ((st = addSimpleNode(i->api, f.graph, "full_update_w2", QNN_OP_ELEMENT_WISE_SUBTRACT, update2Inputs, 2, &f.w2Next)) != QNN_SUCCESS) { e="full update W2 graphAddNode="+std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
   started = Clock::now();
   st = i->api.graphFinalize(f.graph, nullptr, nullptr);
+  apiTrace_.fullStepGraphFinalizeCalled = true;
+  apiTrace_.fullStepGraphFinalizeResult = QNN_GET_ERROR_CODE(st);
   metrics_.graphFinalizeUs += elapsedUs(started); ++metrics_.graphFinalizeCount;
   if (st != QNN_SUCCESS) { e="full step graphFinalize="+std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
   diagnostics_ += "full_step_graph_create=success\nfull_step_graph_finalize=success\n"
@@ -362,6 +368,7 @@ bool Runtime::executeMlpFullStep(const std::vector<float>& input,
   const auto started=Clock::now();
   const auto st=i->api.graphExecute(f.graph,f.inputs,5,outputs,outputCount,nullptr,nullptr);
   metrics_.executeUs.push_back(elapsedUs(started)); ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), st == QNN_SUCCESS);
   if (st!=QNN_SUCCESS) { e="full step graphExecute="+std::to_string(QNN_GET_ERROR_CODE(st)); return false; }
   return true;
 }

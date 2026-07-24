@@ -67,3 +67,12 @@ It is accurate to say that the numerical training step—forward, MSE loss, dP, 
 ```
 
 The runner requires exactly one online ADB target, redacts the endpoint from persisted data, enforces its thermal guard, resumes successful run files, audits the APK against QAIRT 2.48, and does not add APKs, Qualcomm binaries, logs, CSV, JSON, or generated reports to Git.
+## API trace evidence
+
+Each local full-step run contains a fixed-line `api_trace_version=1` summary. The API trace records the actual return codes and resulting handle states observed by PhoneLM for provider selection, backend/device/context creation, full-step graph creation and finalization, and aggregated `graphExecute` calls. It is distinct from `htp_full_step_used`, which is PhoneLM's aggregate success decision.
+
+The `*_symbol_library` fields are the basenames returned by Android `dladdr` for function pointers copied from the selected provider function table. They contain neither pointer addresses nor absolute paths. A basename identifies the shared object that owns the function pointer; it is not a counter of HTP hardware activity or utilization.
+
+The bounded `qnn_callback_begin` block is different evidence: its message text is supplied by the Qualcomm QNN runtime to the registered callback. PhoneLM saves at most 64 messages, 32 KiB total, and 1024 bytes per message. This raw callback block remains only in local individual run files under `build/reports/.../runs/`; public CSV, JSON, `environment.json`, and `docs/results/` exports do not contain it.
+
+Neither evidence source supports a claim that NPU utilization was a particular percentage. It establishes which QNN library/provider functions were selected, their observed API results, and what the runtime reported through its callback.

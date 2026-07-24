@@ -8,10 +8,15 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
 #include <sstream>
+#include <utility>
 
 namespace phonelm::qnn {
 namespace {
@@ -20,6 +25,58 @@ using GetProviders = Qnn_ErrorHandle_t (*)(const QnnInterface_t***, uint32_t*);
 double elapsedUs(Clock::time_point start) {
     return std::chrono::duration<double, std::micro>(Clock::now() - start).count();
 }
+constexpr std::size_t kCallbackMessageLimitBytes = 1024;
+constexpr std::size_t kCallbackLimitMessages = 64;
+constexpr std::size_t kCallbackLimitBytes = 32 * 1024;
+struct CapturedQnnMessage { int level; std::uint64_t timestamp; std::string message; };
+struct QnnCallbackCapture {
+    std::mutex mutex;
+    std::vector<CapturedQnnMessage> messages;
+    std::size_t savedBytes = 0;
+    std::uint64_t droppedMessages = 0;
+} gQnnCallbackCapture;
+void resetQnnCallbackCapture() {
+    std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
+    gQnnCallbackCapture.messages.clear();
+    gQnnCallbackCapture.savedBytes = 0;
+    gQnnCallbackCapture.droppedMessages = 0;
+}
+void qnnLogCallback(const char* format, QnnLog_Level_t level,
+                    std::uint64_t timestamp, va_list arguments) {
+    va_list logcatArgs;
+    va_copy(logcatArgs, arguments);
+    __android_log_vprint(ANDROID_LOG_INFO, "PhoneLMQnn", format, logcatArgs);
+    va_end(logcatArgs);
+    std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
+    if (gQnnCallbackCapture.messages.size() >= kCallbackLimitMessages ||
+        gQnnCallbackCapture.savedBytes >= kCallbackLimitBytes) {
+        ++gQnnCallbackCapture.droppedMessages;
+        return;
+    }
+    std::array<char, kCallbackMessageLimitBytes + 1> buffer{};
+    va_list captureArgs;
+    va_copy(captureArgs, arguments);
+    const int required = std::vsnprintf(buffer.data(), buffer.size(), format, captureArgs);
+    va_end(captureArgs);
+    if (required < 0 || static_cast<std::size_t>(required) > kCallbackMessageLimitBytes ||
+        gQnnCallbackCapture.savedBytes + static_cast<std::size_t>(required) > kCallbackLimitBytes) {
+        ++gQnnCallbackCapture.droppedMessages;
+        return;
+    }
+    std::string message(buffer.data(), static_cast<std::size_t>(required));
+    std::replace(message.begin(), message.end(), '\r', ' ');
+    std::replace(message.begin(), message.end(), '\n', ' ');
+    gQnnCallbackCapture.savedBytes += message.size();
+    gQnnCallbackCapture.messages.push_back({static_cast<int>(level), timestamp, std::move(message)});
+}
+std::string functionLibraryBasename(const void* function) {
+    if (!function) return "UNAVAILABLE";
+    Dl_info info{};
+    if (dladdr(function, &info) == 0 || !info.dli_fname) return "UNAVAILABLE";
+    const char* slash = std::strrchr(info.dli_fname, '/');
+    return slash ? slash + 1 : info.dli_fname;
+}
+const char* boolText(bool value) { return value ? "true" : "false"; }
 }
 
 struct Runtime::Impl {
@@ -133,8 +190,96 @@ const BackendInfo& Runtime::info() const { return info_; }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
 
+void Runtime::recordGraphExecuteResult(int result, bool success) {
+    const auto call = apiTrace_.graphExecuteAttemptCount++;
+    if (call == 0) {
+        apiTrace_.graphExecuteFirstCallIndex = 0;
+        apiTrace_.graphExecuteFirstResult = result;
+    }
+    apiTrace_.graphExecuteLastCallIndex = static_cast<std::int64_t>(call);
+    apiTrace_.graphExecuteLastResult = result;
+    if (success) ++apiTrace_.graphExecuteSuccessCount;
+    else {
+        ++apiTrace_.graphExecuteFailureCount;
+        if (apiTrace_.graphExecuteFirstFailureCall < 0)
+            apiTrace_.graphExecuteFirstFailureCall = static_cast<std::int64_t>(call);
+    }
+}
+
+std::string Runtime::apiTraceSummary() const {
+    const auto& t = apiTrace_;
+    std::ostringstream s;
+    s << "api_trace_version=1\n"
+      << "api_trace_backend_requested=" << t.backendRequested << '\n'
+      << "api_trace_backend_library=" << t.backendLibrary << '\n'
+      << "api_trace_backend_library_load_result=" << t.backendLibraryLoadResult << '\n'
+      << "api_trace_provider_symbol_resolved=" << boolText(t.providerSymbolResolved) << '\n'
+      << "api_trace_provider_count=" << t.providerCount << '\n'
+      << "api_trace_selected_provider_index=" << t.selectedProviderIndex << '\n'
+      << "api_trace_selected_core_api_version=" << t.selectedCoreApiVersion << '\n'
+      << "api_trace_selected_backend_api_version=" << t.selectedBackendApiVersion << '\n'
+      << "api_trace_runtime_backend_build_id=" << t.runtimeBackendBuildId << '\n'
+      << "api_trace_backend_create_symbol_library=" << t.backendCreateSymbolLibrary << '\n'
+      << "api_trace_device_create_symbol_library=" << t.deviceCreateSymbolLibrary << '\n'
+      << "api_trace_context_create_symbol_library=" << t.contextCreateSymbolLibrary << '\n'
+      << "api_trace_graph_create_symbol_library=" << t.graphCreateSymbolLibrary << '\n'
+      << "api_trace_graph_finalize_symbol_library=" << t.graphFinalizeSymbolLibrary << '\n'
+      << "api_trace_graph_execute_symbol_library=" << t.graphExecuteSymbolLibrary << '\n'
+      << "api_trace_backend_create_called=" << boolText(t.backendCreateCalled) << '\n'
+      << "api_trace_backend_create_result=" << t.backendCreateResult << '\n'
+      << "api_trace_backend_handle_nonnull=" << boolText(t.backendHandleNonnull) << '\n'
+      << "api_trace_device_create_called=" << boolText(t.deviceCreateCalled) << '\n'
+      << "api_trace_device_create_result=" << t.deviceCreateResult << '\n'
+      << "api_trace_device_handle_nonnull=" << boolText(t.deviceHandleNonnull) << '\n'
+      << "api_trace_context_create_called=" << boolText(t.contextCreateCalled) << '\n'
+      << "api_trace_context_create_result=" << t.contextCreateResult << '\n'
+      << "api_trace_context_handle_nonnull=" << boolText(t.contextHandleNonnull) << '\n'
+      << "api_trace_full_step_graph_create_called=" << boolText(t.fullStepGraphCreateCalled) << '\n'
+      << "api_trace_full_step_graph_create_result=" << t.fullStepGraphCreateResult << '\n'
+      << "api_trace_full_step_graph_handle_nonnull=" << boolText(t.fullStepGraphHandleNonnull) << '\n'
+      << "api_trace_full_step_graph_finalize_called=" << boolText(t.fullStepGraphFinalizeCalled) << '\n'
+      << "api_trace_full_step_graph_finalize_result=" << t.fullStepGraphFinalizeResult << '\n'
+      << "api_trace_graph_execute_attempt_count=" << t.graphExecuteAttemptCount << '\n'
+      << "api_trace_graph_execute_success_count=" << t.graphExecuteSuccessCount << '\n'
+      << "api_trace_graph_execute_failure_count=" << t.graphExecuteFailureCount << '\n'
+      << "api_trace_graph_execute_first_call_index=" << t.graphExecuteFirstCallIndex << '\n'
+      << "api_trace_graph_execute_first_result=" << t.graphExecuteFirstResult << '\n'
+      << "api_trace_graph_execute_last_call_index=" << t.graphExecuteLastCallIndex << '\n'
+      << "api_trace_graph_execute_last_result=" << t.graphExecuteLastResult << '\n'
+      << "api_trace_graph_execute_first_failure_call=" << t.graphExecuteFirstFailureCall << '\n'
+      << "api_trace_cpu_backend_initialized=" << boolText(t.cpuBackendInitialized) << '\n'
+      << "api_trace_fallback_attempted=" << boolText(t.fallbackAttempted) << '\n'
+      << "api_trace_fallback_succeeded=" << boolText(t.fallbackSucceeded) << '\n';
+    return s.str();
+}
+
+std::string Runtime::qnnCallbackCaptureSummary() const {
+    std::lock_guard<std::mutex> lock(gQnnCallbackCapture.mutex);
+    std::ostringstream s;
+    s << "qnn_callback_capture_enabled=true\n"
+      << "qnn_callback_saved_message_count=" << gQnnCallbackCapture.messages.size() << '\n'
+      << "qnn_callback_dropped_message_count=" << gQnnCallbackCapture.droppedMessages << '\n'
+      << "qnn_callback_saved_bytes=" << gQnnCallbackCapture.savedBytes << '\n'
+      << "qnn_callback_limit_messages=" << kCallbackLimitMessages << '\n'
+      << "qnn_callback_limit_bytes=" << kCallbackLimitBytes << '\n'
+      << "qnn_callback_message_limit_bytes=" << kCallbackMessageLimitBytes << '\n'
+      << "qnn_callback_begin\n";
+    for (std::size_t i = 0; i < gQnnCallbackCapture.messages.size(); ++i) {
+        const auto& message = gQnnCallbackCapture.messages[i];
+        s << '[' << i << "] level=" << message.level << " timestamp=" << message.timestamp
+          << " message=" << message.message << '\n';
+    }
+    s << "qnn_callback_end\n";
+    return s.str();
+}
 bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
     impl_ = new Impl;
+    apiTrace_ = ApiTrace{};
+    apiTrace_.backendRequested = backendKindName(kind);
+    apiTrace_.backendLibrary =
+        kind == QnnBackendKind::CPU ? "libQnnCpu.so" : "libQnnHtp.so";
+    apiTrace_.cpuBackendInitialized = false;
+    resetQnnCallbackCapture();
     std::ostringstream d;
     const char* library = kind == QnnBackendKind::CPU ? "libQnnCpu.so" : "libQnnHtp.so";
     d << "requested_backend=" << backendKindName(kind) << '\n'
@@ -171,12 +316,15 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
         diagnostics_ = d.str() + "failed_api=library_load\n";
         return false;
     }
+    apiTrace_.backendLibraryLoadResult = 0;
     d << "library_load_result=0\n";
     auto getProviders = reinterpret_cast<GetProviders>(dlsym(impl_->library, "QnnInterface_getProviders"));
     if (!getProviders) { error = "get_providers: symbol missing"; diagnostics_=d.str()+"failed_api=get_providers\n"; return false; }
+    apiTrace_.providerSymbolResolved = true;
     const QnnInterface_t** providers = nullptr;
     uint32_t count = 0;
     if (getProviders(&providers, &count) != QNN_SUCCESS) { error = "get_providers: call failed"; diagnostics_=d.str()+"failed_api=get_providers\n"; return false; }
+    apiTrace_.providerCount = count;
     d << "provider_count=" << count << '\n';
     int selected = -1;
     for (uint32_t i = 0; i < count; ++i) {
@@ -189,18 +337,30 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
         if (selected < 0 && compatible) {
             selected = static_cast<int>(i);
             impl_->api = providers[i]->QNN_INTERFACE_VER_NAME;
+            apiTrace_.selectedProviderIndex = selected;
+            apiTrace_.selectedCoreApiVersion = std::to_string(c.major) + "." +
+                std::to_string(c.minor) + "." + std::to_string(c.patch);
+            apiTrace_.selectedBackendApiVersion = std::to_string(b.major) + "." +
+                std::to_string(b.minor) + "." + std::to_string(b.patch);
             d << "provider_core_api_version=" << c.major << '.' << c.minor << '.' << c.patch << '\n'
               << "provider_backend_api_version=" << b.major << '.' << b.minor << '.' << b.patch << '\n';
         }
     }
     d << "selected_provider_index=" << selected << '\n';
     if (!impl_->api.backendCreate) { error = "provider_select: compatible provider missing"; diagnostics_=d.str()+"failed_api=provider_select\n"; return false; }
+    apiTrace_.backendCreateSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.backendCreate));
+    apiTrace_.deviceCreateSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.deviceCreate));
+    apiTrace_.contextCreateSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.contextCreate));
+    apiTrace_.graphCreateSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.graphCreate));
+    apiTrace_.graphFinalizeSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.graphFinalize));
+    apiTrace_.graphExecuteSymbolLibrary = functionLibraryBasename(reinterpret_cast<const void*>(impl_->api.graphExecute));
     const char* runtimeBuildId = nullptr;
     if (!impl_->api.backendGetBuildId || impl_->api.backendGetBuildId(&runtimeBuildId) != QNN_SUCCESS || !runtimeBuildId) {
         error = "backend_build_id: QnnBackend_getBuildId failed";
         diagnostics_ = d.str() + "runtime_backend_build_id=UNAVAILABLE\nfailed_api=backend_build_id\n";
         return false;
     }
+    apiTrace_.runtimeBackendBuildId = runtimeBuildId;
     d << "runtime_backend_build_id=" << runtimeBuildId << '\n';
     const char* compileBuildId = QNN_SDK_BUILD_ID[0] == 'v' ? &QNN_SDK_BUILD_ID[1] : QNN_SDK_BUILD_ID;
     const char* normalizedRuntimeId = runtimeBuildId[0] == 'v' ? runtimeBuildId + 1 : runtimeBuildId;
@@ -210,23 +370,27 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
         return false;
     }
     d << "backend_build_id_match=true\n";
-    auto callback = [](const char* format, QnnLog_Level_t, uint64_t, va_list arguments) {
-        __android_log_vprint(ANDROID_LOG_INFO, "PhoneLMQnn", format, arguments);
-    };
-    auto status = impl_->api.logCreate(callback, QNN_LOG_LEVEL_VERBOSE, &impl_->log);
+    auto status = impl_->api.logCreate(qnnLogCallback, QNN_LOG_LEVEL_VERBOSE, &impl_->log);
     if (status != QNN_SUCCESS && status != QNN_COMMON_ERROR_NOT_SUPPORTED) {
         error = "log_create: logCreate=" + std::to_string(QNN_GET_ERROR_CODE(status)); diagnostics_=d.str()+"failed_api=log_create\n"; return false;
     }
     d << "log_create_result=" << QNN_GET_ERROR_CODE(status) << '\n';
     auto started = Clock::now();
+    apiTrace_.backendCreateCalled = true;
     status = impl_->api.backendCreate(impl_->log, nullptr, &impl_->backend);
+    apiTrace_.backendCreateResult = QNN_GET_ERROR_CODE(status);
+    apiTrace_.backendHandleNonnull = impl_->backend != nullptr;
     metrics_.backendCreateUs = elapsedUs(started);
     d << "backend_create_result=" << QNN_GET_ERROR_CODE(status) << "\nQnnBackend_create=" << QNN_GET_ERROR_CODE(status) << '\n';
     if (status != QNN_SUCCESS) { error = "backend_create: backendCreate=" + std::to_string(QNN_GET_ERROR_CODE(status)); diagnostics_=d.str()+"failed_api=backend_create\n"; return false; }
+    if (kind == QnnBackendKind::CPU) apiTrace_.cpuBackendInitialized = true;
     if (impl_->api.deviceCreate) {
         d << "device_create_called=true\ndevice_create_config_variant=OFFICIAL_SAMPLE_NULL\ndevice_config_pointer_null=true\nconfig_count=0\n";
         started = Clock::now();
+        apiTrace_.deviceCreateCalled = true;
         status = impl_->api.deviceCreate(impl_->log, nullptr, &impl_->device);
+        apiTrace_.deviceCreateResult = QNN_GET_ERROR_CODE(status);
+        apiTrace_.deviceHandleNonnull = impl_->device != nullptr;
         metrics_.deviceCreateUs = elapsedUs(started);
         d << "device_create_result=" << QNN_GET_ERROR_CODE(status) << "\nQnnDevice_create=" << QNN_GET_ERROR_CODE(status)
           << "\ndevice_handle_null=" << (impl_->device ? "false" : "true") << '\n';
@@ -236,7 +400,10 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
     }
     d << "context_create_called=true\n";
     started = Clock::now();
+    apiTrace_.contextCreateCalled = true;
     status = impl_->api.contextCreate(impl_->backend, impl_->device, nullptr, &impl_->context);
+    apiTrace_.contextCreateResult = QNN_GET_ERROR_CODE(status);
+    apiTrace_.contextHandleNonnull = impl_->context != nullptr;
     metrics_.contextCreateUs = elapsedUs(started);
     d << "context_create_result=" << QNN_GET_ERROR_CODE(status) << "\nQnnContext_create=" << QNN_GET_ERROR_CODE(status)
       << "\ncontext_handle_null=" << (impl_->context ? "false" : "true") << '\n';
@@ -426,6 +593,7 @@ bool Runtime::executeDWeight(const std::vector<float>& input,
     metrics_.dWeightExecuteUs.push_back(elapsedUs(started));
     ++metrics_.graphExecuteCount;
     ++metrics_.dWeightGraphExecuteCount;
+    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
     if (status != QNN_SUCCESS) {
         error = "dWeightGraphExecute=" +
                 std::to_string(QNN_GET_ERROR_CODE(status));
@@ -472,6 +640,7 @@ bool Runtime::executePrepared(const std::vector<float>& input, std::vector<float
     const auto status = impl_->api.graphExecute(impl_->graph, impl_->inputs, 2, &impl_->output, 1, nullptr, nullptr);
     metrics_.executeUs.push_back(elapsedUs(started));
     ++metrics_.graphExecuteCount;
+    recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
     if (status != QNN_SUCCESS) { error = "graphExecute=" + std::to_string(status); return false; }
     return true;
 }

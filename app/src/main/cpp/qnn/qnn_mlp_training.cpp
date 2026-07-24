@@ -626,7 +626,8 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
                             c.outputDimension, diagnostic, e))
     return "MLP_FULL_STEP\nexecution_mode=" + std::string(executionModeName(mode)) +
            "\nstatus=FAILED\nfailed_api=HTP_prepare\nerror=" + e +
-           "\ncpu_fallback=false\nhtp_full_step_used=false\n" + rt.diagnostics();
+           "\ncpu_fallback=false\nhtp_full_step_used=false\n" +
+           rt.apiTraceSummary() + rt.qnnCallbackCaptureSummary() + rt.diagnostics();
   const double initializationUs =
       std::chrono::duration<double, std::micro>(Clock::now() - initStart).count();
   const int steps = c.epochs > 0 ? (c.sampleCount / c.batchSize) * c.epochs : c.steps;
@@ -670,7 +671,8 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
                                c.learningRate,out,e))
       return "MLP_FULL_STEP\nexecution_mode="+std::string(executionModeName(mode))+
              "\nstatus=FAILED\nfailed_api=full_step_execute\nerror="+e+
-             "\ncpu_fallback=false\nhtp_full_step_used=false\n"+rt.diagnostics();
+             "\ncpu_fallback=false\nhtp_full_step_used=false\n"+
+             rt.apiTraceSummary()+rt.qnnCallbackCaptureSummary()+rt.diagnostics();
     Matrix nextW1(c.dimension,c.hiddenDimension,out.w1Next);
     Matrix nextW2(c.hiddenDimension,c.outputDimension,out.w2Next);
     if (diagnostic) {
@@ -817,7 +819,8 @@ std::string trainFullStep(ExecutionMode mode, const TrainingConfig& c,
    <<"cpu_fallback=false\nhtp_loss_used=true\nhtp_dp_used=true\nhtp_optimizer_used=true"
    <<"\nhtp_full_step_used=true\nnan_detected="<<(nan?"true":"false")
    <<"\ninf_detected=false\nnan_inf="<<(nan?"true":"false")
-   <<"\nstatus="<<(ok?"SUCCESS":"FAILED")<<'\n'<<rt.diagnostics();
+   <<"\nstatus="<<(ok?"SUCCESS":"FAILED")<<'\n'<<rt.diagnostics()
+   <<rt.apiTraceSummary()<<rt.qnnCallbackCaptureSummary();
   return s.str();
 }
 } // namespace

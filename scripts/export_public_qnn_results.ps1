@@ -202,7 +202,8 @@ $publicTrajectory | Export-Csv -LiteralPath (Join-Path $OutputDir 'weight-trajec
 $dangerPatterns = @(
     '[A-Za-z]:\\', '\\Users\\', '\\ghq\\', '/data/user/', '/sdcard/',
     '(?i)\b(?:192\.168|10\.(?:\d{1,3}\.){2}|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}',
-    '(?i)\bsk-[A-Za-z0-9_-]+', '(?i)BEGIN [A-Z ]*PRIVATE KEY'
+    '(?i)\bsk-[A-Za-z0-9_-]+', '(?i)BEGIN [A-Z ]*PRIVATE KEY',
+    '(?m)^qnn_callback_', '(?m)^qnn_callback_begin$'
 )
 foreach ($file in (Get-ChildItem -LiteralPath $OutputDir -File)) {
     if ($file.Extension -in @('.so','.apk','.aab','.jks','.keystore','.pem','.key','.log')) {

@@ -42,6 +42,49 @@ struct RuntimeMetrics {
     std::vector<double> dPredictionBindUs;
     std::vector<double> dWeightOutputBindUs;};
 
+struct ApiTrace {
+    std::string backendRequested = "UNAVAILABLE";
+    std::string backendLibrary = "UNAVAILABLE";
+    int backendLibraryLoadResult = -1;
+    bool providerSymbolResolved = false;
+    std::uint32_t providerCount = 0;
+    int selectedProviderIndex = -1;
+    std::string selectedCoreApiVersion = "UNAVAILABLE";
+    std::string selectedBackendApiVersion = "UNAVAILABLE";
+    std::string runtimeBackendBuildId = "UNAVAILABLE";
+    std::string backendCreateSymbolLibrary = "UNAVAILABLE";
+    std::string deviceCreateSymbolLibrary = "UNAVAILABLE";
+    std::string contextCreateSymbolLibrary = "UNAVAILABLE";
+    std::string graphCreateSymbolLibrary = "UNAVAILABLE";
+    std::string graphFinalizeSymbolLibrary = "UNAVAILABLE";
+    std::string graphExecuteSymbolLibrary = "UNAVAILABLE";
+    bool backendCreateCalled = false;
+    bool deviceCreateCalled = false;
+    bool contextCreateCalled = false;
+    bool fullStepGraphCreateCalled = false;
+    bool fullStepGraphFinalizeCalled = false;
+    int backendCreateResult = -1;
+    int deviceCreateResult = -1;
+    int contextCreateResult = -1;
+    int fullStepGraphCreateResult = -1;
+    int fullStepGraphFinalizeResult = -1;
+    bool backendHandleNonnull = false;
+    bool deviceHandleNonnull = false;
+    bool contextHandleNonnull = false;
+    bool fullStepGraphHandleNonnull = false;
+    std::uint64_t graphExecuteAttemptCount = 0;
+    std::uint64_t graphExecuteSuccessCount = 0;
+    std::uint64_t graphExecuteFailureCount = 0;
+    std::int64_t graphExecuteFirstFailureCall = -1;
+    std::int64_t graphExecuteFirstCallIndex = -1;
+    std::int64_t graphExecuteLastCallIndex = -1;
+    int graphExecuteFirstResult = -1;
+    int graphExecuteLastResult = -1;
+    bool cpuBackendInitialized = false;
+    bool fallbackAttempted = false;
+    bool fallbackSucceeded = false;
+};
+
 struct MlpFullStepOutputs {
     float loss = 0.0f;
     std::vector<float> w1Next;
@@ -62,6 +105,9 @@ public:
     ~Runtime();
     const BackendInfo& info() const;
     const std::string& diagnostics() const;
+    std::string apiTraceSummary() const;
+    std::string qnnCallbackCaptureSummary() const;
+    void recordGraphExecuteResult(int result, bool success);
     bool initialize(QnnBackendKind requestedBackend, std::string& error);
     bool prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool transposeInput0,
                        std::string& error);
@@ -136,6 +182,7 @@ private:
     BackendInfo info_;
     std::string diagnostics_;
     RuntimeMetrics metrics_;
+    ApiTrace apiTrace_;
     struct Impl;
     Impl* impl_ = nullptr;
 };
