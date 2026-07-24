@@ -383,3 +383,9 @@ scripts/
 ## README履歴
 
 full training-step統合前のREADMEは[docs/archive/README-before-htp-full-step.md](docs/archive/README-before-htp-full-step.md)へ保存しています。
+
+## License
+
+PhoneLM original source code and documentation are licensed under the [Apache License 2.0](LICENSE) unless otherwise noted.
+
+Qualcomm QAIRT/QNN components and other third-party materials are not covered by this license. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and redistribution boundaries.
