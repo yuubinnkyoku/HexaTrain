@@ -48,7 +48,7 @@ Backend APIも別々に記録し、不一致時はbackend作成前に失敗す�
 ## 再現
 
 ```powershell
-$env:ANDROID_HOME = 'C:\Users\yuubi\AppData\Local\Android\Sdk'
+$env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 
 .\scripts\run_qnn_device_tests.ps1 `

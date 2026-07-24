@@ -356,11 +356,17 @@ scripts/
   run_qnn_htp_mlp_tests.ps1
   run_qnn_htp_fused_backward_tests.ps1
   run_qnn_htp_full_step_tests.ps1
+  run_qnn_htp_transformer_tests.ps1
 ```
 
 ## 詳細文書
 
 - [Experimental results](docs/results/README.md)
+- [QNN Transformer op feasibility](docs/qnn-transformer-op-feasibility.md)
+- [QNN HTP LayerNorm](docs/qnn-htp-layernorm.md)
+- [QNN HTP Softmax](docs/qnn-htp-softmax.md)
+- [QNN HTP attention](docs/qnn-htp-attention.md)
+- [Tiny Transformer status](docs/qnn-tiny-transformer-training.md)
 - [QNN HTP full training step](docs/qnn-htp-full-training-step.md)
 - [QNN HTP fused backward](docs/qnn-htp-fused-backward.md)
 - [QNN HTP 2-layer MLP](docs/qnn-htp-mlp-training.md)
