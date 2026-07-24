@@ -69,3 +69,8 @@ loss読取り
 - raw tensor、raw weight、checksum、個別runログは公開対象外です。
 
 再現条件と実行方法は [reproduction.md](reproduction.md)、QAIRT配布物に関する注意は [LICENSE-NOTICE.md](LICENSE-NOTICE.md) を参照してください。
+## API trace evidence and A/B test
+
+- `api-trace-evidence.txt` is an allow-list export of actual QNN API results and shared-object basenames from a successful counter-only HTP run.
+- `api-trace-methodology.md` defines the evidence boundary and distinguishes QNN return codes, callback text, PhoneLM aggregate decisions, and hardware counters.
+- `api-trace-ab-summary.csv` contains the public 10-run-per-condition aggregate. Raw callback text and individual runs are intentionally excluded.

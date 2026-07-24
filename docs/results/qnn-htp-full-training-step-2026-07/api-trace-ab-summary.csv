@@ -1,0 +1,7 @@
+"shape","condition","runs","callback_capture","qnn_log_level","graph_execute_median_of_medians_us","steady_execute_median_of_medians_us","full_step_median_of_medians_us","full_step_p90_across_runs_us","full_step_p95_across_runs_us","full_step_delta_vs_A_percent","temperature_min_c","temperature_max_c","thermal_status_max","status"
+"32/256/256/128","A","10","false","WARN","1297.032","1295.99","6382.708","6410.521","6424.948","0","33","34","0","SUCCESS"
+"32/256/256/128","B","10","true","VERBOSE","4518.802","4518.75","10207.917","10252.448","10283.802","59.93","33","34","0","SUCCESS"
+"8/128/128/64","A","10","false","WARN","863.542","862.031","1744.167","1755.261","1769.948","0","32","32","0","SUCCESS"
+"8/128/128/64","B","10","true","VERBOSE","4064.375","4064.062","5102.604","5328.438","5359.844","192.55","32","32","0","SUCCESS"
+"8/256/256/128","A","10","false","WARN","1232.344","1232.031","6071.302","6106.719","6337.656","0","32","33","0","SUCCESS"
+"8/256/256/128","B","10","true","VERBOSE","4303.906","4301.979","9518.438","9898.542","10444.114","56.78","32","33","0","SUCCESS"

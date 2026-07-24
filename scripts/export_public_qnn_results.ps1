@@ -199,6 +199,45 @@ $publicTrajectory = foreach ($row in $trajectory) {
 }
 $publicTrajectory | Export-Csv -LiteralPath (Join-Path $OutputDir 'weight-trajectory-summary.csv') -NoTypeInformation -Encoding utf8
 
+$traceSource = Join-Path $source 'runs\log-size-640.txt'
+Require-File $traceSource
+$traceFields = [ordered]@{}
+foreach ($line in ((Get-Content -LiteralPath $traceSource -Raw) -split "`r?`n")) {
+    if ($line -match '^([A-Za-z0-9_]+)=(.*)$') { $traceFields[$Matches[1]] = $Matches[2] }
+}
+$traceAllowList = @(
+    'api_trace_version','api_trace_backend_requested','api_trace_backend_library',
+    'api_trace_backend_library_load_result','api_trace_provider_symbol_resolved',
+    'api_trace_provider_count','api_trace_selected_provider_index',
+    'api_trace_selected_core_api_version','api_trace_selected_backend_api_version',
+    'api_trace_runtime_backend_build_id','api_trace_backend_create_symbol_library',
+    'api_trace_device_create_symbol_library','api_trace_context_create_symbol_library',
+    'api_trace_graph_create_symbol_library','api_trace_graph_finalize_symbol_library',
+    'api_trace_graph_execute_symbol_library','api_trace_backend_create_called',
+    'api_trace_backend_create_result','api_trace_backend_handle_nonnull',
+    'api_trace_device_create_called','api_trace_device_create_result',
+    'api_trace_device_handle_nonnull','api_trace_context_create_called',
+    'api_trace_context_create_result','api_trace_context_handle_nonnull',
+    'api_trace_full_step_graph_create_called','api_trace_full_step_graph_create_result',
+    'api_trace_full_step_graph_handle_nonnull','api_trace_full_step_graph_finalize_called',
+    'api_trace_full_step_graph_finalize_result','api_trace_graph_execute_attempt_count',
+    'api_trace_graph_execute_success_count','api_trace_graph_execute_failure_count',
+    'api_trace_graph_execute_first_call_index','api_trace_graph_execute_first_result',
+    'api_trace_graph_execute_last_call_index','api_trace_graph_execute_last_result',
+    'api_trace_graph_execute_first_failure_call','api_trace_failure_injection_enabled',
+    'api_trace_last_qnn_result','api_trace_effective_result',
+    'api_trace_cpu_backend_initialized','api_trace_fallback_attempted',
+    'api_trace_fallback_succeeded'
+)
+$traceLines = @('PhoneLM public QNN HTP API trace evidence',
+    'evidence_mode=counter_only_benchmark','callback_capture=false','qnn_log_level=WARN')
+foreach ($key in $traceAllowList) {
+    if (-not $traceFields.Contains($key)) { throw "Missing public trace field: $key" }
+    $traceLines += "$key=$($traceFields[$key])"
+}
+[IO.File]::WriteAllText((Join-Path $OutputDir 'api-trace-evidence.txt'),
+    ($traceLines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+
 $dangerPatterns = @(
     '[A-Za-z]:\\', '\\Users\\', '\\ghq\\', '/data/user/', '/sdcard/',
     '(?i)\b(?:192\.168|10\.(?:\d{1,3}\.){2}|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}',
