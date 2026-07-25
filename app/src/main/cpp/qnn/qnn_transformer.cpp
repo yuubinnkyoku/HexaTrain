@@ -124,6 +124,238 @@ std::string layerNormCheck() {
          << runtime.apiTraceSummary() << runtime.diagnostics();
   return report.str();
 }
+struct LayerNormCpuResult {
+  std::vector<float> output;
+  std::vector<float> normalized;
+  std::vector<float> dInput;
+  std::vector<float> dGamma;
+  std::vector<float> dBeta;
+};
+
+LayerNormCpuResult layerNormBackwardReference(
+    const std::vector<float> &input, const std::vector<float> &upstream,
+    const std::vector<float> &gamma, const std::vector<float> &beta,
+    size_t dimension, double epsilon) {
+  LayerNormCpuResult result;
+  result.output.resize(input.size());
+  result.normalized.resize(input.size());
+  result.dInput.resize(input.size());
+  result.dGamma.assign(dimension, 0.0f);
+  result.dBeta.assign(dimension, 0.0f);
+  for (size_t start = 0; start < input.size(); start += dimension) {
+    double mean = 0.0;
+    for (size_t column = 0; column < dimension; ++column)
+      mean += input[start + column];
+    mean /= dimension;
+    double variance = 0.0;
+    for (size_t column = 0; column < dimension; ++column) {
+      const double centered = input[start + column] - mean;
+      variance += centered * centered;
+    }
+    variance /= dimension;
+    const double inverseStd = 1.0 / std::sqrt(variance + epsilon);
+    double sumDNormalized = 0.0, sumDNormalizedXhat = 0.0;
+    for (size_t column = 0; column < dimension; ++column) {
+      const size_t index = start + column;
+      result.normalized[index] = float((input[index] - mean) * inverseStd);
+      result.output[index] =
+          result.normalized[index] * gamma[column] + beta[column];
+      const double dNormalized = upstream[index] * gamma[column];
+      sumDNormalized += dNormalized;
+      sumDNormalizedXhat += dNormalized * result.normalized[index];
+      result.dGamma[column] += upstream[index] * result.normalized[index];
+      result.dBeta[column] += upstream[index];
+    }
+    for (size_t column = 0; column < dimension; ++column) {
+      const size_t index = start + column;
+      const double dNormalized = upstream[index] * gamma[column];
+      result.dInput[index] = float(
+          inverseStd / dimension *
+          (dimension * dNormalized - sumDNormalized -
+           result.normalized[index] * sumDNormalizedXhat));
+    }
+  }
+  return result;
+}
+
+std::vector<float> layerNormNumericGradient(
+    const std::vector<float> &input, const std::vector<float> &upstream,
+    const std::vector<float> &gamma, const std::vector<float> &beta,
+    size_t dimension, double normalizationEpsilon, int variable,
+    double finiteDifferenceEpsilon) {
+  std::vector<double> x(input.begin(), input.end()), g(gamma.begin(), gamma.end()),
+      b(beta.begin(), beta.end());
+  auto loss = [&]() {
+    double total = 0.0;
+    for (size_t start = 0; start < x.size(); start += dimension) {
+      double mean = 0.0;
+      for (size_t column = 0; column < dimension; ++column)
+        mean += x[start + column];
+      mean /= dimension;
+      double variance = 0.0;
+      for (size_t column = 0; column < dimension; ++column) {
+        const double centered = x[start + column] - mean;
+        variance += centered * centered;
+      }
+      variance /= dimension;
+      const double inverseStd =
+          1.0 / std::sqrt(variance + normalizationEpsilon);
+      for (size_t column = 0; column < dimension; ++column) {
+        const size_t index = start + column;
+        const double normalized = (x[index] - mean) * inverseStd;
+        total += (normalized * g[column] + b[column]) * upstream[index];
+      }
+    }
+    return total;
+  };
+  std::vector<double> *selected = variable == 0 ? &x : (variable == 1 ? &g : &b);
+  std::vector<float> gradient(selected->size());
+  for (size_t index = 0; index < selected->size(); ++index) {
+    const double original = (*selected)[index];
+    (*selected)[index] = original + finiteDifferenceEpsilon;
+    const double positive = loss();
+    (*selected)[index] = original - finiteDifferenceEpsilon;
+    const double negative = loss();
+    (*selected)[index] = original;
+    gradient[index] = float((positive - negative) /
+                            (2.0 * finiteDifferenceEpsilon));
+  }
+  return gradient;
+}
+
+std::string layerNormBackwardCheck() {
+  constexpr uint32_t batch = 2, tokens = 3, dimension = 8, rows = batch * tokens;
+  constexpr float normalizationEpsilon = 1.0e-5f;
+  constexpr double finiteDifferenceEpsilon = 1.0e-5;
+  struct TestCase {
+    std::string name;
+    std::vector<float> input;
+    std::vector<float> gamma;
+    std::vector<float> beta;
+    std::vector<float> upstream;
+  };
+  std::vector<float> normal(rows * dimension), lowVariance(rows * dimension);
+  for (size_t index = 0; index < normal.size(); ++index) {
+    normal[index] = float(int(index % 17) - 8) * 0.125f +
+                    float(index / dimension) * 0.01f;
+    lowVariance[index] = 0.25f + float(int(index % dimension) - 3) * 1.0e-3f +
+                         float(index / dimension) * 2.0e-4f;
+  }
+  std::vector<float> gammaOne(dimension, 1.0f), betaZero(dimension, 0.0f);
+  std::vector<float> gammaArbitrary(dimension), betaArbitrary(dimension);
+  for (uint32_t column = 0; column < dimension; ++column) {
+    gammaArbitrary[column] = 0.7f + float(column) * 0.08f;
+    betaArbitrary[column] = float(int(column) - 3) * 0.04f;
+  }
+  std::vector<float> upstream(rows * dimension),
+      lowVarianceUpstream(rows * dimension);
+  for (size_t index = 0; index < upstream.size(); ++index) {
+    upstream[index] = std::sin(float(index + 2) * 0.19f) * 0.35f +
+                      float(int(index % 5) - 2) * 0.03f;
+    lowVarianceUpstream[index] = upstream[index] * 0.005f;
+  }
+  const std::vector<TestCase> cases = {
+      {"gamma_one_beta_zero", normal, gammaOne, betaZero, upstream},
+      {"arbitrary_gamma_beta_low_variance", lowVariance, gammaArbitrary,
+       betaArbitrary, lowVarianceUpstream}};
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareLayerNormBackward(rows, dimension, normalizationEpsilon,
+                                        error))
+    return failure("layer_norm_backward", error, runtime);
+  double analyticNumericMax = 0.0, analyticNumericMeanSum = 0.0;
+  double htpCpuMax = 0.0, htpCpuMeanSum = 0.0, htpCpuRelative = 0.0;
+  double dxMax = 0.0, dGammaMax = 0.0, dBetaMax = 0.0;
+  double outputMax = 0.0, normalizedMax = 0.0;
+  bool nanDetected = false, infDetected = false;
+  for (const auto &testCase : cases) {
+    const auto cpu = layerNormBackwardReference(
+        testCase.input, testCase.upstream, testCase.gamma, testCase.beta,
+        dimension, normalizationEpsilon);
+    const auto numericX = layerNormNumericGradient(
+        testCase.input, testCase.upstream, testCase.gamma, testCase.beta,
+        dimension, normalizationEpsilon, 0, finiteDifferenceEpsilon);
+    const auto numericGamma = layerNormNumericGradient(
+        testCase.input, testCase.upstream, testCase.gamma, testCase.beta,
+        dimension, normalizationEpsilon, 1, finiteDifferenceEpsilon);
+    const auto numericBeta = layerNormNumericGradient(
+        testCase.input, testCase.upstream, testCase.gamma, testCase.beta,
+        dimension, normalizationEpsilon, 2, finiteDifferenceEpsilon);
+    LayerNormBackwardOutputs htp;
+    if (!runtime.executeLayerNormBackward(testCase.input, testCase.upstream,
+                                          testCase.gamma, testCase.beta, htp,
+                                          error))
+      return failure("layer_norm_backward", error, runtime);
+    analyticNumericMax = std::max(
+        {analyticNumericMax, maxAbs(cpu.dInput, numericX),
+         maxAbs(cpu.dGamma, numericGamma), maxAbs(cpu.dBeta, numericBeta)});
+    analyticNumericMeanSum +=
+        (meanAbs(cpu.dInput, numericX) + meanAbs(cpu.dGamma, numericGamma) +
+         meanAbs(cpu.dBeta, numericBeta)) /
+        3.0;
+    dxMax = std::max(dxMax, maxAbs(cpu.dInput, htp.dInput));
+    dGammaMax = std::max(dGammaMax, maxAbs(cpu.dGamma, htp.dGamma));
+    dBetaMax = std::max(dBetaMax, maxAbs(cpu.dBeta, htp.dBeta));
+    htpCpuMax = std::max({htpCpuMax, dxMax, dGammaMax, dBetaMax});
+    htpCpuMeanSum +=
+        (meanAbs(cpu.dInput, htp.dInput) +
+         meanAbs(cpu.dGamma, htp.dGamma) + meanAbs(cpu.dBeta, htp.dBeta)) /
+        3.0;
+    htpCpuRelative =
+        std::max({htpCpuRelative, maxRelative(cpu.dInput, htp.dInput),
+                  maxRelative(cpu.dGamma, htp.dGamma),
+                  maxRelative(cpu.dBeta, htp.dBeta)});
+    outputMax = std::max(outputMax, maxAbs(cpu.output, htp.output));
+    normalizedMax =
+        std::max(normalizedMax, maxAbs(cpu.normalized, htp.normalized));
+    nanDetected = nanDetected || anyNan(htp.output) || anyNan(htp.normalized) ||
+                  anyNan(htp.dInput) || anyNan(htp.dGamma) || anyNan(htp.dBeta);
+    infDetected = infDetected || anyInf(htp.output) || anyInf(htp.normalized) ||
+                  anyInf(htp.dInput) || anyInf(htp.dGamma) || anyInf(htp.dBeta);
+  }
+  const double analyticNumericMean = analyticNumericMeanSum / cases.size();
+  const double htpCpuMean = htpCpuMeanSum / cases.size();
+  const bool ok = !nanDetected && !infDetected && analyticNumericMax < 5.0e-4 &&
+                  dxMax <= 2.0e-2 && dGammaMax <= 2.0e-2 &&
+                  dBetaMax <= 2.0e-2;
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "TRANSFORMER_BACKWARD_MICRO\ntest=layer_norm_backward\n"
+            "execution_mode=QNN_HTP_LAYER_NORM_BACKWARD_CHECK\n"
+            "method=PRIMITIVE_COMPOSITION\nshape=B2_T3_D8\n"
+            "qnn_tensor_shape=6x8\nnorm_axis=D\nepsilon="
+         << normalizationEpsilon
+         << "\nfinite_difference_epsilon=" << finiteDifferenceEpsilon
+         << "\nvariance_rescale=64\nlow_variance_upstream_scale=0.005"
+            "\ncases=gamma_one_beta_zero,arbitrary_gamma_beta_low_variance\n"
+            "cpu_analytic_vs_numeric_max_abs_error="
+         << analyticNumericMax
+         << "\ncpu_analytic_vs_numeric_mean_abs_error=" << analyticNumericMean
+         << "\nhtp_vs_cpu_max_abs_error=" << htpCpuMax
+         << "\nhtp_vs_cpu_mean_abs_error=" << htpCpuMean
+         << "\nhtp_vs_cpu_max_relative_error=" << htpCpuRelative
+         << "\nhtp_vs_cpu_dx_max_abs_error=" << dxMax
+         << "\nhtp_vs_cpu_dgamma_max_abs_error=" << dGammaMax
+         << "\nhtp_vs_cpu_dbeta_max_abs_error=" << dBetaMax
+         << "\nhtp_vs_cpu_forward_max_abs_error=" << outputMax
+         << "\nhtp_vs_cpu_xhat_max_abs_error=" << normalizedMax
+         << "\ngraph_create_result=0\ngraph_finalize_result=0\n"
+            "graph_execute_result=0\ngraph_create=SUCCESS\n"
+            "graph_finalize=SUCCESS\ngraph_execute=SUCCESS\n"
+            "cpu_fallback=false\nnan_detected="
+         << (nanDetected ? "true" : "false") << "\ninf_detected="
+         << (infDetected ? "true" : "false") << "\nnan_inf="
+         << (nanDetected || infDetected ? "true" : "false")
+         << "\nhtp_graph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nstatus=" << (ok ? "SUCCESS" : "FAILED") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
 std::string softmaxCheck() {
   constexpr uint32_t rows = 3, columns = 4;
   Runtime runtime;
@@ -730,6 +962,8 @@ std::string runTransformerExperiment(ExecutionMode mode) {
     return softmaxBackwardCheck();
   if (mode == ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK)
     return attentionBackwardCheck();
+  if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK)
+    return layerNormBackwardCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "
          "mode\n";
 }

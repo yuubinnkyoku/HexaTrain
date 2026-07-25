@@ -97,6 +97,14 @@ struct RuntimeOptions {
     bool failGraphFinalize = false;
 };
 
+struct LayerNormBackwardOutputs {
+    std::vector<float> output;
+    std::vector<float> normalized;
+    std::vector<float> dInput;
+    std::vector<float> dGamma;
+    std::vector<float> dBeta;
+};
+
 struct AttentionBackwardOutputs {
     std::vector<float> probabilities;
     std::vector<float> dScores;
@@ -192,6 +200,14 @@ public:
                           float epsilon, std::string& error);
     bool executeLayerNorm(const std::vector<float>& input,
                           std::vector<float>& output, std::string& error);
+    bool prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
+                                  float epsilon, std::string& error);
+    bool executeLayerNormBackward(const std::vector<float>& input,
+                                  const std::vector<float>& upstream,
+                                  const std::vector<float>& gamma,
+                                  const std::vector<float>& beta,
+                                  LayerNormBackwardOutputs& outputs,
+                                  std::string& error);
     bool prepareSoftmax(uint32_t rows, uint32_t columns, std::string& error);
     bool executeSoftmax(const std::vector<float>& input,
                         std::vector<float>& output, std::string& error);

@@ -51,6 +51,7 @@ enum class ExecutionMode : int {
     QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK = 40,
     QNN_HTP_SOFTMAX_BACKWARD_CHECK = 41,
     QNN_HTP_ATTENTION_BACKWARD_CHECK = 42,
+    QNN_HTP_LAYER_NORM_BACKWARD_CHECK = 43,
 };
 
 const char* executionModeName(ExecutionMode mode);

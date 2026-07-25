@@ -38,6 +38,11 @@ $tests=@(
     '(?m)^cpu_analytic_vs_numeric_dv_max_abs_error=','(?m)^htp_vs_cpu_dq_max_abs_error=',
     '(?m)^htp_vs_cpu_dk_max_abs_error=','(?m)^htp_vs_cpu_dv_max_abs_error=',
     '(?m)^future_probability_max=0(?:\.0+)?$','(?m)^future_dscores_max=0(?:\.0+)?$',
+    '(?m)^graph_create_result=0$','(?m)^graph_finalize_result=0$','(?m)^graph_execute_result=0$')},
+  @{mode='QNN_HTP_LAYER_NORM_BACKWARD_CHECK';name='layernorm-backward';required=@(
+    '(?m)^shape=B2_T3_D8$','(?m)^norm_axis=D$','(?m)^epsilon=',
+    '(?m)^cpu_analytic_vs_numeric_max_abs_error=','(?m)^htp_vs_cpu_dx_max_abs_error=',
+    '(?m)^htp_vs_cpu_dgamma_max_abs_error=','(?m)^htp_vs_cpu_dbeta_max_abs_error=',
     '(?m)^graph_create_result=0$','(?m)^graph_finalize_result=0$','(?m)^graph_execute_result=0$')}
 )
 foreach($test in $tests){

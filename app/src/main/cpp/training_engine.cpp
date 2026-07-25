@@ -106,6 +106,7 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK: return "QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK";
         case ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK: return "QNN_HTP_SOFTMAX_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK: return "QNN_HTP_ATTENTION_BACKWARD_CHECK";
+        case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK: return "QNN_HTP_LAYER_NORM_BACKWARD_CHECK";
         default: return "UNKNOWN";
     }
 }
@@ -173,6 +174,7 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK:
         case ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK:
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK:
+        case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK:
             return qnn::runTransformerExperiment(mode);
         default: {
             const std::string report =

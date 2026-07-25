@@ -110,6 +110,323 @@ bool Runtime::executeLayerNorm(const std::vector<float> &input,
   return true;
 }
 
+bool Runtime::prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
+                                       float epsilon, std::string &error) {
+  if (!impl_ || !impl_->context || rows == 0 || dimension == 0 ||
+      !std::isfinite(epsilon) || epsilon <= 0.0f) {
+    error = "LayerNorm backward invalid runtime or shape";
+    return false;
+  }
+  auto &g = impl_->layerNormBackward;
+  g.rows = rows;
+  g.dimension = dimension;
+  g.elements = rows * dimension;
+  g.dims[0] = rows;
+  g.dims[1] = dimension;
+  g.reducedDims[0] = rows;
+  g.reducedDims[1] = 1;
+  g.parameterDims[0] = dimension;
+  g.epsilonData = epsilon * g.centeredScaleData * g.centeredScaleData;
+  g.dimensionData = static_cast<float>(dimension);
+  g.inverseDimensionData = 1.0f / static_cast<float>(dimension);
+  auto make = [&](Qnn_Tensor_t &item, const char *name, Qnn_TensorType_t type,
+                  uint32_t *dims, uint32_t rank = 2) {
+    tensor(item, name, type, dims, QNN_DATATYPE_FLOAT_32, rank);
+  };
+  make(g.input, "layernorm_backward_input", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  make(g.upstream, "layernorm_backward_dy", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  make(g.gamma, "layernorm_backward_gamma", QNN_TENSOR_TYPE_APP_WRITE,
+       g.parameterDims, 1);
+  make(g.beta, "layernorm_backward_beta", QNN_TENSOR_TYPE_APP_WRITE,
+       g.parameterDims, 1);
+  make(g.mean, "layernorm_backward_mean", QNN_TENSOR_TYPE_NATIVE,
+       g.reducedDims);
+  make(g.centered, "layernorm_backward_centered", QNN_TENSOR_TYPE_NATIVE,
+       g.dims);
+  make(g.centeredScaled, "layernorm_backward_centered_scaled",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.squared, "layernorm_backward_squared", QNN_TENSOR_TYPE_NATIVE,
+       g.dims);
+  make(g.variance, "layernorm_backward_variance", QNN_TENSOR_TYPE_NATIVE,
+       g.reducedDims);
+  make(g.varianceEpsilon, "layernorm_backward_variance_epsilon",
+       QNN_TENSOR_TYPE_NATIVE, g.reducedDims);
+  make(g.inverseStdScaled, "layernorm_backward_inverse_std_scaled",
+       QNN_TENSOR_TYPE_NATIVE, g.reducedDims);
+  make(g.inverseStd, "layernorm_backward_inverse_std", QNN_TENSOR_TYPE_NATIVE,
+       g.reducedDims);
+  make(g.normalized, "layernorm_backward_xhat", QNN_TENSOR_TYPE_APP_READ,
+       g.dims);
+  make(g.normalizedGamma, "layernorm_backward_xhat_gamma",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.output, "layernorm_backward_output", QNN_TENSOR_TYPE_APP_READ,
+       g.dims);
+  make(g.dNormalized, "layernorm_backward_dxhat", QNN_TENSOR_TYPE_NATIVE,
+       g.dims);
+  make(g.sumDNormalized, "layernorm_backward_sum_dxhat",
+       QNN_TENSOR_TYPE_NATIVE, g.reducedDims);
+  make(g.dNormalizedTimesXhat, "layernorm_backward_dxhat_xhat",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.sumDNormalizedTimesXhat, "layernorm_backward_sum_dxhat_xhat",
+       QNN_TENSOR_TYPE_NATIVE, g.reducedDims);
+  make(g.dimensionTimesDNormalized, "layernorm_backward_d_dxhat",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.firstDifference, "layernorm_backward_first_difference",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.xhatTimesSum, "layernorm_backward_xhat_times_sum",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.bracket, "layernorm_backward_bracket", QNN_TENSOR_TYPE_NATIVE,
+       g.dims);
+  make(g.inverseStdOverDimension, "layernorm_backward_invstd_over_d",
+       QNN_TENSOR_TYPE_NATIVE, g.reducedDims);
+  make(g.dInput, "layernorm_backward_dx", QNN_TENSOR_TYPE_APP_READ, g.dims);
+  make(g.upstreamTimesXhat, "layernorm_backward_dy_xhat",
+       QNN_TENSOR_TYPE_NATIVE, g.dims);
+  make(g.dGamma, "layernorm_backward_dgamma", QNN_TENSOR_TYPE_APP_READ,
+       g.parameterDims, 1);
+  make(g.dBeta, "layernorm_backward_dbeta", QNN_TENSOR_TYPE_APP_READ,
+       g.parameterDims, 1);
+  tensor(g.lastAxis, "layernorm_backward_last_axis", QNN_TENSOR_TYPE_STATIC,
+         g.axisDims, QNN_DATATYPE_UINT_32, 1);
+  tensor(g.rowAxis, "layernorm_backward_row_axis", QNN_TENSOR_TYPE_STATIC,
+         g.axisDims, QNN_DATATYPE_UINT_32, 1);
+  g.lastAxis.v1.clientBuf = {g.lastAxisData, uint32_t(sizeof(g.lastAxisData))};
+  g.rowAxis.v1.clientBuf = {g.rowAxisData, uint32_t(sizeof(g.rowAxisData))};
+  make(g.epsilon, "layernorm_backward_epsilon", QNN_TENSOR_TYPE_STATIC,
+       g.scalarDims);
+  make(g.dimensionScalar, "layernorm_backward_dimension",
+       QNN_TENSOR_TYPE_STATIC, g.scalarDims);
+  make(g.inverseDimension, "layernorm_backward_inverse_dimension",
+       QNN_TENSOR_TYPE_STATIC, g.scalarDims);
+  make(g.centeredScale, "layernorm_backward_centered_scale",
+       QNN_TENSOR_TYPE_STATIC, g.scalarDims);
+  g.epsilon.v1.clientBuf = {&g.epsilonData, uint32_t(sizeof(g.epsilonData))};
+  g.dimensionScalar.v1.clientBuf = {&g.dimensionData,
+                                    uint32_t(sizeof(g.dimensionData))};
+  g.inverseDimension.v1.clientBuf = {
+      &g.inverseDimensionData, uint32_t(sizeof(g.inverseDimensionData))};
+  g.centeredScale.v1.clientBuf = {
+      &g.centeredScaleData, uint32_t(sizeof(g.centeredScaleData))};
+  auto status = impl_->api.graphCreate(
+      impl_->context, "phonelm_layernorm_backward", nullptr, &g.graph);
+  ++metrics_.graphCreateCount;
+  if (status != QNN_SUCCESS) {
+    error = "LayerNorm backward graphCreate=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  for (auto *item : {
+           &g.input, &g.upstream, &g.gamma, &g.beta, &g.mean, &g.centered,
+           &g.centeredScaled, &g.squared, &g.variance, &g.varianceEpsilon,
+           &g.inverseStdScaled, &g.inverseStd,
+           &g.normalized, &g.normalizedGamma, &g.output, &g.dNormalized,
+           &g.sumDNormalized, &g.dNormalizedTimesXhat,
+           &g.sumDNormalizedTimesXhat, &g.dimensionTimesDNormalized,
+           &g.firstDifference, &g.xhatTimesSum, &g.bracket,
+           &g.inverseStdOverDimension, &g.dInput, &g.upstreamTimesXhat,
+           &g.dGamma, &g.dBeta, &g.lastAxis, &g.rowAxis, &g.epsilon,
+           &g.dimensionScalar, &g.inverseDimension, &g.centeredScale}) {
+    status = impl_->api.tensorCreateGraphTensor(g.graph, item);
+    if (status != QNN_SUCCESS) {
+      error = "LayerNorm backward tensor=" +
+              std::to_string(QNN_GET_ERROR_CODE(status));
+      return false;
+    }
+  }
+  auto addReduce = [&](const char *name, const char *type,
+                       const char *axesName, const char *keepDimsName,
+                       Qnn_Tensor_t &input, Qnn_Tensor_t &axes, bool keepDims,
+                       Qnn_Tensor_t &output) {
+    Qnn_Param_t params[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+    params[0].paramType = QNN_PARAMTYPE_TENSOR;
+    params[0].name = axesName;
+    params[0].tensorParam = axes;
+    params[1].paramType = QNN_PARAMTYPE_SCALAR;
+    params[1].name = keepDimsName;
+    params[1].scalarParam.dataType = QNN_DATATYPE_BOOL_8;
+    params[1].scalarParam.bool8Value = keepDims;
+    Qnn_OpConfig_t op = QNN_OPCONFIG_INIT;
+    op.v1.name = name;
+    op.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+    op.v1.typeName = type;
+    op.v1.numOfParams = 2;
+    op.v1.params = params;
+    op.v1.numOfInputs = 1;
+    op.v1.inputTensors = &input;
+    op.v1.numOfOutputs = 1;
+    op.v1.outputTensors = &output;
+    return impl_->api.graphAddNode(g.graph, op);
+  };
+  if ((status = addReduce("layernorm_backward_mean", QNN_OP_REDUCE_MEAN,
+                          QNN_OP_REDUCE_MEAN_PARAM_AXES,
+                          QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, g.input,
+                          g.lastAxis, true, g.mean)) != QNN_SUCCESS) {
+    error = "LayerNorm backward mean=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  auto addBinary = [&](const char *name, const char *type, Qnn_Tensor_t &left,
+                       Qnn_Tensor_t &right, Qnn_Tensor_t &output) {
+    Qnn_Tensor_t inputs[2] = {left, right};
+    return addSimpleNode(impl_->api, g.graph, name, type, inputs, 2, &output);
+  };
+  if ((status = addBinary("layernorm_backward_center", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                           g.input, g.mean, g.centered)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_scale_centered",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.centered,
+                           g.centeredScale, g.centeredScaled)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_square", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                           g.centeredScaled, g.centeredScaled, g.squared)) != QNN_SUCCESS) {
+    error = "LayerNorm backward center/square=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if ((status = addReduce("layernorm_backward_variance", QNN_OP_REDUCE_MEAN,
+                          QNN_OP_REDUCE_MEAN_PARAM_AXES,
+                          QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, g.squared,
+                          g.lastAxis, true, g.variance)) != QNN_SUCCESS) {
+    error = "LayerNorm backward variance=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if ((status = addBinary("layernorm_backward_add_epsilon",
+                           QNN_OP_ELEMENT_WISE_ADD, g.variance, g.epsilon,
+                           g.varianceEpsilon)) != QNN_SUCCESS ||
+      (status = addSimpleNode(impl_->api, g.graph, "layernorm_backward_rsqrt",
+                              QNN_OP_ELEMENT_WISE_RSQRT, &g.varianceEpsilon, 1,
+                              &g.inverseStdScaled)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_unscale_invstd",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.inverseStdScaled,
+                           g.centeredScale, g.inverseStd)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_normalize",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.centered,
+                           g.inverseStd, g.normalized)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_affine_scale",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.normalized, g.gamma,
+                           g.normalizedGamma)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_affine_add",
+                           QNN_OP_ELEMENT_WISE_ADD, g.normalizedGamma, g.beta,
+                           g.output)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_dxhat",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.upstream, g.gamma,
+                           g.dNormalized)) != QNN_SUCCESS) {
+    error = "LayerNorm backward forward/dXhat=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if ((status = addReduce("layernorm_backward_sum_dxhat", QNN_OP_REDUCE_SUM,
+                          QNN_OP_REDUCE_SUM_PARAM_AXES,
+                          QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, g.dNormalized,
+                          g.lastAxis, true, g.sumDNormalized)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_dxhat_xhat",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.dNormalized,
+                           g.normalized, g.dNormalizedTimesXhat)) != QNN_SUCCESS ||
+      (status = addReduce("layernorm_backward_sum_dxhat_xhat",
+                          QNN_OP_REDUCE_SUM, QNN_OP_REDUCE_SUM_PARAM_AXES,
+                          QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS,
+                          g.dNormalizedTimesXhat, g.lastAxis, true,
+                          g.sumDNormalizedTimesXhat)) != QNN_SUCCESS) {
+    error = "LayerNorm backward reductions=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if ((status = addBinary("layernorm_backward_d_dxhat",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.dNormalized,
+                           g.dimensionScalar, g.dimensionTimesDNormalized)) !=
+          QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_first_difference",
+                           QNN_OP_ELEMENT_WISE_SUBTRACT,
+                           g.dimensionTimesDNormalized, g.sumDNormalized,
+                           g.firstDifference)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_xhat_times_sum",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.normalized,
+                           g.sumDNormalizedTimesXhat, g.xhatTimesSum)) !=
+          QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_bracket",
+                           QNN_OP_ELEMENT_WISE_SUBTRACT, g.firstDifference,
+                           g.xhatTimesSum, g.bracket)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_invstd_over_d",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.inverseStd,
+                           g.inverseDimension,
+                           g.inverseStdOverDimension)) != QNN_SUCCESS ||
+      (status = addBinary("layernorm_backward_dx",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.bracket,
+                           g.inverseStdOverDimension, g.dInput)) != QNN_SUCCESS) {
+    error = "LayerNorm backward dX composition=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if ((status = addBinary("layernorm_backward_dy_xhat",
+                           QNN_OP_ELEMENT_WISE_MULTIPLY, g.upstream,
+                           g.normalized, g.upstreamTimesXhat)) != QNN_SUCCESS ||
+      (status = addReduce("layernorm_backward_dgamma", QNN_OP_REDUCE_SUM,
+                          QNN_OP_REDUCE_SUM_PARAM_AXES,
+                          QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS,
+                          g.upstreamTimesXhat, g.rowAxis, false,
+                          g.dGamma)) != QNN_SUCCESS ||
+      (status = addReduce("layernorm_backward_dbeta", QNN_OP_REDUCE_SUM,
+                          QNN_OP_REDUCE_SUM_PARAM_AXES,
+                          QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, g.upstream,
+                          g.rowAxis, false, g.dBeta)) != QNN_SUCCESS) {
+    error = "LayerNorm backward parameter gradients=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
+  ++metrics_.graphFinalizeCount;
+  if (status != QNN_SUCCESS) {
+    error = "LayerNorm backward graphFinalize=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  diagnostics_ += "transformer_layernorm_backward_method=PRIMITIVE_COMPOSITION\n"
+                  "transformer_layernorm_backward_axis=last\n"
+                  "transformer_layernorm_backward_finalize=0\n";
+  return true;
+}
+
+bool Runtime::executeLayerNormBackward(
+    const std::vector<float> &input, const std::vector<float> &upstream,
+    const std::vector<float> &gamma, const std::vector<float> &beta,
+    LayerNormBackwardOutputs &outputs, std::string &error) {
+  auto &g = impl_->layerNormBackward;
+  if (!g.graph || input.size() != g.elements || upstream.size() != g.elements ||
+      gamma.size() != g.dimension || beta.size() != g.dimension) {
+    error = "LayerNorm backward input size";
+    return false;
+  }
+  outputs.output.resize(g.elements);
+  outputs.normalized.resize(g.elements);
+  outputs.dInput.resize(g.elements);
+  outputs.dGamma.resize(g.dimension);
+  outputs.dBeta.resize(g.dimension);
+  Qnn_Tensor_t inputs[4] = {g.input, g.upstream, g.gamma, g.beta};
+  const std::vector<float> *inputData[4] = {&input, &upstream, &gamma, &beta};
+  for (size_t index = 0; index < 4; ++index)
+    inputs[index].v1.clientBuf = {
+        const_cast<float *>(inputData[index]->data()),
+        uint32_t(inputData[index]->size() * sizeof(float))};
+  Qnn_Tensor_t outputTensors[5] = {g.output, g.normalized, g.dInput,
+                                    g.dGamma, g.dBeta};
+  std::vector<float> *outputData[5] = {&outputs.output, &outputs.normalized,
+                                       &outputs.dInput, &outputs.dGamma,
+                                       &outputs.dBeta};
+  for (size_t index = 0; index < 5; ++index)
+    outputTensors[index].v1.clientBuf = {
+        outputData[index]->data(),
+        uint32_t(outputData[index]->size() * sizeof(float))};
+  const auto status = impl_->api.graphExecute(g.graph, inputs, 4, outputTensors,
+                                               5, nullptr, nullptr);
+  ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status),
+                           QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+  if (status != QNN_SUCCESS) {
+    error = "LayerNorm backward graphExecute=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  return true;
+}
 bool Runtime::prepareSoftmax(uint32_t rows, uint32_t columns,
                              std::string &error) {
   if (!impl_ || !impl_->context || rows == 0 || columns == 0) {
