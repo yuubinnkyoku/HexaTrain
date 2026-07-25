@@ -287,6 +287,48 @@ struct Runtime::Impl {
         uint32_t tokens = 0, headDimension = 0;
         float scaleData = 1.0f;
     } attentionBackward;
+    struct TinyTransformerTrainingGraph {
+        enum TensorIndex {
+            X, TARGET, G1, B1, WQ, WK, WV, WO, G2, B2, W1, W2, LR,
+            MASK, SCALE, LAST_AXIS, ROW_AXIS, ALL_AXES, EPS_SCALED,
+            CENTER_SCALE, DIMENSION, INV_DIMENSION, GRAD_SCALE, ZERO_FF,
+            MEAN1, CENTERED1, CENTERED_S1, SQUARE1, VAR1, VAR_EPS1,
+            INV_STD_S1, INV_STD1, XHAT1, XHAT_G1, LN1,
+            Q, K, V, SCORES, SCALED_SCORES, MASKED_SCORES, PROBABILITIES,
+            CONTEXT, PROJECTED, RESIDUAL1,
+            MEAN2, CENTERED2, CENTERED_S2, SQUARE2, VAR2, VAR_EPS2,
+            INV_STD_S2, INV_STD2, XHAT2, XHAT_G2, LN2,
+            FF1, RELU, FF2, OUTPUT, ERROR, SQUARED_ERROR, LOSS, DOUTPUT,
+            DW2, DRELU, RELU_MASK, DFF1, DW1, DLN2,
+            DXHAT2, SUM_DXHAT2, DXHAT_XHAT2, SUM_DXHAT_XHAT2,
+            D_TIMES_DXHAT2, FIRST_DIFF2, XHAT_TIMES_SUM2, BRACKET2,
+            INV_STD_OVER_D2, DRESIDUAL1_LN, DG2, DB2, DRESIDUAL1,
+            DWO, DCONTEXT, DPROBABILITIES, DV, SOFTMAX_PRODUCT,
+            SOFTMAX_DOT, SOFTMAX_CENTERED, DSCORES, DQ_RAW, DK_RAW, DQ, DK,
+            DWQ, DWK, DWV, DLN1_Q, DLN1_K, DLN1_V, DLN1_QK, DLN1,
+            DXHAT1, SUM_DXHAT1, DXHAT_XHAT1, SUM_DXHAT_XHAT1,
+            D_TIMES_DXHAT1, FIRST_DIFF1, XHAT_TIMES_SUM1, BRACKET1,
+            INV_STD_OVER_D1, DG1, DB1,
+            S_DG1, N_G1, S_DB1, N_B1, S_DWQ, N_WQ, S_DWK, N_WK,
+            S_DWV, N_WV, S_DWO, N_WO, S_DG2, N_G2, S_DB2, N_B2,
+            S_DW1, N_W1, S_DW2, N_W2, TENSOR_COUNT
+        };
+        Qnn_GraphHandle_t graph = nullptr;
+        std::array<Qnn_Tensor_t, TENSOR_COUNT> tensors{};
+        std::array<std::string, TENSOR_COUNT> names{};
+        uint32_t activationDims[2]{}, scoreDims[2]{}, ffDims[2]{};
+        uint32_t ddDims[2]{}, dfDims[2]{}, fdDims[2]{};
+        uint32_t normDims[1]{}, rowDims[2]{}, scalarDims[2]{1, 1};
+        uint32_t axisOneDims[1]{1}, axisTwoDims[1]{2};
+        uint32_t lastAxisData[1]{1}, rowAxisData[1]{0}, allAxesData[2]{0, 1};
+        uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
+        bool diagnosticOutputs = true;
+        float scaleData = 1.0f, epsilonScaledData = 1.0e-5f;
+        float centeredScaleData = 64.0f, dimensionData = 1.0f;
+        float inverseDimensionData = 1.0f, gradientScaleData = 1.0f;
+        std::vector<float> maskData, zeroFfData;
+    } tinyTransformerTraining;
+
     struct TinyTransformerGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t input = QNN_TENSOR_INIT, output = QNN_TENSOR_INIT;
@@ -807,4 +849,5 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 #include "qnn_runtime_mlp.inc"
 #include "qnn_runtime_full_step.inc"
 #include "qnn_runtime_transformer.inc"
+#include "qnn_runtime_transformer_training.inc"
 }

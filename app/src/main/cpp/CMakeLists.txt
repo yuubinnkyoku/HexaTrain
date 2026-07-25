@@ -128,6 +128,7 @@ add_library(phonelm_native SHARED
     qnn/qnn_linear_training.cpp
     qnn/qnn_mlp_training.cpp
     qnn/qnn_transformer.cpp
+    qnn/qnn_transformer_training.cpp
     qnn/qnn_training_benchmark.cpp
     ${PHONELM_QNN_RUNTIME_SOURCE}
     ${PHONELM_QNN_OPTIONAL_SOURCES}

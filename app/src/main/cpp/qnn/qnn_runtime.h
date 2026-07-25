@@ -113,6 +113,18 @@ struct AttentionBackwardOutputs {
     std::vector<float> dValue;
 };
 
+struct TinyTransformerParameters {
+    std::vector<float> gamma1, beta1, wq, wk, wv, wo;
+    std::vector<float> gamma2, beta2, w1, w2;
+};
+
+struct TinyTransformerTrainingOutputs {
+    float loss = 0.0f;
+    std::vector<float> output;
+    std::vector<float> dOutput;
+    TinyTransformerParameters gradients;
+    TinyTransformerParameters next;
+};
 struct MlpFullStepOutputs {
     float loss = 0.0f;
     std::vector<float> w1Next;
@@ -239,6 +251,14 @@ public:
                                 std::string& error);
     bool executeTinyTransformer(const std::vector<float>& input,
                                 std::vector<float>& output, std::string& error);
+    bool prepareTinyTransformerTraining(uint32_t tokens, uint32_t dimension,
+                                        uint32_t feedForwardDimension,
+                                        float epsilon, bool diagnosticOutputs,
+                                        std::string& error);
+    bool executeTinyTransformerTraining(
+        const std::vector<float>& input, const std::vector<float>& target,
+        const TinyTransformerParameters& current, float learningRate,
+        TinyTransformerTrainingOutputs& outputs, std::string& error);
     bool prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
                             uint32_t hiddenDimension, uint32_t outputDimension,
                             bool diagnosticOutputs, std::string& error);

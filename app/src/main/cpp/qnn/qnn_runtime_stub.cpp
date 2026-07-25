@@ -90,6 +90,8 @@ bool Runtime::prepareAttentionBackward(uint32_t,uint32_t,std::string&e){e="QNN_D
 bool Runtime::executeAttentionBackward(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,AttentionBackwardOutputs&,std::string&e){e="QNN_DISABLED: attention backward unavailable";return false;}
 bool Runtime::prepareTinyTransformer(uint32_t,uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
 bool Runtime::executeTinyTransformer(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
+bool Runtime::prepareTinyTransformerTraining(uint32_t,uint32_t,uint32_t,float,bool,std::string&e){e="QNN_DISABLED: tiny transformer training unavailable";return false;}
+bool Runtime::executeTinyTransformerTraining(const std::vector<float>&,const std::vector<float>&,const TinyTransformerParameters&,float,TinyTransformerTrainingOutputs&,std::string&e){e="QNN_DISABLED: tiny transformer training unavailable";return false;}
 bool Runtime::prepareMlpFullStep(uint32_t,uint32_t,uint32_t,uint32_t,bool,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 bool Runtime::executeMlpFullStep(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,MlpFullStepOutputs&,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 }  // namespace phonelm::qnn

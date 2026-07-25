@@ -107,6 +107,8 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK: return "QNN_HTP_SOFTMAX_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK: return "QNN_HTP_ATTENTION_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK: return "QNN_HTP_LAYER_NORM_BACKWARD_CHECK";
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP";
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP";
         default: return "UNKNOWN";
     }
 }
@@ -176,6 +178,9 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK:
         case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK:
             return qnn::runTransformerExperiment(mode);
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP:
+        case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP:
+            return qnn::runTinyTransformerTrainingExperiment(mode);
         default: {
             const std::string report =
                 "status=NOT_IMPLEMENTED\nerror=unknown execution mode";
