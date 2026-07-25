@@ -48,6 +48,7 @@ enum class ExecutionMode(val nativeCode: Int) {
     QNN_HTP_SOFTMAX_CHECK(38),
     QNN_HTP_ATTENTION_FORWARD_CHECK(39),
     QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK(40),
+    QNN_HTP_SOFTMAX_BACKWARD_CHECK(41),
     ;
 
     companion object {

@@ -187,6 +187,12 @@ public:
     bool prepareSoftmax(uint32_t rows, uint32_t columns, std::string& error);
     bool executeSoftmax(const std::vector<float>& input,
                         std::vector<float>& output, std::string& error);
+    bool prepareSoftmaxBackward(uint32_t rows, uint32_t columns,
+                                std::string& error);
+    bool executeSoftmaxBackward(const std::vector<float>& probabilities,
+                                const std::vector<float>& upstream,
+                                std::vector<float>& inputGradient,
+                                std::string& error);
     bool prepareAttention(uint32_t tokens, uint32_t headDimension, std::string& error);
     bool executeAttention(const std::vector<float>& query,
                           const std::vector<float>& key,

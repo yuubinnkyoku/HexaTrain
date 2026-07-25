@@ -16,6 +16,14 @@ bool finite(const std::vector<float> &values) {
   return std::all_of(values.begin(), values.end(),
                      [](float value) { return std::isfinite(value); });
 }
+bool anyNan(const std::vector<float> &values) {
+  return std::any_of(values.begin(), values.end(),
+                     [](float value) { return std::isnan(value); });
+}
+bool anyInf(const std::vector<float> &values) {
+  return std::any_of(values.begin(), values.end(),
+                     [](float value) { return std::isinf(value); });
+}
 double maxAbs(const std::vector<float> &a, const std::vector<float> &b) {
   double result = 0.0;
   for (size_t i = 0; i < a.size(); ++i)
@@ -164,6 +172,144 @@ std::string softmaxCheck() {
          "false\nstatus="
       << (ok ? "SUCCESS" : "FAILED") << '\n'
       << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+std::vector<float> softmaxBackwardReference(
+    const std::vector<float> &probabilities,
+    const std::vector<float> &upstream, size_t columns) {
+  std::vector<float> gradient(probabilities.size());
+  for (size_t start = 0; start < probabilities.size(); start += columns) {
+    double dot = 0.0;
+    for (size_t j = 0; j < columns; ++j)
+      dot += double(upstream[start + j]) * probabilities[start + j];
+    for (size_t j = 0; j < columns; ++j)
+      gradient[start + j] = float(probabilities[start + j] *
+                                  (upstream[start + j] - dot));
+  }
+  return gradient;
+}
+
+std::vector<float> softmaxBackwardNumeric(const std::vector<float> &input,
+                                           const std::vector<float> &upstream,
+                                           size_t columns, float epsilon) {
+  std::vector<double> perturbed(input.begin(), input.end());
+  std::vector<float> gradient(input.size());
+  auto loss = [&](const std::vector<double> &x) {
+    double result = 0.0;
+    for (size_t start = 0; start < x.size(); start += columns) {
+      const double maximum = *std::max_element(x.begin() + start,
+                                                x.begin() + start + columns);
+      double denominator = 0.0;
+      for (size_t j = 0; j < columns; ++j)
+        denominator += std::exp(x[start + j] - maximum);
+      for (size_t j = 0; j < columns; ++j)
+        result += std::exp(x[start + j] - maximum) / denominator *
+                  upstream[start + j];
+    }
+    return result;
+  };
+  for (size_t i = 0; i < input.size(); ++i) {
+    perturbed[i] = double(input[i]) + epsilon;
+    const double positive = loss(perturbed);
+    perturbed[i] = double(input[i]) - epsilon;
+    const double negative = loss(perturbed);
+    perturbed[i] = input[i];
+    gradient[i] = float((positive - negative) / (2.0 * epsilon));
+  }
+  return gradient;
+}
+
+std::string softmaxBackwardCheck() {
+  constexpr uint32_t rows = 4, columns = 4;
+  constexpr float epsilon = 1.0e-3f;
+  const std::vector<float> upstream = {
+      0.25f, -0.5f, 0.75f, -0.125f, -0.3f, 0.2f, 0.6f, -0.4f,
+      0.9f, -0.7f, 0.1f, 0.35f, -0.8f, 0.55f, -0.2f, 0.45f};
+  const std::vector<std::pair<std::string, std::vector<float>>> cases = {
+      {"normal", {-1.0f, 0.0f, 1.0f, 2.0f, 0.2f, -0.3f, 0.7f, 0.1f,
+                  -0.4f, 0.9f, -0.8f, 0.3f, 1.2f, -1.1f, 0.4f, -0.2f}},
+      {"large_positive", {1000, 999, 998, 997, 1004, 1003, 1002, 1001,
+                          1010, 1000, 990, 980, 1020, 1019, 1018, 1017}},
+      {"large_negative", {-1000, -1001, -1002, -1003, -996, -997, -998,
+                          -999, -990, -1000, -1010, -1020, -1010, -1011,
+                          -1012, -1013}},
+      {"equal_rows", {3, 3, 3, 3, -2, -2, -2, -2, 0.5f, 0.5f, 0.5f,
+                      0.5f, 12, 12, 12, 12}},
+      {"causal_masked", {0.4f, -10000, -10000, -10000, 0.2f, -0.1f,
+                          -10000, -10000, -0.3f, 0.8f, 0.1f, -10000,
+                          0.7f, -0.2f, 0.5f, 0.0f}}};
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareSoftmaxBackward(rows, columns, error))
+    return failure("softmax_backward", error, runtime);
+  double analyticNumericMax = 0.0, analyticNumericSum = 0.0;
+  double htpCpuMax = 0.0, htpCpuSum = 0.0, htpCpuRelative = 0.0;
+  double rowSumMax = 0.0;
+  size_t compared = 0;
+  bool allFinite = true, nanDetected = false, infDetected = false;
+  for (const auto &testCase : cases) {
+    const auto probabilities = softmaxReference(testCase.second, columns);
+    const auto analytic =
+        softmaxBackwardReference(probabilities, upstream, columns);
+    const auto numeric = softmaxBackwardNumeric(testCase.second, upstream,
+                                                 columns, epsilon);
+    std::vector<float> htp;
+    if (!runtime.executeSoftmaxBackward(probabilities, upstream, htp, error))
+      return failure("softmax_backward", error, runtime);
+    analyticNumericMax = std::max(analyticNumericMax, maxAbs(analytic, numeric));
+    htpCpuMax = std::max(htpCpuMax, maxAbs(analytic, htp));
+    htpCpuRelative = std::max(htpCpuRelative, maxRelative(analytic, htp));
+    for (size_t i = 0; i < analytic.size(); ++i) {
+      analyticNumericSum += std::abs(double(analytic[i]) - numeric[i]);
+      htpCpuSum += std::abs(double(analytic[i]) - htp[i]);
+      ++compared;
+    }
+    for (size_t start = 0; start < htp.size(); start += columns) {
+      const double sum = std::accumulate(htp.begin() + start,
+                                         htp.begin() + start + columns, 0.0);
+      rowSumMax = std::max(rowSumMax, std::abs(sum));
+    }
+    allFinite = allFinite && finite(probabilities) && finite(analytic) &&
+                finite(numeric) && finite(htp);
+    nanDetected = nanDetected || anyNan(probabilities) || anyNan(analytic) ||
+                  anyNan(numeric) || anyNan(htp);
+    infDetected = infDetected || anyInf(probabilities) || anyInf(analytic) ||
+                  anyInf(numeric) || anyInf(htp);
+  }
+  const double analyticNumericMean = analyticNumericSum / compared;
+  const double htpCpuMean = htpCpuSum / compared;
+  const bool ok = allFinite && analyticNumericMax < 2.0e-4 &&
+                  htpCpuMax <= 5.0e-3 && rowSumMax <= 5.0e-3;
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "TRANSFORMER_BACKWARD_MICRO\ntest=softmax_backward\n"
+            "execution_mode=QNN_HTP_SOFTMAX_BACKWARD_CHECK\n"
+            "method=PRIMITIVE_COMPOSITION\nshape=B1_H1_T4_D4\n"
+            "qnn_tensor_shape=4x4\naxis=last\nepsilon="
+         << epsilon
+         << "\ncases=normal,large_positive,large_negative,equal_rows,causal_"
+            "masked\ncpu_analytic_vs_numeric_max_abs_error="
+         << analyticNumericMax
+         << "\ncpu_analytic_vs_numeric_mean_abs_error=" << analyticNumericMean
+         << "\nhtp_vs_cpu_max_abs_error=" << htpCpuMax
+         << "\nhtp_vs_cpu_mean_abs_error=" << htpCpuMean
+         << "\nhtp_vs_cpu_max_relative_error=" << htpCpuRelative
+         << "\nmax_row_gradient_sum_abs=" << rowSumMax
+         << "\ngraph_create_result=0\ngraph_finalize_result=0\n"
+            "graph_execute_result=0\ngraph_create=SUCCESS\n"
+            "graph_finalize=SUCCESS\ngraph_execute=SUCCESS\ncpu_fallback=false\n"
+            "nan_detected="
+         << (nanDetected ? "true" : "false") << "\ninf_detected="
+         << (infDetected ? "true" : "false") << "\nnan_inf="
+         << (allFinite ? "false" : "true")
+         << "\nhtp_graph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nstatus=" << (ok ? "SUCCESS" : "FAILED") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
   return report.str();
 }
 std::string attentionCheck() {
@@ -352,6 +498,8 @@ std::string runTransformerExperiment(ExecutionMode mode) {
     return attentionCheck();
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_FORWARD_CHECK)
     return tinyTransformerCheck();
+  if (mode == ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK)
+    return softmaxBackwardCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "
          "mode\n";
 }

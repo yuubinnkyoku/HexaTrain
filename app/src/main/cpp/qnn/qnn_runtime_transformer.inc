@@ -200,6 +200,142 @@ bool Runtime::executeSoftmax(const std::vector<float> &input,
   }
   return true;
 }
+bool Runtime::prepareSoftmaxBackward(uint32_t rows, uint32_t columns,
+                                     std::string &error) {
+  if (!impl_ || !impl_->context || rows == 0 || columns == 0) {
+    error = "Softmax backward invalid runtime or shape";
+    return false;
+  }
+  auto &g = impl_->softmaxBackward;
+  g.dims[0] = rows;
+  g.dims[1] = columns;
+  g.reducedDims[0] = rows;
+  g.reducedDims[1] = 1;
+  g.elements = rows * columns;
+  tensor(g.probabilities, "softmax_backward_probabilities",
+         QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  tensor(g.upstream, "softmax_backward_upstream", QNN_TENSOR_TYPE_APP_WRITE,
+         g.dims);
+  tensor(g.product, "softmax_backward_product", QNN_TENSOR_TYPE_NATIVE,
+         g.dims);
+  tensor(g.dot, "softmax_backward_dot", QNN_TENSOR_TYPE_NATIVE,
+         g.reducedDims);
+  tensor(g.centered, "softmax_backward_centered", QNN_TENSOR_TYPE_NATIVE,
+         g.dims);
+  tensor(g.inputGradient, "softmax_backward_dx", QNN_TENSOR_TYPE_APP_READ,
+         g.dims);
+  tensor(g.axes, "softmax_backward_axes", QNN_TENSOR_TYPE_STATIC, g.axesDims,
+         QNN_DATATYPE_UINT_32, 1);
+  g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  auto status = impl_->api.graphCreate(
+      impl_->context, "phonelm_softmax_backward", nullptr, &g.graph);
+  ++metrics_.graphCreateCount;
+  if (status != QNN_SUCCESS) {
+    error = "Softmax backward graphCreate=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  for (auto *item : {&g.probabilities, &g.upstream, &g.product, &g.dot,
+                     &g.centered, &g.inputGradient, &g.axes}) {
+    status = impl_->api.tensorCreateGraphTensor(g.graph, item);
+    if (status != QNN_SUCCESS) {
+      error = "Softmax backward tensor=" +
+              std::to_string(QNN_GET_ERROR_CODE(status));
+      return false;
+    }
+  }
+  Qnn_Tensor_t multiplyInputs[2] = {g.upstream, g.probabilities};
+  if ((status = addSimpleNode(impl_->api, g.graph, "softmax_backward_ds_s",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, multiplyInputs, 2,
+                              &g.product)) != QNN_SUCCESS) {
+    error = "Softmax backward product=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Param_t reduceParams[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+  reduceParams[0].paramType = QNN_PARAMTYPE_TENSOR;
+  reduceParams[0].name = QNN_OP_REDUCE_SUM_PARAM_AXES;
+  reduceParams[0].tensorParam = g.axes;
+  reduceParams[1].paramType = QNN_PARAMTYPE_SCALAR;
+  reduceParams[1].name = QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS;
+  reduceParams[1].scalarParam.dataType = QNN_DATATYPE_BOOL_8;
+  reduceParams[1].scalarParam.bool8Value = true;
+  Qnn_OpConfig_t reduce = QNN_OPCONFIG_INIT;
+  reduce.v1.name = "softmax_backward_reduce";
+  reduce.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+  reduce.v1.typeName = QNN_OP_REDUCE_SUM;
+  reduce.v1.numOfParams = 2;
+  reduce.v1.params = reduceParams;
+  reduce.v1.numOfInputs = 1;
+  reduce.v1.inputTensors = &g.product;
+  reduce.v1.numOfOutputs = 1;
+  reduce.v1.outputTensors = &g.dot;
+  if ((status = impl_->api.graphAddNode(g.graph, reduce)) != QNN_SUCCESS) {
+    error = "Softmax backward reduce=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t subtractInputs[2] = {g.upstream, g.dot};
+  if ((status = addSimpleNode(impl_->api, g.graph, "softmax_backward_center",
+                              QNN_OP_ELEMENT_WISE_SUBTRACT, subtractInputs, 2,
+                              &g.centered)) != QNN_SUCCESS) {
+    error = "Softmax backward subtract=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t outputInputs[2] = {g.probabilities, g.centered};
+  if ((status = addSimpleNode(impl_->api, g.graph, "softmax_backward_output",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, outputInputs, 2,
+                              &g.inputGradient)) != QNN_SUCCESS) {
+    error = "Softmax backward output=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
+  ++metrics_.graphFinalizeCount;
+  if (status != QNN_SUCCESS) {
+    error = "Softmax backward graphFinalize=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  diagnostics_ += "transformer_softmax_backward_method=PRIMITIVE_COMPOSITION\n"
+                  "transformer_softmax_backward_axis=last\n"
+                  "transformer_softmax_backward_finalize=0\n";
+  return true;
+}
+
+bool Runtime::executeSoftmaxBackward(
+    const std::vector<float> &probabilities,
+    const std::vector<float> &upstream, std::vector<float> &inputGradient,
+    std::string &error) {
+  auto &g = impl_->softmaxBackward;
+  if (!g.graph || probabilities.size() != g.elements ||
+      upstream.size() != g.elements) {
+    error = "Softmax backward input size";
+    return false;
+  }
+  inputGradient.resize(g.elements);
+  Qnn_Tensor_t inputs[2] = {g.probabilities, g.upstream};
+  inputs[0].v1.clientBuf = {
+      const_cast<float *>(probabilities.data()),
+      uint32_t(probabilities.size() * sizeof(float))};
+  inputs[1].v1.clientBuf = {const_cast<float *>(upstream.data()),
+                            uint32_t(upstream.size() * sizeof(float))};
+  Qnn_Tensor_t output = g.inputGradient;
+  output.v1.clientBuf = {inputGradient.data(),
+                         uint32_t(inputGradient.size() * sizeof(float))};
+  const auto status =
+      impl_->api.graphExecute(g.graph, inputs, 2, &output, 1, nullptr, nullptr);
+  ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status),
+                           QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+  if (status != QNN_SUCCESS) {
+    error = "Softmax backward graphExecute=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  return true;
+}
 bool Runtime::prepareAttention(uint32_t tokens, uint32_t headDimension,
                                std::string &error) {
   if (!impl_ || !impl_->context || tokens == 0 || headDimension == 0) {

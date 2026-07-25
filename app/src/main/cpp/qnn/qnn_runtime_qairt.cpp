@@ -203,6 +203,19 @@ struct Runtime::Impl {
         std::vector<float> gammaData;
         std::vector<float> betaData;
     } layerNorm, softmax;
+    struct SoftmaxBackwardGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t probabilities = QNN_TENSOR_INIT;
+        Qnn_Tensor_t upstream = QNN_TENSOR_INIT;
+        Qnn_Tensor_t product = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dot = QNN_TENSOR_INIT;
+        Qnn_Tensor_t centered = QNN_TENSOR_INIT;
+        Qnn_Tensor_t inputGradient = QNN_TENSOR_INIT;
+        Qnn_Tensor_t axes = QNN_TENSOR_INIT;
+        uint32_t dims[2]{}, reducedDims[2]{}, axesDims[1]{1};
+        uint32_t axesData[1]{1};
+        uint32_t elements = 0;
+    } softmaxBackward;
     struct AttentionGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t query = QNN_TENSOR_INIT, key = QNN_TENSOR_INIT;

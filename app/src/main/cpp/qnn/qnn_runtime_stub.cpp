@@ -80,6 +80,8 @@ bool Runtime::prepareLayerNorm(uint32_t,uint32_t,uint32_t,float,std::string&e){e
 bool Runtime::executeLayerNorm(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: LayerNorm unavailable";return false;}
 bool Runtime::prepareSoftmax(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}
 bool Runtime::executeSoftmax(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}
+bool Runtime::prepareSoftmaxBackward(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: Softmax backward unavailable";return false;}
+bool Runtime::executeSoftmaxBackward(const std::vector<float>&,const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: Softmax backward unavailable";return false;}
 bool Runtime::prepareAttention(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: attention unavailable";return false;}
 bool Runtime::executeAttention(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: attention unavailable";return false;}
 bool Runtime::prepareTinyTransformer(uint32_t,uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
