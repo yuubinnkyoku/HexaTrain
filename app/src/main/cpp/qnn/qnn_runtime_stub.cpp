@@ -87,7 +87,7 @@ bool Runtime::executeSoftmaxBackward(const std::vector<float>&,const std::vector
 bool Runtime::prepareMomentumOptimizer(uint32_t,std::string&e){e="QNN_DISABLED: momentum optimizer unavailable";return false;}
 bool Runtime::executeMomentumOptimizer(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,float,MomentumOptimizerOutputs&,std::string&e){e="QNN_DISABLED: momentum optimizer unavailable";return false;}
 bool Runtime::prepareAdamOptimizer(uint32_t,std::string&e){e="QNN_DISABLED: Adam optimizer unavailable";return false;}
-bool Runtime::executeAdamOptimizer(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,float,float,AdamOptimizerOutputs&,std::string&e){e="QNN_DISABLED: Adam optimizer unavailable";return false;}
+bool Runtime::executeAdamOptimizer(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,float,float,float,AdamOptimizerOutputs&,std::string&e){e="QNN_DISABLED: Adam optimizer unavailable";return false;}
 bool Runtime::prepareCrossEntropyGradient(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: cross entropy gradient unavailable";return false;}
 bool Runtime::executeCrossEntropyGradient(const std::vector<float>&,const std::vector<float>&,CrossEntropyGradientOutputs&,std::string&e){e="QNN_DISABLED: cross entropy gradient unavailable";return false;}
 bool Runtime::prepareAttention(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: attention unavailable";return false;}

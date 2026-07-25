@@ -302,6 +302,8 @@ struct Runtime::Impl {
     struct AdamOptimizerGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t current = QNN_TENSOR_INIT, gradient = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gradientScale = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gradientClipped = QNN_TENSOR_INIT;
         Qnn_Tensor_t firstMoment = QNN_TENSOR_INIT, secondMoment = QNN_TENSOR_INIT;
         Qnn_Tensor_t learningRate = QNN_TENSOR_INIT;
         Qnn_Tensor_t beta1 = QNN_TENSOR_INIT, beta2 = QNN_TENSOR_INIT;
@@ -347,14 +349,14 @@ struct Runtime::Impl {
             MEAN2, CENTERED2, CENTERED_S2, SQUARE2, VAR2, VAR_EPS2,
             INV_STD_S2, INV_STD2, XHAT2, XHAT_G2, LN2,
             FF1, RELU, FF2, OUTPUT, ERROR, SQUARED_ERROR, LOSS, DOUTPUT,
-            DW2, DRELU, RELU_MASK, DFF1, DW1, DLN2,
-            DXHAT2, SUM_DXHAT2, DXHAT_XHAT2, SUM_DXHAT_XHAT2,
+             DW2, DRELU, RELU_MASK, DFF1, DW1, DLN2,
+             DXHAT2, SUM_DXHAT2, DXHAT_XHAT2, DY_XHAT2, SUM_DXHAT_XHAT2,
             D_TIMES_DXHAT2, FIRST_DIFF2, XHAT_TIMES_SUM2, BRACKET2,
             INV_STD_OVER_D2, DRESIDUAL1_LN, DG2, DB2, DRESIDUAL1,
             DWO, DCONTEXT, DPROBABILITIES, DV, SOFTMAX_PRODUCT,
             SOFTMAX_DOT, SOFTMAX_CENTERED, DSCORES, DQ_RAW, DK_RAW, DQ, DK,
             DWQ, DWK, DWV, DLN1_Q, DLN1_K, DLN1_V, DLN1_QK, DLN1,
-            DXHAT1, SUM_DXHAT1, DXHAT_XHAT1, SUM_DXHAT_XHAT1,
+             DXHAT1, SUM_DXHAT1, DXHAT_XHAT1, DY_XHAT1, SUM_DXHAT_XHAT1,
             D_TIMES_DXHAT1, FIRST_DIFF1, XHAT_TIMES_SUM1, BRACKET1,
             INV_STD_OVER_D1, DG1, DB1,
             S_DG1, N_G1, S_DB1, N_B1, S_DWQ, N_WQ, S_DWK, N_WK,

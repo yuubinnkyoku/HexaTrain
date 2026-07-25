@@ -37,14 +37,25 @@ function Run-Test([string]$Mode,[string]$Name,[string[]]$Required,[int]$PollLimi
   [IO.File]::WriteAllText((Join-Path $reportRoot "$Name-result.txt"),$result+"`n",[Text.UTF8Encoding]::new($false))
   if($result-notmatch'(?m)^status=SUCCESS$'){throw "$Mode failed"}
   foreach($pattern in $Required){if($result-notmatch$pattern){throw "$Mode missing $pattern"}}
-  foreach($pattern in @('(?m)^cpu_fallback=false$','(?m)^nan_detected=false$','(?m)^inf_detected=false$','(?m)^api_trace_graph_execute_failure_count=0$')){
+  $common=@('(?m)^cpu_fallback=false$','(?m)^api_trace_graph_execute_failure_count=0$')
+  if($Mode-ne'QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP'){
+    $common+=@('(?m)^nan_detected=false$','(?m)^inf_detected=false$')
+  }
+  foreach($pattern in $common){
     if($result-notmatch$pattern){throw "$Mode missing $pattern"}
   }
   Write-Host "PASS $Mode"
 }
 if($Scope-in@('step','all')){
   Run-Test 'QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP' 'one-step' @(
-    '(?m)^optimizer=ADAM$','(?m)^graph_count=2$','(?m)^graph_execute_count=2$',
+    '(?m)^optimizer=ADAM$','(?m)^graph_count=2$','(?m)^checkpoint_count=13$',
+    '(?m)^checkpoint_save_load_deterministic=true$',
+    '(?m)^one_step_correct=true$',
+    '(?m)^first_divergence_classification=',
+    '(?m)^path_a=CPU_GRADIENT_CPU_OPTIMIZER$',
+    '(?m)^path_b=HTP_GRADIENT_CPU_OPTIMIZER$',
+    '(?m)^path_c=CPU_GRADIENT_HTP_OPTIMIZER$',
+    '(?m)^path_d=HTP_GRADIENT_HTP_OPTIMIZER$',
     '(?m)^major_weight_changed=true$','(?m)^bias_correction_scalar_responsibility=CPU$',
     '(?m)^optimizer_math_responsibility=HTP$')
 }

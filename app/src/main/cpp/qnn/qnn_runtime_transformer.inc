@@ -784,6 +784,10 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
   g.dims[1] = 1;
   tensor(g.current, "adam_current", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
   tensor(g.gradient, "adam_gradient", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  tensor(g.gradientScale, "adam_gradient_scale", QNN_TENSOR_TYPE_APP_WRITE,
+         g.scalarDims);
+  tensor(g.gradientClipped, "adam_gradient_clipped", QNN_TENSOR_TYPE_NATIVE,
+         g.dims);
   tensor(g.firstMoment, "adam_first_moment", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
   tensor(g.secondMoment, "adam_second_moment", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
   tensor(g.learningRate, "adam_learning_rate", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
@@ -807,13 +811,13 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
   tensor(g.secondMomentNext, "adam_second_moment_next", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.firstMomentHat, "adam_first_moment_hat", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.secondMomentHat, "adam_second_moment_hat", QNN_TENSOR_TYPE_APP_READ, g.dims);
-  tensor(g.secondRoot, "adam_second_root", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.secondRoot, "adam_second_root", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.firstOverEpsilon, "adam_first_over_epsilon", QNN_TENSOR_TYPE_NATIVE, g.dims);
   tensor(g.rootOverEpsilon, "adam_root_over_epsilon", QNN_TENSOR_TYPE_NATIVE, g.dims);
-  tensor(g.denominator, "adam_denominator", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.denominator, "adam_denominator", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.divided, "adam_divided", QNN_TENSOR_TYPE_NATIVE, g.dims);
-  tensor(g.normalized, "adam_normalized", QNN_TENSOR_TYPE_NATIVE, g.dims);
-  tensor(g.scaledUpdate, "adam_scaled_update", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.normalized, "adam_normalized", QNN_TENSOR_TYPE_APP_READ, g.dims);
+  tensor(g.scaledUpdate, "adam_scaled_update", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.weightNext, "adam_weight_next", QNN_TENSOR_TYPE_APP_READ, g.dims);
   auto started = Clock::now();
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_adam_optimizer", nullptr, &g.graph);
@@ -824,7 +828,8 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
     return false;
   }
   Qnn_Tensor_t *all[]{
-      &g.current, &g.gradient, &g.firstMoment, &g.secondMoment, &g.learningRate,
+      &g.current, &g.gradient, &g.gradientScale, &g.gradientClipped,
+      &g.firstMoment, &g.secondMoment, &g.learningRate,
       &g.beta1, &g.beta2, &g.oneMinusBeta1, &g.oneMinusBeta2,
       &g.inverseEpsilon, &g.one, &g.zero, &g.nonzeroMask,
       &g.firstCorrection, &g.secondCorrection, &g.firstScaled,
@@ -843,14 +848,19 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
     Qnn_Tensor_t inputs[2]{a, b};
     return addSimpleNode(impl_->api, g.graph, name, type, inputs, 2, output);
   };
-  if ((status = binary("adam_scale_first", QNN_OP_ELEMENT_WISE_MULTIPLY,
+  if ((status = binary("adam_clip_gradient", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                       g.gradient, g.gradientScale,
+                       &g.gradientClipped)) != QNN_SUCCESS ||
+      (status = binary("adam_scale_first", QNN_OP_ELEMENT_WISE_MULTIPLY,
                        g.firstMoment, g.beta1, &g.firstScaled)) != QNN_SUCCESS ||
       (status = binary("adam_scale_gradient_first", QNN_OP_ELEMENT_WISE_MULTIPLY,
-                       g.gradient, g.oneMinusBeta1, &g.gradientFirstScaled)) != QNN_SUCCESS ||
+                       g.gradientClipped, g.oneMinusBeta1,
+                       &g.gradientFirstScaled)) != QNN_SUCCESS ||
       (status = binary("adam_add_first", QNN_OP_ELEMENT_WISE_ADD,
                        g.firstScaled, g.gradientFirstScaled, &g.firstMomentNext)) != QNN_SUCCESS ||
       (status = binary("adam_square_gradient", QNN_OP_ELEMENT_WISE_MULTIPLY,
-                       g.gradient, g.gradient, &g.gradientSquared)) != QNN_SUCCESS ||
+                       g.gradientClipped, g.gradientClipped,
+                       &g.gradientSquared)) != QNN_SUCCESS ||
       (status = binary("adam_scale_second", QNN_OP_ELEMENT_WISE_MULTIPLY,
                        g.secondMoment, g.beta2, &g.secondScaled)) != QNN_SUCCESS ||
       (status = binary("adam_scale_gradient_second", QNN_OP_ELEMENT_WISE_MULTIPLY,
@@ -919,12 +929,15 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
 bool Runtime::executeAdamOptimizer(
     const std::vector<float> &current, const std::vector<float> &gradient,
     const std::vector<float> &firstMoment, const std::vector<float> &secondMoment,
-    float learningRate, float firstCorrection, float secondCorrection,
+    float learningRate, float gradientScale, float firstCorrection,
+    float secondCorrection,
     AdamOptimizerOutputs &outputs, std::string &error) {
   auto &g = impl_->adamOptimizer;
   if (!g.graph || current.size() != g.elements || gradient.size() != g.elements ||
       firstMoment.size() != g.elements || secondMoment.size() != g.elements ||
-      !std::isfinite(learningRate) || !std::isfinite(firstCorrection) ||
+      !std::isfinite(learningRate) || !std::isfinite(gradientScale) ||
+      gradientScale < 0.0f || gradientScale > 1.0f ||
+      !std::isfinite(firstCorrection) ||
       !std::isfinite(secondCorrection)) {
     error = "Adam optimizer buffer size or scalar";
     return false;
@@ -934,31 +947,42 @@ bool Runtime::executeAdamOptimizer(
   // equivalent and keeps epsilon visible without overflowing HTP intermediates.
   float oneMinusBeta2 = .001f, inverseEpsilon = 1e4f, one = 1e-4f;
   std::vector<float> zero(g.elements, 0.0f);
-  Qnn_Tensor_t inputs[14]{g.current, g.gradient, g.firstMoment, g.secondMoment,
-                          g.learningRate, g.beta1, g.beta2, g.oneMinusBeta1,
+  Qnn_Tensor_t inputs[15]{g.current, g.gradient, g.gradientScale, g.firstMoment,
+                          g.secondMoment, g.learningRate, g.beta1, g.beta2, g.oneMinusBeta1,
                           g.oneMinusBeta2, g.inverseEpsilon, g.one,
                           g.firstCorrection, g.secondCorrection, g.zero};
-  const float *data[14]{current.data(), gradient.data(), firstMoment.data(),
-                        secondMoment.data(), &learningRate, &beta1, &beta2,
+  const float *data[15]{current.data(), gradient.data(), &gradientScale,
+                        firstMoment.data(), secondMoment.data(), &learningRate,
+                        &beta1, &beta2,
                         &oneMinusBeta1, &oneMinusBeta2, &inverseEpsilon, &one,
                         &firstCorrection, &secondCorrection, zero.data()};
-  for (size_t i = 0; i < 14; ++i)
+  for (size_t i = 0; i < 15; ++i)
     inputs[i].v1.clientBuf = {const_cast<float *>(data[i]),
-        uint32_t(((i < 4 || i == 13) ? g.elements : 1) * sizeof(float))};
+        uint32_t(((i < 2 || (i >= 3 && i <= 4) || i == 14) ? g.elements : 1) *
+                 sizeof(float))};
   outputs.firstMomentNext.resize(g.elements);
   outputs.secondMomentNext.resize(g.elements);
   outputs.firstMomentHat.resize(g.elements);
   outputs.secondMomentHat.resize(g.elements);
+  outputs.secondRoot.resize(g.elements);
+  outputs.denominator.resize(g.elements);
+  outputs.normalizedUpdate.resize(g.elements);
+  outputs.scaledUpdate.resize(g.elements);
   outputs.weightNext.resize(g.elements);
-  Qnn_Tensor_t out[5]{g.firstMomentNext, g.secondMomentNext, g.firstMomentHat,
-                      g.secondMomentHat, g.weightNext};
-  float *outData[5]{outputs.firstMomentNext.data(), outputs.secondMomentNext.data(),
-                    outputs.firstMomentHat.data(), outputs.secondMomentHat.data(),
-                    outputs.weightNext.data()};
-  for (size_t i = 0; i < 5; ++i)
+  Qnn_Tensor_t out[9]{
+      g.firstMomentNext, g.secondMomentNext, g.firstMomentHat,
+      g.secondMomentHat, g.secondRoot, g.denominator, g.normalized,
+      g.scaledUpdate, g.weightNext};
+  float *outData[9]{
+      outputs.firstMomentNext.data(), outputs.secondMomentNext.data(),
+      outputs.firstMomentHat.data(), outputs.secondMomentHat.data(),
+      outputs.secondRoot.data(), outputs.denominator.data(),
+      outputs.normalizedUpdate.data(), outputs.scaledUpdate.data(),
+      outputs.weightNext.data()};
+  for (size_t i = 0; i < 9; ++i)
     out[i].v1.clientBuf = {outData[i], uint32_t(g.elements * sizeof(float))};
   auto started = Clock::now();
-  auto status = impl_->api.graphExecute(g.graph, inputs, 14, out, 5, nullptr, nullptr);
+  auto status = impl_->api.graphExecute(g.graph, inputs, 15, out, 9, nullptr, nullptr);
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),

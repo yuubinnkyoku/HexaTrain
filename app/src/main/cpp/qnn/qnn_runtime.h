@@ -137,7 +137,8 @@ struct MomentumOptimizerOutputs {
 };
 struct AdamOptimizerOutputs {
     std::vector<float> firstMomentNext, secondMomentNext;
-    std::vector<float> firstMomentHat, secondMomentHat, weightNext;
+    std::vector<float> firstMomentHat, secondMomentHat, secondRoot;
+    std::vector<float> denominator, normalizedUpdate, scaledUpdate, weightNext;
 };
 struct MlpFullStepOutputs {
     float loss = 0.0f;
@@ -255,7 +256,8 @@ public:
                               const std::vector<float>& gradient,
                               const std::vector<float>& firstMoment,
                               const std::vector<float>& secondMoment,
-                              float learningRate, float firstCorrection,
+                              float learningRate, float gradientScale,
+                              float firstCorrection,
                               float secondCorrection,
                               AdamOptimizerOutputs& outputs,
                               std::string& error);

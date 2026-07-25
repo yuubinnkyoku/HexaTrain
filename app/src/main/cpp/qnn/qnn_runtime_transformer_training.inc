@@ -135,9 +135,10 @@ bool Runtime::prepareTinyTransformerTraining(
         G::FF2,
         G::ERROR,
         G::SQUARED_ERROR,
-        G::DLN2,
-        G::DXHAT2,
-        G::DXHAT_XHAT2,
+         G::DLN2,
+         G::DXHAT2,
+         G::DXHAT_XHAT2,
+         G::DY_XHAT2,
         G::D_TIMES_DXHAT2,
         G::FIRST_DIFF2,
         G::XHAT_TIMES_SUM2,
@@ -154,9 +155,10 @@ bool Runtime::prepareTinyTransformerTraining(
         G::DLN1_K,
         G::DLN1_V,
         G::DLN1_QK,
-        G::DLN1,
-        G::DXHAT1,
-        G::DXHAT_XHAT1,
+         G::DLN1,
+         G::DXHAT1,
+         G::DXHAT_XHAT1,
+         G::DY_XHAT1,
         G::D_TIMES_DXHAT1,
         G::FIRST_DIFF1,
         G::XHAT_TIMES_SUM1,
@@ -454,8 +456,8 @@ bool Runtime::prepareTinyTransformerTraining(
           "dln2"))
     return false;
   auto lnb = [&](const char *p, int dy, int ga, int xhat, int inv, int dxhat,
-                 int sum, int prod, int sumprod, int ddx, int first, int xsum,
-                 int bracket, int invd, int dx, int dg, int db) {
+                  int sum, int prod, int dyx, int sumprod, int ddx, int first,
+                  int xsum, int bracket, int invd, int dx, int dg, int db) {
     std::string s = p;
     return ok(bin((s + "_dxhat").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dy, ga,
                   dxhat),
@@ -491,12 +493,12 @@ bool Runtime::prepareTinyTransformerTraining(
            ok(bin((s + "_dx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, bracket,
                   invd, dx),
               "lnb dx") &&
-           ok(bin((s + "_dyx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dy, xhat,
-                  prod),
-              "lnb dyx") &&
+            ok(bin((s + "_dyx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dy, xhat,
+                   dyx),
+               "lnb dyx") &&
            ok(reduce((s + "_dg").c_str(), QNN_OP_REDUCE_SUM,
                      QNN_OP_REDUCE_SUM_PARAM_AXES,
-                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, prod, G::ROW_AXIS,
+                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dyx, G::ROW_AXIS,
                      false, dg),
               "lnb dg") &&
            ok(reduce((s + "_db").c_str(), QNN_OP_REDUCE_SUM,
@@ -506,8 +508,9 @@ bool Runtime::prepareTinyTransformerTraining(
               "lnb db");
   };
   if (!lnb("tt_lnb2", G::DLN2, G::G2, G::XHAT2, G::INV_STD2, G::DXHAT2,
-           G::SUM_DXHAT2, G::DXHAT_XHAT2, G::SUM_DXHAT_XHAT2, G::D_TIMES_DXHAT2,
-           G::FIRST_DIFF2, G::XHAT_TIMES_SUM2, G::BRACKET2, G::INV_STD_OVER_D2,
+           G::SUM_DXHAT2, G::DXHAT_XHAT2, G::DY_XHAT2,
+           G::SUM_DXHAT_XHAT2, G::D_TIMES_DXHAT2, G::FIRST_DIFF2,
+           G::XHAT_TIMES_SUM2, G::BRACKET2, G::INV_STD_OVER_D2,
            G::DRESIDUAL1_LN, G::DG2, G::DB2))
     return false;
   if (!ok(bin("tt_dres1", QNN_OP_ELEMENT_WISE_ADD, G::DOUTPUT, G::DRESIDUAL1_LN,
@@ -575,10 +578,10 @@ bool Runtime::prepareTinyTransformerTraining(
           "dln1"))
     return false;
   if (!lnb("tt_lnb1", G::DLN1, G::G1, G::XHAT1, G::INV_STD1, G::DXHAT1,
-           G::SUM_DXHAT1, G::DXHAT_XHAT1, G::SUM_DXHAT_XHAT1, G::D_TIMES_DXHAT1,
-           G::FIRST_DIFF1, G::XHAT_TIMES_SUM1, G::BRACKET1, G::INV_STD_OVER_D1,
-           g.languageModel ? G::DINPUT_NORM : G::CENTERED1, G::DG1,
-           G::DB1))
+           G::SUM_DXHAT1, G::DXHAT_XHAT1, G::DY_XHAT1,
+           G::SUM_DXHAT_XHAT1, G::D_TIMES_DXHAT1, G::FIRST_DIFF1,
+           G::XHAT_TIMES_SUM1, G::BRACKET1, G::INV_STD_OVER_D1,
+           g.languageModel ? G::DINPUT_NORM : G::CENTERED1, G::DG1, G::DB1))
     return false;
   if (g.languageModel &&
       (!ok(bin("lm_dinput", QNN_OP_ELEMENT_WISE_ADD, G::DRESIDUAL1,
