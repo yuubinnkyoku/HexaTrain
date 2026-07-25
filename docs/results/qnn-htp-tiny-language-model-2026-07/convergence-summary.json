@@ -1,0 +1,54 @@
+{
+  "status": "PARTIAL_SUCCESS",
+  "stop_reason": "Bounded SGD, Momentum SGD, and Adam HTP candidates did not meet the additional convergence condition without NaN/Inf.",
+  "shape": "B1_T8_V32_D16_H1_L1_F32",
+  "dataset": {
+    "patterns": 4,
+    "train_sequences": 4,
+    "evaluation_sequences": 4,
+    "train_phase": 0,
+    "evaluation_phase": 1,
+    "input_token_frequency": "0:2,1:2,2:2,3:2,4:2,5:2,6:2,7:2,8:4,9:4,10:3,11:3,12:2",
+    "target_token_frequency": "0:2,1:2,2:2,3:2,4:2,5:2,6:2,7:2,8:4,9:4,10:2,11:3,12:3",
+    "train_evaluation_leakage": false,
+    "future_token_leakage": false,
+    "causal_mask": true
+  },
+  "search_counts": {
+    "sgd_cpu": 48,
+    "sgd_htp": 3,
+    "momentum_cpu": 24,
+    "momentum_htp": 2,
+    "adam_cpu": 12,
+    "adam_htp": 2
+  },
+  "cpu_best": {
+    "sgd": "lr=0.1,steps=1000,init=1,shuffle,median=99.90563384%,accuracy75=5",
+    "momentum": "lr=0.01,momentum=0.95,steps=1000,fixed,median=98.80187239%,accuracy75=5",
+    "adam": "lr=0.003,steps=320,fixed,median=94.56031737%,accuracy75=5"
+  },
+  "htp_classification": "NUMERICALLY_UNSTABLE_REPEATED_UPDATES",
+  "momentum_one_step": {
+    "status": "SUCCESS",
+    "gradient_max_abs_error": "0.002408927624",
+    "next_velocity_max_abs_error": "0.002408927624",
+    "next_parameter_max_abs_error": "0.0001114904881"
+  },
+  "adam_one_step": {
+    "status": "SUCCESS",
+    "gradient_max_abs_error": "0.002408927624",
+    "first_moment_next_max_abs_error": "0.0002407973948",
+    "second_moment_next_max_abs_error": "1.381591801e-07",
+    "first_moment_hat_max_abs_error": "0.002408927622",
+    "second_moment_hat_max_abs_error": "0.0001381591428",
+    "next_parameter_max_abs_error": "0.003058940172"
+  },
+  "boundary": {
+    "cpu": "token/one-hot construction, batch and graph control, stable CE scalar, bias-correction scalars, independent reference, buffer handoff",
+    "htp": "embedding, Transformer forward/backward, logits, Softmax, CE dLogits, parameter gradients, Momentum or Adam optimizer arithmetic",
+    "cpu_backend_fallback": false
+  },
+  "final_optimizer": "NOT_ESTABLISHED",
+  "four_pattern_inference": "NOT_REACHED",
+  "performance": "NOT_REACHED"
+}

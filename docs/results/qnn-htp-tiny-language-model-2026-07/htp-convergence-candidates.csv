@@ -1,0 +1,8 @@
+"optimizer","candidate","configuration_id","status","learning_rate","steps","median_loss_reduction_percent","seeds_at_or_above_75_percent","all_seeds_loss_decreased","all_seeds_accuracy_increased","additional_convergence_condition","nan_detected","cpu_fallback","graph_count","execute_count_per_training_step"
+"SGD","sgd-1","sgd_lr0.1_steps1000_init1_shuffle","FAILED","0.1000000015","1000","nan","0","false","false","false","true","false","1","1"
+"SGD","sgd-2","sgd_lr0.1_steps1000_init1_fixed","FAILED","0.1000000015","1000","nan","0","false","false","false","true","false","1","1"
+"SGD","sgd-3","sgd_lr0.1_steps640_init1_shuffle","FAILED","0.1000000015","640","nan","0","false","false","false","true","false","1","1"
+"MOMENTUM_SGD","momentum-1","momentum_lr0.01_m0.95_steps1000","FAILED","0.009999999776","1000","nan","0","false","true","false","true","false","2","2"
+"MOMENTUM_SGD","momentum-2","momentum_lr0.01_m0.95_steps640","FAILED","0.009999999776","640","nan","0","false","true","false","true","false","2","2"
+"ADAM","adam-1","adam_lr0.003_steps320","FAILED","0.003000000026","320","nan","0","false","true","false","true","false","2","2"
+"ADAM","adam-2","adam_lr0.001_steps640","FAILED","0.001000000047","640","nan","0","false","true","false","true","false","2","2"

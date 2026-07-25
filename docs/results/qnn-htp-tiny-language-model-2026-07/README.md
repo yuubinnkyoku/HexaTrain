@@ -28,3 +28,13 @@ One graph was created and finalized. Each update used one execute; the 5-seed ru
 - Generation: expected `0,1,2,3,0,1,2,3` reproduced; HTP logits and CPU ArgMax.
 
 `summary.json`, `seeds.csv`, `trajectory.csv`, and `gradient-check.csv` are allow-listed aggregate exports. Raw QNN callback/logcat output, endpoints, private paths, binaries, APKs, and tensor/weight dumps are excluded.
+
+## Follow-up convergence study
+
+`convergence-summary.json`, `convergence-sweeps.csv`, and
+`htp-convergence-candidates.csv` are allow-listed aggregates from the bounded
+SGD, Momentum SGD, and Adam follow-up. The CPU finalists satisfy the additional
+convergence condition, but every permitted HTP finalist eventually becomes
+non-finite during repeated updates. The follow-up status is therefore
+`PARTIAL_SUCCESS`; performance and four-pattern final-optimizer inference are
+`NOT_REACHED`.
