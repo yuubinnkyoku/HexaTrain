@@ -1,0 +1,37 @@
+{
+  "status": "PARTIAL_SUCCESS",
+  "experiment_source_commit": "b134bdaa703d93c2c81787826061029539451526",
+  "shape": "B1_T8_V32_D16_H1_L1_F32",
+  "steps": 320,
+  "seeds": 5,
+  "learning_rate": 0.009999999776,
+  "dataset_seed": "deterministic_rules_v1",
+  "all_seeds_loss_decreased": true,
+  "all_seeds_accuracy_increased": true,
+  "median_loss_reduction_percent": 6.060655091409197,
+  "seeds_at_or_above_75_percent_evaluation_accuracy": 1,
+  "deterministic_replay": true,
+  "graph_count": 1,
+  "execute_count_per_training_step": 1,
+  "graph_execute_count": 1605,
+  "cpu_htp_parameter_max_abs_difference": 0.02902960777,
+  "cross_entropy": {
+    "loss_scalar": "CPU_STABLE_LOGSUMEXP",
+    "gradient": "HTP",
+    "dlogits_max_abs_error": 0.0001964271069
+  },
+  "one_step": {
+    "loss_abs_error": 2.145767212E-06,
+    "gradient_max_abs_error": 0.0001563841297,
+    "next_parameter_max_abs_error": 5.939602852E-05
+  },
+  "inference": {
+    "expected_continuation": "0,1,2,3,0,1,2,3",
+    "argmax": "CPU",
+    "logits": "HTP"
+  },
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api": "2.37.0",
+  "cpu_fallback": false,
+  "nan_inf": false
+}
