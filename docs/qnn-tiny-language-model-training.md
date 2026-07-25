@@ -39,7 +39,7 @@ One-step comparison reports loss error `2.145767e-6`, embedded-input error `9.82
 
 Five seeds use 320 updates at learning rate `0.01`. The train set cycles four non-constant deterministic rules over tokens 0 through 12; evaluation uses held-out phase offsets. All five seeds reduce evaluation loss and increase evaluation accuracy, with exact same-seed trajectory replay. One graph is created and finalized, and one execute is issued per update. Current and next parameters never alias.
 
-The additional convergence threshold is not reached: median evaluation loss reduction is `6.060655%` rather than 20%, and only one of five seeds reaches 75% evaluation accuracy. This remains a partial-success result after varying learning rate, initialization scale, step count, and dataset sampling within the requested limits. No performance benchmark was run after this result because performance measurement was gated on full convergence success.
+The additional convergence threshold is not reached: median evaluation loss reduction is `6.060655%` rather than 20%, and only one of five seeds reaches 75% evaluation accuracy. This remains a partial-success result after three bounded tuning campaigns within the requested limits. No performance benchmark was run after this result because performance measurement was gated on full convergence success.
 
 Autoregressive verification trains the known `0,1,2,3` rule and reproduces `0,1,2,3,0,1,2,3`. HTP generates logits; CPU takes ArgMax and updates context.
 
