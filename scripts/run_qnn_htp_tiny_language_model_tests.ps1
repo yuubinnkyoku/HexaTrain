@@ -57,7 +57,7 @@ Run-Test 'QNN_HTP_TINY_LANGUAGE_MODEL_STEP' 'one-step' @(
   '(?m)^shape=B1_T8_V32_D16_H1_L1_F32$','(?m)^major_weight_changed=true$','(?m)^execute_count_per_step=1$'
 )
 Run-Test 'QNN_HTP_TINY_LANGUAGE_MODEL_MULTI_STEP' 'multi-step' @(
-  '(?m)^steps=320$','(?m)^seeds=5$','(?m)^all_seeds_loss_decreased=true$','(?m)^all_seeds_accuracy_increased=true$','(?m)^deterministic_replay=true$','(?m)^graph_execute_count=1605$'
+  '(?m)^steps=320$','(?m)^seeds=5$','(?m)^all_seeds_loss_decreased=true$','(?m)^all_seeds_accuracy_increased=true$','(?m)^deterministic_replay=true$','(?m)^graph_execute_count=1640$'
 ) 4000
 Run-Test 'QNN_HTP_TINY_LANGUAGE_MODEL_INFERENCE' 'inference' @(
   '(?m)^expected_continuation=0,1,2,3,0,1,2,3$','(?m)^argmax_responsibility=CPU$','(?m)^logits_responsibility=HTP$'

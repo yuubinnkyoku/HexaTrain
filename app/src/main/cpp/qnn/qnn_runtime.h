@@ -132,6 +132,13 @@ struct CrossEntropyGradientOutputs {
     std::vector<float> probabilities;
     std::vector<float> dLogits;
 };
+struct MomentumOptimizerOutputs {
+    std::vector<float> velocityNext, weightNext;
+};
+struct AdamOptimizerOutputs {
+    std::vector<float> firstMomentNext, secondMomentNext;
+    std::vector<float> firstMomentHat, secondMomentHat, weightNext;
+};
 struct MlpFullStepOutputs {
     float loss = 0.0f;
     std::vector<float> w1Next;
@@ -236,6 +243,22 @@ public:
                                 const std::vector<float>& upstream,
                                 std::vector<float>& inputGradient,
                                 std::string& error);
+    bool prepareMomentumOptimizer(uint32_t elements, std::string& error);
+    bool executeMomentumOptimizer(const std::vector<float>& current,
+                                  const std::vector<float>& gradient,
+                                  const std::vector<float>& velocity,
+                                  float learningRate, float momentum,
+                                  MomentumOptimizerOutputs& outputs,
+                                  std::string& error);
+    bool prepareAdamOptimizer(uint32_t elements, std::string& error);
+    bool executeAdamOptimizer(const std::vector<float>& current,
+                              const std::vector<float>& gradient,
+                              const std::vector<float>& firstMoment,
+                              const std::vector<float>& secondMoment,
+                              float learningRate, float firstCorrection,
+                              float secondCorrection,
+                              AdamOptimizerOutputs& outputs,
+                              std::string& error);
     bool prepareCrossEntropyGradient(uint32_t rows, uint32_t columns,
                                      std::string& error);
     bool executeCrossEntropyGradient(const std::vector<float>& logits,

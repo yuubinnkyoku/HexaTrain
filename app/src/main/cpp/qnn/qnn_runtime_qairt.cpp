@@ -287,6 +287,44 @@ struct Runtime::Impl {
         uint32_t tokens = 0, headDimension = 0;
         float scaleData = 1.0f;
     } attentionBackward;
+    struct MomentumOptimizerGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t current = QNN_TENSOR_INIT, gradient = QNN_TENSOR_INIT;
+        Qnn_Tensor_t velocity = QNN_TENSOR_INIT, momentum = QNN_TENSOR_INIT;
+        Qnn_Tensor_t learningRate = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scaledVelocity = QNN_TENSOR_INIT;
+        Qnn_Tensor_t velocityNext = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scaledUpdate = QNN_TENSOR_INIT;
+        Qnn_Tensor_t weightNext = QNN_TENSOR_INIT;
+        uint32_t dims[2]{}, scalarDims[2]{1, 1};
+        uint32_t elements = 0;
+    } momentumOptimizer;
+    struct AdamOptimizerGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t current = QNN_TENSOR_INIT, gradient = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstMoment = QNN_TENSOR_INIT, secondMoment = QNN_TENSOR_INIT;
+        Qnn_Tensor_t learningRate = QNN_TENSOR_INIT;
+        Qnn_Tensor_t beta1 = QNN_TENSOR_INIT, beta2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t oneMinusBeta1 = QNN_TENSOR_INIT, oneMinusBeta2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t inverseEpsilon = QNN_TENSOR_INIT, one = QNN_TENSOR_INIT;
+        Qnn_Tensor_t zero = QNN_TENSOR_INIT, nonzeroMask = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstCorrection = QNN_TENSOR_INIT, secondCorrection = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstScaled = QNN_TENSOR_INIT, gradientFirstScaled = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstMomentNext = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gradientSquared = QNN_TENSOR_INIT;
+        Qnn_Tensor_t secondScaled = QNN_TENSOR_INIT, gradientSecondScaled = QNN_TENSOR_INIT;
+        Qnn_Tensor_t secondMomentNext = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstMomentHat = QNN_TENSOR_INIT, secondMomentHat = QNN_TENSOR_INIT;
+        Qnn_Tensor_t secondRoot = QNN_TENSOR_INIT;
+        Qnn_Tensor_t firstOverEpsilon = QNN_TENSOR_INIT;
+        Qnn_Tensor_t rootOverEpsilon = QNN_TENSOR_INIT;
+        Qnn_Tensor_t denominator = QNN_TENSOR_INIT;
+        Qnn_Tensor_t divided = QNN_TENSOR_INIT, normalized = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scaledUpdate = QNN_TENSOR_INIT;
+        Qnn_Tensor_t weightNext = QNN_TENSOR_INIT;
+        uint32_t dims[2]{}, scalarDims[2]{1, 1};
+        uint32_t elements = 0;
+    } adamOptimizer;
     struct CrossEntropyGradientGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t logits = QNN_TENSOR_INIT, target = QNN_TENSOR_INIT;
