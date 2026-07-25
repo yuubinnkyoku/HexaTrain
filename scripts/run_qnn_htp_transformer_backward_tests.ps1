@@ -31,6 +31,13 @@ $tests=@(
   @{mode='QNN_HTP_SOFTMAX_BACKWARD_CHECK';name='softmax-backward';required=@(
     '(?m)^shape=B1_H1_T4_D4$','(?m)^epsilon=0\.001','(?m)^cpu_analytic_vs_numeric_max_abs_error=',
     '(?m)^htp_vs_cpu_max_abs_error=','(?m)^max_row_gradient_sum_abs=',
+    '(?m)^graph_create_result=0$','(?m)^graph_finalize_result=0$','(?m)^graph_execute_result=0$')},
+  @{mode='QNN_HTP_ATTENTION_BACKWARD_CHECK';name='attention-backward';required=@(
+    '(?m)^shape=B1_H1_T4_D8$','(?m)^causal_mask=true$','(?m)^mask_gradient=false$',
+    '(?m)^cpu_analytic_vs_numeric_dq_max_abs_error=','(?m)^cpu_analytic_vs_numeric_dk_max_abs_error=',
+    '(?m)^cpu_analytic_vs_numeric_dv_max_abs_error=','(?m)^htp_vs_cpu_dq_max_abs_error=',
+    '(?m)^htp_vs_cpu_dk_max_abs_error=','(?m)^htp_vs_cpu_dv_max_abs_error=',
+    '(?m)^future_probability_max=0(?:\.0+)?$','(?m)^future_dscores_max=0(?:\.0+)?$',
     '(?m)^graph_create_result=0$','(?m)^graph_finalize_result=0$','(?m)^graph_execute_result=0$')}
 )
 foreach($test in $tests){

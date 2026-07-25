@@ -487,6 +487,293 @@ bool Runtime::executeAttention(const std::vector<float> &query,
   }
   return true;
 }
+bool Runtime::prepareAttentionBackward(uint32_t tokens,
+                                       uint32_t headDimension,
+                                       std::string &error) {
+  if (!impl_ || !impl_->context || tokens == 0 || headDimension == 0) {
+    error = "Attention backward invalid runtime or shape";
+    return false;
+  }
+  auto &g = impl_->attentionBackward;
+  g.tokens = tokens;
+  g.headDimension = headDimension;
+  g.activationDims[0] = tokens;
+  g.activationDims[1] = headDimension;
+  g.scoreDims[0] = tokens;
+  g.scoreDims[1] = tokens;
+  g.reducedDims[0] = tokens;
+  g.reducedDims[1] = 1;
+  g.scaleData = 1.0f / std::sqrt(static_cast<float>(headDimension));
+  auto appWrite = [&](Qnn_Tensor_t &tensorValue, const char *name,
+                      uint32_t *dims) {
+    tensor(tensorValue, name, QNN_TENSOR_TYPE_APP_WRITE, dims);
+  };
+  auto native = [&](Qnn_Tensor_t &tensorValue, const char *name,
+                    uint32_t *dims) {
+    tensor(tensorValue, name, QNN_TENSOR_TYPE_NATIVE, dims);
+  };
+  auto appRead = [&](Qnn_Tensor_t &tensorValue, const char *name,
+                     uint32_t *dims) {
+    tensor(tensorValue, name, QNN_TENSOR_TYPE_APP_READ, dims);
+  };
+  appWrite(g.query, "attention_backward_q", g.activationDims);
+  appWrite(g.key, "attention_backward_k", g.activationDims);
+  appWrite(g.value, "attention_backward_v", g.activationDims);
+  appWrite(g.upstream, "attention_backward_do", g.activationDims);
+  appWrite(g.causalMask, "attention_backward_causal_mask", g.scoreDims);
+  native(g.scores, "attention_backward_scores", g.scoreDims);
+  native(g.scaledScores, "attention_backward_scaled_scores", g.scoreDims);
+  native(g.maskedScores, "attention_backward_masked_scores", g.scoreDims);
+  appRead(g.probabilities, "attention_backward_probabilities", g.scoreDims);
+  native(g.dProbabilities, "attention_backward_dp", g.scoreDims);
+  appRead(g.dValue, "attention_backward_dv", g.activationDims);
+  native(g.softmaxProduct, "attention_backward_softmax_product", g.scoreDims);
+  native(g.softmaxDot, "attention_backward_softmax_dot", g.reducedDims);
+  native(g.softmaxCentered, "attention_backward_softmax_centered", g.scoreDims);
+  appRead(g.dScores, "attention_backward_dscores", g.scoreDims);
+  native(g.dQueryRaw, "attention_backward_dq_raw", g.activationDims);
+  native(g.dKeyRaw, "attention_backward_dk_raw", g.activationDims);
+  appRead(g.dQuery, "attention_backward_dq", g.activationDims);
+  appRead(g.dKey, "attention_backward_dk", g.activationDims);
+  tensor(g.scale, "attention_backward_scale", QNN_TENSOR_TYPE_STATIC,
+         g.scalarDims);
+  g.scale.v1.clientBuf = {&g.scaleData, uint32_t(sizeof(g.scaleData))};
+  tensor(g.axes, "attention_backward_axes", QNN_TENSOR_TYPE_STATIC,
+         g.axesDims, QNN_DATATYPE_UINT_32, 1);
+  g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  auto status = impl_->api.graphCreate(
+      impl_->context, "phonelm_attention_backward", nullptr, &g.graph);
+  ++metrics_.graphCreateCount;
+  if (status != QNN_SUCCESS) {
+    error = "Attention backward graphCreate=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  for (auto *item : {&g.query, &g.key, &g.value, &g.upstream, &g.causalMask,
+                     &g.scores, &g.scaledScores, &g.maskedScores,
+                     &g.probabilities, &g.dProbabilities, &g.dValue,
+                     &g.softmaxProduct, &g.softmaxDot, &g.softmaxCentered,
+                     &g.dScores, &g.dQueryRaw, &g.dKeyRaw, &g.dQuery, &g.dKey,
+                     &g.scale, &g.axes}) {
+    status = impl_->api.tensorCreateGraphTensor(g.graph, item);
+    if (status != QNN_SUCCESS) {
+      error = "Attention backward tensor=" +
+              std::to_string(QNN_GET_ERROR_CODE(status));
+      return false;
+    }
+  }
+  Qnn_Tensor_t qk[2] = {g.query, g.key};
+  if ((status = addMatMulNode(impl_->api, g.graph, "attention_backward_qk",
+                              qk, &g.scores,
+                              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1)) !=
+      QNN_SUCCESS) {
+    error = "Attention backward QK=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t scaleScores[2] = {g.scores, g.scale};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "attention_backward_scale_scores",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, scaleScores, 2,
+                              &g.scaledScores)) != QNN_SUCCESS) {
+    error = "Attention backward scale scores=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t addMask[2] = {g.scaledScores, g.causalMask};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "attention_backward_add_mask",
+                              QNN_OP_ELEMENT_WISE_ADD, addMask, 2,
+                              &g.maskedScores)) != QNN_SUCCESS) {
+    error = "Attention backward mask=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Param_t softmaxParams[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+  softmaxParams[0].paramType = QNN_PARAMTYPE_SCALAR;
+  softmaxParams[0].name = QNN_OP_SOFTMAX_PARAM_AXIS;
+  softmaxParams[0].scalarParam.dataType = QNN_DATATYPE_UINT_32;
+  softmaxParams[0].scalarParam.uint32Value = 1;
+  softmaxParams[1].paramType = QNN_PARAMTYPE_SCALAR;
+  softmaxParams[1].name = QNN_OP_SOFTMAX_PARAM_BETA;
+  softmaxParams[1].scalarParam.dataType = QNN_DATATYPE_FLOAT_32;
+  softmaxParams[1].scalarParam.floatValue = 1.0f;
+  Qnn_OpConfig_t softmax = QNN_OPCONFIG_INIT;
+  softmax.v1.name = "attention_backward_softmax";
+  softmax.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+  softmax.v1.typeName = QNN_OP_SOFTMAX;
+  softmax.v1.numOfParams = 2;
+  softmax.v1.params = softmaxParams;
+  softmax.v1.numOfInputs = 1;
+  softmax.v1.inputTensors = &g.maskedScores;
+  softmax.v1.numOfOutputs = 1;
+  softmax.v1.outputTensors = &g.probabilities;
+  if ((status = impl_->api.graphAddNode(g.graph, softmax)) != QNN_SUCCESS) {
+    error = "Attention backward Softmax=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dpInputs[2] = {g.upstream, g.value};
+  if ((status = addMatMulNode(impl_->api, g.graph, "attention_backward_dp",
+                              dpInputs, &g.dProbabilities,
+                              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1)) !=
+      QNN_SUCCESS) {
+    error = "Attention backward dP=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dvInputs[2] = {g.probabilities, g.upstream};
+  if ((status = addMatMulNode(impl_->api, g.graph, "attention_backward_dv",
+                              dvInputs, &g.dValue,
+                              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0)) !=
+      QNN_SUCCESS) {
+    error = "Attention backward dV=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t smProduct[2] = {g.dProbabilities, g.probabilities};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "attention_backward_dp_times_p",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, smProduct, 2,
+                              &g.softmaxProduct)) != QNN_SUCCESS) {
+    error = "Attention backward Softmax product=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Param_t reduceParams[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+  reduceParams[0].paramType = QNN_PARAMTYPE_TENSOR;
+  reduceParams[0].name = QNN_OP_REDUCE_SUM_PARAM_AXES;
+  reduceParams[0].tensorParam = g.axes;
+  reduceParams[1].paramType = QNN_PARAMTYPE_SCALAR;
+  reduceParams[1].name = QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS;
+  reduceParams[1].scalarParam.dataType = QNN_DATATYPE_BOOL_8;
+  reduceParams[1].scalarParam.bool8Value = true;
+  Qnn_OpConfig_t reduce = QNN_OPCONFIG_INIT;
+  reduce.v1.name = "attention_backward_softmax_reduce";
+  reduce.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+  reduce.v1.typeName = QNN_OP_REDUCE_SUM;
+  reduce.v1.numOfParams = 2;
+  reduce.v1.params = reduceParams;
+  reduce.v1.numOfInputs = 1;
+  reduce.v1.inputTensors = &g.softmaxProduct;
+  reduce.v1.numOfOutputs = 1;
+  reduce.v1.outputTensors = &g.softmaxDot;
+  if ((status = impl_->api.graphAddNode(g.graph, reduce)) != QNN_SUCCESS) {
+    error = "Attention backward Softmax reduce=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t centerInputs[2] = {g.dProbabilities, g.softmaxDot};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "attention_backward_softmax_center",
+                              QNN_OP_ELEMENT_WISE_SUBTRACT, centerInputs, 2,
+                              &g.softmaxCentered)) != QNN_SUCCESS) {
+    error = "Attention backward Softmax subtract=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dsInputs[2] = {g.probabilities, g.softmaxCentered};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "attention_backward_dscores",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, dsInputs, 2,
+                              &g.dScores)) != QNN_SUCCESS) {
+    error = "Attention backward dScores=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dqInputs[2] = {g.dScores, g.key};
+  if ((status = addMatMulNode(impl_->api, g.graph, "attention_backward_dq_raw",
+                              dqInputs, &g.dQueryRaw)) != QNN_SUCCESS) {
+    error = "Attention backward dQ=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dkInputs[2] = {g.dScores, g.query};
+  if ((status = addMatMulNode(impl_->api, g.graph, "attention_backward_dk_raw",
+                              dkInputs, &g.dKeyRaw,
+                              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0)) !=
+      QNN_SUCCESS) {
+    error = "Attention backward dK=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dqScale[2] = {g.dQueryRaw, g.scale};
+  if ((status = addSimpleNode(impl_->api, g.graph, "attention_backward_dq_scale",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, dqScale, 2,
+                              &g.dQuery)) != QNN_SUCCESS) {
+    error = "Attention backward dQ scale=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t dkScale[2] = {g.dKeyRaw, g.scale};
+  if ((status = addSimpleNode(impl_->api, g.graph, "attention_backward_dk_scale",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, dkScale, 2,
+                              &g.dKey)) != QNN_SUCCESS) {
+    error = "Attention backward dK scale=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
+  ++metrics_.graphFinalizeCount;
+  if (status != QNN_SUCCESS) {
+    error = "Attention backward graphFinalize=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  diagnostics_ += "transformer_attention_backward_method=COMPOSED_QNN_OPS\n"
+                  "transformer_attention_backward_correctness_outputs="
+                  "P,dScores,dQ,dK,dV\n"
+                  "transformer_attention_backward_finalize=0\n";
+  return true;
+}
+
+bool Runtime::executeAttentionBackward(
+    const std::vector<float> &query, const std::vector<float> &key,
+    const std::vector<float> &value, const std::vector<float> &upstream,
+    const std::vector<float> &causalMask, AttentionBackwardOutputs &outputs,
+    std::string &error) {
+  auto &g = impl_->attentionBackward;
+  const size_t activationElements = size_t(g.tokens) * g.headDimension;
+  const size_t scoreElements = size_t(g.tokens) * g.tokens;
+  if (!g.graph || query.size() != activationElements ||
+      key.size() != activationElements || value.size() != activationElements ||
+      upstream.size() != activationElements ||
+      causalMask.size() != scoreElements) {
+    error = "Attention backward input size";
+    return false;
+  }
+  outputs.probabilities.resize(scoreElements);
+  outputs.dScores.resize(scoreElements);
+  outputs.dQuery.resize(activationElements);
+  outputs.dKey.resize(activationElements);
+  outputs.dValue.resize(activationElements);
+  Qnn_Tensor_t inputs[5] = {g.query, g.key, g.value, g.upstream, g.causalMask};
+  const std::vector<float> *inputData[5] = {&query, &key, &value, &upstream,
+                                            &causalMask};
+  for (size_t i = 0; i < 5; ++i)
+    inputs[i].v1.clientBuf = {
+        const_cast<float *>(inputData[i]->data()),
+        uint32_t(inputData[i]->size() * sizeof(float))};
+  Qnn_Tensor_t outputTensors[5] = {g.probabilities, g.dScores, g.dQuery,
+                                    g.dKey, g.dValue};
+  std::vector<float> *outputData[5] = {&outputs.probabilities, &outputs.dScores,
+                                       &outputs.dQuery, &outputs.dKey,
+                                       &outputs.dValue};
+  for (size_t i = 0; i < 5; ++i)
+    outputTensors[i].v1.clientBuf = {
+        outputData[i]->data(), uint32_t(outputData[i]->size() * sizeof(float))};
+  const auto status = impl_->api.graphExecute(g.graph, inputs, 5, outputTensors,
+                                               5, nullptr, nullptr);
+  ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status),
+                           QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+  if (status != QNN_SUCCESS) {
+    error = "Attention backward graphExecute=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  return true;
+}
 bool Runtime::prepareTinyTransformer(uint32_t tokens, uint32_t dimension,
                                      uint32_t feedForwardDimension,
                                      float epsilon, std::string &error) {

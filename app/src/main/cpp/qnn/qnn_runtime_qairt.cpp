@@ -227,6 +227,29 @@ struct Runtime::Impl {
         uint32_t tokens = 0, headDimension = 0;
         float scaleData = 1.0f;
     } attention;
+    struct AttentionBackwardGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t query = QNN_TENSOR_INIT, key = QNN_TENSOR_INIT;
+        Qnn_Tensor_t value = QNN_TENSOR_INIT, upstream = QNN_TENSOR_INIT;
+        Qnn_Tensor_t causalMask = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scores = QNN_TENSOR_INIT, scaledScores = QNN_TENSOR_INIT;
+        Qnn_Tensor_t maskedScores = QNN_TENSOR_INIT;
+        Qnn_Tensor_t probabilities = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dProbabilities = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dValue = QNN_TENSOR_INIT;
+        Qnn_Tensor_t softmaxProduct = QNN_TENSOR_INIT;
+        Qnn_Tensor_t softmaxDot = QNN_TENSOR_INIT;
+        Qnn_Tensor_t softmaxCentered = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dScores = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dQueryRaw = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dKeyRaw = QNN_TENSOR_INIT;
+        Qnn_Tensor_t dQuery = QNN_TENSOR_INIT, dKey = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scale = QNN_TENSOR_INIT, axes = QNN_TENSOR_INIT;
+        uint32_t activationDims[2]{}, scoreDims[2]{}, reducedDims[2]{};
+        uint32_t scalarDims[2]{1, 1}, axesDims[1]{1}, axesData[1]{1};
+        uint32_t tokens = 0, headDimension = 0;
+        float scaleData = 1.0f;
+    } attentionBackward;
     struct TinyTransformerGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t input = QNN_TENSOR_INIT, output = QNN_TENSOR_INIT;

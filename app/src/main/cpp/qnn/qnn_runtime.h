@@ -97,6 +97,14 @@ struct RuntimeOptions {
     bool failGraphFinalize = false;
 };
 
+struct AttentionBackwardOutputs {
+    std::vector<float> probabilities;
+    std::vector<float> dScores;
+    std::vector<float> dQuery;
+    std::vector<float> dKey;
+    std::vector<float> dValue;
+};
+
 struct MlpFullStepOutputs {
     float loss = 0.0f;
     std::vector<float> w1Next;
@@ -201,6 +209,15 @@ public:
                           std::vector<float>& output,
                           std::vector<float>& probabilities,
                           std::string& error);
+    bool prepareAttentionBackward(uint32_t tokens, uint32_t headDimension,
+                                  std::string& error);
+    bool executeAttentionBackward(const std::vector<float>& query,
+                                  const std::vector<float>& key,
+                                  const std::vector<float>& value,
+                                  const std::vector<float>& upstream,
+                                  const std::vector<float>& causalMask,
+                                  AttentionBackwardOutputs& outputs,
+                                  std::string& error);
     bool prepareTinyTransformer(uint32_t tokens, uint32_t dimension,
                                 uint32_t feedForwardDimension, float epsilon,
                                 std::string& error);

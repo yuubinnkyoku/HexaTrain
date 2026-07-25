@@ -400,6 +400,234 @@ std::string attentionCheck() {
          << runtime.apiTraceSummary() << runtime.diagnostics();
   return report.str();
 }
+struct AttentionCpuResult {
+  std::vector<float> probabilities;
+  std::vector<float> output;
+  std::vector<float> dScores;
+  std::vector<float> dQuery;
+  std::vector<float> dKey;
+  std::vector<float> dValue;
+};
+
+AttentionCpuResult attentionBackwardReference(
+    const std::vector<float> &query, const std::vector<float> &key,
+    const std::vector<float> &value, const std::vector<float> &upstream,
+    uint32_t tokens, uint32_t dimension) {
+  AttentionCpuResult result;
+  result.probabilities.resize(size_t(tokens) * tokens);
+  result.output.assign(size_t(tokens) * dimension, 0.0f);
+  result.dScores.resize(size_t(tokens) * tokens);
+  result.dQuery.assign(size_t(tokens) * dimension, 0.0f);
+  result.dKey.assign(size_t(tokens) * dimension, 0.0f);
+  result.dValue.assign(size_t(tokens) * dimension, 0.0f);
+  const double scale = 1.0 / std::sqrt(double(dimension));
+  std::vector<float> scores(size_t(tokens) * tokens);
+  for (uint32_t row = 0; row < tokens; ++row)
+    for (uint32_t column = 0; column < tokens; ++column) {
+      double sum = 0.0;
+      for (uint32_t d = 0; d < dimension; ++d)
+        sum += double(query[row * dimension + d]) *
+               key[column * dimension + d];
+      scores[row * tokens + column] =
+          float(sum * scale + (column > row ? -10000.0 : 0.0));
+    }
+  result.probabilities = softmaxReference(scores, tokens);
+  std::vector<float> dProbabilities(size_t(tokens) * tokens, 0.0f);
+  for (uint32_t row = 0; row < tokens; ++row) {
+    for (uint32_t d = 0; d < dimension; ++d)
+      for (uint32_t column = 0; column < tokens; ++column)
+        result.output[row * dimension + d] +=
+            result.probabilities[row * tokens + column] *
+            value[column * dimension + d];
+    for (uint32_t column = 0; column < tokens; ++column) {
+      double dp = 0.0;
+      for (uint32_t d = 0; d < dimension; ++d)
+        dp += double(upstream[row * dimension + d]) *
+              value[column * dimension + d];
+      dProbabilities[row * tokens + column] = float(dp);
+    }
+  }
+  result.dScores =
+      softmaxBackwardReference(result.probabilities, dProbabilities, tokens);
+  for (uint32_t row = 0; row < tokens; ++row)
+    for (uint32_t d = 0; d < dimension; ++d) {
+      double dq = 0.0;
+      for (uint32_t column = 0; column < tokens; ++column) {
+        dq += double(result.dScores[row * tokens + column]) *
+              key[column * dimension + d];
+        result.dKey[column * dimension + d] +=
+            float(result.dScores[row * tokens + column] *
+                  query[row * dimension + d] * scale);
+        result.dValue[column * dimension + d] +=
+            result.probabilities[row * tokens + column] *
+            upstream[row * dimension + d];
+      }
+      result.dQuery[row * dimension + d] = float(dq * scale);
+    }
+  return result;
+}
+
+std::vector<float> attentionNumericGradient(
+    const std::vector<float> &query, const std::vector<float> &key,
+    const std::vector<float> &value, const std::vector<float> &upstream,
+    uint32_t tokens, uint32_t dimension, int variable, double epsilon) {
+  std::vector<double> q(query.begin(), query.end()), k(key.begin(), key.end()),
+      v(value.begin(), value.end());
+  auto loss = [&]() {
+    const double scale = 1.0 / std::sqrt(double(dimension));
+    double total = 0.0;
+    for (uint32_t row = 0; row < tokens; ++row) {
+      std::vector<double> probabilities(tokens);
+      double maximum = -1.0e300;
+      for (uint32_t column = 0; column < tokens; ++column) {
+        double score = 0.0;
+        for (uint32_t d = 0; d < dimension; ++d)
+          score += q[row * dimension + d] * k[column * dimension + d];
+        probabilities[column] =
+            score * scale + (column > row ? -10000.0 : 0.0);
+        maximum = std::max(maximum, probabilities[column]);
+      }
+      double denominator = 0.0;
+      for (double &probability : probabilities) {
+        probability = std::exp(probability - maximum);
+        denominator += probability;
+      }
+      for (double &probability : probabilities)
+        probability /= denominator;
+      for (uint32_t d = 0; d < dimension; ++d) {
+        double output = 0.0;
+        for (uint32_t column = 0; column < tokens; ++column)
+          output += probabilities[column] * v[column * dimension + d];
+        total += output * upstream[row * dimension + d];
+      }
+    }
+    return total;
+  };
+  std::vector<double> *selected = variable == 0 ? &q : (variable == 1 ? &k : &v);
+  std::vector<float> gradient(selected->size());
+  for (size_t index = 0; index < selected->size(); ++index) {
+    const double original = (*selected)[index];
+    (*selected)[index] = original + epsilon;
+    const double positive = loss();
+    (*selected)[index] = original - epsilon;
+    const double negative = loss();
+    (*selected)[index] = original;
+    gradient[index] = float((positive - negative) / (2.0 * epsilon));
+  }
+  return gradient;
+}
+
+std::string attentionBackwardCheck() {
+  constexpr uint32_t tokens = 4, dimension = 8;
+  constexpr double epsilon = 1.0e-3;
+  std::vector<float> query(tokens * dimension), key(tokens * dimension),
+      value(tokens * dimension), upstream(tokens * dimension);
+  for (size_t index = 0; index < query.size(); ++index) {
+    query[index] = std::sin(float(index + 1) * 0.17f) * 0.7f;
+    key[index] = std::cos(float(index + 2) * 0.13f) * 0.6f;
+    value[index] = float(int(index % 11) - 5) * 0.09f;
+    upstream[index] = std::sin(float(index + 3) * 0.11f) * 0.4f;
+  }
+  std::vector<float> mask(tokens * tokens, 0.0f);
+  for (uint32_t row = 0; row < tokens; ++row)
+    for (uint32_t column = row + 1; column < tokens; ++column)
+      mask[row * tokens + column] = -10000.0f;
+  const auto cpu = attentionBackwardReference(query, key, value, upstream,
+                                               tokens, dimension);
+  const auto numericQ = attentionNumericGradient(
+      query, key, value, upstream, tokens, dimension, 0, epsilon);
+  const auto numericK = attentionNumericGradient(
+      query, key, value, upstream, tokens, dimension, 1, epsilon);
+  const auto numericV = attentionNumericGradient(
+      query, key, value, upstream, tokens, dimension, 2, epsilon);
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  AttentionBackwardOutputs htp;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareAttentionBackward(tokens, dimension, error) ||
+      !runtime.executeAttentionBackward(query, key, value, upstream, mask, htp,
+                                        error))
+    return failure("attention_backward", error, runtime);
+  const double numericQMax = maxAbs(cpu.dQuery, numericQ);
+  const double numericKMax = maxAbs(cpu.dKey, numericK);
+  const double numericVMax = maxAbs(cpu.dValue, numericV);
+  const double analyticNumericMax =
+      std::max({numericQMax, numericKMax, numericVMax});
+  const double analyticNumericMean =
+      (meanAbs(cpu.dQuery, numericQ) + meanAbs(cpu.dKey, numericK) +
+       meanAbs(cpu.dValue, numericV)) /
+      3.0;
+  const double dqMax = maxAbs(cpu.dQuery, htp.dQuery);
+  const double dkMax = maxAbs(cpu.dKey, htp.dKey);
+  const double dvMax = maxAbs(cpu.dValue, htp.dValue);
+  const double dsMax = maxAbs(cpu.dScores, htp.dScores);
+  const double probabilityMax = maxAbs(cpu.probabilities, htp.probabilities);
+  const double htpCpuMax = std::max({dqMax, dkMax, dvMax});
+  const double htpCpuMean =
+      (meanAbs(cpu.dQuery, htp.dQuery) + meanAbs(cpu.dKey, htp.dKey) +
+       meanAbs(cpu.dValue, htp.dValue)) /
+      3.0;
+  const double htpCpuRelative =
+      std::max({maxRelative(cpu.dQuery, htp.dQuery),
+                maxRelative(cpu.dKey, htp.dKey),
+                maxRelative(cpu.dValue, htp.dValue)});
+  double futureProbabilityMax = 0.0, futureDScoreMax = 0.0;
+  for (uint32_t row = 0; row < tokens; ++row)
+    for (uint32_t column = row + 1; column < tokens; ++column) {
+      futureProbabilityMax = std::max(
+          futureProbabilityMax,
+          double(std::abs(htp.probabilities[row * tokens + column])));
+      futureDScoreMax = std::max(
+          futureDScoreMax, double(std::abs(htp.dScores[row * tokens + column])));
+    }
+  const bool nanDetected = anyNan(htp.probabilities) || anyNan(htp.dScores) ||
+                           anyNan(htp.dQuery) || anyNan(htp.dKey) ||
+                           anyNan(htp.dValue);
+  const bool infDetected = anyInf(htp.probabilities) || anyInf(htp.dScores) ||
+                           anyInf(htp.dQuery) || anyInf(htp.dKey) ||
+                           anyInf(htp.dValue);
+  const bool ok = !nanDetected && !infDetected && analyticNumericMax < 2.0e-4 &&
+                  dqMax <= 1.0e-2 && dkMax <= 1.0e-2 && dvMax <= 1.0e-2 &&
+                  futureProbabilityMax <= 2.0e-3 && futureDScoreMax <= 2.0e-3;
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "TRANSFORMER_BACKWARD_MICRO\ntest=attention_backward\n"
+            "execution_mode=QNN_HTP_ATTENTION_BACKWARD_CHECK\n"
+            "method=COMPOSED_QNN_OPS\nshape=B1_H1_T4_D8\nepsilon="
+         << epsilon
+         << "\ncausal_mask=true\nmask_gradient=false\n"
+            "cpu_analytic_vs_numeric_max_abs_error="
+         << analyticNumericMax
+         << "\ncpu_analytic_vs_numeric_mean_abs_error=" << analyticNumericMean
+         << "\ncpu_analytic_vs_numeric_dq_max_abs_error=" << numericQMax
+         << "\ncpu_analytic_vs_numeric_dk_max_abs_error=" << numericKMax
+         << "\ncpu_analytic_vs_numeric_dv_max_abs_error=" << numericVMax
+         << "\nhtp_vs_cpu_max_abs_error=" << htpCpuMax
+         << "\nhtp_vs_cpu_mean_abs_error=" << htpCpuMean
+         << "\nhtp_vs_cpu_max_relative_error=" << htpCpuRelative
+         << "\nhtp_vs_cpu_dq_max_abs_error=" << dqMax
+         << "\nhtp_vs_cpu_dk_max_abs_error=" << dkMax
+         << "\nhtp_vs_cpu_dv_max_abs_error=" << dvMax
+         << "\nhtp_vs_cpu_dscores_max_abs_error=" << dsMax
+         << "\nhtp_vs_cpu_probability_max_abs_error=" << probabilityMax
+         << "\nfuture_probability_max=" << futureProbabilityMax
+         << "\nfuture_dscores_max=" << futureDScoreMax
+         << "\ngraph_create_result=0\ngraph_finalize_result=0\n"
+            "graph_execute_result=0\ngraph_create=SUCCESS\n"
+            "graph_finalize=SUCCESS\ngraph_execute=SUCCESS\n"
+            "cpu_fallback=false\nnan_detected="
+         << (nanDetected ? "true" : "false") << "\ninf_detected="
+         << (infDetected ? "true" : "false") << "\nnan_inf="
+         << (nanDetected || infDetected ? "true" : "false")
+         << "\nhtp_graph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nstatus=" << (ok ? "SUCCESS" : "FAILED") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
 std::string tinyTransformerCheck() {
   constexpr uint32_t tokens = 4, dimension = 16, feedForward = 32;
   constexpr float epsilon = 1.0e-5f;
@@ -500,6 +728,8 @@ std::string runTransformerExperiment(ExecutionMode mode) {
     return tinyTransformerCheck();
   if (mode == ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK)
     return softmaxBackwardCheck();
+  if (mode == ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK)
+    return attentionBackwardCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "
          "mode\n";
 }
