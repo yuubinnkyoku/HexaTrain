@@ -653,6 +653,125 @@ bool Runtime::executeSoftmaxBackward(
   }
   return true;
 }
+bool Runtime::prepareCrossEntropyGradient(uint32_t rows, uint32_t columns,
+                                          std::string &error) {
+  if (!impl_ || !impl_->context || !rows || !columns) {
+    error = "cross entropy gradient invalid runtime or shape";
+    return false;
+  }
+  auto &g = impl_->crossEntropyGradient;
+  g.rows = rows;
+  g.columns = columns;
+  g.dims[0] = rows;
+  g.dims[1] = columns;
+  g.scaleData = 1.0f / float(rows);
+  tensor(g.logits, "cross_entropy_logits", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  tensor(g.target, "cross_entropy_target", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
+  tensor(g.probabilities, "cross_entropy_probabilities", QNN_TENSOR_TYPE_APP_READ,
+         g.dims);
+  tensor(g.difference, "cross_entropy_difference", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.dLogits, "cross_entropy_dlogits", QNN_TENSOR_TYPE_APP_READ, g.dims);
+  tensor(g.scale, "cross_entropy_scale", QNN_TENSOR_TYPE_STATIC, g.scalarDims);
+  g.scale.v1.clientBuf = {&g.scaleData, sizeof(float)};
+  auto status = impl_->api.graphCreate(impl_->context, "phonelm_cross_entropy_gradient",
+                                       nullptr, &g.graph);
+  if (status != QNN_SUCCESS) {
+    error = "cross entropy graphCreate=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t *all[] = {&g.logits, &g.target, &g.probabilities,
+                         &g.difference, &g.dLogits, &g.scale};
+  for (auto *t : all)
+    if ((status = impl_->api.tensorCreateGraphTensor(g.graph, t)) != QNN_SUCCESS) {
+      error = "cross entropy tensor=" +
+              std::to_string(QNN_GET_ERROR_CODE(status));
+      return false;
+    }
+  Qnn_Param_t params[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+  params[0].paramType = QNN_PARAMTYPE_SCALAR;
+  params[0].name = QNN_OP_SOFTMAX_PARAM_AXIS;
+  params[0].scalarParam.dataType = QNN_DATATYPE_UINT_32;
+  params[0].scalarParam.uint32Value = 1;
+  params[1].paramType = QNN_PARAMTYPE_SCALAR;
+  params[1].name = QNN_OP_SOFTMAX_PARAM_BETA;
+  params[1].scalarParam.dataType = QNN_DATATYPE_FLOAT_32;
+  params[1].scalarParam.floatValue = 1.0f;
+  Qnn_OpConfig_t softmax = QNN_OPCONFIG_INIT;
+  softmax.v1.name = "cross_entropy_softmax";
+  softmax.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+  softmax.v1.typeName = QNN_OP_SOFTMAX;
+  softmax.v1.numOfParams = 2;
+  softmax.v1.params = params;
+  softmax.v1.numOfInputs = 1;
+  softmax.v1.inputTensors = &g.logits;
+  softmax.v1.numOfOutputs = 1;
+  softmax.v1.outputTensors = &g.probabilities;
+  if ((status = impl_->api.graphAddNode(g.graph, softmax)) != QNN_SUCCESS) {
+    error = "cross entropy Softmax=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t subtractInputs[2] = {g.probabilities, g.target};
+  if ((status = addSimpleNode(impl_->api, g.graph, "cross_entropy_subtract",
+                              QNN_OP_ELEMENT_WISE_SUBTRACT, subtractInputs, 2,
+                              &g.difference)) != QNN_SUCCESS) {
+    error = "cross entropy subtract=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  Qnn_Tensor_t scaleInputs[2] = {g.difference, g.scale};
+  if ((status = addSimpleNode(impl_->api, g.graph, "cross_entropy_scale",
+                              QNN_OP_ELEMENT_WISE_MULTIPLY, scaleInputs, 2,
+                              &g.dLogits)) != QNN_SUCCESS) {
+    error = "cross entropy scale=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
+  if (status != QNN_SUCCESS) {
+    error = "cross entropy graphFinalize=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  diagnostics_ += "cross_entropy_method=HTP_SOFTMAX_P_MINUS_Y_OVER_N\n"
+                  "cross_entropy_loss_scalar=CPU_STABLE_LOGSUMEXP\n"
+                  "cross_entropy_gradient=HTP\n";
+  return true;
+}
+
+bool Runtime::executeCrossEntropyGradient(
+    const std::vector<float> &logits, const std::vector<float> &targetOneHot,
+    CrossEntropyGradientOutputs &outputs, std::string &error) {
+  auto &g = impl_->crossEntropyGradient;
+  const size_t count = size_t(g.rows) * g.columns;
+  if (!g.graph || logits.size() != count || targetOneHot.size() != count) {
+    error = "cross entropy buffer size";
+    return false;
+  }
+  outputs.probabilities.resize(count);
+  outputs.dLogits.resize(count);
+  Qnn_Tensor_t inputs[2] = {g.logits, g.target};
+  inputs[0].v1.clientBuf = {const_cast<float *>(logits.data()),
+                            uint32_t(count * sizeof(float))};
+  inputs[1].v1.clientBuf = {const_cast<float *>(targetOneHot.data()),
+                            uint32_t(count * sizeof(float))};
+  Qnn_Tensor_t out[2] = {g.probabilities, g.dLogits};
+  out[0].v1.clientBuf = {outputs.probabilities.data(),
+                         uint32_t(count * sizeof(float))};
+  out[1].v1.clientBuf = {outputs.dLogits.data(),
+                         uint32_t(count * sizeof(float))};
+  auto status = impl_->api.graphExecute(g.graph, inputs, 2, out, 2, nullptr, nullptr);
+  ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),
+                           status == QNN_SUCCESS);
+  if (status != QNN_SUCCESS) {
+    error = "cross entropy graphExecute=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  return true;
+}
 bool Runtime::prepareAttention(uint32_t tokens, uint32_t headDimension,
                                std::string &error) {
   if (!impl_ || !impl_->context || tokens == 0 || headDimension == 0) {

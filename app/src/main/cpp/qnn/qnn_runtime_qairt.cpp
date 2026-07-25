@@ -287,6 +287,16 @@ struct Runtime::Impl {
         uint32_t tokens = 0, headDimension = 0;
         float scaleData = 1.0f;
     } attentionBackward;
+    struct CrossEntropyGradientGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t logits = QNN_TENSOR_INIT, target = QNN_TENSOR_INIT;
+        Qnn_Tensor_t probabilities = QNN_TENSOR_INIT;
+        Qnn_Tensor_t difference = QNN_TENSOR_INIT, dLogits = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scale = QNN_TENSOR_INIT;
+        uint32_t dims[2]{}, scalarDims[2]{1, 1};
+        uint32_t rows = 0, columns = 0;
+        float scaleData = 1.0f;
+    } crossEntropyGradient;
     struct TinyTransformerTrainingGraph {
         enum TensorIndex {
             X, TARGET, G1, B1, WQ, WK, WV, WO, G2, B2, W1, W2, LR,
@@ -311,7 +321,12 @@ struct Runtime::Impl {
             INV_STD_OVER_D1, DG1, DB1,
             S_DG1, N_G1, S_DB1, N_B1, S_DWQ, N_WQ, S_DWK, N_WK,
             S_DWV, N_WV, S_DWO, N_WO, S_DG2, N_G2, S_DB2, N_B2,
-            S_DW1, N_W1, S_DW2, N_W2, TENSOR_COUNT
+            S_DW1, N_W1, S_DW2, N_W2,
+            ONE_HOT, EMBEDDING, POSITION, EMBEDDED_TOKEN, OUTPUT_PROJECTION,
+            LOGITS, LM_PROBABILITIES, LM_DIFFERENCE, DLOGITS,
+            DOUTPUT_PROJECTION,
+            DINPUT_NORM, DINPUT, DEMBEDDING, S_DEMBEDDING, N_EMBEDDING,
+            S_DOUTPUT_PROJECTION, N_OUTPUT_PROJECTION, TENSOR_COUNT
         };
         Qnn_GraphHandle_t graph = nullptr;
         std::array<Qnn_Tensor_t, TENSOR_COUNT> tensors{};
@@ -319,14 +334,18 @@ struct Runtime::Impl {
         uint32_t activationDims[2]{}, scoreDims[2]{}, ffDims[2]{};
         uint32_t ddDims[2]{}, dfDims[2]{}, fdDims[2]{};
         uint32_t normDims[1]{}, rowDims[2]{}, scalarDims[2]{1, 1};
+        uint32_t oneHotDims[2]{}, embeddingDims[2]{}, logitsDims[2]{};
+        uint32_t outputProjectionDims[2]{};
         uint32_t axisOneDims[1]{1}, axisTwoDims[1]{2};
         uint32_t lastAxisData[1]{1}, rowAxisData[1]{0}, allAxesData[2]{0, 1};
         uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
+        uint32_t vocabularySize = 0;
+        bool languageModel = false;
         bool diagnosticOutputs = true;
         float scaleData = 1.0f, epsilonScaledData = 1.0e-5f;
         float centeredScaleData = 64.0f, dimensionData = 1.0f;
         float inverseDimensionData = 1.0f, gradientScaleData = 1.0f;
-        std::vector<float> maskData, zeroFfData;
+        std::vector<float> maskData, zeroFfData, positionData;
     } tinyTransformerTraining;
 
     struct TinyTransformerGraph {

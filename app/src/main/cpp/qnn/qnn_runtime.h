@@ -116,14 +116,21 @@ struct AttentionBackwardOutputs {
 struct TinyTransformerParameters {
     std::vector<float> gamma1, beta1, wq, wk, wv, wo;
     std::vector<float> gamma2, beta2, w1, w2;
+    std::vector<float> tokenEmbedding, outputProjection;
 };
 
 struct TinyTransformerTrainingOutputs {
     float loss = 0.0f;
     std::vector<float> output;
     std::vector<float> dOutput;
+    std::vector<float> embeddedInput, logits, probabilities, dLogits;
+    std::vector<float> dEmbeddedInput;
     TinyTransformerParameters gradients;
     TinyTransformerParameters next;
+};
+struct CrossEntropyGradientOutputs {
+    std::vector<float> probabilities;
+    std::vector<float> dLogits;
 };
 struct MlpFullStepOutputs {
     float loss = 0.0f;
@@ -229,6 +236,12 @@ public:
                                 const std::vector<float>& upstream,
                                 std::vector<float>& inputGradient,
                                 std::string& error);
+    bool prepareCrossEntropyGradient(uint32_t rows, uint32_t columns,
+                                     std::string& error);
+    bool executeCrossEntropyGradient(const std::vector<float>& logits,
+                                     const std::vector<float>& targetOneHot,
+                                     CrossEntropyGradientOutputs& outputs,
+                                     std::string& error);
     bool prepareAttention(uint32_t tokens, uint32_t headDimension, std::string& error);
     bool executeAttention(const std::vector<float>& query,
                           const std::vector<float>& key,
@@ -254,7 +267,8 @@ public:
     bool prepareTinyTransformerTraining(uint32_t tokens, uint32_t dimension,
                                         uint32_t feedForwardDimension,
                                         float epsilon, bool diagnosticOutputs,
-                                        std::string& error);
+                                        std::string& error,
+                                        uint32_t vocabularySize = 0);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,

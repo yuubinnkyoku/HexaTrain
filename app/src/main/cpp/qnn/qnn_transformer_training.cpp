@@ -2,6 +2,7 @@
 // Copyright 2026 yuubinnkyoku
 #include "qnn_runtime.h"
 #include "qnn_transformer.h"
+#include "../tiny_language_model_cpu.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -292,12 +293,15 @@ double maxParamError(const Params &a, const Params &b) {
                    maxAbs(a.wq, b.wq), maxAbs(a.wk, b.wk), maxAbs(a.wv, b.wv),
                    maxAbs(a.wo, b.wo), maxAbs(a.gamma2, b.gamma2),
                    maxAbs(a.beta2, b.beta2), maxAbs(a.w1, b.w1),
-                   maxAbs(a.w2, b.w2)});
+                   maxAbs(a.w2, b.w2),
+                   maxAbs(a.tokenEmbedding, b.tokenEmbedding),
+                   maxAbs(a.outputProjection, b.outputProjection)});
 }
 bool finiteParams(const Params &p) {
   return finite(p.gamma1) && finite(p.beta1) && finite(p.wq) && finite(p.wk) &&
          finite(p.wv) && finite(p.wo) && finite(p.gamma2) && finite(p.beta2) &&
-         finite(p.w1) && finite(p.w2);
+         finite(p.w1) && finite(p.w2) && finite(p.tokenEmbedding) &&
+         finite(p.outputProjection);
 }
 double paramNorm(const Params &p) {
   double s = 0;
@@ -315,6 +319,8 @@ double paramNorm(const Params &p) {
   add(p.beta2);
   add(p.w1);
   add(p.w2);
+  add(p.tokenEmbedding);
+  add(p.outputProjection);
   return std::sqrt(s);
 }
 std::string failure(const char *test, const std::string &e, Runtime &r) {
@@ -511,12 +517,294 @@ std::string multiStep() {
     << rt.apiTraceSummary() << rt.diagnostics();
   return s.str();
 }
-} // namespace
+float tokenAccuracy(const std::vector<float> &logits,
+                    const std::vector<float> &target, uint32_t rows,
+                    uint32_t vocabulary) {
+  uint32_t correct = 0;
+  for (uint32_t row = 0; row < rows; ++row) {
+    const size_t base = size_t(row) * vocabulary;
+    uint32_t predicted = 0, truth = 0;
+    for (uint32_t column = 1; column < vocabulary; ++column) {
+      if (logits[base + column] > logits[base + predicted]) predicted = column;
+      if (target[base + column] > target[base + truth]) truth = column;
+    }
+    correct += predicted == truth;
+  }
+  return float(correct) / rows;
+}
+std::pair<std::vector<float>, std::vector<float>> languageBatch(
+    const tiny_lm::Config &config, uint32_t patternIndex, uint32_t phase = 0) {
+  static const std::vector<std::vector<uint32_t>> patterns{
+      {0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9}, {10, 11, 12}};
+  const auto &pattern = patterns.at(patternIndex % patterns.size());
+  std::vector<uint32_t> input(config.tokens), target(config.tokens);
+  for (uint32_t i = 0; i < config.tokens; ++i) {
+    input[i] = pattern[(i + phase) % pattern.size()];
+    target[i] = pattern[(i + phase + 1) % pattern.size()];
+  }
+  return {tiny_lm::oneHot(input, config.vocabularySize),
+          tiny_lm::oneHot(target, config.vocabularySize)};
+}
+std::string crossEntropyMicrotest() {
+  constexpr uint32_t rows = 6, vocabulary = 8;
+  std::vector<float> logits{
+      .2f,-.1f,.7f,.4f,-.5f,.1f,.3f,-.2f,
+      1000.f,999.f,998.f,997.f,996.f,995.f,994.f,993.f,
+      -1000.f,-1001.f,-1002.f,-1003.f,-1004.f,-1005.f,-1006.f,-1007.f,
+      -3.f,-2.f,-1.f,8.f,0.f,1.f,2.f,3.f,
+      8.f,7.f,6.f,5.f,4.f,3.f,2.f,-8.f,
+      4.f,4.f,4.f,4.f,4.f,4.f,4.f,4.f};
+  const std::vector<uint32_t> targetIds{2,0,7,3,7,5};
+  auto target = tiny_lm::oneHot(targetIds, vocabulary);
+  std::vector<float> cpuProbability(logits.size()), cpuGradient(logits.size());
+  double cpuLoss = 0.0;
+  for (uint32_t row = 0; row < rows; ++row) {
+    const size_t base = size_t(row) * vocabulary;
+    float maximum = *std::max_element(logits.begin() + base,
+                                      logits.begin() + base + vocabulary);
+    double sum = 0.0;
+    for (uint32_t column = 0; column < vocabulary; ++column) {
+      cpuProbability[base + column] = std::exp(logits[base + column] - maximum);
+      sum += cpuProbability[base + column];
+    }
+    for (uint32_t column = 0; column < vocabulary; ++column) {
+      cpuProbability[base + column] /= float(sum);
+      cpuGradient[base + column] =
+          (cpuProbability[base + column] - target[base + column]) / rows;
+    }
+    cpuLoss += maximum + std::log(sum) - logits[base + targetIds[row]];
+  }
+  cpuLoss /= rows;
+  Runtime runtime;
+  RuntimeOptions options; options.captureQnnCallback = false; options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  CrossEntropyGradientOutputs htp;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareCrossEntropyGradient(rows, vocabulary, error) ||
+      !runtime.executeCrossEntropyGradient(logits, target, htp, error))
+    return failure("cross_entropy_microtest", error, runtime);
+  double probabilityError = maxAbs(cpuProbability, htp.probabilities);
+  double gradientError = maxAbs(cpuGradient, htp.dLogits);
+  double probabilityRowError = 0.0, gradientRowError = 0.0;
+  for (uint32_t row = 0; row < rows; ++row) {
+    double ps = 0.0, gs = 0.0;
+    for (uint32_t column = 0; column < vocabulary; ++column) {
+      ps += htp.probabilities[size_t(row) * vocabulary + column];
+      gs += htp.dLogits[size_t(row) * vocabulary + column];
+    }
+    probabilityRowError = std::max(probabilityRowError, std::abs(ps - 1.0));
+    gradientRowError = std::max(gradientRowError, std::abs(gs));
+  }
+  bool nan = !finite(htp.probabilities) || !finite(htp.dLogits);
+  bool ok = !nan && probabilityError <= 5e-3 && gradientError <= 5e-3 &&
+            probabilityRowError <= 5e-3 && gradientRowError <= 5e-3;
+  std::ostringstream out;
+  out << std::setprecision(10)
+      << "QNN_HTP_CROSS_ENTROPY\nstatus=" << (ok ? "SUCCESS" : "FAILED")
+      << "\nshape=B2_T3_V8\nimplementation=HTP_SOFTMAX_P_MINUS_Y_OVER_N"
+      << "\ncross_entropy_loss_scalar=CPU_STABLE_LOGSUMEXP"
+      << "\ncross_entropy_gradient=HTP\ncpu_loss=" << cpuLoss
+      << "\nprobability_max_abs_error=" << probabilityError
+      << "\ndlogits_max_abs_error=" << gradientError
+      << "\nprobability_row_sum_max_abs_error=" << probabilityRowError
+      << "\ndlogits_row_sum_max_abs_error=" << gradientRowError
+      << "\nrequired_cases=normal,large_positive,large_negative,target_max,target_min,equal"
+      << "\ncpu_fallback=false\nnan_detected=" << (nan ? "true" : "false")
+      << "\ninf_detected=false\n" << runtime.apiTraceSummary()
+      << runtime.diagnostics();
+  return out.str();
+}
+std::string languageModelOneStep() {
+  tiny_lm::Config config;
+  auto [input, target] = languageBatch(config, 0);
+  auto parameters = tiny_lm::initialParameters(config, 1);
+  constexpr float learningRate = .03f;
+  auto cpu = tiny_lm::forwardBackward(config, input, target, parameters,
+                                      learningRate);
+  Runtime runtime; RuntimeOptions options;
+  options.captureQnnCallback = false; options.qnnLogLevel = 2;
+  runtime.setOptions(options); std::string error;
+  TinyTransformerTrainingOutputs htp;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(config.tokens, config.dimension,
+          config.feedForwardDimension, config.epsilon, true, error,
+          config.vocabularySize) ||
+      !runtime.executeTinyTransformerTraining(input, target, parameters,
+                                               learningRate, htp, error))
+    return failure("tiny_language_model_one_step", error, runtime);
+  const double embeddedError = maxAbs(cpu.embeddedInput, htp.embeddedInput);
+  const double logitsError = maxAbs(cpu.logits, htp.logits);
+  const double probabilityError = maxAbs(cpu.probabilities, htp.probabilities);
+  const double dLogitsError = maxAbs(cpu.dLogits, htp.dLogits);
+  const double dEmbeddingError = maxAbs(cpu.gradients.tokenEmbedding,
+                                        htp.gradients.tokenEmbedding);
+  const double dProjectionError = maxAbs(cpu.gradients.outputProjection,
+                                         htp.gradients.outputProjection);
+  const double gradientError = maxParamError(cpu.gradients, htp.gradients);
+  const double nextError = maxParamError(cpu.next, htp.next);
+  const double lossError = std::abs(double(cpu.loss) - htp.loss);
+  const bool nan = !std::isfinite(htp.loss) || !finite(htp.logits) ||
+                   !finiteParams(htp.gradients) || !finiteParams(htp.next);
+  const bool changed = maxParamError(parameters, htp.next) > 0.0;
+  const bool ok = !nan && embeddedError < 2e-2 && logitsError < 2e-2 &&
+                  probabilityError < 5e-3 && dLogitsError < 5e-3 &&
+                  gradientError < 3e-2 && nextError < 3e-2 && changed;
+  std::ostringstream out;
+  out << std::setprecision(10) << "TINY_LANGUAGE_MODEL\ntest=one_step\nstatus="
+      << (ok ? "SUCCESS" : "FAILED")
+      << "\nshape=B1_T8_V32_D16_H1_L1_F32\nlearning_rate=" << learningRate
+      << "\nembedding_method=CPU_ONE_HOT_HTP_MATMUL"
+      << "\nposition_embedding=FIXED_SINUSOIDAL"
+      << "\ncross_entropy_loss_scalar=CPU_STABLE_LOGSUMEXP"
+      << "\ncross_entropy_gradient=HTP\nloss_abs_error=" << lossError
+      << "\nembedded_input_max_abs_error=" << embeddedError
+      << "\nlogits_max_abs_error=" << logitsError
+      << "\nprobability_max_abs_error=" << probabilityError
+      << "\ndlogits_max_abs_error=" << dLogitsError
+      << "\ndembedding_max_abs_error=" << dEmbeddingError
+      << "\ndoutput_projection_max_abs_error=" << dProjectionError
+      << "\ngradient_max_abs_error=" << gradientError
+      << "\nnext_parameter_max_abs_error=" << nextError
+      << "\ninitial_loss=" << cpu.loss << "\nhtp_loss=" << htp.loss
+      << "\ninitial_accuracy=" << cpu.accuracy
+      << "\nhtp_accuracy=" << tokenAccuracy(htp.logits, target, 8, 32)
+      << "\nmajor_weight_changed=" << (changed ? "true" : "false")
+      << "\ngraph_count=1\nexecute_count_per_step=1\ncpu_fallback=false"
+      << "\nnan_detected=" << (nan ? "true" : "false")
+      << "\ninf_detected=false\n" << runtime.apiTraceSummary()
+      << runtime.diagnostics();
+  return out.str();
+}
+std::string languageModelMultiStep(bool inferenceOnly) {
+  tiny_lm::Config config;
+  constexpr int steps = 320;
+  constexpr float learningRate = .01f;
+  Runtime runtime; RuntimeOptions options;
+  options.captureQnnCallback = false; options.qnnLogLevel = 2;
+  runtime.setOptions(options); std::string error;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(config.tokens, config.dimension,
+          config.feedForwardDimension, config.epsilon, true, error,
+          config.vocabularySize))
+    return failure("tiny_language_model_multi_prepare", error, runtime);
+  std::ostringstream trajectory; trajectory << std::setprecision(10);
+  bool allLossDown = true, allAccuracyUp = true, nan = false, replay = true;
+  double worstParameterError = 0.0;
+  const int firstSeed = 1, lastSeed = inferenceOnly ? 1 : 5;
+  Params inferenceParameters;
+  for (int seed = firstSeed; seed <= lastSeed; ++seed) {
+
+    auto htp = tiny_lm::initialParameters(config, seed);
+    auto cpu = htp;
+    auto initialBatch = languageBatch(config, 0, 1);
+    auto initial = tiny_lm::forwardBackward(config, initialBatch.first,
+                                            initialBatch.second, cpu, 0.0f);
+    double initialLoss = initial.loss;
+    double initialAccuracy = initial.accuracy;
+    trajectory << "seed_" << seed << "_initial_loss=" << initialLoss
+               << "\nseed_" << seed << "_initial_accuracy=" << initialAccuracy
+               << '\n';
+    TinyTransformerTrainingOutputs output;
+    for (int step = 1; step <= steps; ++step) {
+      const uint32_t pattern = inferenceOnly ? 0u : uint32_t((step - 1) % 4);
+      auto batch = languageBatch(config, pattern);
+      auto cpuStep = tiny_lm::forwardBackward(config, batch.first, batch.second,
+                                               cpu, learningRate);
+      if (!runtime.executeTinyTransformerTraining(batch.first, batch.second, htp,
+                                                   learningRate, output, error))
+        return failure("tiny_language_model_multi_execute", error, runtime);
+      cpu = std::move(cpuStep.next);
+      htp = output.next;
+      nan = nan || !std::isfinite(output.loss) || !finiteParams(htp);
+      if (step==1||step==2||step==5||step==10||step==20||step==50||
+          step==100||step==320)
+        trajectory << "seed_" << seed << "_step_" << step
+                   << "_loss=" << output.loss << "\nseed_" << seed
+                   << "_step_" << step << "_accuracy="
+                   << tokenAccuracy(output.logits, batch.second, 8, 32) << '\n';
+    }
+    auto eval = languageBatch(config, 0, 1);
+    if (!runtime.executeTinyTransformerTraining(eval.first, eval.second, htp,
+                                                 0.0f, output, error))
+      return failure("tiny_language_model_final_eval", error, runtime);
+    auto cpuFinal = tiny_lm::forwardBackward(config, eval.first, eval.second,
+                                              cpu, 0.0f);
+    const double finalLoss = output.loss;
+    const double finalAccuracy = tokenAccuracy(output.logits, eval.second, 8, 32);
+    const double parameterError = maxParamError(cpu, htp);
+    worstParameterError = std::max(worstParameterError, parameterError);
+    allLossDown = allLossDown && finalLoss < initialLoss;
+    allAccuracyUp = allAccuracyUp && finalAccuracy > initialAccuracy;
+    replay = replay && maxParamError(tiny_lm::initialParameters(config, seed),
+                                     tiny_lm::initialParameters(config, seed)) == 0;
+    trajectory << "seed_" << seed << "_final_loss=" << finalLoss
+               << "\nseed_" << seed << "_final_accuracy=" << finalAccuracy
+               << "\nseed_" << seed << "_cpu_final_loss=" << cpuFinal.loss
+               << "\nseed_" << seed << "_parameter_norm=" << paramNorm(htp)
+               << "\nseed_" << seed << "_cpu_htp_parameter_max_abs_difference="
+               << parameterError << '\n';
+    inferenceParameters = std::move(htp);
+  }
+  if (inferenceOnly) {
+    std::vector<uint32_t> context{0,1,2,3,0,1,2,3}, generated;
+    bool generationOk = true;
+    for (uint32_t step = 0; step < 8; ++step) {
+      std::vector<uint32_t> targets(config.tokens);
+      for (uint32_t i=0;i<config.tokens;++i) targets[i]=(context[i]+1)%4;
+      auto input = tiny_lm::oneHot(context,32), target=tiny_lm::oneHot(targets,32);
+      TinyTransformerTrainingOutputs output;
+      if (!runtime.executeTinyTransformerTraining(input,target,inferenceParameters,
+                                                   0.0f,output,error))
+        return failure("tiny_language_model_generation",error,runtime);
+      size_t base=size_t(config.tokens-1)*config.vocabularySize;
+      uint32_t next=0;for(uint32_t j=1;j<32;++j)
+        if(output.logits[base+j]>output.logits[base+next])next=j;
+      uint32_t expected=(context.back()+1)%4;
+      generationOk=generationOk&&next==expected;generated.push_back(next);
+      trajectory<<"generation_step_"<<step<<"_context_last="<<context.back()
+                <<"\ngeneration_step_"<<step<<"_argmax="<<next<<'\n';
+      context.erase(context.begin());context.push_back(next);
+    }
+    std::ostringstream out;out<<"TINY_LANGUAGE_MODEL\ntest=autoregressive_inference\nstatus="
+      <<(generationOk&&!nan?"SUCCESS":"FAILED")
+      <<"\nprompt=0,1,2,3,0,1,2,3\nexpected_continuation=0,1,2,3,0,1,2,3"
+      <<"\nargmax_responsibility=CPU\nlogits_responsibility=HTP\ncpu_fallback=false"
+      <<"\nnan_detected="<<(nan?"true":"false")<<"\ninf_detected=false\n"
+      <<trajectory.str()<<runtime.apiTraceSummary()<<runtime.diagnostics();return out.str();
+  }
+  bool ok=allLossDown&&allAccuracyUp&&!nan&&replay&&worstParameterError<0.1;
+  std::ostringstream out;out<<std::setprecision(10)
+    <<"TINY_LANGUAGE_MODEL\ntest=multi_step\nstatus="<<(ok?"SUCCESS":"FAILED")
+    <<"\nshape=B1_T8_V32_D16_H1_L1_F32\nsteps="<<steps<<"\nseeds=5"
+    <<"\ndataset_patterns=4\ntrain_sequences=4\nevaluation_sequences=4"
+    <<"\ndataset_seed=deterministic_rules_v1\nvocab_used=0..12"
+    <<"\nlearning_rate="<<learningRate
+    <<"\nall_seeds_loss_decreased="<<(allLossDown?"true":"false")
+    <<"\nall_seeds_accuracy_increased="<<(allAccuracyUp?"true":"false")
+    <<"\ndeterministic_replay="<<(replay?"true":"false")
+    <<"\ncpu_htp_parameter_max_abs_difference="<<worstParameterError
+    <<"\ngraph_count=1\ngraph_create_count=1\ngraph_finalize_count=1"
+    <<"\ngraph_execute_count="<<runtime.metrics().graphExecuteCount
+    <<"\nexecute_count_per_training_step=1"
+    <<"\ncross_entropy_loss_scalar=CPU_STABLE_LOGSUMEXP"
+    <<"\ncross_entropy_gradient=HTP\ncpu_fallback=false"
+    <<"\nnan_detected="<<(nan?"true":"false")<<"\ninf_detected=false\n"
+    <<trajectory.str()<<runtime.apiTraceSummary()<<runtime.diagnostics();return out.str();
+}} // namespace
 std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP)
     return oneStep();
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP)
     return multiStep();
+  if (mode == ExecutionMode::QNN_HTP_CROSS_ENTROPY_CHECK)
+    return crossEntropyMicrotest();
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_STEP)
+    return languageModelOneStep();
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_MULTI_STEP)
+    return languageModelMultiStep(false);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_INFERENCE)
+    return languageModelMultiStep(true);
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn

@@ -1,4 +1,5 @@
 #include "cpu_reference_training.h"
+#include "tiny_language_model_cpu.h"
 
 #include <algorithm>
 #include <cassert>
@@ -75,6 +76,40 @@ void testLossDecrease() {
     assert(result.lossHistory.size() == 101);
 }
 
+void testTinyLanguageModelGradientCheck() {
+    const auto check = phonelm::tiny_lm::gradientCheck();
+    std::cout << check.report
+              << "tiny_lm_gradient_check_max_abs=" << check.maximumAbsoluteError << '\n'
+              << "tiny_lm_gradient_check_max_rel=" << check.maximumRelativeError << '\n';
+    assert(check.passed);
+}
+
+void testTinyLanguageModelLearning() {
+    const phonelm::tiny_lm::Config config{};
+    const std::vector<uint32_t> sequence{0, 1, 2, 3, 0, 1, 2, 3, 0};
+    const std::vector<uint32_t> inputTokens(sequence.begin(), sequence.end() - 1);
+    const std::vector<uint32_t> targetTokens(sequence.begin() + 1, sequence.end());
+    const auto input = phonelm::tiny_lm::oneHot(inputTokens, config.vocabularySize);
+    const auto target = phonelm::tiny_lm::oneHot(targetTokens, config.vocabularySize);
+    for (uint32_t seed = 1; seed <= 5; ++seed) {
+        auto parameters = phonelm::tiny_lm::initialParameters(config, seed);
+        const auto initial = phonelm::tiny_lm::forwardBackward(
+            config, input, target, parameters, 0.0f);
+        auto current = parameters;
+        for (int step = 0; step < 320; ++step)
+            current = phonelm::tiny_lm::forwardBackward(
+                config, input, target, current, 0.03f).next;
+        const auto final = phonelm::tiny_lm::forwardBackward(
+            config, input, target, current, 0.0f);
+        std::cout << "tiny_lm_seed=" << seed
+                  << " initial_loss=" << initial.loss
+                  << " final_loss=" << final.loss
+                  << " initial_accuracy=" << initial.accuracy
+                  << " final_accuracy=" << final.accuracy << '\n';
+        assert(final.loss < initial.loss);
+        assert(final.accuracy > initial.accuracy);
+    }
+}
 }  // namespace
 
 int main() {
@@ -82,6 +117,8 @@ int main() {
     testLossGradientsAndSgd();
     testGradientCheck();
     testLossDecrease();
+    testTinyLanguageModelGradientCheck();
+    testTinyLanguageModelLearning();
     std::cout << "cpu_reference_tests=PASS\n";
     return 0;
 }

@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `
     (Join-Path $Root "app\src\main\cpp\cpu_reference_training.cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
     (Join-Path $Root "host_tests\cpu_reference_training_test.cpp") `
     -o $CpuExecutable
 if ($LASTEXITCODE -ne 0) {
@@ -23,6 +24,7 @@ if ($LASTEXITCODE -ne 0) {
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `
     (Join-Path $Root "app\src\main\cpp\cpu_reference_training.cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_backend_info.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_host_quantization.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_hybrid_training.cpp") `

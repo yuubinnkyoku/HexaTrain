@@ -1,6 +1,7 @@
 bool Runtime::prepareTinyTransformerTraining(
     uint32_t tokens, uint32_t dimension, uint32_t feedForwardDimension,
-    float epsilon, bool diagnosticOutputs, std::string &error) {
+    float epsilon, bool diagnosticOutputs, std::string &error,
+    uint32_t vocabularySize) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0) {
     error = "tiny training invalid runtime or shape";
@@ -12,7 +13,17 @@ bool Runtime::prepareTinyTransformerTraining(
   g.dimension = dimension;
   g.feedForwardDimension = feedForwardDimension;
   g.diagnosticOutputs = diagnosticOutputs;
+  g.vocabularySize = vocabularySize;
+  g.languageModel = vocabularySize != 0;
   g.activationDims[0] = tokens;
+  g.oneHotDims[0] = tokens;
+  g.oneHotDims[1] = vocabularySize;
+  g.embeddingDims[0] = vocabularySize;
+  g.embeddingDims[1] = dimension;
+  g.logitsDims[0] = tokens;
+  g.logitsDims[1] = vocabularySize;
+  g.outputProjectionDims[0] = dimension;
+  g.outputProjectionDims[1] = vocabularySize;
   g.activationDims[1] = dimension;
   g.scoreDims[0] = tokens;
   g.scoreDims[1] = tokens;
@@ -31,12 +42,23 @@ bool Runtime::prepareTinyTransformerTraining(
   g.epsilonScaledData = epsilon * g.centeredScaleData * g.centeredScaleData;
   g.dimensionData = float(dimension);
   g.inverseDimensionData = 1.0f / float(dimension);
-  g.gradientScaleData = 2.0f / float(tokens * dimension);
+  g.gradientScaleData = g.languageModel ? 1.0f / float(tokens) :
+                                            2.0f / float(tokens * dimension);
   g.maskData.assign(size_t(tokens) * tokens, 0);
   for (uint32_t r = 0; r < tokens; ++r)
     for (uint32_t c = r + 1; c < tokens; ++c)
       g.maskData[r * tokens + c] = -10000.0f;
   g.zeroFfData.assign(size_t(tokens) * feedForwardDimension, 0);
+  g.positionData.assign(size_t(tokens) * dimension, 0.0f);
+  if (g.languageModel) {
+    for (uint32_t t = 0; t < tokens; ++t)
+      for (uint32_t d = 0; d < dimension; ++d) {
+        const float frequency = std::pow(10000.0f, -float(d & ~1u) / float(dimension));
+        g.positionData[size_t(t) * dimension + d] =
+            ((d & 1u) ? std::cos(float(t) * frequency)
+                      : std::sin(float(t) * frequency)) * 0.05f;
+      }
+  }
   for (int i = 0; i < G::TENSOR_COUNT; ++i) {
     Qnn_Tensor_t initialized = QNN_TENSOR_INIT;
     g.tensors[i] = initialized;
@@ -52,7 +74,19 @@ bool Runtime::prepareTinyTransformerTraining(
     for (int i : ids)
       make(i, type, d, rank, dt);
   };
-  many({G::X, G::TARGET}, QNN_TENSOR_TYPE_APP_WRITE, g.activationDims);
+  if (g.languageModel) {
+    make(G::X, diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ :
+                                  QNN_TENSOR_TYPE_NATIVE, g.activationDims);
+    make(G::TARGET, QNN_TENSOR_TYPE_APP_WRITE, g.logitsDims);
+    make(G::ONE_HOT, QNN_TENSOR_TYPE_APP_WRITE, g.oneHotDims);
+    make(G::EMBEDDING, QNN_TENSOR_TYPE_APP_WRITE, g.embeddingDims);
+    make(G::POSITION, QNN_TENSOR_TYPE_STATIC, g.activationDims);
+    make(G::EMBEDDED_TOKEN, QNN_TENSOR_TYPE_NATIVE, g.activationDims);
+    make(G::OUTPUT_PROJECTION, QNN_TENSOR_TYPE_APP_WRITE,
+         g.outputProjectionDims);
+  } else {
+    many({G::X, G::TARGET}, QNN_TENSOR_TYPE_APP_WRITE, g.activationDims);
+  }
   many({G::G1, G::B1, G::G2, G::B2}, QNN_TENSOR_TYPE_APP_WRITE, g.normDims, 1);
   many({G::WQ, G::WK, G::WV, G::WO}, QNN_TENSOR_TYPE_APP_WRITE, g.ddDims);
   make(G::W1, QNN_TENSOR_TYPE_APP_WRITE, g.dfDims);
@@ -132,11 +166,28 @@ bool Runtime::prepareTinyTransformerTraining(
       diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
   make(G::OUTPUT, diag, g.activationDims);
   make(G::DOUTPUT, diag, g.activationDims);
-  make(G::LOSS, QNN_TENSOR_TYPE_APP_READ, g.scalarDims);
+  make(G::LOSS, g.languageModel ? QNN_TENSOR_TYPE_NATIVE :
+                              QNN_TENSOR_TYPE_APP_READ, g.scalarDims);
   many({G::DG1, G::DB1, G::DG2, G::DB2}, diag, g.normDims, 1);
   many({G::DWQ, G::DWK, G::DWV, G::DWO}, diag, g.ddDims);
   make(G::DW1, diag, g.dfDims);
   make(G::DW2, diag, g.fdDims);
+  if (g.languageModel) {
+    make(G::LOGITS, QNN_TENSOR_TYPE_APP_READ, g.logitsDims);
+    make(G::LM_PROBABILITIES, diag, g.logitsDims);
+    make(G::LM_DIFFERENCE, QNN_TENSOR_TYPE_NATIVE, g.logitsDims);
+    make(G::DLOGITS, diag, g.logitsDims);
+    make(G::DOUTPUT_PROJECTION, diag, g.outputProjectionDims);
+    make(G::DINPUT_NORM, QNN_TENSOR_TYPE_NATIVE, g.activationDims);
+    make(G::DINPUT, diag, g.activationDims);
+    make(G::DEMBEDDING, diag, g.embeddingDims);
+    make(G::S_DEMBEDDING, QNN_TENSOR_TYPE_NATIVE, g.embeddingDims);
+    make(G::N_EMBEDDING, QNN_TENSOR_TYPE_APP_READ, g.embeddingDims);
+    make(G::S_DOUTPUT_PROJECTION, QNN_TENSOR_TYPE_NATIVE,
+         g.outputProjectionDims);
+    make(G::N_OUTPUT_PROJECTION, QNN_TENSOR_TYPE_APP_READ,
+         g.outputProjectionDims);
+  }
   many({G::S_DG1, G::S_DB1, G::S_DG2, G::S_DB2}, QNN_TENSOR_TYPE_NATIVE,
        g.normDims, 1);
   many({G::N_G1, G::N_B1, G::N_G2, G::N_B2}, QNN_TENSOR_TYPE_APP_READ,
@@ -163,6 +214,9 @@ bool Runtime::prepareTinyTransformerTraining(
   g.tensors[G::INV_DIMENSION].v1.clientBuf = {&g.inverseDimensionData,
                                               sizeof(float)};
   g.tensors[G::GRAD_SCALE].v1.clientBuf = {&g.gradientScaleData, sizeof(float)};
+  if (g.languageModel)
+    g.tensors[G::POSITION].v1.clientBuf = {
+        g.positionData.data(), uint32_t(g.positionData.size() * sizeof(float))};
   g.tensors[G::ZERO_FF].v1.clientBuf = {
       g.zeroFfData.data(), uint32_t(g.zeroFfData.size() * sizeof(float))};
   auto started = Clock::now();
@@ -178,11 +232,14 @@ bool Runtime::prepareTinyTransformerTraining(
         "tiny training graphCreate=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
   }
-  for (auto &t : g.tensors)
+  const int tensorLimit = g.languageModel ? G::TENSOR_COUNT : G::ONE_HOT;
+  for (int tensorIndex = 0; tensorIndex < tensorLimit; ++tensorIndex) {
+    auto &t = g.tensors[tensorIndex];
     if ((st = impl_->api.tensorCreateGraphTensor(g.graph, &t)) != QNN_SUCCESS) {
       error = "tiny training tensor=" + std::to_string(QNN_GET_ERROR_CODE(st));
       return false;
     }
+  }
   auto bin = [&](const char *n, const char *type, int a, int b, int o) {
     Qnn_Tensor_t in[2] = {g.tensors[a], g.tensors[b]};
     return addSimpleNode(impl_->api, g.graph, n, type, in, 2, &g.tensors[o]);
@@ -266,6 +323,12 @@ bool Runtime::prepareTinyTransformerTraining(
                   out),
               "ln beta");
   };
+  if (g.languageModel &&
+      (!ok(mm("lm_embedding", G::ONE_HOT, G::EMBEDDING,
+              G::EMBEDDED_TOKEN), "embedding") ||
+       !ok(bin("lm_position", QNN_OP_ELEMENT_WISE_ADD, G::EMBEDDED_TOKEN,
+               G::POSITION, G::X), "position")))
+    return false;
   if (!lnf("tt_ln1", G::X, G::G1, G::B1, G::MEAN1, G::CENTERED1, G::CENTERED_S1,
            G::SQUARE1, G::VAR1, G::VAR_EPS1, G::INV_STD_S1, G::INV_STD1,
            G::XHAT1, G::XHAT_G1, G::LN1))
@@ -317,22 +380,56 @@ bool Runtime::prepareTinyTransformerTraining(
       !ok(unary("tt_relu", QNN_OP_RELU, G::FF1, G::RELU), "relu") ||
       !ok(mm("tt_ff2", G::RELU, G::W2, G::FF2), "ff2") ||
       !ok(bin("tt_out", QNN_OP_ELEMENT_WISE_ADD, G::RESIDUAL1, G::FF2,
-              G::OUTPUT),
-          "out") ||
-      !ok(bin("tt_error", QNN_OP_ELEMENT_WISE_SUBTRACT, G::OUTPUT, G::TARGET,
-              G::ERROR),
-          "error") ||
-      !ok(bin("tt_sq_error", QNN_OP_ELEMENT_WISE_MULTIPLY, G::ERROR, G::ERROR,
-              G::SQUARED_ERROR),
-          "sq error") ||
-      !ok(reduce("tt_loss", QNN_OP_REDUCE_MEAN, QNN_OP_REDUCE_MEAN_PARAM_AXES,
-                 QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, G::SQUARED_ERROR,
-                 G::ALL_AXES, true, G::LOSS),
-          "loss") ||
-      !ok(bin("tt_dout", QNN_OP_ELEMENT_WISE_MULTIPLY, G::ERROR, G::GRAD_SCALE,
-              G::DOUTPUT),
-          "dout"))
+              G::OUTPUT), "out"))
     return false;
+  if (g.languageModel) {
+    if (!ok(mm("lm_logits", G::OUTPUT, G::OUTPUT_PROJECTION, G::LOGITS),
+            "logits"))
+      return false;
+    Qnn_Param_t lmParams[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+    lmParams[0].paramType = QNN_PARAMTYPE_SCALAR;
+    lmParams[0].name = QNN_OP_SOFTMAX_PARAM_AXIS;
+    lmParams[0].scalarParam.dataType = QNN_DATATYPE_UINT_32;
+    lmParams[0].scalarParam.uint32Value = 1;
+    lmParams[1].paramType = QNN_PARAMTYPE_SCALAR;
+    lmParams[1].name = QNN_OP_SOFTMAX_PARAM_BETA;
+    lmParams[1].scalarParam.dataType = QNN_DATATYPE_FLOAT_32;
+    lmParams[1].scalarParam.floatValue = 1.0f;
+    Qnn_OpConfig_t lmSoftmax = QNN_OPCONFIG_INIT;
+    lmSoftmax.v1.name = "lm_softmax";
+    lmSoftmax.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+    lmSoftmax.v1.typeName = QNN_OP_SOFTMAX;
+    lmSoftmax.v1.numOfParams = 2;
+    lmSoftmax.v1.params = lmParams;
+    lmSoftmax.v1.numOfInputs = 1;
+    lmSoftmax.v1.inputTensors = &g.tensors[G::LOGITS];
+    lmSoftmax.v1.numOfOutputs = 1;
+    lmSoftmax.v1.outputTensors = &g.tensors[G::LM_PROBABILITIES];
+    if (!ok(impl_->api.graphAddNode(g.graph, lmSoftmax), "lm softmax") ||
+        !ok(bin("lm_difference", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                G::LM_PROBABILITIES, G::TARGET, G::LM_DIFFERENCE),
+            "lm difference") ||
+        !ok(bin("lm_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                G::LM_DIFFERENCE,
+                G::GRAD_SCALE, G::DLOGITS), "lm dlogits") ||
+        !ok(mm("lm_doutput", G::DLOGITS, G::OUTPUT_PROJECTION, G::DOUTPUT,
+               QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1), "lm doutput") ||
+        !ok(mm("lm_doutput_projection", G::OUTPUT, G::DLOGITS,
+               G::DOUTPUT_PROJECTION, QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0),
+            "lm doutput projection"))
+      return false;
+  } else if (!ok(bin("tt_error", QNN_OP_ELEMENT_WISE_SUBTRACT, G::OUTPUT,
+                     G::TARGET, G::ERROR), "error") ||
+             !ok(bin("tt_sq_error", QNN_OP_ELEMENT_WISE_MULTIPLY, G::ERROR,
+                     G::ERROR, G::SQUARED_ERROR), "sq error") ||
+             !ok(reduce("tt_loss", QNN_OP_REDUCE_MEAN,
+                        QNN_OP_REDUCE_MEAN_PARAM_AXES,
+                        QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, G::SQUARED_ERROR,
+                        G::ALL_AXES, true, G::LOSS), "loss") ||
+             !ok(bin("tt_dout", QNN_OP_ELEMENT_WISE_MULTIPLY, G::ERROR,
+                     G::GRAD_SCALE, G::DOUTPUT), "dout")) {
+    return false;
+  }
   if (!ok(mm("tt_dw2", G::RELU, G::DOUTPUT, G::DW2,
              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0),
           "dw2") ||
@@ -480,7 +577,14 @@ bool Runtime::prepareTinyTransformerTraining(
   if (!lnb("tt_lnb1", G::DLN1, G::G1, G::XHAT1, G::INV_STD1, G::DXHAT1,
            G::SUM_DXHAT1, G::DXHAT_XHAT1, G::SUM_DXHAT_XHAT1, G::D_TIMES_DXHAT1,
            G::FIRST_DIFF1, G::XHAT_TIMES_SUM1, G::BRACKET1, G::INV_STD_OVER_D1,
-           G::CENTERED1, G::DG1, G::DB1))
+           g.languageModel ? G::DINPUT_NORM : G::CENTERED1, G::DG1,
+           G::DB1))
+    return false;
+  if (g.languageModel &&
+      (!ok(bin("lm_dinput", QNN_OP_ELEMENT_WISE_ADD, G::DRESIDUAL1,
+               G::DINPUT_NORM, G::DINPUT), "lm dinput") ||
+       !ok(mm("lm_dembedding", G::ONE_HOT, G::DINPUT, G::DEMBEDDING,
+              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0), "lm dembedding")))
     return false;
   auto upd = [&](const char *n, int cur, int grad, int scaled, int next) {
     std::string s = n;
@@ -500,7 +604,13 @@ bool Runtime::prepareTinyTransformerTraining(
       !upd("tt_g2", G::G2, G::DG2, G::S_DG2, G::N_G2) ||
       !upd("tt_b2", G::B2, G::DB2, G::S_DB2, G::N_B2) ||
       !upd("tt_w1", G::W1, G::DW1, G::S_DW1, G::N_W1) ||
-      !upd("tt_w2", G::W2, G::DW2, G::S_DW2, G::N_W2))
+      !upd("tt_w2", G::W2, G::DW2, G::S_DW2, G::N_W2) ||
+      (g.languageModel &&
+       (!upd("lm_embedding", G::EMBEDDING, G::DEMBEDDING,
+             G::S_DEMBEDDING, G::N_EMBEDDING) ||
+        !upd("lm_output_projection", G::OUTPUT_PROJECTION,
+             G::DOUTPUT_PROJECTION, G::S_DOUTPUT_PROJECTION,
+             G::N_OUTPUT_PROJECTION))))
     return false;
   started = Clock::now();
   st = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
@@ -516,8 +626,13 @@ bool Runtime::prepareTinyTransformerTraining(
   diagnostics_ +=
       "tiny_transformer_training_graph=EXPLICIT_FORWARD_BACKWARD_SGD\ntiny_"
       "transformer_training_graph_count=1\ntiny_transformer_training_execute_"
-      "count_per_step=1\ntiny_transformer_training_weight_handoff=CPU_PING_"
-      "PONG_BINDING\ntiny_transformer_training_in_place_alias=false\n";
+      "count_per_step=1\n";
+  diagnostics_ += g.languageModel
+                      ? "tiny_language_model_weight_handoff=CPU_FIXED_BUFFER_"
+                        "COPY\n"
+                      : "tiny_transformer_training_weight_handoff=CPU_PING_"
+                        "PONG_BINDING\n";
+  diagnostics_ += "tiny_transformer_training_in_place_alias=false\n";
   return true;
 }
 
@@ -527,28 +642,35 @@ bool Runtime::executeTinyTransformerTraining(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
-  size_t a = size_t(g.tokens) * g.dimension,
-         dd = size_t(g.dimension) * g.dimension,
-         df = size_t(g.dimension) * g.feedForwardDimension,
-         fd = size_t(g.feedForwardDimension) * g.dimension, n = g.dimension;
-  if (!g.graph || input.size() != a || target.size() != a ||
+  const size_t a = size_t(g.tokens) * g.dimension;
+  const size_t dd = size_t(g.dimension) * g.dimension;
+  const size_t df = size_t(g.dimension) * g.feedForwardDimension;
+  const size_t fd = size_t(g.feedForwardDimension) * g.dimension;
+  const size_t n = g.dimension;
+  const size_t tv = size_t(g.tokens) * g.vocabularySize;
+  const size_t vd = size_t(g.vocabularySize) * g.dimension;
+  const size_t dv = size_t(g.dimension) * g.vocabularySize;
+  const size_t expectedInput = g.languageModel ? tv : a;
+  if (!g.graph || input.size() != expectedInput || target.size() != expectedInput ||
       !std::isfinite(learningRate) || current.gamma1.size() != n ||
       current.beta1.size() != n || current.wq.size() != dd ||
       current.wk.size() != dd || current.wv.size() != dd ||
       current.wo.size() != dd || current.gamma2.size() != n ||
       current.beta2.size() != n || current.w1.size() != df ||
-      current.w2.size() != fd) {
+      current.w2.size() != fd ||
+      (g.languageModel && (current.tokenEmbedding.size() != vd ||
+                           current.outputProjection.size() != dv))) {
     error = "tiny training buffer size";
     return false;
   }
   std::vector<Qnn_Tensor_t> in;
-  in.reserve(13);
+  in.reserve(g.languageModel ? 15 : 13);
   auto bi = [&](int id, const std::vector<float> &v) {
     in.push_back(g.tensors[id]);
     in.back().v1.clientBuf = {const_cast<float *>(v.data()),
                               uint32_t(v.size() * sizeof(float))};
   };
-  bi(G::X, input);
+  bi(g.languageModel ? G::ONE_HOT : G::X, input);
   bi(G::TARGET, target);
   bi(G::G1, current.gamma1);
   bi(G::B1, current.beta1);
@@ -560,17 +682,25 @@ bool Runtime::executeTinyTransformerTraining(
   bi(G::B2, current.beta2);
   bi(G::W1, current.w1);
   bi(G::W2, current.w2);
+  if (g.languageModel) {
+    bi(G::EMBEDDING, current.tokenEmbedding);
+    bi(G::OUTPUT_PROJECTION, current.outputProjection);
+  }
   in.push_back(g.tensors[G::LR]);
   in.back().v1.clientBuf = {&learningRate, sizeof(float)};
   std::vector<Qnn_Tensor_t> out;
-  out.reserve(23);
+  out.reserve(g.languageModel ? 30 : 23);
   auto bo = [&](int id, std::vector<float> &v, size_t count) {
     v.resize(count);
     out.push_back(g.tensors[id]);
     out.back().v1.clientBuf = {v.data(), uint32_t(count * sizeof(float))};
   };
-  out.push_back(g.tensors[G::LOSS]);
-  out.back().v1.clientBuf = {&outputs.loss, sizeof(float)};
+  if (!g.languageModel) {
+    out.push_back(g.tensors[G::LOSS]);
+    out.back().v1.clientBuf = {&outputs.loss, sizeof(float)};
+  } else {
+    bo(G::LOGITS, outputs.logits, tv);
+  }
   bo(G::N_G1, outputs.next.gamma1, n);
   bo(G::N_B1, outputs.next.beta1, n);
   bo(G::N_WQ, outputs.next.wq, dd);
@@ -581,6 +711,10 @@ bool Runtime::executeTinyTransformerTraining(
   bo(G::N_B2, outputs.next.beta2, n);
   bo(G::N_W1, outputs.next.w1, df);
   bo(G::N_W2, outputs.next.w2, fd);
+  if (g.languageModel) {
+    bo(G::N_EMBEDDING, outputs.next.tokenEmbedding, vd);
+    bo(G::N_OUTPUT_PROJECTION, outputs.next.outputProjection, dv);
+  }
   if (g.diagnosticOutputs) {
     bo(G::OUTPUT, outputs.output, a);
     bo(G::DOUTPUT, outputs.dOutput, a);
@@ -594,9 +728,21 @@ bool Runtime::executeTinyTransformerTraining(
     bo(G::DB2, outputs.gradients.beta2, n);
     bo(G::DW1, outputs.gradients.w1, df);
     bo(G::DW2, outputs.gradients.w2, fd);
+    if (g.languageModel) {
+      bo(G::X, outputs.embeddedInput, a);
+      bo(G::LM_PROBABILITIES, outputs.probabilities, tv);
+      bo(G::DLOGITS, outputs.dLogits, tv);
+      bo(G::DINPUT, outputs.dEmbeddedInput, a);
+      bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
+      bo(G::DOUTPUT_PROJECTION, outputs.gradients.outputProjection, dv);
+    }
   } else {
     outputs.output.clear();
     outputs.dOutput.clear();
+    outputs.embeddedInput.clear();
+    outputs.probabilities.clear();
+    outputs.dLogits.clear();
+    outputs.dEmbeddedInput.clear();
     outputs.gradients = {};
   }
   auto started = Clock::now();
@@ -611,6 +757,22 @@ bool Runtime::executeTinyTransformerTraining(
     error =
         "tiny training graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
     return false;
+  }
+  if (g.languageModel) {
+    double loss = 0.0;
+    for (uint32_t row = 0; row < g.tokens; ++row) {
+      const float *z = outputs.logits.data() + size_t(row) * g.vocabularySize;
+      const float maximum = *std::max_element(z, z + g.vocabularySize);
+      double sum = 0.0;
+      uint32_t targetIndex = 0;
+      for (uint32_t column = 0; column < g.vocabularySize; ++column) {
+        sum += std::exp(double(z[column] - maximum));
+        if (target[size_t(row) * g.vocabularySize + column] > 0.5f)
+          targetIndex = column;
+      }
+      loss += double(maximum) + std::log(sum) - z[targetIndex];
+    }
+    outputs.loss = float(loss / g.tokens);
   }
   return true;
 }

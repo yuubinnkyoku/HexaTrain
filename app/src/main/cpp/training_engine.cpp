@@ -109,6 +109,10 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK: return "QNN_HTP_LAYER_NORM_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP";
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP";
+        case ExecutionMode::QNN_HTP_CROSS_ENTROPY_CHECK: return "QNN_HTP_CROSS_ENTROPY_CHECK";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_STEP: return "QNN_HTP_TINY_LANGUAGE_MODEL_STEP";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_MULTI_STEP: return "QNN_HTP_TINY_LANGUAGE_MODEL_MULTI_STEP";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_INFERENCE: return "QNN_HTP_TINY_LANGUAGE_MODEL_INFERENCE";
         default: return "UNKNOWN";
     }
 }
@@ -180,6 +184,10 @@ std::string TrainingEngine::run(ExecutionMode mode,
             return qnn::runTransformerExperiment(mode);
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP:
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP:
+        case ExecutionMode::QNN_HTP_CROSS_ENTROPY_CHECK:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_STEP:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_MULTI_STEP:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_INFERENCE:
             return qnn::runTinyTransformerTrainingExperiment(mode);
         default: {
             const std::string report =
