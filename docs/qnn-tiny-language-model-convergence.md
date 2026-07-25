@@ -4,6 +4,12 @@
 
 This bounded study did not establish an HTP setting that meets the additional convergence condition. The result is `GOAL_PARTIAL_SUCCESS`: every permitted CPU configuration and HTP finalist was evaluated, one-step Momentum and Adam optimizer graphs are correct, but repeated HTP updates eventually become non-finite. The success thresholds were not relaxed.
 
+This paragraph records the historical bounded-search result. A later
+[numerical-stability follow-up](qnn-tiny-language-model-numerical-stability.md)
+isolated the first divergence and completed 1,000 finite Adam updates for 5/5
+seeds. That follow-up remains partial because four-pattern autoregressive exact
+continuation was 0/4.
+
 The model remains `B=1, T=8, V=32, D=16`, one head, one pre-norm layer, `FFN=32`, ReLU, causal FP32. It uses one-hot token embedding, fixed sinusoidal position values, separate trainable token/output matrices, and the same four deterministic rule families. Training uses phase 0 and evaluation uses phase 1; no evaluation sequence or future token enters training input.
 
 ## Diagnosis and bounded search

@@ -1,0 +1,57 @@
+{
+  "status": "GOAL_PARTIAL_SUCCESS",
+  "stop_reason": "Five-seed HTP convergence passed, but autoregressive exact continuation was 0/4 rather than at least 3/4.",
+  "source_commit": "ad0ee55b8235fab7b51d63d14d9cf0f0516f6430",
+  "model": "B1_T8_V32_D16_H1_L1_FFN32_ReLU_pre_norm_FP32",
+  "diagnostic": {
+    "learning_rate": 0.003000000026,
+    "checkpoints": "0,1,2,5,10,20,50,100,150,200,250,300,320",
+    "checkpoint_roundtrip": "true",
+    "one_step_correct": "true",
+    "first_major_divergence_checkpoint": 10.0,
+    "first_major_divergence_tensor": "token_embedding_gradient",
+    "first_major_divergence_node": "lm_dembedding",
+    "first_optimizer_divergence_checkpoint": 100.0,
+    "classification": "MULTIPLE_CAUSES",
+    "last_finite_step": 121.0,
+    "first_nonfinite_step": 122.0,
+    "first_nonfinite_tensor": "adam_denominator"
+  },
+  "final": {
+    "configuration": "adam_lr0.0003_clip10_steps1000",
+    "learning_rate": 0.0003000000142,
+    "steps": 1000.0,
+    "seeds": 5,
+    "gradient_clip_threshold": 10.0,
+    "median_evaluation_loss_reduction_percent": 54.78955743,
+    "accuracy_75_seed_count": 1.0,
+    "all_seeds_loss_decreased": "true",
+    "all_seeds_accuracy_increased": "true",
+    "all_steps_finite": "true",
+    "cpu_fallback": "false",
+    "graph_count": 2.0,
+    "executes_per_update": 2.0,
+    "cpu_scalar_boundary": "Adam bias correction and global gradient clip scale",
+    "htp_responsibility": "Forward, backward, gradient scaling, and Adam arithmetic"
+  },
+  "performance": {
+    "graph_initialization_us": 102879.009,
+    "graph_create_us": 129855.625,
+    "graph_finalize_us": 103673.802,
+    "first_execute_us": 1349.219,
+    "steady_execute_mean_us": 1742.602269,
+    "updates_per_second_estimate": 286.9272058,
+    "tokens_per_second_estimate": 2295.417646
+  },
+  "inference": {
+    "exact_pattern_count": 0.0,
+    "required_exact_pattern_count": 3,
+    "finite": "true"
+  },
+  "rejected": {
+    "epsilon": "NOT_NEEDED",
+    "learning_rates": "0.003 and 0.001 remained unstable under repeated updates",
+    "gradient_clip_thresholds": "1, 5, and 10 evaluated",
+    "update_clipping": "REJECTED: did not prevent non-finite state in bounded trials"
+  }
+}

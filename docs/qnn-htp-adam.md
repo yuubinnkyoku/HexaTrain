@@ -17,6 +17,18 @@ One-step device comparison passes:
 | second moment hat | 0.000138159 |
 | next weight | 0.00305894 |
 
-The bounded 12-configuration CPU search selected `lr=0.003`/320 steps and `lr=0.001`/640 steps. CPU medians were 94.5603% and 94.3134%, with 5/5 seeds at evaluation accuracy 75% or higher. Both permitted HTP finalists improved before eventually becoming non-finite, so Adam did not meet the additional HTP convergence condition.
+The original bounded 12-configuration CPU search selected `lr=0.003`/320 steps
+and `lr=0.001`/640 steps. CPU medians were 94.5603% and 94.3134%, with 5/5 seeds
+at evaluation accuracy 75% or higher. Both original HTP finalists improved before
+eventually becoming non-finite.
+
+A subsequent synchronized-checkpoint and 2x2 gradient/optimizer isolation study
+located the first major divergence in `lm_dembedding` at step 10. It then
+stabilized 5/5 HTP seeds for 1,000 steps with `lr=0.0003` and global
+gradient-norm clipping at 10. The median evaluation-loss reduction was 54.7896%,
+and no NaN, Inf, or CPU fallback occurred. See
+[QNN HTP tiny language model numerical stability](qnn-tiny-language-model-numerical-stability.md)
+for the full diagnosis, rejected alternatives, inference result, and public
+aggregates.
 
 Callback capture is disabled, QNN log level is WARN, API trace is enabled, graph calls succeed, and the QNN CPU backend is not initialized. Raw evidence remains under ignored `build/reports`.
