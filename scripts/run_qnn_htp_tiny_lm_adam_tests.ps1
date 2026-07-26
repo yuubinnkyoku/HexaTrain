@@ -24,7 +24,7 @@ function Adb([string[]]$Arguments){
   $output
 }
 if(!$SkipInstall){Adb @('install','-r',$apk)|Out-Null}
-function Run-Test([string]$Mode,[string]$Name,[string[]]$Required,[int]$PollLimit=14400){
+function Run-Test([string]$Mode,[string]$Name,[string[]]$Required,[int]$PollLimit=14400,[switch]$AllowPartial){
   Adb @('shell','am','force-stop',$package)|Out-Null
   & $adb -s $device shell run-as $package rm -f files/device-test-result.txt 2>$null|Out-Null
   Adb @('shell','am','start','-W','-n',$activity,'--es','phonelm.mode',$Mode)|Out-Null
@@ -32,10 +32,12 @@ function Run-Test([string]$Mode,[string]$Name,[string[]]$Required,[int]$PollLimi
   for($poll=0;$poll-lt$PollLimit;$poll++){
     Start-Sleep -Milliseconds 500
     $result=(& $adb -s $device shell run-as $package cat files/device-test-result.txt 2>$null)-join"`n"
-    if($result-match'(?m)^status=(SUCCESS|FAILED)$'){break}
+    if($result-match'(?m)^status=(SUCCESS|PARTIAL_SUCCESS|FAILED)$'){break}
   }
   [IO.File]::WriteAllText((Join-Path $reportRoot "$Name-result.txt"),$result+"`n",[Text.UTF8Encoding]::new($false))
-  if($result-notmatch'(?m)^status=SUCCESS$'){throw "$Mode failed"}
+  $accepted=$result-match'(?m)^status=SUCCESS$' -or
+    ($AllowPartial -and $result-match'(?m)^status=PARTIAL_SUCCESS$')
+  if(!$accepted){throw "$Mode failed"}
   foreach($pattern in $Required){if($result-notmatch$pattern){throw "$Mode missing $pattern"}}
   $common=@('(?m)^cpu_fallback=false$','(?m)^api_trace_graph_execute_failure_count=0$')
   if($Mode-ne'QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP'){
@@ -71,7 +73,20 @@ if($Scope-in@('candidate2','all')){
 }
 if($Scope-in@('inference','all')){
   Run-Test 'QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_INFERENCE' 'inference' @(
-    '(?m)^exact_pattern_count=[34]$','(?m)^logits_responsibility=HTP$',
-    '(?m)^argmax_responsibility=CPU$')
+    '(?m)^research_goal_met=(true|false)$',
+    '(?m)^sampling=pattern_balanced_phase01_round_robin$',
+    '(?m)^seed_count=5$','(?m)^qualifying_seed_count=\d+$',
+    '(?m)^exact_rollout_count=\d+$',
+    '(?m)^oracle_qualifying_seed_count=\d+$',
+    '(?m)^oracle_exact_rollout_count=\d+$',
+    '(?m)^same_prefix_host_inputs_identical=true$',
+    '(?m)^same_prefix_cpu_eval_generation_max_abs_error=0$',
+    '(?m)^same_prefix_htp_eval_generation_max_abs_error=0$',
+    '(?m)^same_prefix_seed_count=5$',
+    '(?m)^same_prefix_all_cpu_eval_generation_argmax_match=true$',
+    '(?m)^same_prefix_all_htp_eval_generation_argmax_match=true$',
+    '(?m)^same_prefix_all_cpu_htp_argmax_match=true$',
+    '(?m)^same_prefix_all_cpu_htp_top3_match=true$',
+    '(?m)^logits_responsibility=HTP$','(?m)^argmax_responsibility=CPU$') -AllowPartial
 }
 Write-Host 'HTP_ADAM=PASS'

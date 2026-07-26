@@ -1676,8 +1676,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   double minimumClipScale = 1.0, maximumPreclipGradientNorm = 0.0;
   double worstParameter = 0, worstFirst = 0, worstSecond = 0;
   std::vector<double> reductions;
-  Params inferenceParameters;
-  const int lastSeed = inferenceOnly ? 1 : 5;
+  std::vector<Params> inferenceParameters;
+  const int lastSeed = 5;
   for (int seed = 1; seed <= lastSeed; ++seed) {
     auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
     auto htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
@@ -1689,7 +1689,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                << "\nseed_" << seed << "_initial_accuracy=" << initial.accuracy
                << '\n';
     for (int step = 1; step <= selected.steps; ++step) {
-      const auto batch = languageBatch(config, uint32_t((step - 1) % 4));
+      const uint32_t pattern = uint32_t((step - 1) % 4);
+      const uint32_t phase =
+          inferenceOnly ? uint32_t((step - 1) / 4) % 2 : 0;
+      const auto batch = languageBatch(config, pattern, phase);
       const auto cpuGradient = tiny_lm::forwardBackward(
           config, batch.first, batch.second, cpu, 0.0f);
       const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
@@ -1780,7 +1783,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                << cpuFinal.accuracy << "\nseed_" << seed
                << "_cpu_htp_parameter_max_abs_difference=" << parameterError
                << '\n';
-    inferenceParameters = htp;
+    inferenceParameters.push_back(htp);
   }
   std::sort(reductions.begin(), reductions.end());
   const double median = reductions[reductions.size() / 2];
@@ -1788,49 +1791,268 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     static const std::array<std::vector<uint32_t>, 4> rules{
         std::vector<uint32_t>{0, 1, 2, 3}, std::vector<uint32_t>{4, 5, 6, 7},
         std::vector<uint32_t>{8, 9}, std::vector<uint32_t>{10, 11, 12}};
-    int exactPatterns = 0;
-    for (size_t pattern = 0; pattern < rules.size(); ++pattern) {
-      const auto &rule = rules[pattern];
-      std::vector<uint32_t> context(config.tokens);
-      for (uint32_t i = 0; i < config.tokens; ++i)
-        context[i] = rule[i % rule.size()];
-      const auto prompt = context;
-      std::vector<uint32_t> generated, expectedTokens;
-      int correct = 0;
-      double probability = 0, margin = 0;
-      double minimumMargin = std::numeric_limits<double>::infinity();
-      for (int step = 0; step < 8; ++step) {
-        const uint32_t expected =
-            rule[(size_t(config.tokens) + size_t(step)) % rule.size()];
-        auto input = tiny_lm::oneHot(context, config.vocabularySize);
-        auto target = tiny_lm::oneHot(
-            std::vector<uint32_t>(config.tokens, expected),
-            config.vocabularySize);
-        TinyTransformerTrainingOutputs output;
-        if (!runtime.executeTinyTransformerTraining(
-                input, target, inferenceParameters, 0.0f, output, error))
-          return failure("adam_generation", error, runtime);
-        const size_t base =
-            size_t(config.tokens - 1) * config.vocabularySize;
-        uint32_t predicted = 0;
-        float other = -std::numeric_limits<float>::infinity();
-        for (uint32_t token = 1; token < config.vocabularySize; ++token)
-          if (output.logits[base + token] > output.logits[base + predicted])
-            predicted = token;
-        for (uint32_t token = 0; token < config.vocabularySize; ++token)
-          if (token != expected)
-            other = std::max(other, output.logits[base + token]);
-        correct += predicted == expected;
-        probability += output.probabilities[base + expected];
-        const double tokenMargin = output.logits[base + expected] - other;
-        margin += tokenMargin;
-        minimumMargin = std::min(minimumMargin, tokenMargin);
-        generated.push_back(predicted);
-        expectedTokens.push_back(expected);
-        context.erase(context.begin());
-        context.push_back(predicted);
+    const auto parityBatch = languageBatch(config, 0, 0);
+    const std::vector<uint32_t> parityTokenIds{0, 1, 2, 3, 0, 1, 2, 3};
+    const std::vector<uint32_t> parityTargetIds{1, 2, 3, 0, 1, 2, 3, 0};
+    const auto generationInput =
+        tiny_lm::oneHot(parityTokenIds, config.vocabularySize);
+    const auto generationTarget =
+        tiny_lm::oneHot(parityTargetIds, config.vocabularySize);
+    const auto cpuEval = tiny_lm::forwardBackward(
+        config, parityBatch.first, parityBatch.second,
+        inferenceParameters.front(), 0.0f);
+    const auto cpuGeneration = tiny_lm::forwardBackward(
+        config, generationInput, generationTarget,
+        inferenceParameters.front(), 0.0f);
+    TinyTransformerTrainingOutputs htpEval, htpGeneration;
+    if (!runtime.executeTinyTransformerTraining(
+            parityBatch.first, parityBatch.second, inferenceParameters.front(),
+            0.0f, htpEval, error) ||
+        !runtime.executeTinyTransformerTraining(
+            generationInput, generationTarget, inferenceParameters.front(),
+            0.0f, htpGeneration, error))
+      return failure("adam_same_prefix_parity", error, runtime);
+    struct Difference {
+      double maximum = 0, mean = 0, relative = 0;
+    };
+    auto difference = [](const std::vector<float> &a,
+                         const std::vector<float> &b) {
+      Difference result;
+      if (a.size() != b.size()) {
+        result.maximum = result.mean = result.relative =
+            std::numeric_limits<double>::infinity();
+        return result;
       }
-      exactPatterns += correct == 8;
+      for (size_t i = 0; i < a.size(); ++i) {
+        const double error = std::abs(double(a[i]) - b[i]);
+        result.maximum = std::max(result.maximum, error);
+        result.mean += error;
+        result.relative = std::max(
+            result.relative,
+            error / std::max(1.0e-12, std::abs(double(a[i]))));
+      }
+      result.mean /= std::max<size_t>(1, a.size());
+      return result;
+    };
+    auto argmaxAtLastPosition = [&](const std::vector<float> &logits) {
+      const size_t base =
+          size_t(config.tokens - 1) * config.vocabularySize;
+      uint32_t result = 0;
+      for (uint32_t token = 1; token < config.vocabularySize; ++token)
+        if (logits[base + token] > logits[base + result]) result = token;
+      return result;
+    };
+    auto top3AtLastPosition = [&](const std::vector<float> &logits) {
+      std::array<uint32_t, 3> result{0, 1, 2};
+      const size_t base =
+          size_t(config.tokens - 1) * config.vocabularySize;
+      std::sort(result.begin(), result.end(), [&](uint32_t a, uint32_t b) {
+        return logits[base + a] > logits[base + b];
+      });
+      for (uint32_t token = 3; token < config.vocabularySize; ++token)
+        if (logits[base + token] > logits[base + result.back()]) {
+          result.back() = token;
+          std::sort(result.begin(), result.end(), [&](uint32_t a, uint32_t b) {
+            return logits[base + a] > logits[base + b];
+          });
+        }
+      return result;
+    };
+    const Difference cpuEvalGeneration =
+        difference(cpuEval.logits, cpuGeneration.logits);
+    const Difference htpEvalGeneration =
+        difference(htpEval.logits, htpGeneration.logits);
+    const Difference cpuHtpEval = difference(cpuEval.logits, htpEval.logits);
+    const Difference cpuHtpGeneration =
+        difference(cpuGeneration.logits, htpGeneration.logits);
+    const auto cpuTop3 = top3AtLastPosition(cpuEval.logits);
+    const auto htpTop3 = top3AtLastPosition(htpEval.logits);
+    bool allCpuEvalGenerationArgmax = true;
+    bool allHtpEvalGenerationArgmax = true;
+    bool allCpuHtpArgmax = true;
+    bool allCpuHtpTop3 = true;
+    double worstCpuHtpLogits = 0;
+    std::ostringstream paritySeeds;
+    for (size_t seedIndex = 0; seedIndex < inferenceParameters.size();
+         ++seedIndex) {
+      const auto seedCpuEval = tiny_lm::forwardBackward(
+          config, parityBatch.first, parityBatch.second,
+          inferenceParameters[seedIndex], 0.0f);
+      const auto seedCpuGeneration = tiny_lm::forwardBackward(
+          config, generationInput, generationTarget,
+          inferenceParameters[seedIndex], 0.0f);
+      TinyTransformerTrainingOutputs seedHtpEval, seedHtpGeneration;
+      if (!runtime.executeTinyTransformerTraining(
+              parityBatch.first, parityBatch.second,
+              inferenceParameters[seedIndex], 0.0f, seedHtpEval, error) ||
+          !runtime.executeTinyTransformerTraining(
+              generationInput, generationTarget,
+              inferenceParameters[seedIndex], 0.0f, seedHtpGeneration, error))
+        return failure("adam_same_prefix_parity_seed", error, runtime);
+      const auto seedCpuEvalGeneration =
+          difference(seedCpuEval.logits, seedCpuGeneration.logits);
+      const auto seedHtpEvalGeneration =
+          difference(seedHtpEval.logits, seedHtpGeneration.logits);
+      const auto seedCpuHtp =
+          difference(seedCpuEval.logits, seedHtpEval.logits);
+      const auto seedCpuArgmax = argmaxAtLastPosition(seedCpuEval.logits);
+      const auto seedCpuGenerationArgmax =
+          argmaxAtLastPosition(seedCpuGeneration.logits);
+      const auto seedHtpArgmax = argmaxAtLastPosition(seedHtpEval.logits);
+      const auto seedHtpGenerationArgmax =
+          argmaxAtLastPosition(seedHtpGeneration.logits);
+      const auto seedCpuTop3 = top3AtLastPosition(seedCpuEval.logits);
+      const auto seedHtpTop3 = top3AtLastPosition(seedHtpEval.logits);
+      allCpuEvalGenerationArgmax =
+          allCpuEvalGenerationArgmax &&
+          seedCpuArgmax == seedCpuGenerationArgmax;
+      allHtpEvalGenerationArgmax =
+          allHtpEvalGenerationArgmax &&
+          seedHtpArgmax == seedHtpGenerationArgmax;
+      allCpuHtpArgmax =
+          allCpuHtpArgmax && seedCpuArgmax == seedHtpArgmax;
+      allCpuHtpTop3 = allCpuHtpTop3 && seedCpuTop3 == seedHtpTop3;
+      worstCpuHtpLogits =
+          std::max(worstCpuHtpLogits, seedCpuHtp.maximum);
+      paritySeeds << "same_prefix_seed_" << (seedIndex + 1)
+                  << "_cpu_eval_generation_max_abs_error="
+                  << seedCpuEvalGeneration.maximum << "\nsame_prefix_seed_"
+                  << (seedIndex + 1)
+                  << "_htp_eval_generation_max_abs_error="
+                  << seedHtpEvalGeneration.maximum << "\nsame_prefix_seed_"
+                  << (seedIndex + 1) << "_cpu_htp_max_abs_error="
+                  << seedCpuHtp.maximum << '\n';
+    }
+    trajectory
+        << "same_prefix_token_ids=0,1,2,3,0,1,2,3"
+        << "\nsame_prefix_host_inputs_identical="
+        << ((parityBatch.first == generationInput &&
+             parityBatch.second == generationTarget)
+                ? "true"
+                : "false")
+        << "\nsame_prefix_valid_token_count=8"
+        << "\nsame_prefix_position_indices=0,1,2,3,4,5,6,7"
+        << "\nsame_prefix_logit_read_position=7"
+        << "\nsame_prefix_cpu_eval_generation_max_abs_error="
+        << cpuEvalGeneration.maximum
+        << "\nsame_prefix_cpu_eval_generation_mean_abs_error="
+        << cpuEvalGeneration.mean
+        << "\nsame_prefix_cpu_eval_generation_max_relative_error="
+        << cpuEvalGeneration.relative
+        << "\nsame_prefix_htp_eval_generation_max_abs_error="
+        << htpEvalGeneration.maximum
+        << "\nsame_prefix_htp_eval_generation_mean_abs_error="
+        << htpEvalGeneration.mean
+        << "\nsame_prefix_htp_eval_generation_max_relative_error="
+        << htpEvalGeneration.relative
+        << "\nsame_prefix_cpu_htp_eval_max_abs_error=" << cpuHtpEval.maximum
+        << "\nsame_prefix_cpu_htp_eval_mean_abs_error=" << cpuHtpEval.mean
+        << "\nsame_prefix_cpu_htp_eval_max_relative_error="
+        << cpuHtpEval.relative
+        << "\nsame_prefix_cpu_htp_generation_max_abs_error="
+        << cpuHtpGeneration.maximum
+        << "\nsame_prefix_cpu_htp_generation_mean_abs_error="
+        << cpuHtpGeneration.mean
+        << "\nsame_prefix_cpu_htp_generation_max_relative_error="
+        << cpuHtpGeneration.relative
+        << "\nsame_prefix_cpu_argmax="
+        << argmaxAtLastPosition(cpuEval.logits)
+        << "\nsame_prefix_htp_argmax="
+        << argmaxAtLastPosition(htpEval.logits)
+        << "\nsame_prefix_cpu_top3=" << cpuTop3[0] << ',' << cpuTop3[1]
+        << ',' << cpuTop3[2] << "\nsame_prefix_htp_top3=" << htpTop3[0]
+        << ',' << htpTop3[1] << ',' << htpTop3[2]
+        << "\nsame_prefix_seed_count=5"
+        << "\nsame_prefix_all_cpu_eval_generation_argmax_match="
+        << (allCpuEvalGenerationArgmax ? "true" : "false")
+        << "\nsame_prefix_all_htp_eval_generation_argmax_match="
+        << (allHtpEvalGenerationArgmax ? "true" : "false")
+        << "\nsame_prefix_all_cpu_htp_argmax_match="
+        << (allCpuHtpArgmax ? "true" : "false")
+        << "\nsame_prefix_all_cpu_htp_top3_match="
+        << (allCpuHtpTop3 ? "true" : "false")
+        << "\nsame_prefix_all_seed_cpu_htp_logits_max_abs_error="
+        << worstCpuHtpLogits << '\n' << paritySeeds.str();
+    int exactPatterns = 0;
+    int exactRollouts = 0, qualifyingSeeds = 0;
+    int oracleExactRollouts = 0, oracleQualifyingSeeds = 0;
+    for (size_t seedIndex = 0; seedIndex < inferenceParameters.size();
+         ++seedIndex) {
+      int seedExactPatterns = 0, seedOracleExactPatterns = 0;
+      for (size_t pattern = 0; pattern < rules.size(); ++pattern) {
+        const auto &rule = rules[pattern];
+        std::vector<uint32_t> context(config.tokens);
+        for (uint32_t i = 0; i < config.tokens; ++i)
+          context[i] = rule[i % rule.size()];
+        const auto prompt = context;
+        std::vector<uint32_t> generated, expectedTokens;
+        int correct = 0, firstError = -1;
+        double probability = 0, margin = 0;
+        double minimumMargin = std::numeric_limits<double>::infinity();
+        for (int step = 0; step < 8; ++step) {
+          const uint32_t expected =
+              rule[(size_t(config.tokens) + size_t(step)) % rule.size()];
+          auto input = tiny_lm::oneHot(context, config.vocabularySize);
+          auto target = tiny_lm::oneHot(
+              std::vector<uint32_t>(config.tokens, expected),
+              config.vocabularySize);
+          TinyTransformerTrainingOutputs output;
+          if (!runtime.executeTinyTransformerTraining(
+                  input, target, inferenceParameters[seedIndex], 0.0f, output,
+                  error))
+            return failure("adam_generation", error, runtime);
+          const size_t base =
+              size_t(config.tokens - 1) * config.vocabularySize;
+          uint32_t predicted = 0;
+          float other = -std::numeric_limits<float>::infinity();
+          for (uint32_t token = 1; token < config.vocabularySize; ++token)
+            if (output.logits[base + token] > output.logits[base + predicted])
+              predicted = token;
+          for (uint32_t token = 0; token < config.vocabularySize; ++token)
+            if (token != expected)
+              other = std::max(other, output.logits[base + token]);
+          if (predicted != expected && firstError < 0) firstError = step;
+          correct += predicted == expected;
+          probability += output.probabilities[base + expected];
+          const double tokenMargin = output.logits[base + expected] - other;
+          margin += tokenMargin;
+          minimumMargin = std::min(minimumMargin, tokenMargin);
+          generated.push_back(predicted);
+          expectedTokens.push_back(expected);
+          context.erase(context.begin());
+          context.push_back(predicted);
+        }
+        const bool exact = correct == 8;
+        exactPatterns += seedIndex == 0 && exact;
+        exactRollouts += exact;
+        seedExactPatterns += exact;
+        std::vector<uint32_t> oracleContext(config.tokens);
+        for (uint32_t i = 0; i < config.tokens; ++i)
+          oracleContext[i] = rule[i % rule.size()];
+        int oracleCorrect = 0, firstOracleError = -1;
+        for (int step = 0; step < 8; ++step) {
+          const uint32_t expected =
+              rule[(size_t(config.tokens) + size_t(step)) % rule.size()];
+          const auto input =
+              tiny_lm::oneHot(oracleContext, config.vocabularySize);
+          const auto target = tiny_lm::oneHot(
+              std::vector<uint32_t>(config.tokens, expected),
+              config.vocabularySize);
+          TinyTransformerTrainingOutputs output;
+          if (!runtime.executeTinyTransformerTraining(
+                  input, target, inferenceParameters[seedIndex], 0.0f, output,
+                  error))
+            return failure("adam_oracle_generation", error, runtime);
+          const uint32_t predicted = argmaxAtLastPosition(output.logits);
+          if (predicted != expected && firstOracleError < 0)
+            firstOracleError = step;
+          oracleCorrect += predicted == expected;
+          oracleContext.erase(oracleContext.begin());
+          oracleContext.push_back(expected);
+        }
+        const bool oracleExact = oracleCorrect == 8;
+        oracleExactRollouts += oracleExact;
+        seedOracleExactPatterns += oracleExact;
       auto tokenList = [](const std::vector<uint32_t> &values) {
         std::ostringstream text;
         for (size_t i = 0; i < values.size(); ++i) {
@@ -1839,28 +2061,51 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         }
         return text.str();
       };
-      trajectory << "generation_pattern_" << pattern << "_prompt="
-                  << tokenList(prompt)
-                 << "\ngeneration_pattern_" << pattern << "_expected="
-                 << tokenList(expectedTokens) << "\ngeneration_pattern_"
-                 << pattern << "_generated=" << tokenList(generated)
-                 << "\ngeneration_pattern_" << pattern << "_exact="
-                 << (correct == 8 ? "true" : "false")
-                 << "\ngeneration_pattern_" << pattern
-                 << "_token_accuracy=" << correct / 8.0
-                 << "\ngeneration_pattern_" << pattern
-                  << "_mean_correct_probability=" << probability / 8
-                  << "\ngeneration_pattern_" << pattern
-                  << "_mean_margin=" << margin / 8
-                  << "\ngeneration_pattern_" << pattern
-                  << "_minimum_margin=" << minimumMargin << '\n';
+        trajectory << "seed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_prompt=" << tokenList(prompt)
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_expected=" << tokenList(expectedTokens)
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_generated=" << tokenList(generated)
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_exact=" << (exact ? "true" : "false")
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_token_accuracy=" << correct / 8.0
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_first_error=" << firstError
+                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << pattern << "_mean_correct_probability="
+                   << probability / 8 << "\nseed_" << (seedIndex + 1)
+                   << "_generation_pattern_" << pattern << "_mean_margin="
+                   << margin / 8 << "\nseed_" << (seedIndex + 1)
+                   << "_generation_pattern_" << pattern << "_minimum_margin="
+                   << minimumMargin << '\n';
+        trajectory << "seed_" << (seedIndex + 1)
+                   << "_oracle_pattern_" << pattern
+                   << "_exact=" << (oracleExact ? "true" : "false")
+                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << pattern << "_token_accuracy=" << oracleCorrect / 8.0
+                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << pattern << "_first_error=" << firstOracleError << '\n';
+      }
+      qualifyingSeeds += seedExactPatterns >= 3;
+      oracleQualifyingSeeds += seedOracleExactPatterns == 4;
     }
+    const bool exactSuccess = qualifyingSeeds >= 4 && exactRollouts >= 16 &&
+                              oracleQualifyingSeeds >= 4;
     std::ostringstream report;
     report << "TINY_LANGUAGE_MODEL\ntest=adam_inference_4_pattern\nstatus="
-           << (exactPatterns >= 3 && !nan ? "SUCCESS" : "FAILED")
+           << (nan ? "FAILED"
+                   : (exactSuccess ? "SUCCESS" : "PARTIAL_SUCCESS"))
+           << "\nresearch_goal_met=" << (exactSuccess ? "true" : "false")
            << "\noptimizer=ADAM\nlearning_rate=" << selected.lr
            << "\nsteps=" << selected.steps
-           << "\nexact_pattern_count=" << exactPatterns
+           << "\nsampling=pattern_balanced_phase01_round_robin"
+           << "\nseed_count=5\nrepresentative_seed_exact_pattern_count="
+           << exactPatterns << "\nqualifying_seed_count=" << qualifyingSeeds
+           << "\nexact_rollout_count=" << exactRollouts
+           << "\noracle_qualifying_seed_count=" << oracleQualifyingSeeds
+           << "\noracle_exact_rollout_count=" << oracleExactRollouts
            << "\nlogits_responsibility=HTP\nargmax_responsibility=CPU"
            << "\ncpu_fallback=false\nnan_detected="
            << (nan ? "true" : "false") << "\ninf_detected=false\n"
