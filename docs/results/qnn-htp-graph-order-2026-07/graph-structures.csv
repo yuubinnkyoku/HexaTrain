@@ -1,0 +1,4 @@
+"variant","source_graph_add_node_success_count","source_tensor_create_success_count","backend_finalized_node_count","backend_finalized_tensor_count","actual_qnn_input_tensor_count","actual_qnn_output_tensor_count","audited_app_read_tensor_count","app_read_output_element_count"
+"full","123","153","UNAVAILABLE","UNAVAILABLE","15","31","31","7552"
+"stop_after_dembedding","99","153","UNAVAILABLE","UNAVAILABLE","14","19","19","4416"
+"stop_after_dinput","98","153","UNAVAILABLE","UNAVAILABLE","14","18","18","3904"

@@ -1,0 +1,176 @@
+{
+  "classification": "FRESH_RUNTIME_CONTEXT_INSTANCE_ASSOCIATED_EXECUTION_VARIABILITY",
+  "source_commit": "aa94e5a937bc878333305b8ea46e129342390d03",
+  "environment": {
+    "android": "16",
+    "qnn_api": "2.37",
+    "qairt_build": "2.48.40.260702151143",
+    "selinux": "Enforcing",
+    "android_security_patch": "2026-05-01",
+    "htp": "V81"
+  },
+  "model": {
+    "dtype": "FP32",
+    "shape": "B1_T8_V32_D16"
+  },
+  "fixed_canonical_hashes": {
+    "parameter": "5674c9ecf8bcb785a4db27a73afb11e33aa22c23670301fbe7865692fa83b93b",
+    "one_hot": "d85d7d14ab07879ab62b29dc0be5eef0c51d29db0a1e6050b8d7ccb080bd00f1",
+    "target": "f1c1a960169be212ee9f4b5856b9add5b9f2dd5ff68b77ce962292d8e1c724cb"
+  },
+  "input_report_count": 60,
+  "discovery_processes": 45,
+  "confirmation_processes": 15,
+  "slots": 180,
+  "qnn_execute_attempts": 18000,
+  "qnn_execute_successes": 18000,
+  "varying_slots": 21,
+  "nonfinite_slots": 12,
+  "nonfinite_elements": 6733.0,
+  "qnn_failures": 0,
+  "poison_failures": 0,
+  "app_write_failures": 0,
+  "activity_failures": 0,
+  "focus_failures": 0,
+  "first_external_audit_tensor": {
+    "candidate_node": "UNMAPPED",
+    "name": "gradient_gamma1",
+    "varying_slots": 21,
+    "limitation": "audit_order_tie"
+  },
+  "dinput_varying_slots": 21,
+  "discovery_plan_varying_processes": [
+    {
+      "plan": "dembedding_dembedding_dembedding",
+      "varying": 2,
+      "total": 5
+    },
+    {
+      "plan": "dembedding_dinput_full",
+      "varying": 1,
+      "total": 5
+    },
+    {
+      "plan": "dembedding_full_dinput",
+      "varying": 3,
+      "total": 5
+    },
+    {
+      "plan": "dinput_dembedding_full",
+      "varying": 1,
+      "total": 5
+    },
+    {
+      "plan": "dinput_dinput_dinput",
+      "varying": 2,
+      "total": 5
+    },
+    {
+      "plan": "dinput_full_dembedding",
+      "varying": 0,
+      "total": 5
+    },
+    {
+      "plan": "full_dembedding_dinput",
+      "varying": 2,
+      "total": 5
+    },
+    {
+      "plan": "full_dinput_dembedding",
+      "varying": 3,
+      "total": 5
+    },
+    {
+      "plan": "full_full_full",
+      "varying": 1,
+      "total": 5
+    }
+  ],
+  "discovery_any_process_clopper_pearson_95": {
+    "method": "exact_binomial_Clopper_Pearson",
+    "varying": 15,
+    "upper": 0.48950363785836115,
+    "lower": 0.20000568801069463,
+    "total": 45
+  },
+  "confirmation_homogeneous_process_discordance": {
+    "varying": 3,
+    "clopper_pearson_95": {
+      "upper": 0.4808911338068528,
+      "lower": 0.043312005105836465
+    },
+    "patterns": {
+      "000": 12,
+      "010": 2,
+      "001": 1
+    },
+    "total": 15
+  },
+  "combined_homogeneous_process_discordance": {
+    "varying": 8,
+    "clopper_pearson_95": {
+      "upper": 0.4588936513947509,
+      "lower": 0.12279480987235389
+    },
+    "patterns": {
+      "000": 22,
+      "010": 3,
+      "001": 2,
+      "100": 2,
+      "011": 1
+    },
+    "total": 30
+  },
+  "homogeneous_variant_varying": [
+    {
+      "variant": "stop_after_dembedding",
+      "varying": 3,
+      "total": 10
+    },
+    {
+      "variant": "stop_after_dinput",
+      "varying": 3,
+      "total": 10
+    },
+    {
+      "variant": "full",
+      "varying": 2,
+      "total": 10
+    }
+  ],
+  "homogeneous_position_varying": [
+    {
+      "position": 1,
+      "varying": 2,
+      "total": 30
+    },
+    {
+      "position": 2,
+      "varying": 4,
+      "total": 30
+    },
+    {
+      "position": 3,
+      "varying": 3,
+      "total": 30
+    }
+  ],
+  "all_process_clopper_pearson_95": {
+    "method": "exact_binomial_Clopper_Pearson",
+    "varying": 18,
+    "upper": 0.4320831338760621,
+    "lower": 0.18845144541972103,
+    "total": 60
+  },
+  "nonfinite_process_clopper_pearson_95": {
+    "method": "exact_binomial_Clopper_Pearson",
+    "varying": 10,
+    "upper": 0.2852192548287028,
+    "lower": 0.08292881015906398,
+    "total": 60
+  },
+  "interpretation": {
+    "measured": "Variation occurred across all three graph variants and across all three positions; all QNN result codes, poison checks, APP_WRITE checks, and activity/focus checks passed.",
+    "inference": "The observed effect is not graph-variant-specific. The design does not require a fixed position or a particular preceding graph to observe it. The jointly-created Runtime/backend/device/context/graph instance scopes remain confounded."
+  }
+}
