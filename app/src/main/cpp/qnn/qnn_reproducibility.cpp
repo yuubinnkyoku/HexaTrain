@@ -241,18 +241,27 @@ void poisonOutputs(TinyTransformerTrainingOutputs& o,
 }
 struct TensorRepeat {
   std::set<std::string> raw, canonical;
+  std::map<std::string,size_t> canonicalCounts;
+  std::string firstCanonical;
   std::vector<float> first;
   double maxAbs=0;
   size_t firstDiff=std::numeric_limits<size_t>::max(), poisonResidual=0,
-         nonfinite=0;
+         nonfinite=0, runs=0,
+         firstDifferentRun=std::numeric_limits<size_t>::max();
 };
 void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
-  a.raw.insert(rawHash(v));
-  a.canonical.insert(canonicalHash(v));
+  ++a.runs;
+  const auto raw=rawHash(v), canonical=canonicalHash(v);
+  a.raw.insert(raw);
+  a.canonical.insert(canonical);
+  ++a.canonicalCounts[canonical];
   a.poisonResidual+=std::count(v.begin(),v.end(),poison);
   a.nonfinite+=std::count_if(v.begin(),v.end(),
                             [](float value){return !std::isfinite(value);});
-  if(a.first.empty()){a.first=v;return;}
+  if(a.first.empty()){a.first=v;a.firstCanonical=canonical;return;}
+  if(canonical!=a.firstCanonical &&
+     a.firstDifferentRun==std::numeric_limits<size_t>::max())
+    a.firstDifferentRun=a.runs;
   for(size_t i=0;i<v.size();++i){
     a.maxAbs=std::max(a.maxAbs,std::abs(double(v[i])-a.first[i]));
     if(canonicalBits(v[i])!=canonicalBits(a.first[i]) &&
@@ -260,11 +269,23 @@ void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
   }
 }
 void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRepeat& a) {
+  std::ostringstream frequencies;
+  bool first=true;
+  for(const auto& item:a.canonicalCounts) {
+    if(!first) frequencies<<',';
+    first=false;
+    frequencies<<item.first<<':'<<item.second;
+  }
   out<<prefix<<"_unique_raw_hashes="<<a.raw.size()<<'\n'
      <<prefix<<"_unique_canonical_hashes="<<a.canonical.size()<<'\n'
      <<prefix<<"_representative_raw_hash="<<(a.raw.empty()?"NONE":*a.raw.begin())<<'\n'
      <<prefix<<"_representative_canonical_hash="<<(a.canonical.empty()?"NONE":*a.canonical.begin())<<'\n'
+     <<prefix<<"_canonical_hash_frequencies="
+     <<(frequencies.str().empty()?"NONE":frequencies.str())<<'\n'
      <<prefix<<"_repeat_max_abs_difference="<<a.maxAbs<<'\n'
+     <<prefix<<"_first_different_run="
+     <<(a.firstDifferentRun==std::numeric_limits<size_t>::max()?-1:
+        static_cast<long long>(a.firstDifferentRun))<<'\n'
      <<prefix<<"_first_repeat_different_index="
      <<(a.firstDiff==std::numeric_limits<size_t>::max()?-1:static_cast<long long>(a.firstDiff))<<'\n'
      <<prefix<<"_app_read_poison_residual_elements="<<a.poisonResidual<<'\n'
@@ -334,6 +355,194 @@ bool runFullGraphFixed(const Snapshot& s,int repeats,std::ostringstream& out,
      <<maxAbsDifference(tensors["next_token_embedding"].first,s.cpu.next.tokenEmbedding)<<'\n';
   if(!poisonOk){error="APP_READ poison remained in full graph output";return false;}
   return true;
+}
+const char* variantName(TinyTransformerTrainingVariant variant) {
+  switch (variant) {
+    case TinyTransformerTrainingVariant::FULL: return "full";
+    case TinyTransformerTrainingVariant::STOP_AFTER_DINPUT:
+      return "stop_after_dinput";
+    case TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING:
+      return "stop_after_dembedding";
+  }
+  return "unknown";
+}
+bool runGraphVariantFixed(const Snapshot& s, TinyTransformerTrainingVariant variant,
+                          int repeats, std::ostringstream& out,
+                          std::string& error) {
+  Runtime rt;
+  const std::string prefix=std::string("variant_")+variantName(variant);
+  if(!rt.initialize(QnnBackendKind::HTP,error) ||
+     !rt.prepareTinyTransformerTraining(8,16,32,1e-5f,true,error,32,variant))
+    return false;
+  std::map<std::string,TensorRepeat> tensors;
+  int attempts=0, successes=0;
+  bool appWriteHashesUnchanged=true;
+  for(int i=0;i<repeats;++i) {
+    ++attempts;
+    const float poison=(i&1)?-1.1415926f:1.1415926f;
+    auto input=s.oneHot;
+    auto target=s.target;
+    auto current=s.current;
+    const auto inputBefore=rawHash(input), targetBefore=rawHash(target);
+    const auto parameterBefore=rawHash(flattenParameters(current));
+    TinyTransformerTrainingOutputs outputs;
+    poisonOutputs(outputs,current,poison);
+    if(!rt.executeTinyTransformerTraining(input,target,current,0.0003f,outputs,error))
+      return false;
+    ++successes;
+    appWriteHashesUnchanged &=
+        rawHash(input)==inputBefore && rawHash(target)==targetBefore &&
+        rawHash(flattenParameters(current))==parameterBefore;
+    if(!appWriteHashesUnchanged) {
+      error="APP_WRITE input/state mutated during graph variant execute";
+      return false;
+    }
+    auto audit=[&](const char* name,const std::vector<float>& values) {
+      observeRepeat(tensors[name],values,poison);
+    };
+    audit("logits",outputs.logits);
+    audit("transformer_output",outputs.output);
+    audit("transformer_output_gradient",outputs.dOutput);
+    audit("gradient_gamma1",outputs.gradients.gamma1);
+    audit("gradient_beta1",outputs.gradients.beta1);
+    audit("gradient_wq",outputs.gradients.wq);
+    audit("gradient_wk",outputs.gradients.wk);
+    audit("gradient_wv",outputs.gradients.wv);
+    audit("gradient_wo",outputs.gradients.wo);
+    audit("gradient_gamma2",outputs.gradients.gamma2);
+    audit("gradient_beta2",outputs.gradients.beta2);
+    audit("gradient_w1",outputs.gradients.w1);
+    audit("gradient_w2",outputs.gradients.w2);
+    audit("embedded_input",outputs.embeddedInput);
+    audit("softmax_probability",outputs.probabilities);
+    audit("dlogits",outputs.dLogits);
+    audit("embedding_input_gradient",outputs.dEmbeddedInput);
+    audit("output_projection_gradient",outputs.gradients.outputProjection);
+    if(variant!=TinyTransformerTrainingVariant::STOP_AFTER_DINPUT)
+      audit("token_embedding_gradient",outputs.gradients.tokenEmbedding);
+    if(variant==TinyTransformerTrainingVariant::FULL) {
+      audit("next_gamma1",outputs.next.gamma1);
+      audit("next_beta1",outputs.next.beta1);
+      audit("next_wq",outputs.next.wq);
+      audit("next_wk",outputs.next.wk);
+      audit("next_wv",outputs.next.wv);
+      audit("next_wo",outputs.next.wo);
+      audit("next_gamma2",outputs.next.gamma2);
+      audit("next_beta2",outputs.next.beta2);
+      audit("next_w1",outputs.next.w1);
+      audit("next_w2",outputs.next.w2);
+      audit("next_token_embedding",outputs.next.tokenEmbedding);
+      audit("next_output_projection",outputs.next.outputProjection);
+    }
+  }
+  emitRepeat(out,prefix+"_transformer_output",tensors["transformer_output"]);
+  emitRepeat(out,prefix+"_embedding_input_gradient",
+             tensors["embedding_input_gradient"]);
+  if(variant!=TinyTransformerTrainingVariant::STOP_AFTER_DINPUT)
+    emitRepeat(out,prefix+"_token_embedding_gradient",
+               tensors["token_embedding_gradient"]);
+  else
+    out<<prefix<<"_token_embedding_gradient=NOT_PRESENT_BY_DESIGN\n";
+  if(variant==TinyTransformerTrainingVariant::FULL)
+    emitRepeat(out,prefix+"_next_token_embedding",
+               tensors["next_token_embedding"]);
+  else
+    out<<prefix<<"_next_token_embedding=NOT_PRESENT_BY_DESIGN\n";
+  bool poisonOk=true, finite=true;
+  for(const auto& item:tensors) {
+    poisonOk&=item.second.poisonResidual==0;
+    finite&=item.second.nonfinite==0;
+  }
+  auto executeUs=rt.metrics().executeUs;
+  std::sort(executeUs.begin(),executeUs.end());
+  double executeMeanUs=0;
+  for(double value:executeUs) executeMeanUs+=value;
+  if(!executeUs.empty()) executeMeanUs/=executeUs.size();
+  const auto percentile=[&](double q) {
+    if(executeUs.empty()) return 0.0;
+    return executeUs[std::min(executeUs.size()-1,
+                              size_t(q*double(executeUs.size()-1)))];
+  };
+  out<<prefix<<"_graph_boundary="<<(variant==TinyTransformerTrainingVariant::FULL?
+       "lm_output_projection_next":variant==TinyTransformerTrainingVariant::STOP_AFTER_DINPUT?
+       "lm_dinput":"lm_dembedding")<<'\n'
+     <<prefix<<"_repeats="<<repeats<<'\n'
+     <<prefix<<"_qnn_execute_attempts="<<attempts<<'\n'
+     <<prefix<<"_qnn_execute_successes="<<successes<<'\n'
+     <<prefix<<"_qnn_execute_return_code=0\n"
+     <<prefix<<"_execute_us_min="<<percentile(0)<<'\n'
+     <<prefix<<"_execute_us_median="<<percentile(.5)<<'\n'
+     <<prefix<<"_execute_us_p95="<<percentile(.95)<<'\n'
+     <<prefix<<"_execute_us_max="<<percentile(1)<<'\n'
+     <<prefix<<"_execute_us_mean="<<executeMeanUs<<'\n'
+     <<prefix<<"_app_write_hashes_unchanged="
+     <<(appWriteHashesUnchanged?"true":"false")<<'\n'
+     <<prefix<<"_app_read_tensors_audited="<<tensors.size()<<'\n'
+     <<prefix<<"_app_read_poison_residual_elements="
+     <<([&](){size_t n=0;for(const auto& item:tensors)n+=item.second.poisonResidual;
+              return n;}())<<'\n'
+     <<prefix<<"_nonfinite_elements="
+     <<([&](){size_t n=0;for(const auto& item:tensors)n+=item.second.nonfinite;
+              return n;}())<<'\n'
+     <<prefix<<"_all_outputs_finite="<<(finite?"true":"false")<<'\n'
+     <<prefix<<"_numerical_variability_observed="
+     <<([&](){for(const auto& item:tensors)
+                if(item.second.canonical.size()>1)return true;
+              return false;}()?"true":"false")<<'\n';
+  if(!poisonOk){error="APP_READ poison remained in graph variant output";return false;}
+  if(!finite){error="nonfinite graph variant output";return false;}
+  return true;
+}
+bool runStandalonePrelude(const Snapshot& s,std::ostringstream& out,
+                          std::string& error) {
+  bool ok=true;
+  Aggregate sameGraph;
+  {
+    Runtime rt;
+    if(!rt.initialize(QnnBackendKind::HTP,error) ||
+       !runSame(rt,s,100,sameGraph,error)) ok=false;
+  }
+  emit(out,"prelude_scope_a_same_graph",sameGraph);
+  Aggregate recreateGraph;
+  {
+    Runtime rt;
+    if(!rt.initialize(QnnBackendKind::HTP,error)) ok=false;
+    else for(int i=0;i<30;++i)
+      if(!runSame(rt,s,1,recreateGraph,error)){ok=false;break;}
+  }
+  emit(out,"prelude_scope_b_recreate_graph_context_reuse",recreateGraph);
+  Aggregate recreateContext;
+  {
+    Runtime rt;
+    if(!rt.initialize(QnnBackendKind::HTP,error)) ok=false;
+    else for(int i=0;i<20;++i) {
+      if(!runSame(rt,s,1,recreateContext,error)){ok=false;break;}
+      if(i!=19&&!rt.recreateContext(error)){
+        recreateContext.success=false;ok=false;break;
+      }
+    }
+  }
+  emit(out,"prelude_scope_c_recreate_context_backend_reuse",recreateContext);
+  Aggregate recreateRuntime;
+  for(int i=0;i<10;++i) {
+    Runtime rt;
+    if(!rt.initialize(QnnBackendKind::HTP,error) ||
+       !runSame(rt,s,1,recreateRuntime,error)){ok=false;break;}
+  }
+  emit(out,"prelude_scope_d_backend_runtime_recreate",recreateRuntime);
+  for(const Aggregate* aggregate:{&sameGraph,&recreateGraph,&recreateContext,
+                                  &recreateRuntime}) {
+    ok&=aggregate->success && aggregate->runs==aggregate->attempts &&
+        aggregate->canonical.size()==1 && aggregate->poison==0 &&
+        aggregate->nonfinite==0;
+  }
+  out<<"prelude_total_qnn_execute_attempts="
+     <<sameGraph.attempts+recreateGraph.attempts+recreateContext.attempts+
+       recreateRuntime.attempts<<'\n'
+     <<"prelude_qnn_execute_return_code=0\n"
+     <<"prelude_all_outputs_deterministic="<<(ok?"true":"false")<<'\n';
+  if(!ok&&error.empty()) error="standalone prelude invariant failed";
+  return ok;
 }
 bool runZeroGradientOptimizer(const Snapshot& s,std::ostringstream& out,
                               std::string& error) {
@@ -451,6 +660,102 @@ std::string rawFloatSha256(const std::vector<float>& values) {
 }
 std::string canonicalFloatSha256(const std::vector<float>& values) {
   return canonicalHash(values);
+}
+
+std::string runTinyLmGraphBisection(bool standalonePrelude) {
+  std::ostringstream out;
+  out<<std::setprecision(9)
+     <<"QNN_TINY_LM_GRAPH_BISECTION\n"
+     <<"test=fixed_state_graph_prefix_bisection\n"
+     <<"shape=B1_T8_V32_D16\n"
+     <<"snapshot=E\n"
+     <<"snapshot_source=CPU_REFERENCE_ADAM_TRAJECTORY\n"
+     <<"manifest_schema_version=2\n"
+     <<"manifest_seed=1\n"
+     <<"manifest_batch_schedule=pattern_round_robin_4\n"
+     <<"repeats_per_variant=100\n"
+     <<"fresh_process_control=EXTERNAL_HEADLESS_INSTRUMENTATION\n"
+     <<"prelude="<<(standalonePrelude?
+       "E_STANDALONE_SCOPE_A100_B30_C20_D10":"NONE_COLD_FULL_FIRST")<<'\n'
+     <<"variant_execution_order=full,stop_after_dinput,stop_after_dembedding\n"
+     <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
+     <<"node_prefix_order=PRESERVED\n"
+     <<"app_write_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
+  const auto fixedSnapshots=snapshots();
+  if(fixedSnapshots.empty()) return out.str()+"status=FAILED\nerror=no snapshots\n";
+  const auto& s=fixedSnapshots.front();
+  out<<"snapshot_E_one_hot_raw_hash="<<rawHash(s.oneHot)<<'\n'
+     <<"snapshot_E_one_hot_canonical_hash="<<canonicalHash(s.oneHot)<<'\n'
+     <<"snapshot_E_target_raw_hash="<<rawHash(s.target)<<'\n'
+     <<"snapshot_E_target_canonical_hash="<<canonicalHash(s.target)<<'\n'
+     <<"snapshot_E_current_parameter_raw_hash="
+     <<rawHash(flattenParameters(s.current))<<'\n'
+     <<"snapshot_E_current_parameter_canonical_hash="
+     <<canonicalHash(flattenParameters(s.current))<<'\n';
+  std::string error;
+  bool ok=true;
+  if(standalonePrelude&&!runStandalonePrelude(s,out,error)) ok=false;
+  for(auto variant:{TinyTransformerTrainingVariant::FULL,
+                    TinyTransformerTrainingVariant::STOP_AFTER_DINPUT,
+                    TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING}) {
+    if(ok&&!runGraphVariantFixed(s,variant,100,out,error)){ok=false;break;}
+  }
+  out<<"comparison_same_input_state=true\n"
+     <<"qnn_execute_all_success="<<(ok?"true":"false")<<'\n'
+     <<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
+     <<"error="<<(ok?"none":error)<<'\n';
+  return out.str();
+}
+
+std::string runTinyLmGraphIsolated(int variantCode) {
+  TinyTransformerTrainingVariant variant;
+  switch(variantCode) {
+    case 0: variant=TinyTransformerTrainingVariant::FULL;break;
+    case 1: variant=TinyTransformerTrainingVariant::STOP_AFTER_DINPUT;break;
+    case 2: variant=TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING;break;
+    default:
+      return "QNN_TINY_LM_GRAPH_ISOLATED\nstatus=FAILED\n"
+             "error=unknown graph variant\n";
+  }
+  std::ostringstream out;
+  out<<std::setprecision(9)
+     <<"QNN_TINY_LM_GRAPH_ISOLATED\n"
+     <<"test=fixed_state_isolated_graph_variant\n"
+     <<"shape=B1_T8_V32_D16\n"
+     <<"snapshot=E\n"
+     <<"snapshot_source=CPU_REFERENCE_ADAM_TRAJECTORY\n"
+     <<"manifest_schema_version=2\n"
+     <<"manifest_seed=1\n"
+     <<"manifest_batch_schedule=pattern_round_robin_4\n"
+     <<"isolated_variant="<<variantName(variant)<<'\n'
+     <<"repeats=100\n"
+     <<"qnn_graphs_before_variant=0\n"
+     <<"fresh_process_control=EXTERNAL_HEADLESS_INSTRUMENTATION\n"
+     <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
+     <<"node_prefix_order=PRESERVED\n"
+     <<"app_write_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
+  const auto fixedSnapshots=snapshots();
+  if(fixedSnapshots.empty()) return out.str()+"status=FAILED\nerror=no snapshots\n";
+  const auto& s=fixedSnapshots.front();
+  out<<"snapshot_E_one_hot_raw_hash="<<rawHash(s.oneHot)<<'\n'
+     <<"snapshot_E_one_hot_canonical_hash="<<canonicalHash(s.oneHot)<<'\n'
+     <<"snapshot_E_target_raw_hash="<<rawHash(s.target)<<'\n'
+     <<"snapshot_E_target_canonical_hash="<<canonicalHash(s.target)<<'\n'
+     <<"snapshot_E_current_parameter_raw_hash="
+     <<rawHash(flattenParameters(s.current))<<'\n'
+     <<"snapshot_E_current_parameter_canonical_hash="
+     <<canonicalHash(flattenParameters(s.current))<<'\n';
+  std::string error;
+  const bool ok=runGraphVariantFixed(s,variant,100,out,error);
+  out<<"comparison_same_input_state=true\n"
+     <<"qnn_execute_all_success="<<(ok?"true":"false")<<'\n'
+     <<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
+     <<"error="<<(ok?"none":error)<<'\n';
+  return out.str();
 }
 
 std::string runTinyLmDembeddingReproducibility() {

@@ -385,6 +385,8 @@ struct Runtime::Impl {
         uint32_t vocabularySize = 0;
         bool languageModel = false;
         bool diagnosticOutputs = true;
+        TinyTransformerTrainingVariant variant =
+            TinyTransformerTrainingVariant::FULL;
         float scaleData = 1.0f, epsilonScaledData = 1.0e-5f;
         float centeredScaleData = 64.0f, dimensionData = 1.0f;
         float inverseDimensionData = 1.0f, gradientScaleData = 1.0f;

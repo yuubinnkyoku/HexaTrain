@@ -1,0 +1,2 @@
+"arm","process","variant","status","repeats","qnn_execute_successes","qnn_execute_return_code","app_read_tensors_audited","app_read_poison_residual_elements","nonfinite_elements","embedding_input_gradient_unique_canonical_hashes","embedding_input_gradient_canonical_hash_frequencies"
+"full_first_sequential","13","full","FAILED_NUMERICAL_AUDIT","100","100","0","31","0","584","2","1acf328cc71304e22c36ddd70b0d9dbe1303273b389f48aea065ef5ddf2e6431:73,98086e40e683c3f5d2ae59934332421406eeeb54da29d56df376f70330e33a28:27"

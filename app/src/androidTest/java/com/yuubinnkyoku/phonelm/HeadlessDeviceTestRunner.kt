@@ -136,6 +136,11 @@ class HeadlessDeviceTestRunner {
         "api-trace" -> ExecutionMode.QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE
         "callback-bound" -> ExecutionMode.QNN_HTP_MLP_FULL_STEP_BENCHMARK_CAPTURE
         "qnn-reproducibility" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY
+        "qnn-graph-bisection" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION
+        "qnn-graph-bisection-prelude" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION_PRELUDE
+        "qnn-graph-full-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_FULL_ISOLATED
+        "qnn-graph-dinput-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DINPUT_ISOLATED
+        "qnn-graph-dembedding-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DEMBEDDING_ISOLATED
         "qnn-adam-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }

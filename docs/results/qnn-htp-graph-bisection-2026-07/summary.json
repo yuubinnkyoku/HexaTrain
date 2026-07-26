@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "study": "QNN HTP fixed-state full-graph prefix bisection",
+  "result": "GOAL_SUCCESS",
+  "success_path": "C",
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api_version": "2.37.0",
+  "model": {
+    "batch": 1,
+    "tokens": 8,
+    "vocabulary": 32,
+    "dimension": 16,
+    "heads": 1,
+    "layers": 1,
+    "feed_forward_dimension": 32,
+    "declared_dtype": "FP32"
+  },
+  "fixed_state_hashes": {
+    "one_hot": "d85d7d14ab07879ab62b29dc0be5eef0c51d29db0a1e6050b8d7ccb080bd00f1",
+    "target": "f1c1a960169be212ee9f4b5856b9add5b9f2dd5ff68b77ce962292d8e1c724cb",
+    "current_parameters": "5674c9ecf8bcb785a4db27a73afb11e33aa22c23670301fbe7865692fa83b93b"
+  },
+  "completed_paired_fresh_processes": 14,
+  "additional_numerical_audit_failure_processes": 1,
+  "repeats_per_graph": 100,
+  "primary_result": {
+    "full_varying_processes": 2,
+    "full_tested_processes": 14,
+    "stop_after_dinput_varying_processes": 3,
+    "stop_after_dinput_tested_processes": 14,
+    "stop_after_dembedding_varying_processes": 1,
+    "stop_after_dembedding_tested_processes": 14,
+    "full_varying_stop_after_dembedding_stable_processes": 2,
+    "first_changing_tensor": "embedding_input_gradient",
+    "first_exposed_candidate_node": "lm_dinput",
+    "maximum_absolute_difference": 950.488281,
+    "qnn_execute_return_code": 0,
+    "app_read_poison_residual_elements": 0,
+    "nonfinite_elements": 0
+  },
+  "numerical_audit_failure": {
+    "full_varying_processes": 1,
+    "qnn_execute_return_code": 0,
+    "app_read_poison_residual_elements": 0,
+    "nonfinite_elements": 584,
+    "shortened_variants_executed": false
+  },
+  "classification": "GRAPH_VARIANT_OR_RUNTIME_ORDER_DEPENDENT_EXECUTION_VARIABILITY",
+  "toggle": "in two full-varying processes, the subsequently-created stop_after_dembedding graph is stable; stop_after_dinput is stable in one and varying in one",
+  "unresolved": [
+    "DRESIDUAL1 and DINPUT_NORM remain native, so lm_dinput is the first exposed candidate rather than a proven causal node",
+    "the causal member of the 24-node SGD tail and the backend lowering or memory-planning mechanism are not isolated",
+    "each variant uses a separate Runtime/context, so graph structure is confounded with creation and execution order",
+    "small process counts estimate prevalence imprecisely"
+  ],
+  "publication": {
+    "contains_raw_tensor": false,
+    "contains_device_endpoint": false,
+    "contains_private_path": false,
+    "contains_qualcomm_binary": false,
+    "contains_apk": false,
+    "contains_logcat_capture": false
+  }
+}

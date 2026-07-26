@@ -13,6 +13,14 @@ enum class QnnBackendKind {
     HTP,
 };
 
+// Selects the terminal node for diagnostic language-model training graphs.
+// FULL preserves the normal forward/backward/SGD graph.
+enum class TinyTransformerTrainingVariant {
+    FULL,
+    STOP_AFTER_DINPUT,
+    STOP_AFTER_DEMBEDDING,
+};
+
 const char* backendKindName(QnnBackendKind kind);
 
 struct RuntimeMetrics {
@@ -294,7 +302,9 @@ public:
                                         uint32_t feedForwardDimension,
                                         float epsilon, bool diagnosticOutputs,
                                         std::string& error,
-                                        uint32_t vocabularySize = 0);
+                                        uint32_t vocabularySize = 0,
+                                        TinyTransformerTrainingVariant variant =
+                                            TinyTransformerTrainingVariant::FULL);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,

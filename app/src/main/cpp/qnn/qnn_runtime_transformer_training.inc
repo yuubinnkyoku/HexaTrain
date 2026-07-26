@@ -1,7 +1,7 @@
 bool Runtime::prepareTinyTransformerTraining(
     uint32_t tokens, uint32_t dimension, uint32_t feedForwardDimension,
     float epsilon, bool diagnosticOutputs, std::string &error,
-    uint32_t vocabularySize) {
+    uint32_t vocabularySize, TinyTransformerTrainingVariant variant) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0) {
     error = "tiny training invalid runtime or shape";
@@ -15,6 +15,21 @@ bool Runtime::prepareTinyTransformerTraining(
   g.diagnosticOutputs = diagnosticOutputs;
   g.vocabularySize = vocabularySize;
   g.languageModel = vocabularySize != 0;
+  g.variant = variant;
+  switch (variant) {
+  case TinyTransformerTrainingVariant::FULL:
+  case TinyTransformerTrainingVariant::STOP_AFTER_DINPUT:
+  case TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING:
+    break;
+  default:
+    error = "tiny training invalid graph variant";
+    return false;
+  }
+  if (variant != TinyTransformerTrainingVariant::FULL &&
+      !g.languageModel) {
+    error = "tiny training graph variant requires language model";
+    return false;
+  }
   g.activationDims[0] = tokens;
   g.oneHotDims[0] = tokens;
   g.oneHotDims[1] = vocabularySize;
@@ -91,7 +106,10 @@ bool Runtime::prepareTinyTransformerTraining(
   many({G::WQ, G::WK, G::WV, G::WO}, QNN_TENSOR_TYPE_APP_WRITE, g.ddDims);
   make(G::W1, QNN_TENSOR_TYPE_APP_WRITE, g.dfDims);
   make(G::W2, QNN_TENSOR_TYPE_APP_WRITE, g.fdDims);
-  make(G::LR, QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
+  make(G::LR, variant == TinyTransformerTrainingVariant::FULL
+                  ? QNN_TENSOR_TYPE_APP_WRITE
+                  : QNN_TENSOR_TYPE_NATIVE,
+       g.scalarDims);
   make(G::MASK, QNN_TENSOR_TYPE_STATIC, g.scoreDims);
   many({G::SCALE, G::EPS_SCALED, G::CENTER_SCALE, G::DIMENSION,
         G::INV_DIMENSION, G::GRAD_SCALE},
@@ -181,27 +199,59 @@ bool Runtime::prepareTinyTransformerTraining(
     make(G::DLOGITS, diag, g.logitsDims);
     make(G::DOUTPUT_PROJECTION, diag, g.outputProjectionDims);
     make(G::DINPUT_NORM, QNN_TENSOR_TYPE_NATIVE, g.activationDims);
-    make(G::DINPUT, diag, g.activationDims);
-    make(G::DEMBEDDING, diag, g.embeddingDims);
+    make(G::DINPUT,
+         (diagnosticOutputs ||
+          variant != TinyTransformerTrainingVariant::FULL)
+             ? QNN_TENSOR_TYPE_APP_READ
+             : QNN_TENSOR_TYPE_NATIVE,
+         g.activationDims);
+    make(G::DEMBEDDING,
+         (variant == TinyTransformerTrainingVariant::FULL
+              ? diagnosticOutputs
+              : variant == TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING)
+             ? QNN_TENSOR_TYPE_APP_READ
+             : QNN_TENSOR_TYPE_NATIVE,
+         g.embeddingDims);
     make(G::S_DEMBEDDING, QNN_TENSOR_TYPE_NATIVE, g.embeddingDims);
-    make(G::N_EMBEDDING, QNN_TENSOR_TYPE_APP_READ, g.embeddingDims);
+    make(G::N_EMBEDDING,
+         variant == TinyTransformerTrainingVariant::FULL
+             ? QNN_TENSOR_TYPE_APP_READ
+             : QNN_TENSOR_TYPE_NATIVE,
+         g.embeddingDims);
     make(G::S_DOUTPUT_PROJECTION, QNN_TENSOR_TYPE_NATIVE,
          g.outputProjectionDims);
-    make(G::N_OUTPUT_PROJECTION, QNN_TENSOR_TYPE_APP_READ,
+    make(G::N_OUTPUT_PROJECTION,
+         variant == TinyTransformerTrainingVariant::FULL
+             ? QNN_TENSOR_TYPE_APP_READ
+             : QNN_TENSOR_TYPE_NATIVE,
          g.outputProjectionDims);
   }
   many({G::S_DG1, G::S_DB1, G::S_DG2, G::S_DB2}, QNN_TENSOR_TYPE_NATIVE,
        g.normDims, 1);
-  many({G::N_G1, G::N_B1, G::N_G2, G::N_B2}, QNN_TENSOR_TYPE_APP_READ,
+  many({G::N_G1, G::N_B1, G::N_G2, G::N_B2},
+       variant == TinyTransformerTrainingVariant::FULL
+           ? QNN_TENSOR_TYPE_APP_READ
+           : QNN_TENSOR_TYPE_NATIVE,
        g.normDims, 1);
   many({G::S_DWQ, G::S_DWK, G::S_DWV, G::S_DWO}, QNN_TENSOR_TYPE_NATIVE,
        g.ddDims);
-  many({G::N_WQ, G::N_WK, G::N_WV, G::N_WO}, QNN_TENSOR_TYPE_APP_READ,
+  many({G::N_WQ, G::N_WK, G::N_WV, G::N_WO},
+       variant == TinyTransformerTrainingVariant::FULL
+           ? QNN_TENSOR_TYPE_APP_READ
+           : QNN_TENSOR_TYPE_NATIVE,
        g.ddDims);
   make(G::S_DW1, QNN_TENSOR_TYPE_NATIVE, g.dfDims);
-  make(G::N_W1, QNN_TENSOR_TYPE_APP_READ, g.dfDims);
+  make(G::N_W1,
+       variant == TinyTransformerTrainingVariant::FULL
+           ? QNN_TENSOR_TYPE_APP_READ
+           : QNN_TENSOR_TYPE_NATIVE,
+       g.dfDims);
   make(G::S_DW2, QNN_TENSOR_TYPE_NATIVE, g.fdDims);
-  make(G::N_W2, QNN_TENSOR_TYPE_APP_READ, g.fdDims);
+  make(G::N_W2,
+       variant == TinyTransformerTrainingVariant::FULL
+           ? QNN_TENSOR_TYPE_APP_READ
+           : QNN_TENSOR_TYPE_NATIVE,
+       g.fdDims);
   g.tensors[G::MASK].v1.clientBuf = {
       g.maskData.data(), uint32_t(g.maskData.size() * sizeof(float))};
   g.tensors[G::SCALE].v1.clientBuf = {&g.scaleData, sizeof(float)};
@@ -584,10 +634,13 @@ bool Runtime::prepareTinyTransformerTraining(
            g.languageModel ? G::DINPUT_NORM : G::CENTERED1, G::DG1, G::DB1))
     return false;
   if (g.languageModel &&
-      (!ok(bin("lm_dinput", QNN_OP_ELEMENT_WISE_ADD, G::DRESIDUAL1,
-               G::DINPUT_NORM, G::DINPUT), "lm dinput") ||
-       !ok(mm("lm_dembedding", G::ONE_HOT, G::DINPUT, G::DEMBEDDING,
-              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0), "lm dembedding")))
+      !ok(bin("lm_dinput", QNN_OP_ELEMENT_WISE_ADD, G::DRESIDUAL1,
+              G::DINPUT_NORM, G::DINPUT), "lm dinput"))
+    return false;
+  if (g.languageModel &&
+      g.variant != TinyTransformerTrainingVariant::STOP_AFTER_DINPUT &&
+      !ok(mm("lm_dembedding", G::ONE_HOT, G::DINPUT, G::DEMBEDDING,
+             QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0), "lm dembedding"))
     return false;
   auto upd = [&](const char *n, int cur, int grad, int scaled, int next) {
     std::string s = n;
@@ -598,22 +651,23 @@ bool Runtime::prepareTinyTransformerTraining(
                   scaled, next),
               "upd next");
   };
-  if (!upd("tt_g1", G::G1, G::DG1, G::S_DG1, G::N_G1) ||
-      !upd("tt_b1", G::B1, G::DB1, G::S_DB1, G::N_B1) ||
-      !upd("tt_wq", G::WQ, G::DWQ, G::S_DWQ, G::N_WQ) ||
-      !upd("tt_wk", G::WK, G::DWK, G::S_DWK, G::N_WK) ||
-      !upd("tt_wv", G::WV, G::DWV, G::S_DWV, G::N_WV) ||
-      !upd("tt_wo", G::WO, G::DWO, G::S_DWO, G::N_WO) ||
-      !upd("tt_g2", G::G2, G::DG2, G::S_DG2, G::N_G2) ||
-      !upd("tt_b2", G::B2, G::DB2, G::S_DB2, G::N_B2) ||
-      !upd("tt_w1", G::W1, G::DW1, G::S_DW1, G::N_W1) ||
-      !upd("tt_w2", G::W2, G::DW2, G::S_DW2, G::N_W2) ||
-      (g.languageModel &&
-       (!upd("lm_embedding", G::EMBEDDING, G::DEMBEDDING,
-             G::S_DEMBEDDING, G::N_EMBEDDING) ||
-        !upd("lm_output_projection", G::OUTPUT_PROJECTION,
-             G::DOUTPUT_PROJECTION, G::S_DOUTPUT_PROJECTION,
-             G::N_OUTPUT_PROJECTION))))
+  if (g.variant == TinyTransformerTrainingVariant::FULL &&
+      (!upd("tt_g1", G::G1, G::DG1, G::S_DG1, G::N_G1) ||
+       !upd("tt_b1", G::B1, G::DB1, G::S_DB1, G::N_B1) ||
+       !upd("tt_wq", G::WQ, G::DWQ, G::S_DWQ, G::N_WQ) ||
+       !upd("tt_wk", G::WK, G::DWK, G::S_DWK, G::N_WK) ||
+       !upd("tt_wv", G::WV, G::DWV, G::S_DWV, G::N_WV) ||
+       !upd("tt_wo", G::WO, G::DWO, G::S_DWO, G::N_WO) ||
+       !upd("tt_g2", G::G2, G::DG2, G::S_DG2, G::N_G2) ||
+       !upd("tt_b2", G::B2, G::DB2, G::S_DB2, G::N_B2) ||
+       !upd("tt_w1", G::W1, G::DW1, G::S_DW1, G::N_W1) ||
+       !upd("tt_w2", G::W2, G::DW2, G::S_DW2, G::N_W2) ||
+       (g.languageModel &&
+        (!upd("lm_embedding", G::EMBEDDING, G::DEMBEDDING,
+              G::S_DEMBEDDING, G::N_EMBEDDING) ||
+         !upd("lm_output_projection", G::OUTPUT_PROJECTION,
+              G::DOUTPUT_PROJECTION, G::S_DOUTPUT_PROJECTION,
+              G::N_OUTPUT_PROJECTION)))))
     return false;
   started = Clock::now();
   st = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
@@ -636,6 +690,20 @@ bool Runtime::prepareTinyTransformerTraining(
                       : "tiny_transformer_training_weight_handoff=CPU_PING_"
                         "PONG_BINDING\n";
   diagnostics_ += "tiny_transformer_training_in_place_alias=false\n";
+  switch (g.variant) {
+  case TinyTransformerTrainingVariant::FULL:
+    diagnostics_ += "tiny_transformer_training_variant=FULL\n"
+                    "tiny_transformer_training_node_boundary=SGD_UPDATE\n";
+    break;
+  case TinyTransformerTrainingVariant::STOP_AFTER_DINPUT:
+    diagnostics_ += "tiny_transformer_training_variant=STOP_AFTER_DINPUT\n"
+                    "tiny_transformer_training_node_boundary=lm_dinput\n";
+    break;
+  case TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING:
+    diagnostics_ += "tiny_transformer_training_variant=STOP_AFTER_DEMBEDDING\n"
+                    "tiny_transformer_training_node_boundary=lm_dembedding\n";
+    break;
+  }
   return true;
 }
 
@@ -689,8 +757,10 @@ bool Runtime::executeTinyTransformerTraining(
     bi(G::EMBEDDING, current.tokenEmbedding);
     bi(G::OUTPUT_PROJECTION, current.outputProjection);
   }
-  in.push_back(g.tensors[G::LR]);
-  in.back().v1.clientBuf = {&learningRate, sizeof(float)};
+  if (g.variant == TinyTransformerTrainingVariant::FULL) {
+    in.push_back(g.tensors[G::LR]);
+    in.back().v1.clientBuf = {&learningRate, sizeof(float)};
+  }
   std::vector<Qnn_Tensor_t> out;
   out.reserve(g.languageModel ? 30 : 23);
   auto bo = [&](int id, std::vector<float> &v, size_t count) {
@@ -704,19 +774,23 @@ bool Runtime::executeTinyTransformerTraining(
   } else {
     bo(G::LOGITS, outputs.logits, tv);
   }
-  bo(G::N_G1, outputs.next.gamma1, n);
-  bo(G::N_B1, outputs.next.beta1, n);
-  bo(G::N_WQ, outputs.next.wq, dd);
-  bo(G::N_WK, outputs.next.wk, dd);
-  bo(G::N_WV, outputs.next.wv, dd);
-  bo(G::N_WO, outputs.next.wo, dd);
-  bo(G::N_G2, outputs.next.gamma2, n);
-  bo(G::N_B2, outputs.next.beta2, n);
-  bo(G::N_W1, outputs.next.w1, df);
-  bo(G::N_W2, outputs.next.w2, fd);
-  if (g.languageModel) {
-    bo(G::N_EMBEDDING, outputs.next.tokenEmbedding, vd);
-    bo(G::N_OUTPUT_PROJECTION, outputs.next.outputProjection, dv);
+  if (g.variant == TinyTransformerTrainingVariant::FULL) {
+    bo(G::N_G1, outputs.next.gamma1, n);
+    bo(G::N_B1, outputs.next.beta1, n);
+    bo(G::N_WQ, outputs.next.wq, dd);
+    bo(G::N_WK, outputs.next.wk, dd);
+    bo(G::N_WV, outputs.next.wv, dd);
+    bo(G::N_WO, outputs.next.wo, dd);
+    bo(G::N_G2, outputs.next.gamma2, n);
+    bo(G::N_B2, outputs.next.beta2, n);
+    bo(G::N_W1, outputs.next.w1, df);
+    bo(G::N_W2, outputs.next.w2, fd);
+    if (g.languageModel) {
+      bo(G::N_EMBEDDING, outputs.next.tokenEmbedding, vd);
+      bo(G::N_OUTPUT_PROJECTION, outputs.next.outputProjection, dv);
+    }
+  } else {
+    outputs.next = {};
   }
   if (g.diagnosticOutputs) {
     bo(G::OUTPUT, outputs.output, a);
@@ -736,7 +810,8 @@ bool Runtime::executeTinyTransformerTraining(
       bo(G::LM_PROBABILITIES, outputs.probabilities, tv);
       bo(G::DLOGITS, outputs.dLogits, tv);
       bo(G::DINPUT, outputs.dEmbeddedInput, a);
-      bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
+      if (g.variant != TinyTransformerTrainingVariant::STOP_AFTER_DINPUT)
+        bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
       bo(G::DOUTPUT_PROJECTION, outputs.gradients.outputProjection, dv);
     }
   } else {
@@ -747,6 +822,12 @@ bool Runtime::executeTinyTransformerTraining(
     outputs.dLogits.clear();
     outputs.dEmbeddedInput.clear();
     outputs.gradients = {};
+  }
+  if (g.languageModel && !g.diagnosticOutputs &&
+      g.variant != TinyTransformerTrainingVariant::FULL) {
+    bo(G::DINPUT, outputs.dEmbeddedInput, a);
+    if (g.variant == TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING)
+      bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
   }
   auto started = Clock::now();
   auto st = impl_->api.graphExecute(g.graph, in.data(), uint32_t(in.size()),

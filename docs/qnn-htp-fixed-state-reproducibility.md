@@ -2,11 +2,18 @@
 
 ## Result
 
-This study reached partial success. The headless test isolated an intermittent
-full-graph HTP execution variation, but the standalone micrograph did not
-reproduce it. With identical checkpoint, input, parameters, and optimizer state,
-one of five fresh processes produced two canonical hashes during 100 executions
-of checkpoint E. The first changing exposed tensor was
+This study now reaches success path C. The initial headless test isolated an
+intermittent full-graph HTP execution variation, and the follow-up graph-prefix
+bisection identified a repeatable operational switch: in two fresh processes
+the full graph varied, while the subsequently initialized graph ending at
+`lm_dembedding` was deterministic. The `lm_dinput` boundary was mixed, and
+graph structure remains confounded with Runtime/context creation order.
+The full technical report is
+[`qnn-htp-fixed-state-graph-bisection.md`](qnn-htp-fixed-state-graph-bisection.md).
+
+The original study found that, with identical checkpoint, input, parameters,
+and optimizer state, one of five fresh processes produced two canonical hashes
+during 100 executions of checkpoint E. The first changing exposed tensor was
 `embedding_input_gradient`, produced by `lm_dinput`; its maximum absolute
 difference was 5431.98079. The downstream `token_embedding_gradient`
 (`lm_dembedding`) and next token embedding changed afterward. Earlier exposed
@@ -73,7 +80,8 @@ and node timing, not intermediate tensor values. Value bisection consequently
 requires graph recomposition with selected tensors promoted to APP_READ.
 Profiling was not needed for the value result and was not enabled.
 
-The unresolved work is a standalone subgraph that retains enough of the
-full-graph scheduling/lowering to reproduce the intermittent `lm_dinput`
-variation in at least two fresh processes. Until then this does not meet the
-backend-minimal-reproducer success path.
+The follow-up does not identify a single causal node or prove a backend defect.
+`DRESIDUAL1` and `DINPUT_NORM` remain native, and removing the SGD tail changes
+output types/bindings and lowering as well as node count. The established result
+is therefore graph-composition-dependent execution variability, not a
+single-operation minimal reproducer.

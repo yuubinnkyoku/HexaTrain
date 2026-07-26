@@ -2409,6 +2409,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
 
 } // namespace
 std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
+    return runTinyLmGraphBisection(false);
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION_PRELUDE)
+    return runTinyLmGraphBisection(true);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_FULL_ISOLATED)
+    return runTinyLmGraphIsolated(0);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DINPUT_ISOLATED)
+    return runTinyLmGraphIsolated(1);
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DEMBEDDING_ISOLATED)
+    return runTinyLmGraphIsolated(2);
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY)
     return runTinyLmDembeddingReproducibility();
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP)

@@ -6,7 +6,10 @@ param(
         "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward",
         "transformer-mse", "tiny-lm-ce", "sgd-one-step", "momentum-one-step", "adam-one-step",
         "tiny-lm-stability", "phase01-adam", "generation-diagnostics", "api-trace", "callback-bound",
-        "qnn-reproducibility", "qnn-adam-diagnostic"
+        "qnn-reproducibility", "qnn-graph-bisection",
+        "qnn-graph-bisection-prelude", "qnn-graph-full-isolated",
+        "qnn-graph-dinput-isolated", "qnn-graph-dembedding-isolated",
+        "qnn-adam-diagnostic"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",

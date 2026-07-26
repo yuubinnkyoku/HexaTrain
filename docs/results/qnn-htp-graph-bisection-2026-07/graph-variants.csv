@@ -1,0 +1,4 @@
+"variant","terminal_node","lm_dembedding_present","sgd_update_nodes","next_parameter_outputs"
+"full","lm_output_projection_next","True","24","12"
+"stop_after_dinput","lm_dinput","False","0","0"
+"stop_after_dembedding","lm_dembedding","True","0","0"
