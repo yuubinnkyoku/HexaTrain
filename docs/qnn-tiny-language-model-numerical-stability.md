@@ -1,5 +1,14 @@
 # QNN HTP tiny language model numerical stability
 
+> July 2026 reproducibility update: the earlier convergence result below is a
+> historical run, not a stable cross-process guarantee. A new headless
+> fixed-state study found intermittent full-graph variation beginning at
+> `embedding_input_gradient` / `lm_dinput` in one of five fresh processes, while
+> the standalone `lm_dembedding` micrograph and fixed Adam graph remained
+> deterministic. Formal phase01 repeats at learning rate 0.0003 and clip 10 did
+> not keep all 25 process/seed trajectories finite. See
+> [QNN HTP fixed-state reproducibility](qnn-htp-fixed-state-reproducibility.md).
+
 ## Result
 
 This follow-up reached `GOAL_PARTIAL_SUCCESS`. Five independent seeds completed

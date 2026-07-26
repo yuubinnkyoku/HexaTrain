@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "study": "QNN HTP fixed-state reproducibility",
+  "result": "PARTIAL_SUCCESS",
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api_version": "2.37.0",
+  "model": {
+    "batch": 1,
+    "tokens": 8,
+    "vocabulary": 32,
+    "dimension": 16,
+    "heads": 1,
+    "layers": 1,
+    "ffn": 32,
+    "declared_dtype": "FP32"
+  },
+  "fixed_state": {
+    "checkpoints": [
+      "E",
+      "D",
+      "L"
+    ],
+    "processes": 5,
+    "repeats_per_full_graph_checkpoint": 100,
+    "first_varying_tensor": "embedding_input_gradient",
+    "first_varying_node": "lm_dinput",
+    "first_varying_scope": "full_graph_same_graph",
+    "affected_processes": 1,
+    "maximum_absolute_difference": 5431.98079,
+    "nonfinite_count": "NOT_MEASURED_IN_SOURCE_RUNS",
+    "app_read_poison_residual_elements": 0,
+    "standalone_lm_dembedding_all_scope_unique_canonical_hashes": 1
+  },
+  "classification": "BACKEND_EXECUTION_VARIABILITY_FULL_GRAPH",
+  "app_buffer_lifetime_defect_found": false,
+  "physical_guard": "UNSUPPORTED_RUNTIME_VECTOR_API",
+  "phase01": {
+    "optimizer": "Adam",
+    "learning_rate": 0.0003,
+    "gradient_clip": 10,
+    "maximum_steps": 1000,
+    "all_process_seed_runs_finite": false
+  },
+  "publication": {
+    "contains_raw_checkpoint": false,
+    "contains_device_endpoint": false,
+    "contains_private_path": false,
+    "contains_qualcomm_binary": false
+  }
+}
