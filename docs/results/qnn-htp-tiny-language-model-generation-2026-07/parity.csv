@@ -1,0 +1,5 @@
+"comparison","max_abs_error","mean_abs_error","max_relative_error","cpu_argmax","htp_argmax","cpu_top3","htp_top3","representative_finite"
+"cpu_eval_generation","0","0","0","0","0","0,1,3","0,1,3","true"
+"htp_eval_generation","0","0","0","0","0","0,1,3","0,1,3","true"
+"cpu_htp_eval","0.01226641238","0.002476906831","0.399705283","0","0","0,1,3","0,1,3","true"
+"cpu_htp_generation","0.01226641238","0.002476906831","0.399705283","0","0","0,1,3","0,1,3","true"

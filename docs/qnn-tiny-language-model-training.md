@@ -46,3 +46,11 @@ Autoregressive verification trains the known `0,1,2,3` rule and reproduces `0,1,
 ## Reproduction and publication
 
 Run `scripts/run_host_tests.ps1` for CPU reference checks and `scripts/run_qnn_htp_tiny_language_model_tests.ps1` for the four device modes. Raw device reports stay under ignored `build/reports`. `scripts/export_public_tiny_language_model_results.ps1` reads only a fixed key allow-list and emits aggregate JSON/CSV; it never publishes callback/logcat text, device endpoints, private paths, function addresses, APKs, Qualcomm binaries, or full tensors.
+
+The follow-up autoregressive-gap investigation is documented in
+[`qnn-tiny-language-model-autoregressive-gap.md`](qnn-tiny-language-model-autoregressive-gap.md).
+It adds true sliding-window CPU diagnostics, five-seed CPU/HTP same-prefix parity,
+oracle/free-running separation, and pattern-balanced phase sampling without changing
+the model shape. CPU reaches 20/20 exact rollouts, while the final HTP candidate
+does not remain finite across five seeds; the bounded run reaches 4/20 exact
+rollouts, so the published outcome remains `GOAL_PARTIAL_SUCCESS`.

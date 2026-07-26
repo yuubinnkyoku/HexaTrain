@@ -1,0 +1,47 @@
+{
+  "status": "GOAL_PARTIAL_SUCCESS",
+  "source_commit": "c15ecead3f7eff8eb6bdc060417e1cecaeec4978",
+  "model": "B1_T8_V32_D16_H1_L1_FFN32_ReLU_pre_norm_FP32",
+  "cause": "MULTIPLE_CAUSES: PREFIX_COVERAGE_DEFICIT plus HTP phase01 numerical instability",
+  "sampling": "pattern_balanced_phase01_round_robin",
+  "optimizer": "Adam",
+  "learning_rate": 0.0003,
+  "steps": 1000.0,
+  "gradient_clip_threshold": 10,
+  "same_prefix": {
+    "representative_finite": "true",
+    "finite_seed_count": 3,
+    "cpu_eval_generation_max_abs_error": 0.0,
+    "htp_eval_generation_max_abs_error": 0.0,
+    "cpu_htp_eval_max_abs_error": 0.01226641238,
+    "cpu_htp_generation_max_abs_error": 0.01226641238,
+    "representative_argmax_match": true,
+    "representative_top3_match": true,
+    "all_seed_cpu_eval_generation_argmax_match": "false",
+    "all_seed_htp_eval_generation_argmax_match": "false"
+  },
+  "htp": {
+    "all_seed_final_metrics_finite": "false",
+    "generation_outputs_finite": "false",
+    "generation_nonfinite_count": 9.0,
+    "generation_nan_count": 2182.0,
+    "generation_inf_count": 0.0,
+    "first_generation_nonfinite": "same_prefix_seed3",
+    "cpu_fallback": "false",
+    "qualifying_seed_count": 1.0,
+    "exact_rollout_count": 4,
+    "oracle_qualifying_seed_count": 0.0,
+    "oracle_exact_rollout_count": 4,
+    "research_goal_met": "false",
+    "deterministic_replay": "false"
+  },
+  "cpu": {
+    "phase01_true_sliding_window_exact_rollouts": 20,
+    "phase01_true_sliding_window_oracle_exact_rollouts": 20,
+    "finite": "true",
+    "deterministic": "true"
+  },
+  "closed_loop": "NOT_NEEDED",
+  "prefix_length_coverage": "UNSUPPORTED by fixed-T8 API without padding/loss mask",
+  "performance": "NOT_REACHED because GOAL_SUCCESS was not met"
+}
