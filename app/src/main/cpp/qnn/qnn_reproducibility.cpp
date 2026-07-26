@@ -243,12 +243,15 @@ struct TensorRepeat {
   std::set<std::string> raw, canonical;
   std::vector<float> first;
   double maxAbs=0;
-  size_t firstDiff=std::numeric_limits<size_t>::max(), poisonResidual=0;
+  size_t firstDiff=std::numeric_limits<size_t>::max(), poisonResidual=0,
+         nonfinite=0;
 };
 void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
   a.raw.insert(rawHash(v));
   a.canonical.insert(canonicalHash(v));
   a.poisonResidual+=std::count(v.begin(),v.end(),poison);
+  a.nonfinite+=std::count_if(v.begin(),v.end(),
+                            [](float value){return !std::isfinite(value);});
   if(a.first.empty()){a.first=v;return;}
   for(size_t i=0;i<v.size();++i){
     a.maxAbs=std::max(a.maxAbs,std::abs(double(v[i])-a.first[i]));
@@ -264,7 +267,8 @@ void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRe
      <<prefix<<"_repeat_max_abs_difference="<<a.maxAbs<<'\n'
      <<prefix<<"_first_repeat_different_index="
      <<(a.firstDiff==std::numeric_limits<size_t>::max()?-1:static_cast<long long>(a.firstDiff))<<'\n'
-     <<prefix<<"_app_read_poison_residual_elements="<<a.poisonResidual<<'\n';
+     <<prefix<<"_app_read_poison_residual_elements="<<a.poisonResidual<<'\n'
+     <<prefix<<"_nonfinite_elements="<<a.nonfinite<<'\n';
 }
 double maxAbsDifference(const std::vector<float>& a,const std::vector<float>& b) {
   if(a.size()!=b.size()) return std::numeric_limits<double>::infinity();
