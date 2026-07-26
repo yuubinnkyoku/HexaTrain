@@ -216,7 +216,85 @@ $varyingProcessCount = @($processRows | Where-Object process_varying).Count
 $nonfiniteProcessCount = @($processRows | Where-Object { $_.nonfinite_elements -gt 0 }).Count
 $discoveryCi = Clopper-Pearson $discoveryVarying 45; $confirmationCi = Clopper-Pearson $confirmationVarying 15
 $homogeneousCi = Clopper-Pearson $homogeneousVarying 30; $ci = Clopper-Pearson $varyingProcessCount $processRows.Count; $nonfiniteCi = Clopper-Pearson $nonfiniteProcessCount 60
-$summary = [ordered]@{ classification='FRESH_RUNTIME_CONTEXT_INSTANCE_ASSOCIATED_EXECUTION_VARIABILITY'; source_commit=$commit; environment=@{ qairt_build='2.48.40.260702151143'; qnn_api='2.37'; htp='V81'; android='16'; android_security_patch='2026-05-01'; selinux='Enforcing' }; model=@{ shape='B1_T8_V32_D16'; dtype='FP32' }; fixed_canonical_hashes=$hashes; input_report_count=60; discovery_processes=45; confirmation_processes=15; slots=180; qnn_execute_attempts=18000; qnn_execute_successes=18000; varying_slots=$allVarying; nonfinite_slots=$nonfiniteSlots; nonfinite_elements=$nonfiniteElements; qnn_failures=0; poison_failures=0; app_write_failures=0; activity_failures=0; focus_failures=0; first_external_audit_tensor=@{ name='gradient_gamma1'; varying_slots=$firstExternalAuditCount; candidate_node='UNMAPPED'; limitation='audit_order_tie' }; dinput_varying_slots=$dinputVaryingCount; discovery_plan_varying_processes=$discoveryPlanVarying; discovery_any_process_clopper_pearson_95=@{ varying=$discoveryVarying; total=45; lower=$discoveryCi.lower; upper=$discoveryCi.upper; method='exact_binomial_Clopper_Pearson' }; confirmation_homogeneous_process_discordance=@{ varying=3; total=15; clopper_pearson_95=@{ lower=$confirmationCi.lower; upper=$confirmationCi.upper }; patterns=$confirmationPatterns }; combined_homogeneous_process_discordance=@{ varying=8; total=30; clopper_pearson_95=@{ lower=$homogeneousCi.lower; upper=$homogeneousCi.upper }; patterns=$combinedPatterns }; homogeneous_variant_varying=$variantStats; homogeneous_position_varying=$positionStats; all_process_clopper_pearson_95=@{ varying=$varyingProcessCount; total=60; lower=$ci.lower; upper=$ci.upper; method='exact_binomial_Clopper_Pearson' }; nonfinite_process_clopper_pearson_95=@{ varying=$nonfiniteProcessCount; total=60; lower=$nonfiniteCi.lower; upper=$nonfiniteCi.upper; method='exact_binomial_Clopper_Pearson' }; interpretation=@{ measured='Variation occurred across all three graph variants and across all three positions; all QNN result codes, poison checks, APP_WRITE checks, and activity/focus checks passed.'; inference='The observed effect is not graph-variant-specific. The design does not require a fixed position or a particular preceding graph to observe it. The jointly-created Runtime/backend/device/context/graph instance scopes remain confounded.' } }
+$summary = [ordered]@{
+    classification = 'FRESH_RUNTIME_CONTEXT_INSTANCE_ASSOCIATED_EXECUTION_VARIABILITY'
+    source_commit = $commit
+    environment = [ordered]@{
+        qairt_build = '2.48.40.260702151143'
+        qnn_api = '2.37'
+        htp = 'V81'
+        android = '16'
+        android_security_patch = '2026-05-01'
+        selinux = 'Enforcing'
+    }
+    model = [ordered]@{ shape='B1_T8_V32_D16'; dtype='FP32' }
+    fixed_canonical_hashes = [ordered]@{
+        one_hot = $hashes.one_hot
+        target = $hashes.target
+        parameter = $hashes.parameter
+    }
+    input_report_count = 60
+    discovery_processes = 45
+    confirmation_processes = 15
+    slots = 180
+    qnn_execute_attempts = 18000
+    qnn_execute_successes = 18000
+    varying_slots = $allVarying
+    nonfinite_slots = $nonfiniteSlots
+    nonfinite_elements = $nonfiniteElements
+    qnn_failures = 0
+    poison_failures = 0
+    app_write_failures = 0
+    activity_failures = 0
+    focus_failures = 0
+    first_external_audit_tensor = [ordered]@{
+        name = 'gradient_gamma1'
+        varying_slots = $firstExternalAuditCount
+        candidate_node = 'UNMAPPED'
+        limitation = 'audit_order_tie'
+    }
+    dinput_varying_slots = $dinputVaryingCount
+    discovery_plan_varying_processes = $discoveryPlanVarying
+    discovery_any_process_clopper_pearson_95 = [ordered]@{
+        varying = $discoveryVarying
+        total = 45
+        lower = $discoveryCi.lower
+        upper = $discoveryCi.upper
+        method = 'exact_binomial_Clopper_Pearson'
+    }
+    confirmation_homogeneous_process_discordance = [ordered]@{
+        varying = 3
+        total = 15
+        clopper_pearson_95 = [ordered]@{ lower=$confirmationCi.lower; upper=$confirmationCi.upper }
+        patterns = $confirmationPatterns
+    }
+    combined_homogeneous_process_discordance = [ordered]@{
+        varying = 8
+        total = 30
+        clopper_pearson_95 = [ordered]@{ lower=$homogeneousCi.lower; upper=$homogeneousCi.upper }
+        patterns = $combinedPatterns
+    }
+    homogeneous_variant_varying = $variantStats
+    homogeneous_position_varying = $positionStats
+    all_process_clopper_pearson_95 = [ordered]@{
+        varying = $varyingProcessCount
+        total = 60
+        lower = $ci.lower
+        upper = $ci.upper
+        method = 'exact_binomial_Clopper_Pearson'
+    }
+    nonfinite_process_clopper_pearson_95 = [ordered]@{
+        varying = $nonfiniteProcessCount
+        total = 60
+        lower = $nonfiniteCi.lower
+        upper = $nonfiniteCi.upper
+        method = 'exact_binomial_Clopper_Pearson'
+    }
+    interpretation = [ordered]@{
+        measured = 'Variation occurred across all three graph variants and across all three positions; all QNN result codes, poison checks, APP_WRITE checks, and activity/focus checks passed.'
+        inference = 'The observed effect is not graph-variant-specific. The design does not require a fixed position or a particular preceding graph to observe it. The jointly-created Runtime/backend/device/context/graph instance scopes remain confounded.'
+    }
+}
 
 $stagingRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $stagingDirectory = Join-Path $stagingRoot ("phonelm-qnn-graph-order-export-" + [guid]::NewGuid().ToString('N'))

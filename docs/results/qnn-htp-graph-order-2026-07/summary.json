@@ -2,21 +2,21 @@
   "classification": "FRESH_RUNTIME_CONTEXT_INSTANCE_ASSOCIATED_EXECUTION_VARIABILITY",
   "source_commit": "aa94e5a937bc878333305b8ea46e129342390d03",
   "environment": {
-    "android": "16",
-    "qnn_api": "2.37",
     "qairt_build": "2.48.40.260702151143",
-    "selinux": "Enforcing",
+    "qnn_api": "2.37",
+    "htp": "V81",
+    "android": "16",
     "android_security_patch": "2026-05-01",
-    "htp": "V81"
+    "selinux": "Enforcing"
   },
   "model": {
-    "dtype": "FP32",
-    "shape": "B1_T8_V32_D16"
+    "shape": "B1_T8_V32_D16",
+    "dtype": "FP32"
   },
   "fixed_canonical_hashes": {
-    "parameter": "5674c9ecf8bcb785a4db27a73afb11e33aa22c23670301fbe7865692fa83b93b",
     "one_hot": "d85d7d14ab07879ab62b29dc0be5eef0c51d29db0a1e6050b8d7ccb080bd00f1",
-    "target": "f1c1a960169be212ee9f4b5856b9add5b9f2dd5ff68b77ce962292d8e1c724cb"
+    "target": "f1c1a960169be212ee9f4b5856b9add5b9f2dd5ff68b77ce962292d8e1c724cb",
+    "parameter": "5674c9ecf8bcb785a4db27a73afb11e33aa22c23670301fbe7865692fa83b93b"
   },
   "input_report_count": 60,
   "discovery_processes": 45,
@@ -33,9 +33,9 @@
   "activity_failures": 0,
   "focus_failures": 0,
   "first_external_audit_tensor": {
-    "candidate_node": "UNMAPPED",
     "name": "gradient_gamma1",
     "varying_slots": 21,
+    "candidate_node": "UNMAPPED",
     "limitation": "audit_order_tie"
   },
   "dinput_varying_slots": 21,
@@ -87,30 +87,31 @@
     }
   ],
   "discovery_any_process_clopper_pearson_95": {
-    "method": "exact_binomial_Clopper_Pearson",
     "varying": 15,
-    "upper": 0.48950363785836115,
+    "total": 45,
     "lower": 0.20000568801069463,
-    "total": 45
+    "upper": 0.48950363785836115,
+    "method": "exact_binomial_Clopper_Pearson"
   },
   "confirmation_homogeneous_process_discordance": {
     "varying": 3,
+    "total": 15,
     "clopper_pearson_95": {
-      "upper": 0.4808911338068528,
-      "lower": 0.043312005105836465
+      "lower": 0.043312005105836465,
+      "upper": 0.4808911338068528
     },
     "patterns": {
       "000": 12,
       "010": 2,
       "001": 1
-    },
-    "total": 15
+    }
   },
   "combined_homogeneous_process_discordance": {
     "varying": 8,
+    "total": 30,
     "clopper_pearson_95": {
-      "upper": 0.4588936513947509,
-      "lower": 0.12279480987235389
+      "lower": 0.12279480987235389,
+      "upper": 0.4588936513947509
     },
     "patterns": {
       "000": 22,
@@ -118,8 +119,7 @@
       "001": 2,
       "100": 2,
       "011": 1
-    },
-    "total": 30
+    }
   },
   "homogeneous_variant_varying": [
     {
@@ -156,18 +156,18 @@
     }
   ],
   "all_process_clopper_pearson_95": {
-    "method": "exact_binomial_Clopper_Pearson",
     "varying": 18,
-    "upper": 0.4320831338760621,
+    "total": 60,
     "lower": 0.18845144541972103,
-    "total": 60
+    "upper": 0.4320831338760621,
+    "method": "exact_binomial_Clopper_Pearson"
   },
   "nonfinite_process_clopper_pearson_95": {
-    "method": "exact_binomial_Clopper_Pearson",
     "varying": 10,
-    "upper": 0.2852192548287028,
+    "total": 60,
     "lower": 0.08292881015906398,
-    "total": 60
+    "upper": 0.2852192548287028,
+    "method": "exact_binomial_Clopper_Pearson"
   },
   "interpretation": {
     "measured": "Variation occurred across all three graph variants and across all three positions; all QNN result codes, poison checks, APP_WRITE checks, and activity/focus checks passed.",
