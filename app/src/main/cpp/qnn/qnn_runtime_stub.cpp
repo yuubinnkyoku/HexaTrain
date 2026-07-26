@@ -18,6 +18,12 @@ const BackendInfo& Runtime::info() const {
 }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
+const ApiTrace& Runtime::apiTrace() const { return apiTrace_; }
+std::uint32_t Runtime::tinyTransformerTrainingSourceTensorCreateSuccessCount() const { return 0; }
+std::uint32_t Runtime::tinyTransformerTrainingSourceGraphAddNodeSuccessCount() const { return 0; }
+std::uint32_t Runtime::tinyTransformerTrainingLastInputTensorCount() const { return 0; }
+std::uint32_t Runtime::tinyTransformerTrainingLastOutputTensorCount() const { return 0; }
+bool Runtime::tinyTransformerTrainingLastLearningRateBytesUnchanged() const { return false; }
 void Runtime::setOptions(const RuntimeOptions& options) { options_ = options; }
 std::string Runtime::apiTraceSummary() const { return "api_trace_version=UNAVAILABLE\n"; }
 std::string Runtime::qnnCallbackCaptureSummary() const { return "qnn_callback_capture_enabled=false\n"; }

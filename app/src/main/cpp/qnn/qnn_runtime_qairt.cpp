@@ -383,6 +383,10 @@ struct Runtime::Impl {
         uint32_t lastAxisData[1]{1}, rowAxisData[1]{0}, allAxesData[2]{0, 1};
         uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
         uint32_t vocabularySize = 0;
+        uint32_t sourceTensorCreateSuccessCount = 0;
+        uint32_t sourceGraphAddNodeSuccessCount = 0;
+        uint32_t lastInputTensorCount = 0, lastOutputTensorCount = 0;
+        bool lastLearningRateBytesUnchanged = true;
         bool languageModel = false;
         bool diagnosticOutputs = true;
         TinyTransformerTrainingVariant variant =
@@ -434,6 +438,22 @@ Runtime::~Runtime() {
 const BackendInfo& Runtime::info() const { return info_; }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
+const ApiTrace& Runtime::apiTrace() const { return apiTrace_; }
+std::uint32_t Runtime::tinyTransformerTrainingSourceTensorCreateSuccessCount() const {
+    return impl_ ? impl_->tinyTransformerTraining.sourceTensorCreateSuccessCount : 0;
+}
+std::uint32_t Runtime::tinyTransformerTrainingSourceGraphAddNodeSuccessCount() const {
+    return impl_ ? impl_->tinyTransformerTraining.sourceGraphAddNodeSuccessCount : 0;
+}
+std::uint32_t Runtime::tinyTransformerTrainingLastInputTensorCount() const {
+    return impl_ ? impl_->tinyTransformerTraining.lastInputTensorCount : 0;
+}
+std::uint32_t Runtime::tinyTransformerTrainingLastOutputTensorCount() const {
+    return impl_ ? impl_->tinyTransformerTraining.lastOutputTensorCount : 0;
+}
+bool Runtime::tinyTransformerTrainingLastLearningRateBytesUnchanged() const {
+    return impl_ ? impl_->tinyTransformerTraining.lastLearningRateBytesUnchanged : false;
+}
 
 void Runtime::setOptions(const RuntimeOptions& options) { options_ = options; }
 

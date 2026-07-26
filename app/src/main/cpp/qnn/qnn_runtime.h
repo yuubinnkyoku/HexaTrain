@@ -168,6 +168,12 @@ public:
     ~Runtime();
     const BackendInfo& info() const;
     const std::string& diagnostics() const;
+    const ApiTrace& apiTrace() const;
+    std::uint32_t tinyTransformerTrainingSourceTensorCreateSuccessCount() const;
+    std::uint32_t tinyTransformerTrainingSourceGraphAddNodeSuccessCount() const;
+    std::uint32_t tinyTransformerTrainingLastInputTensorCount() const;
+    std::uint32_t tinyTransformerTrainingLastOutputTensorCount() const;
+    bool tinyTransformerTrainingLastLearningRateBytesUnchanged() const;
     void setOptions(const RuntimeOptions& options);
     std::string apiTraceSummary() const;
     std::string qnnCallbackCaptureSummary() const;

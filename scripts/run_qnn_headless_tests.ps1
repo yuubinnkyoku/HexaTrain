@@ -9,6 +9,11 @@ param(
         "qnn-reproducibility", "qnn-graph-bisection",
         "qnn-graph-bisection-prelude", "qnn-graph-full-isolated",
         "qnn-graph-dinput-isolated", "qnn-graph-dembedding-isolated",
+        "qnn-graph-order-full-dinput-dembedding", "qnn-graph-order-full-dembedding-dinput",
+        "qnn-graph-order-dinput-full-dembedding", "qnn-graph-order-dinput-dembedding-full",
+        "qnn-graph-order-dembedding-full-dinput", "qnn-graph-order-dembedding-dinput-full",
+        "qnn-graph-order-full-full-full", "qnn-graph-order-dinput-dinput-dinput",
+        "qnn-graph-order-dembedding-dembedding-dembedding",
         "qnn-adam-diagnostic"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]

@@ -141,6 +141,15 @@ class HeadlessDeviceTestRunner {
         "qnn-graph-full-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_FULL_ISOLATED
         "qnn-graph-dinput-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DINPUT_ISOLATED
         "qnn-graph-dembedding-isolated" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DEMBEDDING_ISOLATED
+        "qnn-graph-order-full-dinput-dembedding" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_FULL_DINPUT_DEMBEDDING
+        "qnn-graph-order-full-dembedding-dinput" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_FULL_DEMBEDDING_DINPUT
+        "qnn-graph-order-dinput-full-dembedding" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DINPUT_FULL_DEMBEDDING
+        "qnn-graph-order-dinput-dembedding-full" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DINPUT_DEMBEDDING_FULL
+        "qnn-graph-order-dembedding-full-dinput" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DEMBEDDING_FULL_DINPUT
+        "qnn-graph-order-dembedding-dinput-full" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DEMBEDDING_DINPUT_FULL
+        "qnn-graph-order-full-full-full" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_FULL_FULL_FULL
+        "qnn-graph-order-dinput-dinput-dinput" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DINPUT_DINPUT_DINPUT
+        "qnn-graph-order-dembedding-dembedding-dembedding" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DEMBEDDING_DEMBEDDING_DEMBEDDING
         "qnn-adam-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }

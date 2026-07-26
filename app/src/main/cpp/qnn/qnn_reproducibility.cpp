@@ -241,10 +241,12 @@ void poisonOutputs(TinyTransformerTrainingOutputs& o,
 }
 struct TensorRepeat {
   std::set<std::string> raw, canonical;
+  std::map<std::string,size_t> rawCounts;
   std::map<std::string,size_t> canonicalCounts;
   std::string firstCanonical;
   std::vector<float> first;
-  double maxAbs=0;
+  double maxAbs=0, sumAbs=0;
+  size_t comparedElements=0;
   size_t firstDiff=std::numeric_limits<size_t>::max(), poisonResidual=0,
          nonfinite=0, runs=0,
          firstDifferentRun=std::numeric_limits<size_t>::max();
@@ -254,6 +256,7 @@ void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
   const auto raw=rawHash(v), canonical=canonicalHash(v);
   a.raw.insert(raw);
   a.canonical.insert(canonical);
+  ++a.rawCounts[raw];
   ++a.canonicalCounts[canonical];
   a.poisonResidual+=std::count(v.begin(),v.end(),poison);
   a.nonfinite+=std::count_if(v.begin(),v.end(),
@@ -263,26 +266,39 @@ void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
      a.firstDifferentRun==std::numeric_limits<size_t>::max())
     a.firstDifferentRun=a.runs;
   for(size_t i=0;i<v.size();++i){
-    a.maxAbs=std::max(a.maxAbs,std::abs(double(v[i])-a.first[i]));
+    const double difference=std::abs(double(v[i])-a.first[i]);
+    a.maxAbs=std::max(a.maxAbs,difference);
+    a.sumAbs+=difference;
+    ++a.comparedElements;
     if(canonicalBits(v[i])!=canonicalBits(a.first[i]) &&
        a.firstDiff==std::numeric_limits<size_t>::max()) a.firstDiff=i;
   }
 }
 void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRepeat& a) {
-  std::ostringstream frequencies;
+  std::ostringstream rawFrequencies, canonicalFrequencies;
   bool first=true;
-  for(const auto& item:a.canonicalCounts) {
-    if(!first) frequencies<<',';
+  for(const auto& item:a.rawCounts) {
+    if(!first) rawFrequencies<<',';
     first=false;
-    frequencies<<item.first<<':'<<item.second;
+    rawFrequencies<<item.first<<':'<<item.second;
+  }
+  first=true;
+  for(const auto& item:a.canonicalCounts) {
+    if(!first) canonicalFrequencies<<',';
+    first=false;
+    canonicalFrequencies<<item.first<<':'<<item.second;
   }
   out<<prefix<<"_unique_raw_hashes="<<a.raw.size()<<'\n'
      <<prefix<<"_unique_canonical_hashes="<<a.canonical.size()<<'\n'
      <<prefix<<"_representative_raw_hash="<<(a.raw.empty()?"NONE":*a.raw.begin())<<'\n'
      <<prefix<<"_representative_canonical_hash="<<(a.canonical.empty()?"NONE":*a.canonical.begin())<<'\n'
+     <<prefix<<"_raw_hash_frequencies="
+     <<(rawFrequencies.str().empty()?"NONE":rawFrequencies.str())<<'\n'
      <<prefix<<"_canonical_hash_frequencies="
-     <<(frequencies.str().empty()?"NONE":frequencies.str())<<'\n'
+     <<(canonicalFrequencies.str().empty()?"NONE":canonicalFrequencies.str())<<'\n'
      <<prefix<<"_repeat_max_abs_difference="<<a.maxAbs<<'\n'
+     <<prefix<<"_repeat_mean_abs_difference="
+     <<(a.comparedElements?a.sumAbs/double(a.comparedElements):0.0)<<'\n'
      <<prefix<<"_first_different_run="
      <<(a.firstDifferentRun==std::numeric_limits<size_t>::max()?-1:
         static_cast<long long>(a.firstDifferentRun))<<'\n'
@@ -493,6 +509,218 @@ bool runGraphVariantFixed(const Snapshot& s, TinyTransformerTrainingVariant vari
   if(!finite){error="nonfinite graph variant output";return false;}
   return true;
 }
+const char* variantBoundary(TinyTransformerTrainingVariant variant) {
+  switch (variant) {
+    case TinyTransformerTrainingVariant::FULL: return "lm_output_projection_next";
+    case TinyTransformerTrainingVariant::STOP_AFTER_DINPUT: return "lm_dinput";
+    case TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING:
+      return "lm_dembedding";
+  }
+  return "unknown";
+}
+struct GraphOrderSlot {
+  const char* plan;
+  uint32_t planIndex;
+  uint32_t position;
+  TinyTransformerTrainingVariant variant;
+};
+std::vector<GraphOrderSlot> graphOrderSlots(int planCode) {
+  using V=TinyTransformerTrainingVariant;
+  static constexpr std::array<std::array<V,3>,6> permutations{{
+      {{V::FULL,V::STOP_AFTER_DINPUT,V::STOP_AFTER_DEMBEDDING}},
+      {{V::FULL,V::STOP_AFTER_DEMBEDDING,V::STOP_AFTER_DINPUT}},
+      {{V::STOP_AFTER_DINPUT,V::FULL,V::STOP_AFTER_DEMBEDDING}},
+      {{V::STOP_AFTER_DINPUT,V::STOP_AFTER_DEMBEDDING,V::FULL}},
+      {{V::STOP_AFTER_DEMBEDDING,V::FULL,V::STOP_AFTER_DINPUT}},
+      {{V::STOP_AFTER_DEMBEDDING,V::STOP_AFTER_DINPUT,V::FULL}},
+  }};
+  static constexpr std::array<const char*,9> names{{
+      "full_dinput_dembedding", "full_dembedding_dinput",
+      "dinput_full_dembedding", "dinput_dembedding_full",
+      "dembedding_full_dinput", "dembedding_dinput_full",
+      "full_full_full", "dinput_dinput_dinput", "dembedding_dembedding_dembedding",
+  }};
+  std::vector<GraphOrderSlot> slots;
+  if(planCode<0 || planCode>=static_cast<int>(names.size())) return slots;
+  slots.reserve(3);
+  if(planCode<static_cast<int>(permutations.size())) {
+    for(uint32_t position=0;position<3;++position)
+      slots.push_back({names[planCode],static_cast<uint32_t>(planCode+1),
+                       position+1,permutations[planCode][position]});
+  } else {
+    const V variant=planCode==6?V::FULL:planCode==7?V::STOP_AFTER_DINPUT:
+                                                   V::STOP_AFTER_DEMBEDDING;
+    for(uint32_t position=0;position<3;++position)
+      slots.push_back({names[planCode],static_cast<uint32_t>(planCode+1),
+                       position+1,variant});
+  }
+  return slots;
+}
+bool runGraphOrderSlot(const Snapshot& s, const GraphOrderSlot& slot, int repeats,
+                       std::ostringstream& out, std::string& error) {
+  const std::string prefix="order_slot_"+std::to_string(slot.planIndex)+"_"+
+      slot.plan+"_position_"+std::to_string(slot.position);
+  Runtime rt;
+  bool initialized=rt.initialize(QnnBackendKind::HTP,error);
+  bool prepared=false;
+  if(initialized)
+    prepared=rt.prepareTinyTransformerTraining(8,16,32,1e-5f,true,error,32,
+                                               slot.variant);
+  std::map<std::string,TensorRepeat> tensors;
+  int attempts=0, successes=0;
+  bool callerAppWriteHashesUnchanged=true;
+  bool learningRateBytesUnchanged=true;
+  std::string firstChangingTensor;
+  size_t firstChangingRun=std::numeric_limits<size_t>::max();
+  if(prepared) for(int repeat=0;repeat<repeats;++repeat) {
+    ++attempts;
+    const float poison=(repeat&1)?-1.1415926f:1.1415926f;
+    auto input=s.oneHot, target=s.target;
+    auto current=s.current;
+    const auto inputBefore=rawHash(input), targetBefore=rawHash(target);
+    const auto parameterBefore=rawHash(flattenParameters(current));
+    TinyTransformerTrainingOutputs outputs;
+    poisonOutputs(outputs,current,poison);
+    if(!rt.executeTinyTransformerTraining(input,target,current,.0003f,outputs,error))
+      break;
+    ++successes;
+    callerAppWriteHashesUnchanged&=
+        rawHash(input)==inputBefore && rawHash(target)==targetBefore &&
+        rawHash(flattenParameters(current))==parameterBefore;
+    learningRateBytesUnchanged&=
+        rt.tinyTransformerTrainingLastLearningRateBytesUnchanged();
+    auto audit=[&](const char* name,const std::vector<float>& values) {
+      auto& observation=tensors[name];
+      observeRepeat(observation,values,poison);
+      if(observation.firstDifferentRun<firstChangingRun) {
+        firstChangingRun=observation.firstDifferentRun;
+        firstChangingTensor=name;
+      }
+    };
+    audit("logits",outputs.logits);
+    audit("transformer_output",outputs.output);
+    audit("transformer_output_gradient",outputs.dOutput);
+    audit("gradient_gamma1",outputs.gradients.gamma1);
+    audit("gradient_beta1",outputs.gradients.beta1);
+    audit("gradient_wq",outputs.gradients.wq);
+    audit("gradient_wk",outputs.gradients.wk);
+    audit("gradient_wv",outputs.gradients.wv);
+    audit("gradient_wo",outputs.gradients.wo);
+    audit("gradient_gamma2",outputs.gradients.gamma2);
+    audit("gradient_beta2",outputs.gradients.beta2);
+    audit("gradient_w1",outputs.gradients.w1);
+    audit("gradient_w2",outputs.gradients.w2);
+    audit("embedded_input",outputs.embeddedInput);
+    audit("softmax_probability",outputs.probabilities);
+    audit("dlogits",outputs.dLogits);
+    audit("embedding_input_gradient",outputs.dEmbeddedInput);
+    audit("output_projection_gradient",outputs.gradients.outputProjection);
+    if(slot.variant!=TinyTransformerTrainingVariant::STOP_AFTER_DINPUT)
+      audit("token_embedding_gradient",outputs.gradients.tokenEmbedding);
+    if(slot.variant==TinyTransformerTrainingVariant::FULL) {
+      audit("next_gamma1",outputs.next.gamma1);
+      audit("next_beta1",outputs.next.beta1);
+      audit("next_wq",outputs.next.wq);
+      audit("next_wk",outputs.next.wk);
+      audit("next_wv",outputs.next.wv);
+      audit("next_wo",outputs.next.wo);
+      audit("next_gamma2",outputs.next.gamma2);
+      audit("next_beta2",outputs.next.beta2);
+      audit("next_w1",outputs.next.w1);
+      audit("next_w2",outputs.next.w2);
+      audit("next_token_embedding",outputs.next.tokenEmbedding);
+      audit("next_output_projection",outputs.next.outputProjection);
+    }
+  }
+  size_t poisonResidual=0, nonfinite=0, outputElements=0;
+  size_t globalComparedElements=0;
+  double globalMaxAbs=0.0, globalSumAbs=0.0;
+  bool finite=true;
+  for(const auto& item:tensors) {
+    emitRepeat(out,prefix+"_"+item.first,item.second);
+    poisonResidual+=item.second.poisonResidual;
+    nonfinite+=item.second.nonfinite;
+    finite&=item.second.nonfinite==0;
+    outputElements+=item.second.first.size();
+    globalMaxAbs=std::max(globalMaxAbs,item.second.maxAbs);
+    globalSumAbs+=item.second.sumAbs;
+    globalComparedElements+=item.second.comparedElements;
+  }
+  const auto& trace=rt.apiTrace();
+  const auto& metrics=rt.metrics();
+  const bool appWriteUnchanged=
+      callerAppWriteHashesUnchanged && learningRateBytesUnchanged;
+  const bool bindingCountsMatch=
+      rt.tinyTransformerTrainingLastOutputTensorCount()==tensors.size() &&
+      rt.tinyTransformerTrainingLastInputTensorCount()==
+          (slot.variant==TinyTransformerTrainingVariant::FULL?15u:14u);
+  const bool success=initialized && prepared && attempts==repeats &&
+      successes==repeats && appWriteUnchanged && poisonResidual==0 && finite &&
+      bindingCountsMatch && metrics.graphCreateCount==1 &&
+      metrics.graphFinalizeCount==1 &&
+      metrics.graphExecuteCount==static_cast<uint64_t>(repeats);
+  const char* firstChangingNode=
+      firstChangingTensor=="embedding_input_gradient"?"lm_dinput":
+      firstChangingTensor=="token_embedding_gradient"?"lm_dembedding":"UNMAPPED";
+  out<<prefix<<"_plan="<<slot.plan<<'\n'
+     <<prefix<<"_plan_index="<<slot.planIndex<<'\n'
+     <<prefix<<"_position="<<slot.position<<'\n'
+     <<prefix<<"_variant="<<variantName(slot.variant)<<'\n'
+     <<prefix<<"_node_boundary="<<variantBoundary(slot.variant)<<'\n'
+     <<prefix<<"_runtime_context=FRESH_PER_SLOT\n"
+     <<prefix<<"_fixed_one_hot_raw_hash="<<rawHash(s.oneHot)<<'\n'
+     <<prefix<<"_fixed_one_hot_canonical_hash="<<canonicalHash(s.oneHot)<<'\n'
+     <<prefix<<"_fixed_target_raw_hash="<<rawHash(s.target)<<'\n'
+     <<prefix<<"_fixed_target_canonical_hash="<<canonicalHash(s.target)<<'\n'
+     <<prefix<<"_fixed_parameter_raw_hash="<<rawHash(flattenParameters(s.current))<<'\n'
+     <<prefix<<"_fixed_parameter_canonical_hash="<<canonicalHash(flattenParameters(s.current))<<'\n'
+     <<prefix<<"_source_graph_add_node_success_count="
+     <<rt.tinyTransformerTrainingSourceGraphAddNodeSuccessCount()<<'\n'
+     <<prefix<<"_source_tensor_create_success_count="
+     <<rt.tinyTransformerTrainingSourceTensorCreateSuccessCount()<<'\n'
+     <<prefix<<"_backend_finalized_node_count=UNAVAILABLE\n"
+     <<prefix<<"_backend_finalized_tensor_count=UNAVAILABLE\n"
+     <<prefix<<"_actual_qnn_input_tensor_count="
+     <<rt.tinyTransformerTrainingLastInputTensorCount()<<'\n'
+     <<prefix<<"_actual_qnn_output_tensor_count="
+     <<rt.tinyTransformerTrainingLastOutputTensorCount()<<'\n'
+     <<prefix<<"_audited_app_read_tensor_count="<<tensors.size()<<'\n'
+     <<prefix<<"_app_read_output_element_count="<<outputElements<<'\n'
+     <<prefix<<"_first_changing_tensor="
+     <<(firstChangingTensor.empty()?"NONE":firstChangingTensor)<<'\n'
+     <<prefix<<"_first_changing_candidate_node="
+     <<(firstChangingTensor.empty()?"NONE":firstChangingNode)<<'\n'
+     <<prefix<<"_first_changing_run="
+     <<(firstChangingRun==std::numeric_limits<size_t>::max()?-1:
+        static_cast<long long>(firstChangingRun))<<'\n'
+     <<prefix<<"_global_repeat_max_abs_difference="<<globalMaxAbs<<'\n'
+     <<prefix<<"_global_repeat_mean_abs_difference="
+     <<(globalComparedElements?globalSumAbs/double(globalComparedElements):0.0)
+     <<'\n'
+     <<prefix<<"_repeats="<<repeats<<'\n'
+     <<prefix<<"_qnn_execute_attempts="<<attempts<<'\n'
+     <<prefix<<"_qnn_execute_successes="<<successes<<'\n'
+     <<prefix<<"_backend_create_result="<<trace.backendCreateResult<<'\n'
+     <<prefix<<"_device_create_result="<<trace.deviceCreateResult<<'\n'
+     <<prefix<<"_context_create_result="<<trace.contextCreateResult<<'\n'
+     <<prefix<<"_graph_create_result="<<trace.fullStepGraphCreateResult<<'\n'
+     <<prefix<<"_graph_finalize_result="<<trace.fullStepGraphFinalizeResult<<'\n'
+     <<prefix<<"_graph_execute_result="<<trace.graphExecuteLastResult<<'\n'
+     <<prefix<<"_graph_execute_qnn_result="<<trace.lastQnnResult<<'\n'
+     <<prefix<<"_graph_create_count="<<metrics.graphCreateCount<<'\n'
+     <<prefix<<"_graph_finalize_count="<<metrics.graphFinalizeCount<<'\n'
+     <<prefix<<"_graph_execute_count="<<metrics.graphExecuteCount<<'\n'
+     <<prefix<<"_caller_owned_app_write_hashes_unchanged="
+     <<(callerAppWriteHashesUnchanged?"true":"false")<<'\n'
+     <<prefix<<"_learning_rate_app_write_bytes_unchanged="
+     <<(learningRateBytesUnchanged?"true":"false")<<'\n'
+     <<prefix<<"_app_write_hashes_unchanged="<<(appWriteUnchanged?"true":"false")<<'\n'
+     <<prefix<<"_app_read_poison_residual_elements="<<poisonResidual<<'\n'
+     <<prefix<<"_nonfinite_elements="<<nonfinite<<'\n'
+     <<prefix<<"_slot_success="<<(success?"true":"false")<<'\n';
+  if(!success && error.empty()) error="graph order slot invariant failed";
+  return success;
+}
 bool runStandalonePrelude(const Snapshot& s,std::ostringstream& out,
                           std::string& error) {
   bool ok=true;
@@ -680,7 +908,7 @@ std::string runTinyLmGraphBisection(bool standalonePrelude) {
      <<"variant_execution_order=full,stop_after_dinput,stop_after_dembedding\n"
      <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
      <<"node_prefix_order=PRESERVED\n"
-     <<"app_write_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"app_write_initialization=fixed_state_values\n"
      <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
      <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
   const auto fixedSnapshots=snapshots();
@@ -706,6 +934,58 @@ std::string runTinyLmGraphBisection(bool standalonePrelude) {
      <<"qnn_execute_all_success="<<(ok?"true":"false")<<'\n'
      <<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
      <<"error="<<(ok?"none":error)<<'\n';
+  return out.str();
+}
+
+std::string runTinyLmGraphOrderOrthogonalization(int planCode) {
+  constexpr int kRepeatsPerSlot=100;
+  std::ostringstream out;
+  out<<std::setprecision(9)
+     <<"QNN_TINY_LM_GRAPH_ORDER_ORTHOGONALIZATION\n"
+     <<"test=fixed_state_graph_order_orthogonalization\n"
+     <<"shape=B1_T8_V32_D16\n"
+     <<"snapshot=E\n"
+     <<"snapshot_source=CPU_REFERENCE_ADAM_TRAJECTORY\n"
+     <<"manifest_schema_version=3\n"
+     <<"manifest_seed=1\n"
+     <<"order_plans=6_PERMUTATIONS_PLUS_3_HOMOGENEOUS_CONTROLS\n"
+     <<"permutation_count=6\n"
+     <<"homogeneous_control_count=3\n"
+     <<"slots_per_plan=3\n"
+     <<"repeats_per_slot="<<kRepeatsPerSlot<<'\n'
+     <<"process_policy=ONE_INSTRUMENTATION_PROCESS_PER_SELECTED_PLAN\n"
+     <<"runtime_context_policy=FRESH_RUNTIME_AND_CONTEXT_PER_SLOT\n"
+     <<"fixed_state_policy=RECONSTRUCTED_FROM_SNAPSHOT_E_PER_EXECUTE\n"
+     <<"variant_set=full,stop_after_dinput,stop_after_dembedding\n"
+     <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
+     <<"node_prefix_order=PRESERVED\n"
+     <<"app_write_initialization=fixed_state_values\n"
+     <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n";
+  const auto fixedSnapshots=snapshots();
+  if(fixedSnapshots.empty()) return out.str()+"status=FAILED\nerror=no snapshots\n";
+  const auto& s=fixedSnapshots.front();
+  const auto slots=graphOrderSlots(planCode);
+  if(slots.empty()) return out.str()+"status=FAILED\nerror=unknown graph order plan\n";
+  out<<"slot_count="<<slots.size()<<'\n'
+     <<"selected_plan="<<slots.front().plan<<'\n'
+     <<"selected_plan_index="<<slots.front().planIndex<<'\n'
+     <<"snapshot_E_one_hot_canonical_hash="<<canonicalHash(s.oneHot)<<'\n'
+     <<"snapshot_E_target_canonical_hash="<<canonicalHash(s.target)<<'\n'
+     <<"snapshot_E_current_parameter_canonical_hash="
+     <<canonicalHash(flattenParameters(s.current))<<'\n';
+  bool ok=true;
+  std::string error, firstError;
+  for(const auto& slot:slots) {
+    if(!runGraphOrderSlot(s,slot,kRepeatsPerSlot,out,error)) {
+      ok=false;
+      if(firstError.empty()) firstError=error;
+      error.clear();
+    }
+  }
+  out<<"all_slots_attempted=true\n"
+     <<"all_slots_success="<<(ok?"true":"false")<<'\n'
+     <<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
+     <<"error="<<(ok?"none":firstError)<<'\n';
   return out.str();
 }
 
@@ -735,7 +1015,7 @@ std::string runTinyLmGraphIsolated(int variantCode) {
      <<"fresh_process_control=EXTERNAL_HEADLESS_INSTRUMENTATION\n"
      <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
      <<"node_prefix_order=PRESERVED\n"
-     <<"app_write_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"app_write_initialization=fixed_state_values\n"
      <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
      <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
   const auto fixedSnapshots=snapshots();
@@ -774,7 +1054,7 @@ std::string runTinyLmDembeddingReproducibility() {
     <<"manifest_graph_configuration=B1_T8_V32_D16_OneHotTransposeMatMulDX_FP32\n"
     <<"raw_hash=SHA256_all_float_bytes\n"
     <<"canonical_float_hash=SHA256_IEEE754_binary32_little_endian_negzero_to_poszero_nan_to_7fc00000\n"
-    <<"app_write_poison_patterns=finite_plus_minus_1.1415926\n"
+    <<"app_write_initialization=fixed_state_values\n"
     <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
     <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
   bool all=true, variability=false; std::string error, fullFirstChanging;

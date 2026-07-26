@@ -12,6 +12,9 @@ std::string runTinyLmDembeddingReproducibility();
 // variants in one headless fresh process.
 std::string runTinyLmGraphBisection(bool standalonePrelude);
 std::string runTinyLmGraphIsolated(int variantCode);
+// Runs one selected three-variant order with a fresh Runtime/context per slot.
+// planCode 0..5 are permutations; 6..8 are homogeneous controls.
+std::string runTinyLmGraphOrderOrthogonalization(int planCode);
 std::string rawFloatSha256(const std::vector<float>& values);
 std::string canonicalFloatSha256(const std::vector<float>& values);
 

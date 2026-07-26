@@ -14,6 +14,11 @@ bool Runtime::prepareTinyTransformerTraining(
   g.feedForwardDimension = feedForwardDimension;
   g.diagnosticOutputs = diagnosticOutputs;
   g.vocabularySize = vocabularySize;
+  g.sourceTensorCreateSuccessCount = 0;
+  g.sourceGraphAddNodeSuccessCount = 0;
+  g.lastInputTensorCount = 0;
+  g.lastOutputTensorCount = 0;
+  g.lastLearningRateBytesUnchanged = true;
   g.languageModel = vocabularySize != 0;
   g.variant = variant;
   switch (variant) {
@@ -291,6 +296,7 @@ bool Runtime::prepareTinyTransformerTraining(
       error = "tiny training tensor=" + std::to_string(QNN_GET_ERROR_CODE(st));
       return false;
     }
+    ++g.sourceTensorCreateSuccessCount;
   }
   auto bin = [&](const char *n, const char *type, int a, int b, int o) {
     Qnn_Tensor_t in[2] = {g.tensors[a], g.tensors[b]};
@@ -327,8 +333,10 @@ bool Runtime::prepareTinyTransformerTraining(
     return impl_->api.graphAddNode(g.graph, op);
   };
   auto ok = [&](Qnn_ErrorHandle_t v, const char *label) {
-    if (v == QNN_SUCCESS)
+    if (v == QNN_SUCCESS) {
+      ++g.sourceGraphAddNodeSuccessCount;
       return true;
+    }
     error = std::string("tiny training ") + label + '=' +
             std::to_string(QNN_GET_ERROR_CODE(v));
     return false;
@@ -761,6 +769,8 @@ bool Runtime::executeTinyTransformerTraining(
     in.push_back(g.tensors[G::LR]);
     in.back().v1.clientBuf = {&learningRate, sizeof(float)};
   }
+  std::uint32_t learningRateBitsBefore = 0;
+  std::memcpy(&learningRateBitsBefore, &learningRate, sizeof(learningRateBitsBefore));
   std::vector<Qnn_Tensor_t> out;
   out.reserve(g.languageModel ? 30 : 23);
   auto bo = [&](int id, std::vector<float> &v, size_t count) {
@@ -829,6 +839,8 @@ bool Runtime::executeTinyTransformerTraining(
     if (g.variant == TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING)
       bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
   }
+  g.lastInputTensorCount = static_cast<uint32_t>(in.size());
+  g.lastOutputTensorCount = static_cast<uint32_t>(out.size());
   auto started = Clock::now();
   auto st = impl_->api.graphExecute(g.graph, in.data(), uint32_t(in.size()),
                                     out.data(), uint32_t(out.size()), nullptr,
@@ -837,6 +849,11 @@ bool Runtime::executeTinyTransformerTraining(
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(st), QNN_GET_ERROR_CODE(st),
                            st == QNN_SUCCESS);
+  std::uint32_t learningRateBitsAfter = 0;
+  std::memcpy(&learningRateBitsAfter, &learningRate, sizeof(learningRateBitsAfter));
+  g.lastLearningRateBytesUnchanged =
+      g.variant != TinyTransformerTrainingVariant::FULL ||
+      learningRateBitsBefore == learningRateBitsAfter;
   if (st != QNN_SUCCESS) {
     error =
         "tiny training graphExecute=" + std::to_string(QNN_GET_ERROR_CODE(st));
