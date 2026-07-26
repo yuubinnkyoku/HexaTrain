@@ -165,6 +165,7 @@ public:
     std::string qnnCallbackCaptureSummary() const;
     void recordGraphExecuteResult(int qnnResult, int effectiveResult, bool success);
     bool initialize(QnnBackendKind requestedBackend, std::string& error);
+    bool recreateContext(std::string& error);
     bool prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool transposeInput0,
                        std::string& error);
     bool executeMatMul(const std::vector<float>& a, const std::vector<float>& b,

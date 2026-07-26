@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <list>
 #include <mutex>
 #include <sstream>
 #include <utility>
@@ -104,6 +105,8 @@ struct Runtime::Impl {
     Qnn_BackendHandle_t backend = nullptr;
     Qnn_DeviceHandle_t device = nullptr;
     Qnn_ContextHandle_t context = nullptr;
+    std::list<std::string> matmulGraphNames;
+    uint32_t matmulGraphSerial = 0;
     Qnn_GraphHandle_t graph = nullptr;
     Qnn_GraphHandle_t dWeightGraph = nullptr;
     Qnn_Tensor_t dWeightInputs[2] = {QNN_TENSOR_INIT, QNN_TENSOR_INIT};
@@ -669,6 +672,7 @@ static void tensor(Qnn_Tensor_t& t, const char* name, Qnn_TensorType_t type,
                    uint32_t* dims,
                    Qnn_DataType_t dataType = QNN_DATATYPE_FLOAT_32,
                    uint32_t rank = 2) {
+    t = QNN_TENSOR_INIT;
     t.version = QNN_TENSOR_VERSION_1;
     t.v1.name = name;
     t.v1.type = type;
@@ -677,6 +681,30 @@ static void tensor(Qnn_Tensor_t& t, const char* name, Qnn_TensorType_t type,
     t.v1.rank = rank;
     t.v1.dimensions = dims;
     t.v1.memType = QNN_TENSORMEMTYPE_RAW;
+}
+
+bool Runtime::recreateContext(std::string& error) {
+    if (!impl_ || !impl_->backend || !impl_->device || !impl_->context) {
+        error = "context recreation requires initialized backend, device, and context";
+        return false;
+    }
+    auto status = impl_->api.contextFree(impl_->context, nullptr);
+    impl_->context = nullptr;
+    impl_->graph = nullptr;
+    impl_->weight.clear();
+    impl_->matmulGraphNames.clear();
+    if (status != QNN_SUCCESS) {
+        error = "contextFree=" + std::to_string(QNN_GET_ERROR_CODE(status));
+        return false;
+    }
+    status = impl_->api.contextCreate(
+        impl_->backend, impl_->device, nullptr, &impl_->context);
+    if (status != QNN_SUCCESS) {
+        error = "contextCreate(recreate)=" +
+                std::to_string(QNN_GET_ERROR_CODE(status));
+        return false;
+    }
+    return true;
 }
 
 bool Runtime::prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool trans0, std::string& error) {
@@ -690,7 +718,10 @@ bool Runtime::prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool trans0, std
     tensor(impl_->inputs[1], "b", QNN_TENSOR_TYPE_APP_WRITE, impl_->bdims);
     tensor(impl_->output, "out", QNN_TENSOR_TYPE_APP_READ, impl_->odims);
     auto started = Clock::now();
-    auto status = impl_->api.graphCreate(impl_->context, "phonelm_matmul", nullptr, &impl_->graph);
+    impl_->matmulGraphNames.push_back(
+        "phonelm_matmul_" + std::to_string(impl_->matmulGraphSerial++));
+    auto status = impl_->api.graphCreate(
+        impl_->context, impl_->matmulGraphNames.back().c_str(), nullptr, &impl_->graph);
     metrics_.graphCreateUs = elapsedUs(started);
     ++metrics_.graphCreateCount;
     if (status != QNN_SUCCESS) { error = "graphCreate=" + std::to_string(status); return false; }

@@ -6,6 +6,7 @@
 #include "qnn/qnn_linear_training.h"
 #include "qnn/qnn_mlp_training.h"
 #include "qnn/qnn_transformer.h"
+#include "qnn/qnn_reproducibility.h"
 
 #include <cmath>
 #include <iomanip>
@@ -124,6 +125,7 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_1: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_1";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_2: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_2";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_INFERENCE: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_INFERENCE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY: return "QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY";
         default: return "UNKNOWN";
     }
 }
@@ -210,6 +212,7 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_1:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_CANDIDATE_2:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_INFERENCE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY:
             return qnn::runTinyTransformerTrainingExperiment(mode);
         default: {
             const std::string report =

@@ -26,6 +26,9 @@ void Runtime::recordGraphExecuteResult(int, int, bool) {}
 bool Runtime::prepareMatMul(uint32_t, uint32_t, uint32_t, bool, std::string& error) {
     error = "QNN_DISABLED: MatMul unavailable"; return false;
 }
+bool Runtime::recreateContext(std::string& error) {
+    error = "QNN_DISABLED: context recreation unavailable"; return false;
+}
 bool Runtime::executeMatMul(const std::vector<float>&, const std::vector<float>&,
                             std::vector<float>&, std::string& error) {
     error = "QNN_DISABLED: MatMul unavailable"; return false;

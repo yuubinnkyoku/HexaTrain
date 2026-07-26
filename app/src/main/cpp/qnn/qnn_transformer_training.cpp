@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #include "qnn_runtime.h"
+#include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
 #include "../tiny_language_model_cpu.h"
 #include <algorithm>
@@ -1707,6 +1708,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               batch.first, batch.second, htp, 0.0f, htpGradient, error))
         return failure("adam_gradient_step", error, runtime);
       Params htpNext, firstNext, secondNext;
+      AdamOptimizerOutputs rawHtpUpdate;
       const double preclipGradientNorm = gradientNorm(htpGradient.gradients);
       const float clipScale =
           std::isfinite(preclipGradientNorm) && preclipGradientNorm > 0
@@ -1719,11 +1721,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           std::max(maximumPreclipGradientNorm, preclipGradientNorm);
       if (!executeLanguageAdam(runtime, htp, htpGradient.gradients, htpFirst,
                                htpSecond, selected.lr, step, clipScale, htpNext,
-                               firstNext, secondNext, nullptr, error))
+                               firstNext, secondNext, &rawHtpUpdate, error))
         return failure("adam_update_step", error, runtime);
       if (step == 1 || step == 2 || step == 5 || step == 10 || step == 20 ||
            step == 50 || step == 100 || step == 200 || step == 320 ||
-           step == 640 || step == 1000) {
+           step == 640 || step == 1000 ||
+           (seed == 1 && step >= 101 && step <= 199)) {
         const double update = parameterUpdateNorm(htp, htpNext);
         const double norm = paramNorm(htp);
         trajectory << "seed_" << seed << "_step_" << step
@@ -1742,7 +1745,42 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                    << step << "_second_moment_l2_norm="
                    << paramNorm(htpSecond) << "\nseed_" << seed
                    << "_step_" << step << "_update_to_parameter_ratio="
-                   << (norm ? update / norm : 0) << '\n';
+                   << (norm ? update / norm : 0) << "\nseed_" << seed
+                   << "_step_" << step << "_batch_canonical_hash="
+                   << canonicalFloatSha256(batch.first) << "\nseed_" << seed
+                   << "_step_" << step << "_parameter_before_canonical_hash="
+                   << canonicalFloatSha256(flattenLanguageParameters(htp))
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_first_moment_before_canonical_hash="
+                   << canonicalFloatSha256(flattenLanguageParameters(htpFirst))
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_second_moment_before_canonical_hash="
+                   << canonicalFloatSha256(flattenLanguageParameters(htpSecond))
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_logits_canonical_hash="
+                   << canonicalFloatSha256(htpGradient.logits) << "\nseed_"
+                   << seed << "_step_" << step
+                   << "_probabilities_canonical_hash="
+                   << canonicalFloatSha256(htpGradient.probabilities)
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_dlogits_canonical_hash="
+                   << canonicalFloatSha256(htpGradient.dLogits) << "\nseed_"
+                   << seed << "_step_" << step
+                   << "_token_embedding_gradient_canonical_hash="
+                   << canonicalFloatSha256(
+                          htpGradient.gradients.tokenEmbedding)
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_m_next_canonical_hash="
+                   << canonicalFloatSha256(rawHtpUpdate.firstMomentNext)
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_v_next_canonical_hash="
+                   << canonicalFloatSha256(rawHtpUpdate.secondMomentNext)
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_adam_denominator_canonical_hash="
+                   << canonicalFloatSha256(rawHtpUpdate.denominator)
+                   << "\nseed_" << seed << "_step_" << step
+                   << "_next_parameter_canonical_hash="
+                   << canonicalFloatSha256(rawHtpUpdate.weightNext) << '\n';
       }
       cpu = cpuUpdate.next;
       cpuFirst = cpuUpdate.firstMoment;
@@ -2371,6 +2409,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
 
 } // namespace
 std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_REPRODUCIBILITY)
+    return runTinyLmDembeddingReproducibility();
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP)
     return oneStep();
   if (mode == ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP)
