@@ -85,6 +85,8 @@ if($Scope-in@('inference','all')){
     '(?m)^same_prefix_seed_count=5$',
     '(?m)^same_prefix_all_cpu_eval_generation_argmax_match=true$',
     '(?m)^same_prefix_all_htp_eval_generation_argmax_match=true$',
+    '(?m)^same_prefix_all_cpu_eval_generation_logits_match=true$',
+    '(?m)^same_prefix_all_htp_eval_generation_logits_match=true$',
     '(?m)^same_prefix_all_cpu_htp_argmax_match=true$',
     '(?m)^same_prefix_all_cpu_htp_top3_match=true$',
     '(?m)^logits_responsibility=HTP$','(?m)^argmax_responsibility=CPU$') -AllowPartial

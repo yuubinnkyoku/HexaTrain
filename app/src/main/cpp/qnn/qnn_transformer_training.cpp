@@ -1679,6 +1679,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   std::vector<Params> inferenceParameters;
   const int lastSeed = 5;
   for (int seed = 1; seed <= lastSeed; ++seed) {
+    bool seedAllStepsFinite = true;
+    int seedCompletedSteps = 0;
     auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
     auto htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
     auto cpuFirst = htpFirst, cpuSecond = htpFirst;
@@ -1752,12 +1754,24 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                            !finiteParams(htpSecond) ||
                            !std::isfinite(htpGradient.loss);
       nan = nan || seedNan;
-      if (seedNan) break;
+      if (seedNan) {
+        seedAllStepsFinite = false;
+        break;
+      }
+      seedCompletedSteps = step;
     }
     LanguageQuality final;
     if (!htpLanguageQuality(runtime, config, htp, 1, final, error))
       return failure("adam_final_eval", error, runtime);
     const auto cpuFinal = cpuLanguageQuality(config, cpu, 1);
+    const bool finalEvaluationFinite =
+        std::isfinite(final.loss) && std::isfinite(final.accuracy) &&
+        std::isfinite(final.meanCorrectProbability) &&
+        std::isfinite(final.entropy) && std::isfinite(final.meanMargin) &&
+        std::isfinite(final.minimumMargin);
+    seedAllStepsFinite = seedAllStepsFinite && finalEvaluationFinite &&
+                         seedCompletedSteps == selected.steps;
+    nan = nan || !seedAllStepsFinite;
     const double reduction =
         100 * (initial.loss - final.loss) / initial.loss;
     const double parameterError = maxParamError(cpu, htp);
@@ -1772,6 +1786,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     worstSecond = std::max(worstSecond, secondError);
     trajectory << "seed_" << seed << "_final_loss=" << final.loss
                << "\nseed_" << seed << "_final_accuracy=" << final.accuracy
+               << "\nseed_" << seed << "_completed_steps="
+               << seedCompletedSteps << "\nseed_" << seed
+               << "_all_steps_finite="
+               << (seedAllStepsFinite ? "true" : "false")
+               << "\nseed_" << seed << "_final_evaluation_finite="
+               << (finalEvaluationFinite ? "true" : "false")
                << "\nseed_" << seed << "_loss_reduction=" << reduction
                << "\nseed_" << seed << "_final_correct_probability="
                << final.meanCorrectProbability << "\nseed_" << seed
@@ -1798,6 +1818,17 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         tiny_lm::oneHot(parityTokenIds, config.vocabularySize);
     const auto generationTarget =
         tiny_lm::oneHot(parityTargetIds, config.vocabularySize);
+    bool outputNonfinite = false;
+    int samePrefixNonfiniteCount = 0;
+    int generationNonfiniteCount = 0;
+    size_t outputNanCount = 0, outputInfCount = 0;
+    std::string firstOutputNonfinite = "NONE";
+    auto countOutputNonfinite = [&](const std::vector<float> &values) {
+      for (float value : values) {
+        outputNanCount += std::isnan(value);
+        outputInfCount += std::isinf(value);
+      }
+    };
     const auto cpuEval = tiny_lm::forwardBackward(
         config, parityBatch.first, parityBatch.second,
         inferenceParameters.front(), 0.0f);
@@ -1812,6 +1843,25 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             generationInput, generationTarget, inferenceParameters.front(),
             0.0f, htpGeneration, error))
       return failure("adam_same_prefix_parity", error, runtime);
+    const bool representativeParityFinite =
+        finite(cpuEval.logits) && finite(cpuEval.probabilities) &&
+        finite(cpuGeneration.logits) &&
+        finite(cpuGeneration.probabilities) && finite(htpEval.logits) &&
+        finite(htpEval.probabilities) && finite(htpGeneration.logits) &&
+        finite(htpGeneration.probabilities);
+    if (!representativeParityFinite) {
+      outputNonfinite = true;
+      ++samePrefixNonfiniteCount;
+      firstOutputNonfinite = "same_prefix_seed1";
+      countOutputNonfinite(cpuEval.logits);
+      countOutputNonfinite(cpuEval.probabilities);
+      countOutputNonfinite(cpuGeneration.logits);
+      countOutputNonfinite(cpuGeneration.probabilities);
+      countOutputNonfinite(htpEval.logits);
+      countOutputNonfinite(htpEval.probabilities);
+      countOutputNonfinite(htpGeneration.logits);
+      countOutputNonfinite(htpGeneration.probabilities);
+    }
     struct Difference {
       double maximum = 0, mean = 0, relative = 0;
     };
@@ -1824,6 +1874,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         return result;
       }
       for (size_t i = 0; i < a.size(); ++i) {
+        if (!std::isfinite(a[i]) || !std::isfinite(b[i])) {
+          result.maximum = result.mean = result.relative =
+              std::numeric_limits<double>::infinity();
+          return result;
+        }
         const double error = std::abs(double(a[i]) - b[i]);
         result.maximum = std::max(result.maximum, error);
         result.mean += error;
@@ -1865,12 +1920,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     const Difference cpuHtpEval = difference(cpuEval.logits, htpEval.logits);
     const Difference cpuHtpGeneration =
         difference(cpuGeneration.logits, htpGeneration.logits);
-    const auto cpuTop3 = top3AtLastPosition(cpuEval.logits);
-    const auto htpTop3 = top3AtLastPosition(htpEval.logits);
-    bool allCpuEvalGenerationArgmax = true;
-    bool allHtpEvalGenerationArgmax = true;
-    bool allCpuHtpArgmax = true;
-    bool allCpuHtpTop3 = true;
+    const auto cpuTop3 = representativeParityFinite
+                             ? top3AtLastPosition(cpuEval.logits)
+                             : std::array<uint32_t, 3>{0, 0, 0};
+    const auto htpTop3 = representativeParityFinite
+                             ? top3AtLastPosition(htpEval.logits)
+                             : std::array<uint32_t, 3>{0, 0, 0};
+    bool allCpuEvalGenerationArgmax = representativeParityFinite;
+    bool allHtpEvalGenerationArgmax = representativeParityFinite;
+    bool allCpuEvalGenerationLogits = representativeParityFinite;
+    bool allHtpEvalGenerationLogits = representativeParityFinite;
+    bool allCpuHtpArgmax = representativeParityFinite;
+    bool allCpuHtpTop3 = representativeParityFinite;
     double worstCpuHtpLogits = 0;
     std::ostringstream paritySeeds;
     for (size_t seedIndex = 0; seedIndex < inferenceParameters.size();
@@ -1889,6 +1950,38 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               generationInput, generationTarget,
               inferenceParameters[seedIndex], 0.0f, seedHtpGeneration, error))
         return failure("adam_same_prefix_parity_seed", error, runtime);
+      const bool seedParityFinite =
+          finite(seedCpuEval.logits) && finite(seedCpuEval.probabilities) &&
+          finite(seedCpuGeneration.logits) &&
+          finite(seedCpuGeneration.probabilities) &&
+          finite(seedHtpEval.logits) && finite(seedHtpEval.probabilities) &&
+          finite(seedHtpGeneration.logits) &&
+          finite(seedHtpGeneration.probabilities);
+      if (!seedParityFinite) {
+        outputNonfinite = true;
+        ++samePrefixNonfiniteCount;
+        if (firstOutputNonfinite == "NONE")
+          firstOutputNonfinite =
+              "same_prefix_seed" + std::to_string(seedIndex + 1);
+        countOutputNonfinite(seedCpuEval.logits);
+        countOutputNonfinite(seedCpuEval.probabilities);
+        countOutputNonfinite(seedCpuGeneration.logits);
+        countOutputNonfinite(seedCpuGeneration.probabilities);
+        countOutputNonfinite(seedHtpEval.logits);
+        countOutputNonfinite(seedHtpEval.probabilities);
+        countOutputNonfinite(seedHtpGeneration.logits);
+        countOutputNonfinite(seedHtpGeneration.probabilities);
+        allCpuEvalGenerationArgmax = false;
+        allHtpEvalGenerationArgmax = false;
+        allCpuEvalGenerationLogits = false;
+        allHtpEvalGenerationLogits = false;
+        allCpuHtpArgmax = false;
+        allCpuHtpTop3 = false;
+        worstCpuHtpLogits = std::numeric_limits<double>::infinity();
+        paritySeeds << "same_prefix_seed_" << (seedIndex + 1)
+                    << "_finite=false\n";
+        continue;
+      }
       const auto seedCpuEvalGeneration =
           difference(seedCpuEval.logits, seedCpuGeneration.logits);
       const auto seedHtpEvalGeneration =
@@ -1909,12 +2002,19 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       allHtpEvalGenerationArgmax =
           allHtpEvalGenerationArgmax &&
           seedHtpArgmax == seedHtpGenerationArgmax;
+      allCpuEvalGenerationLogits =
+          allCpuEvalGenerationLogits &&
+          seedCpuEvalGeneration.maximum == 0;
+      allHtpEvalGenerationLogits =
+          allHtpEvalGenerationLogits &&
+          seedHtpEvalGeneration.maximum == 0;
       allCpuHtpArgmax =
           allCpuHtpArgmax && seedCpuArgmax == seedHtpArgmax;
       allCpuHtpTop3 = allCpuHtpTop3 && seedCpuTop3 == seedHtpTop3;
       worstCpuHtpLogits =
           std::max(worstCpuHtpLogits, seedCpuHtp.maximum);
       paritySeeds << "same_prefix_seed_" << (seedIndex + 1)
+                  << "_finite=true\nsame_prefix_seed_" << (seedIndex + 1)
                   << "_cpu_eval_generation_max_abs_error="
                   << seedCpuEvalGeneration.maximum << "\nsame_prefix_seed_"
                   << (seedIndex + 1)
@@ -1933,6 +2033,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         << "\nsame_prefix_valid_token_count=8"
         << "\nsame_prefix_position_indices=0,1,2,3,4,5,6,7"
         << "\nsame_prefix_logit_read_position=7"
+        << "\nsame_prefix_representative_finite="
+        << (representativeParityFinite ? "true" : "false")
         << "\nsame_prefix_cpu_eval_generation_max_abs_error="
         << cpuEvalGeneration.maximum
         << "\nsame_prefix_cpu_eval_generation_mean_abs_error="
@@ -1956,9 +2058,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         << "\nsame_prefix_cpu_htp_generation_max_relative_error="
         << cpuHtpGeneration.relative
         << "\nsame_prefix_cpu_argmax="
-        << argmaxAtLastPosition(cpuEval.logits)
+        << (representativeParityFinite ? argmaxAtLastPosition(cpuEval.logits)
+                                       : 0)
         << "\nsame_prefix_htp_argmax="
-        << argmaxAtLastPosition(htpEval.logits)
+        << (representativeParityFinite ? argmaxAtLastPosition(htpEval.logits)
+                                       : 0)
         << "\nsame_prefix_cpu_top3=" << cpuTop3[0] << ',' << cpuTop3[1]
         << ',' << cpuTop3[2] << "\nsame_prefix_htp_top3=" << htpTop3[0]
         << ',' << htpTop3[1] << ',' << htpTop3[2]
@@ -1967,6 +2071,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         << (allCpuEvalGenerationArgmax ? "true" : "false")
         << "\nsame_prefix_all_htp_eval_generation_argmax_match="
         << (allHtpEvalGenerationArgmax ? "true" : "false")
+        << "\nsame_prefix_all_cpu_eval_generation_logits_match="
+        << (allCpuEvalGenerationLogits ? "true" : "false")
+        << "\nsame_prefix_all_htp_eval_generation_logits_match="
+        << (allHtpEvalGenerationLogits ? "true" : "false")
         << "\nsame_prefix_all_cpu_htp_argmax_match="
         << (allCpuHtpArgmax ? "true" : "false")
         << "\nsame_prefix_all_cpu_htp_top3_match="
@@ -1976,6 +2084,14 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     int exactPatterns = 0;
     int exactRollouts = 0, qualifyingSeeds = 0;
     int oracleExactRollouts = 0, oracleQualifyingSeeds = 0;
+    auto tokenList = [](const std::vector<uint32_t> &values) {
+      std::ostringstream text;
+      for (size_t i = 0; i < values.size(); ++i) {
+        if (i) text << ',';
+        text << values[i];
+      }
+      return text.str();
+    };
     for (size_t seedIndex = 0; seedIndex < inferenceParameters.size();
          ++seedIndex) {
       int seedExactPatterns = 0, seedOracleExactPatterns = 0;
@@ -1986,7 +2102,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           context[i] = rule[i % rule.size()];
         const auto prompt = context;
         std::vector<uint32_t> generated, expectedTokens;
-        int correct = 0, firstError = -1;
+        int correct = 0, firstError = -1, evaluatedSteps = 0;
         double probability = 0, margin = 0;
         double minimumMargin = std::numeric_limits<double>::infinity();
         for (int step = 0; step < 8; ++step) {
@@ -2001,6 +2117,22 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                   input, target, inferenceParameters[seedIndex], 0.0f, output,
                   error))
             return failure("adam_generation", error, runtime);
+          if (!finite(output.logits) || !finite(output.probabilities)) {
+            std::ostringstream location;
+            location << "seed" << (seedIndex + 1) << "_pattern" << pattern
+                     << "_step" << step << "_logits_finite"
+                     << finite(output.logits) << "_probabilities_finite"
+                     << finite(output.probabilities);
+            outputNonfinite = true;
+            ++generationNonfiniteCount;
+            countOutputNonfinite(output.logits);
+            countOutputNonfinite(output.probabilities);
+            if (firstOutputNonfinite == "NONE")
+              firstOutputNonfinite = location.str();
+            if (firstError < 0) firstError = step;
+            break;
+          }
+          ++evaluatedSteps;
           const size_t base =
               size_t(config.tokens - 1) * config.vocabularySize;
           uint32_t predicted = 0;
@@ -2017,12 +2149,41 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           const double tokenMargin = output.logits[base + expected] - other;
           margin += tokenMargin;
           minimumMargin = std::min(minimumMargin, tokenMargin);
+          if (seedIndex == 0) {
+            double tokenEntropy = 0;
+            for (uint32_t token = 0; token < config.vocabularySize; ++token) {
+              const double p =
+                  std::max(double(output.probabilities[base + token]), 1e-30);
+              tokenEntropy -= p * std::log(p);
+            }
+            const auto top3 = top3AtLastPosition(output.logits);
+            trajectory
+                << "generation_detail_pattern_" << pattern << "_step_" << step
+                << "_context=" << tokenList(context)
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_expected=" << expected
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_predicted=" << predicted
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_correct_probability="
+                << output.probabilities[base + expected]
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_predicted_probability="
+                << output.probabilities[base + predicted]
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_margin=" << tokenMargin
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_entropy=" << tokenEntropy
+                << "\ngeneration_detail_pattern_" << pattern << "_step_"
+                << step << "_top3=" << top3[0] << ',' << top3[1] << ','
+                << top3[2] << '\n';
+          }
           generated.push_back(predicted);
           expectedTokens.push_back(expected);
           context.erase(context.begin());
           context.push_back(predicted);
         }
-        const bool exact = correct == 8;
+        const bool exact = evaluatedSteps == 8 && correct == 8;
         exactPatterns += seedIndex == 0 && exact;
         exactRollouts += exact;
         seedExactPatterns += exact;
@@ -2030,6 +2191,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         for (uint32_t i = 0; i < config.tokens; ++i)
           oracleContext[i] = rule[i % rule.size()];
         int oracleCorrect = 0, firstOracleError = -1;
+        int oracleEvaluatedSteps = 0;
         for (int step = 0; step < 8; ++step) {
           const uint32_t expected =
               rule[(size_t(config.tokens) + size_t(step)) % rule.size()];
@@ -2043,6 +2205,22 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                   input, target, inferenceParameters[seedIndex], 0.0f, output,
                   error))
             return failure("adam_oracle_generation", error, runtime);
+          if (!finite(output.logits) || !finite(output.probabilities)) {
+            std::ostringstream location;
+            location << "oracle_seed" << (seedIndex + 1) << "_pattern"
+                     << pattern << "_step" << step << "_logits_finite"
+                     << finite(output.logits) << "_probabilities_finite"
+                     << finite(output.probabilities);
+            outputNonfinite = true;
+            ++generationNonfiniteCount;
+            countOutputNonfinite(output.logits);
+            countOutputNonfinite(output.probabilities);
+            if (firstOutputNonfinite == "NONE")
+              firstOutputNonfinite = location.str();
+            if (firstOracleError < 0) firstOracleError = step;
+            break;
+          }
+          ++oracleEvaluatedSteps;
           const uint32_t predicted = argmaxAtLastPosition(output.logits);
           if (predicted != expected && firstOracleError < 0)
             firstOracleError = step;
@@ -2050,17 +2228,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           oracleContext.erase(oracleContext.begin());
           oracleContext.push_back(expected);
         }
-        const bool oracleExact = oracleCorrect == 8;
+        const bool oracleExact =
+            oracleEvaluatedSteps == 8 && oracleCorrect == 8;
         oracleExactRollouts += oracleExact;
         seedOracleExactPatterns += oracleExact;
-      auto tokenList = [](const std::vector<uint32_t> &values) {
-        std::ostringstream text;
-        for (size_t i = 0; i < values.size(); ++i) {
-          if (i) text << ',';
-          text << values[i];
-        }
-        return text.str();
-      };
         trajectory << "seed_" << (seedIndex + 1) << "_generation_pattern_"
                    << pattern << "_prompt=" << tokenList(prompt)
                    << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
@@ -2071,33 +2242,52 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                    << pattern << "_exact=" << (exact ? "true" : "false")
                    << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
                    << pattern << "_token_accuracy=" << correct / 8.0
+                   << "\nseed_" << (seedIndex + 1)
+                   << "_generation_pattern_" << pattern
+                   << "_evaluated_steps=" << evaluatedSteps
                    << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
                    << pattern << "_first_error=" << firstError
                    << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
                    << pattern << "_mean_correct_probability="
-                   << probability / 8 << "\nseed_" << (seedIndex + 1)
+                   << (evaluatedSteps ? probability / evaluatedSteps : 0)
+                   << "\nseed_" << (seedIndex + 1)
                    << "_generation_pattern_" << pattern << "_mean_margin="
-                   << margin / 8 << "\nseed_" << (seedIndex + 1)
-                   << "_generation_pattern_" << pattern << "_minimum_margin="
-                   << minimumMargin << '\n';
+                   << (evaluatedSteps ? margin / evaluatedSteps : 0)
+                   << "\nseed_" << (seedIndex + 1)
+                   << "_generation_pattern_" << pattern << "_minimum_margin=";
+        if (evaluatedSteps)
+          trajectory << minimumMargin;
+        else
+          trajectory << "NOT_AVAILABLE";
+        trajectory << '\n';
         trajectory << "seed_" << (seedIndex + 1)
                    << "_oracle_pattern_" << pattern
                    << "_exact=" << (oracleExact ? "true" : "false")
                    << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
                    << pattern << "_token_accuracy=" << oracleCorrect / 8.0
                    << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << pattern << "_evaluated_steps=" << oracleEvaluatedSteps
+                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
                    << pattern << "_first_error=" << firstOracleError << '\n';
       }
       qualifyingSeeds += seedExactPatterns >= 3;
       oracleQualifyingSeeds += seedOracleExactPatterns == 4;
     }
-    const bool exactSuccess = qualifyingSeeds >= 4 && exactRollouts >= 16 &&
+    const bool exactSuccess = !outputNonfinite &&
+                              qualifyingSeeds >= 4 && exactRollouts >= 16 &&
                               oracleQualifyingSeeds >= 4;
     std::ostringstream report;
     report << "TINY_LANGUAGE_MODEL\ntest=adam_inference_4_pattern\nstatus="
-           << (nan ? "FAILED"
-                   : (exactSuccess ? "SUCCESS" : "PARTIAL_SUCCESS"))
+           << ((nan || outputNonfinite) ? "FAILED"
+                    : (exactSuccess ? "SUCCESS" : "PARTIAL_SUCCESS"))
            << "\nresearch_goal_met=" << (exactSuccess ? "true" : "false")
+           << "\ngeneration_nonfinite_detected="
+           << (outputNonfinite ? "true" : "false")
+           << "\nsame_prefix_nonfinite_count=" << samePrefixNonfiniteCount
+           << "\ngeneration_nonfinite_count=" << generationNonfiniteCount
+           << "\ngeneration_nan_count=" << outputNanCount
+           << "\ngeneration_inf_count=" << outputInfCount
+           << "\nfirst_generation_nonfinite=" << firstOutputNonfinite
            << "\noptimizer=ADAM\nlearning_rate=" << selected.lr
            << "\nsteps=" << selected.steps
            << "\nsampling=pattern_balanced_phase01_round_robin"
@@ -2108,7 +2298,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\noracle_exact_rollout_count=" << oracleExactRollouts
            << "\nlogits_responsibility=HTP\nargmax_responsibility=CPU"
            << "\ncpu_fallback=false\nnan_detected="
-           << (nan ? "true" : "false") << "\ninf_detected=false\n"
+           << (nan || outputNanCount ? "true" : "false")
+           << "\ninf_detected="
+           << (outputInfCount ? "true" : "false") << '\n'
            << trajectory.str() << runtime.apiTraceSummary()
            << runtime.diagnostics();
     return report.str();
