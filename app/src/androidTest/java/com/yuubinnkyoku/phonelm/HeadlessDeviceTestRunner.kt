@@ -150,6 +150,10 @@ class HeadlessDeviceTestRunner {
         "qnn-graph-order-full-full-full" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_FULL_FULL_FULL
         "qnn-graph-order-dinput-dinput-dinput" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DINPUT_DINPUT_DINPUT
         "qnn-graph-order-dembedding-dembedding-dembedding" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_DEMBEDDING_DEMBEDDING_DEMBEDDING
+        "qnn-tap-backward-regions" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_BACKWARD_REGIONS
+        "qnn-tap-layernorm1" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1
+        "qnn-tap-dscores-only" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY
+        "qnn-tap-dprob-dscores" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES
         "qnn-adam-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }

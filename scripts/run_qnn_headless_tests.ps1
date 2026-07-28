@@ -14,6 +14,8 @@ param(
         "qnn-graph-order-dembedding-full-dinput", "qnn-graph-order-dembedding-dinput-full",
         "qnn-graph-order-full-full-full", "qnn-graph-order-dinput-dinput-dinput",
         "qnn-graph-order-dembedding-dembedding-dembedding",
+        "qnn-tap-backward-regions", "qnn-tap-layernorm1", "qnn-tap-dscores-only",
+        "qnn-tap-dprob-dscores",
         "qnn-adam-diagnostic"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]

@@ -243,6 +243,8 @@ struct TensorRepeat {
   std::set<std::string> raw, canonical;
   std::map<std::string,size_t> rawCounts;
   std::map<std::string,size_t> canonicalCounts;
+  std::map<std::string,std::vector<float>> representatives;
+  std::vector<std::string> canonicalSequence;
   std::string firstCanonical;
   std::vector<float> first;
   double maxAbs=0, sumAbs=0;
@@ -258,6 +260,10 @@ void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
   a.canonical.insert(canonical);
   ++a.rawCounts[raw];
   ++a.canonicalCounts[canonical];
+  if(a.representatives.size()<3 &&
+     a.representatives.find(canonical)==a.representatives.end())
+    a.representatives.emplace(canonical,v);
+  a.canonicalSequence.push_back(canonical);
   a.poisonResidual+=std::count(v.begin(),v.end(),poison);
   a.nonfinite+=std::count_if(v.begin(),v.end(),
                             [](float value){return !std::isfinite(value);});
@@ -275,7 +281,8 @@ void observeRepeat(TensorRepeat& a,const std::vector<float>& v,float poison) {
   }
 }
 void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRepeat& a) {
-  std::ostringstream rawFrequencies, canonicalFrequencies;
+  std::ostringstream rawFrequencies, canonicalFrequencies, canonicalIds,
+      canonicalRle;
   bool first=true;
   for(const auto& item:a.rawCounts) {
     if(!first) rawFrequencies<<',';
@@ -288,6 +295,28 @@ void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRe
     first=false;
     canonicalFrequencies<<item.first<<':'<<item.second;
   }
+  std::map<std::string,size_t> hashIds;
+  std::vector<std::string> hashesById;
+  for(const auto& hash:a.canonicalSequence) {
+    if(hashIds.find(hash)==hashIds.end()) {
+      const size_t id=hashesById.size();
+      hashIds.emplace(hash,id);
+      hashesById.push_back(hash);
+    }
+  }
+  for(size_t id=0;id<hashesById.size();++id) {
+    if(id) canonicalIds<<',';
+    canonicalIds<<id<<':'<<hashesById[id];
+  }
+  for(size_t begin=0;begin<a.canonicalSequence.size();) {
+    size_t end=begin+1;
+    while(end<a.canonicalSequence.size() &&
+          a.canonicalSequence[end]==a.canonicalSequence[begin]) ++end;
+    if(begin) canonicalRle<<',';
+    canonicalRle<<hashIds[a.canonicalSequence[begin]]<<':'<<(begin+1)
+                <<'-'<<end;
+    begin=end;
+  }
   out<<prefix<<"_unique_raw_hashes="<<a.raw.size()<<'\n'
      <<prefix<<"_unique_canonical_hashes="<<a.canonical.size()<<'\n'
      <<prefix<<"_representative_raw_hash="<<(a.raw.empty()?"NONE":*a.raw.begin())<<'\n'
@@ -296,6 +325,10 @@ void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRe
      <<(rawFrequencies.str().empty()?"NONE":rawFrequencies.str())<<'\n'
      <<prefix<<"_canonical_hash_frequencies="
      <<(canonicalFrequencies.str().empty()?"NONE":canonicalFrequencies.str())<<'\n'
+     <<prefix<<"_canonical_hash_ids="
+     <<(canonicalIds.str().empty()?"NONE":canonicalIds.str())<<'\n'
+     <<prefix<<"_canonical_hash_rle="
+     <<(canonicalRle.str().empty()?"NONE":canonicalRle.str())<<'\n'
      <<prefix<<"_repeat_max_abs_difference="<<a.maxAbs<<'\n'
      <<prefix<<"_repeat_mean_abs_difference="
      <<(a.comparedElements?a.sumAbs/double(a.comparedElements):0.0)<<'\n'
@@ -306,6 +339,35 @@ void emitRepeat(std::ostringstream& out,const std::string& prefix,const TensorRe
      <<(a.firstDiff==std::numeric_limits<size_t>::max()?-1:static_cast<long long>(a.firstDiff))<<'\n'
      <<prefix<<"_app_read_poison_residual_elements="<<a.poisonResidual<<'\n'
      <<prefix<<"_nonfinite_elements="<<a.nonfinite<<'\n';
+  for(size_t id=0;id<hashesById.size();++id) {
+    const auto representative=a.representatives.find(hashesById[id]);
+    if(representative==a.representatives.end()) continue;
+    double minimum=std::numeric_limits<double>::infinity();
+    double maximum=-std::numeric_limits<double>::infinity();
+    double sum=0.0, sumSquares=0.0;
+    size_t finite=0, nan=0, positiveInf=0, negativeInf=0;
+    for(float value:representative->second) {
+      if(std::isnan(value)){++nan;continue;}
+      if(std::isinf(value)){
+        if(value>0)++positiveInf;else ++negativeInf;
+        continue;
+      }
+      const double converted=value;
+      minimum=std::min(minimum,converted);
+      maximum=std::max(maximum,converted);
+      sum+=converted;
+      sumSquares+=converted*converted;
+      ++finite;
+    }
+    out<<prefix<<"_hash_id_"<<id<<"_finite_elements="<<finite<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_nan_elements="<<nan<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_positive_inf_elements="<<positiveInf<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_negative_inf_elements="<<negativeInf<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_min="<<(finite?minimum:0.0)<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_max="<<(finite?maximum:0.0)<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_mean="<<(finite?sum/double(finite):0.0)<<'\n'
+       <<prefix<<"_hash_id_"<<id<<"_l2="<<std::sqrt(sumSquares)<<'\n';
+  }
 }
 double maxAbsDifference(const std::vector<float>& a,const std::vector<float>& b) {
   if(a.size()!=b.size()) return std::numeric_limits<double>::infinity();
@@ -1034,6 +1096,213 @@ std::string runTinyLmGraphIsolated(int variantCode) {
   out<<"comparison_same_input_state=true\n"
      <<"qnn_execute_all_success="<<(ok?"true":"false")<<'\n'
      <<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
+     <<"error="<<(ok?"none":error)<<'\n';
+  return out.str();
+}
+
+std::string runTinyLmFirstChangeTap(int tapCode) {
+  TinyTransformerTrainingTapSet tapSet;
+  const char* tapName;
+  std::vector<std::string> auditOrder;
+  size_t expectedTapCount=0;
+  switch(tapCode) {
+    case 0:
+      tapSet=TinyTransformerTrainingTapSet::BACKWARD_REGIONS;
+      tapName="backward_regions";
+      auditOrder={"DRESIDUAL1","DSCORES","DLN1","DINPUT_NORM",
+                  "gradient_gamma1","gradient_beta1",
+                  "embedding_input_gradient"};
+      expectedTapCount=4;
+      break;
+    case 1:
+      tapSet=TinyTransformerTrainingTapSet::LAYERNORM1;
+      tapName="layernorm1";
+      auditOrder={"DLN1","DXHAT1","SUM_DXHAT1","DXHAT_XHAT1",
+                  "SUM_DXHAT_XHAT1","DINPUT_NORM","gradient_gamma1",
+                  "gradient_beta1","embedding_input_gradient"};
+      expectedTapCount=6;
+      break;
+    case 2:
+      tapSet=TinyTransformerTrainingTapSet::DSCORES_ONLY;
+      tapName="dscores_only";
+      auditOrder={"DSCORES","gradient_gamma1","gradient_beta1",
+                  "embedding_input_gradient"};
+      expectedTapCount=1;
+      break;
+    case 3:
+      tapSet=TinyTransformerTrainingTapSet::DPROB_DSCORES;
+      tapName="dprob_dscores";
+      auditOrder={"DPROBABILITIES","DSCORES","gradient_gamma1",
+                  "gradient_beta1","embedding_input_gradient"};
+      expectedTapCount=2;
+      break;
+    default:
+      return "QNN_TINY_LM_FIRST_CHANGE_TAP\nstatus=FAILED\n"
+             "error=unknown tap set\n";
+  }
+  std::ostringstream out;
+  out<<std::setprecision(9)
+     <<"QNN_TINY_LM_FIRST_CHANGE_TAP\n"
+     <<"test=fixed_state_graph_preserving_internal_tap\n"
+     <<"shape=B1_T8_V32_D16\n"
+     <<"snapshot=E\n"
+     <<"snapshot_source=CPU_REFERENCE_ADAM_TRAJECTORY\n"
+     <<"manifest_schema_version=3\n"
+     <<"manifest_seed=1\n"
+     <<"manifest_batch_schedule=pattern_round_robin_4\n"
+     <<"tap_set="<<tapName<<'\n'
+     <<"graph_variant=stop_after_dinput\n"
+     <<"graph_boundary=lm_dinput\n"
+     <<"repeats=100\n"
+     <<"fresh_process_control=EXTERNAL_HEADLESS_INSTRUMENTATION\n"
+     <<"tap_semantics=APP_READ_PROMOTION_ONLY\n"
+     <<"node_set_change=NONE\n"
+     <<"node_creation_order=PRESERVED\n"
+     <<"tensor_creation_order=PRESERVED_FULL_ENUM_ORDER\n"
+     <<"downstream_nodes_through_lm_dinput=PRESERVED\n"
+     <<"app_write_initialization=fixed_state_values\n"
+     <<"app_read_poison_patterns=finite_plus_minus_1.1415926\n"
+     <<"physical_guard=UNSUPPORTED_RUNTIME_VECTOR_API\n";
+  const auto fixedSnapshots=snapshots();
+  if(fixedSnapshots.empty())
+    return out.str()+"status=FAILED\nerror=no snapshots\n";
+  const auto& s=fixedSnapshots.front();
+  out<<"snapshot_E_one_hot_raw_hash="<<rawHash(s.oneHot)<<'\n'
+     <<"snapshot_E_one_hot_canonical_hash="<<canonicalHash(s.oneHot)<<'\n'
+     <<"snapshot_E_target_raw_hash="<<rawHash(s.target)<<'\n'
+     <<"snapshot_E_target_canonical_hash="<<canonicalHash(s.target)<<'\n'
+     <<"snapshot_E_current_parameter_raw_hash="
+     <<rawHash(flattenParameters(s.current))<<'\n'
+     <<"snapshot_E_current_parameter_canonical_hash="
+     <<canonicalHash(flattenParameters(s.current))<<'\n';
+  Runtime rt;
+  std::string error;
+  if(!rt.initialize(QnnBackendKind::HTP,error) ||
+     !rt.prepareTinyTransformerTraining(
+         8,16,32,1e-5f,true,error,32,
+         TinyTransformerTrainingVariant::STOP_AFTER_DINPUT,tapSet)) {
+    out<<"status=FAILED\nerror="<<error<<'\n';
+    return out.str();
+  }
+  std::map<std::string,TensorRepeat> tensors;
+  bool appWriteHashesUnchanged=true;
+  int attempts=0, successes=0;
+  for(int repeat=0;repeat<100;++repeat) {
+    ++attempts;
+    const float poison=(repeat&1)?-1.1415926f:1.1415926f;
+    auto input=s.oneHot;
+    auto target=s.target;
+    auto current=s.current;
+    const auto inputBefore=rawHash(input), targetBefore=rawHash(target);
+    const auto parameterBefore=rawHash(flattenParameters(current));
+    TinyTransformerTrainingOutputs outputs;
+    poisonOutputs(outputs,current,poison);
+    outputs.tapPoison=poison;
+    if(!rt.executeTinyTransformerTraining(
+           input,target,current,.0003f,outputs,error))
+      break;
+    ++successes;
+    appWriteHashesUnchanged&=
+        rawHash(input)==inputBefore && rawHash(target)==targetBefore &&
+        rawHash(flattenParameters(current))==parameterBefore;
+    for(const auto& tap:outputs.taps)
+      observeRepeat(tensors[tap.name],tap.values,poison);
+    observeRepeat(tensors["gradient_gamma1"],outputs.gradients.gamma1,poison);
+    observeRepeat(tensors["gradient_beta1"],outputs.gradients.beta1,poison);
+    observeRepeat(tensors["gradient_wq"],outputs.gradients.wq,poison);
+    observeRepeat(tensors["gradient_wk"],outputs.gradients.wk,poison);
+    observeRepeat(tensors["gradient_wv"],outputs.gradients.wv,poison);
+    observeRepeat(tensors["embedding_input_gradient"],
+                  outputs.dEmbeddedInput,poison);
+  }
+  size_t poisonResidual=0, nonfinite=0;
+  for(const auto& name:auditOrder) {
+    const auto found=tensors.find(name);
+    if(found==tensors.end()) {
+      error="missing requested tap output "+name;
+      break;
+    }
+    emitRepeat(out,std::string("tap_")+tapName+"_"+name,found->second);
+  }
+  for(const auto& name:{"gradient_wq","gradient_wk","gradient_wv"}) {
+    const auto found=tensors.find(name);
+    if(found!=tensors.end())
+      emitRepeat(out,std::string("tap_")+tapName+"_"+name,found->second);
+  }
+  for(const auto& item:tensors) {
+    poisonResidual+=item.second.poisonResidual;
+    nonfinite+=item.second.nonfinite;
+  }
+  std::string firstChanging="NONE", previousStable="NONE";
+  for(const auto& name:auditOrder) {
+    const auto found=tensors.find(name);
+    if(found==tensors.end()) break;
+    if(found->second.canonical.size()>1) {
+      firstChanging=name;
+      break;
+    }
+    previousStable=name;
+  }
+  const auto candidateNode=[&]() -> const char* {
+    if(firstChanging=="DSCORES") return "tt_ds";
+    if(firstChanging=="DLN1") return "tt_dln1";
+    if(firstChanging=="DXHAT1") return "tt_lnb1_dxhat";
+    if(firstChanging=="SUM_DXHAT1") return "tt_lnb1_sum";
+    if(firstChanging=="DXHAT_XHAT1") return "tt_lnb1_prod";
+    if(firstChanging=="SUM_DXHAT_XHAT1") return "tt_lnb1_sumprod";
+    if(firstChanging=="DINPUT_NORM") return "tt_lnb1_dx";
+    if(firstChanging=="gradient_gamma1") return "tt_lnb1_dg";
+    if(firstChanging=="gradient_beta1") return "tt_lnb1_db";
+    if(firstChanging=="embedding_input_gradient") return "lm_dinput";
+    return "UNMAPPED";
+  }();
+  const bool structureMatches=
+      rt.tinyTransformerTrainingSourceTensorCreateSuccessCount()==153 &&
+      rt.tinyTransformerTrainingSourceGraphAddNodeSuccessCount()==98 &&
+      rt.tinyTransformerTrainingLastInputTensorCount()==14 &&
+      rt.tinyTransformerTrainingLastOutputTensorCount()==18+expectedTapCount;
+  const auto dinput=tensors.find("embedding_input_gradient");
+  out<<"first_changing_tensor_data_order="<<firstChanging<<'\n'
+     <<"first_changing_candidate_node="<<candidateNode<<'\n'
+     <<"immediately_preceding_audited_stable_tensor="<<previousStable<<'\n'
+     <<"embedding_input_gradient_cpu_max_abs_difference="
+     <<(dinput==tensors.end()?std::numeric_limits<double>::infinity():
+        maxAbsDifference(dinput->second.first,s.cpu.dEmbeddedInput))<<'\n'
+     <<"qnn_backend_create_result="<<rt.apiTrace().backendCreateResult<<'\n'
+     <<"qnn_device_create_result="<<rt.apiTrace().deviceCreateResult<<'\n'
+     <<"qnn_context_create_result="<<rt.apiTrace().contextCreateResult<<'\n'
+     <<"qnn_graph_create_result="<<rt.apiTrace().fullStepGraphCreateResult<<'\n'
+     <<"qnn_graph_finalize_result="<<rt.apiTrace().fullStepGraphFinalizeResult<<'\n'
+     <<"qnn_execute_return_code="<<rt.apiTrace().graphExecuteLastResult<<'\n'
+     <<"qnn_execute_attempts="<<attempts<<'\n'
+     <<"qnn_execute_successes="<<successes<<'\n'
+     <<"source_tensor_count="
+     <<rt.tinyTransformerTrainingSourceTensorCreateSuccessCount()<<'\n'
+     <<"source_node_count="
+     <<rt.tinyTransformerTrainingSourceGraphAddNodeSuccessCount()<<'\n'
+     <<"actual_input_count="
+     <<rt.tinyTransformerTrainingLastInputTensorCount()<<'\n'
+     <<"actual_output_count="
+     <<rt.tinyTransformerTrainingLastOutputTensorCount()<<'\n'
+     <<"structure_counts_match="<<(structureMatches?"true":"false")<<'\n'
+     <<"app_write_hashes_unchanged="
+     <<(appWriteHashesUnchanged?"true":"false")<<'\n'
+     <<"app_read_poison_residual_elements="<<poisonResidual<<'\n'
+     <<"nonfinite_elements="<<nonfinite<<'\n'
+     <<"all_outputs_finite="<<(nonfinite==0?"true":"false")<<'\n'
+     <<"numerical_variability_observed="
+     <<(firstChanging=="NONE"?"false":"true")<<'\n';
+  const bool ok=error.empty() && attempts==100 && successes==100 &&
+      appWriteHashesUnchanged && poisonResidual==0 && nonfinite==0 &&
+      structureMatches;
+  if(!ok && error.empty()) {
+    if(nonfinite) error="nonfinite tap output";
+    else if(!structureMatches) error="tap graph structure mismatch";
+    else if(!appWriteHashesUnchanged) error="APP_WRITE input/state mutated";
+    else if(poisonResidual) error="APP_READ poison remained in tap output";
+    else error="tap graph execution incomplete";
+  }
+  out<<"status="<<(ok?"SUCCESS":"FAILED")<<'\n'
      <<"error="<<(ok?"none":error)<<'\n';
   return out.str();
 }

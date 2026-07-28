@@ -2421,6 +2421,15 @@ std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
   if (mode ==
       ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_DEMBEDDING_ISOLATED)
     return runTinyLmGraphIsolated(2);
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_BACKWARD_REGIONS)
+    return runTinyLmFirstChangeTap(0);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1)
+    return runTinyLmFirstChangeTap(1);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY)
+    return runTinyLmFirstChangeTap(2);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES)
+    return runTinyLmFirstChangeTap(3);
   if (static_cast<int>(mode) >= static_cast<int>(
           ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_ORDER_FULL_DINPUT_DEMBEDDING) &&
       static_cast<int>(mode) <= static_cast<int>(

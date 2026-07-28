@@ -391,6 +391,8 @@ struct Runtime::Impl {
         bool diagnosticOutputs = true;
         TinyTransformerTrainingVariant variant =
             TinyTransformerTrainingVariant::FULL;
+        TinyTransformerTrainingTapSet tapSet =
+            TinyTransformerTrainingTapSet::NONE;
         float scaleData = 1.0f, epsilonScaledData = 1.0e-5f;
         float centeredScaleData = 64.0f, dimensionData = 1.0f;
         float inverseDimensionData = 1.0f, gradientScaleData = 1.0f;

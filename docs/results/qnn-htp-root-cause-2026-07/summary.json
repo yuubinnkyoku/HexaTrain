@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "study": "PhoneLM QNN HTP fixed-state root-cause investigation",
+  "classification": "APP_IMPLEMENTATION_DEFECT_FIXED_VARIABILITY_NOT_REOBSERVED",
+  "confirmed": {
+    "defect": "SOFTMAX_DOT_REDUCE_OUTPUT_SHAPE_CONTRACT_MISMATCH_8x8_INSTEAD_OF_8x1",
+    "reduce_contract": "axis=1;keep_dims=true;output_shape=8x1",
+    "post_fix_dinput_variability": "0/50",
+    "post_fix_full_variability": "0/10"
+  },
+  "inference": "The SOFTMAX_DOT shape mismatch caused the earlier fresh-instance-associated variability and nonfinite outputs.",
+  "not_determined": "The specific HTP lowering, scratch allocation, or internal execution mechanism affected by the mismatch.",
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api_version": "2.37.0",
+  "fixed_state_hashes": {
+    "one_hot": "d85d7d14ab07879ab62b29dc0be5eef0c51d29db0a1e6050b8d7ccb080bd00f1",
+    "target": "f1c1a960169be212ee9f4b5856b9add5b9f2dd5ff68b77ce962292d8e1c724cb",
+    "current_parameters": "5674c9ecf8bcb785a4db27a73afb11e33aa22c23670301fbe7865692fa83b93b"
+  },
+  "process_reports": 151,
+  "executes": 15100,
+  "pre_fix": {
+    "baseline_full": {
+      "events": 2,
+      "total": 6,
+      "rate": 0.333333333,
+      "clopper_pearson_95_lower": 0.043271868,
+      "clopper_pearson_95_upper": 0.777221904
+    },
+    "original_dinput": {
+      "events": 2,
+      "total": 24,
+      "rate": 0.083333333,
+      "clopper_pearson_95_lower": 0.010256341,
+      "clopper_pearson_95_upper": 0.269972802
+    },
+    "tap_backward": {
+      "events": 0,
+      "total": 24,
+      "rate": 0.0,
+      "clopper_pearson_95_lower": 0.0,
+      "clopper_pearson_95_upper": 0.142473598
+    },
+    "tap_dscores_only": {
+      "events": 3,
+      "total": 12,
+      "rate": 0.25,
+      "clopper_pearson_95_lower": 0.054860645,
+      "clopper_pearson_95_upper": 0.571858462
+    },
+    "tap_dprob_dscores": {
+      "events": 3,
+      "total": 24,
+      "rate": 0.125,
+      "clopper_pearson_95_lower": 0.026559315,
+      "clopper_pearson_95_upper": 0.323611358
+    }
+  },
+  "post_fix": {
+    "dinput": {
+      "events": 0,
+      "total": 50,
+      "rate": 0.0,
+      "clopper_pearson_95_lower": 0.0,
+      "clopper_pearson_95_upper": 0.071121736
+    },
+    "full": {
+      "events": 0,
+      "total": 10,
+      "rate": 0.0,
+      "clopper_pearson_95_lower": 0.0,
+      "clopper_pearson_95_upper": 0.308497108
+    },
+    "tap_dprob_dscores": {
+      "events": 0,
+      "total": 1,
+      "rate": 0.0,
+      "clopper_pearson_95_lower": 0.0,
+      "clopper_pearson_95_upper": 0.975
+    }
+  },
+  "first_change": {
+    "preceding_stable_tensor": "DPROBABILITIES",
+    "interval": "DPROBABILITIES->Multiply(tt_smp)->SOFTMAX_PRODUCT->ReduceSum(tt_smd)->SOFTMAX_DOT->Subtract(tt_smc)->SOFTMAX_CENTERED->Multiply(tt_ds)->DSCORES",
+    "first_varying_tensor": "DSCORES",
+    "dprob_varying_processes": 0,
+    "dprob_tested_processes": 24,
+    "dscores_varying_processes": 3,
+    "dscores_tested_processes": 24,
+    "tap_semantics": "APP_READ_PROMOTION_ONLY",
+    "tap_limitation": "Source node set and creation order are preserved; output exposure changes and backend lowering equivalence is not asserted."
+  },
+  "qnn_execute_return_code": 0,
+  "app_read_poison_residual_elements": 0,
+  "app_write_hashes_unchanged": true,
+  "activity_launches": 0,
+  "focus_takeovers": 0,
+  "micrographs": [
+    {
+      "run": "rootcause-fixed-softmax-micro-01",
+      "status": "SUCCESS",
+      "graph_execute_result": 0,
+      "cpu_fallback": false,
+      "nan_inf": "false"
+    },
+    {
+      "run": "rootcause-fixed-attention-micro-01",
+      "status": "SUCCESS",
+      "graph_execute_result": 0,
+      "cpu_fallback": false,
+      "nan_inf": "false"
+    }
+  ],
+  "publication": {
+    "raw_tensors": false,
+    "private_paths": false,
+    "endpoints": false,
+    "process_ids": false,
+    "timestamps": false,
+    "apks": false,
+    "qnn_binaries": false,
+    "logcat": false,
+    "output_hash_values": false,
+    "fixed_input_state_hashes_present": true
+  }
+}

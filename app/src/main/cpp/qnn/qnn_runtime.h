@@ -21,6 +21,16 @@ enum class TinyTransformerTrainingVariant {
     STOP_AFTER_DEMBEDDING,
 };
 
+// Selects a small, graph-preserving APP_READ tap set for language-model
+// backward diagnostics. NONE preserves the established graph/output contract.
+enum class TinyTransformerTrainingTapSet {
+    NONE,
+    DSCORES_ONLY,
+    DPROB_DSCORES,
+    BACKWARD_REGIONS,
+    LAYERNORM1,
+};
+
 const char* backendKindName(QnnBackendKind kind);
 
 struct RuntimeMetrics {
@@ -127,6 +137,11 @@ struct TinyTransformerParameters {
     std::vector<float> tokenEmbedding, outputProjection;
 };
 
+struct TinyTransformerTrainingTapOutput {
+    std::string name;
+    std::vector<float> values;
+};
+
 struct TinyTransformerTrainingOutputs {
     float loss = 0.0f;
     std::vector<float> output;
@@ -135,6 +150,8 @@ struct TinyTransformerTrainingOutputs {
     std::vector<float> dEmbeddedInput;
     TinyTransformerParameters gradients;
     TinyTransformerParameters next;
+    float tapPoison = 0.0f;
+    std::vector<TinyTransformerTrainingTapOutput> taps;
 };
 struct CrossEntropyGradientOutputs {
     std::vector<float> probabilities;
@@ -310,7 +327,9 @@ public:
                                         std::string& error,
                                         uint32_t vocabularySize = 0,
                                         TinyTransformerTrainingVariant variant =
-                                            TinyTransformerTrainingVariant::FULL);
+                                            TinyTransformerTrainingVariant::FULL,
+                                        TinyTransformerTrainingTapSet tapSet =
+                                            TinyTransformerTrainingTapSet::NONE);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,

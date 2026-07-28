@@ -1,7 +1,8 @@
 bool Runtime::prepareTinyTransformerTraining(
     uint32_t tokens, uint32_t dimension, uint32_t feedForwardDimension,
     float epsilon, bool diagnosticOutputs, std::string &error,
-    uint32_t vocabularySize, TinyTransformerTrainingVariant variant) {
+    uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
+    TinyTransformerTrainingTapSet tapSet) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0) {
     error = "tiny training invalid runtime or shape";
@@ -21,6 +22,7 @@ bool Runtime::prepareTinyTransformerTraining(
   g.lastLearningRateBytesUnchanged = true;
   g.languageModel = vocabularySize != 0;
   g.variant = variant;
+  g.tapSet = tapSet;
   switch (variant) {
   case TinyTransformerTrainingVariant::FULL:
   case TinyTransformerTrainingVariant::STOP_AFTER_DINPUT:
@@ -33,6 +35,21 @@ bool Runtime::prepareTinyTransformerTraining(
   if (variant != TinyTransformerTrainingVariant::FULL &&
       !g.languageModel) {
     error = "tiny training graph variant requires language model";
+    return false;
+  }
+  switch (tapSet) {
+  case TinyTransformerTrainingTapSet::NONE:
+  case TinyTransformerTrainingTapSet::DSCORES_ONLY:
+  case TinyTransformerTrainingTapSet::DPROB_DSCORES:
+  case TinyTransformerTrainingTapSet::BACKWARD_REGIONS:
+  case TinyTransformerTrainingTapSet::LAYERNORM1:
+    break;
+  default:
+    error = "tiny training invalid tap set";
+    return false;
+  }
+  if (tapSet != TinyTransformerTrainingTapSet::NONE && !g.languageModel) {
+    error = "tiny training tap set requires language model";
     return false;
   }
   g.activationDims[0] = tokens;
@@ -94,6 +111,21 @@ bool Runtime::prepareTinyTransformerTraining(
     for (int i : ids)
       make(i, type, d, rank, dt);
   };
+  auto tapType = [&](int id, Qnn_TensorType_t type) {
+    const bool selected =
+        (g.tapSet == TinyTransformerTrainingTapSet::DSCORES_ONLY &&
+         id == G::DSCORES) ||
+        (g.tapSet == TinyTransformerTrainingTapSet::DPROB_DSCORES &&
+         (id == G::DPROBABILITIES || id == G::DSCORES)) ||
+        (g.tapSet == TinyTransformerTrainingTapSet::BACKWARD_REGIONS &&
+         (id == G::DRESIDUAL1 || id == G::DSCORES || id == G::DLN1 ||
+          id == G::DINPUT_NORM)) ||
+        (g.tapSet == TinyTransformerTrainingTapSet::LAYERNORM1 &&
+         (id == G::DLN1 || id == G::DXHAT1 || id == G::SUM_DXHAT1 ||
+          id == G::DXHAT_XHAT1 || id == G::SUM_DXHAT_XHAT1 ||
+          id == G::DINPUT_NORM));
+    return selected ? QNN_TENSOR_TYPE_APP_READ : type;
+  };
   if (g.languageModel) {
     make(G::X, diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ :
                                   QNN_TENSOR_TYPE_NATIVE, g.activationDims);
@@ -129,10 +161,10 @@ bool Runtime::prepareTinyTransformerTraining(
   many({G::MEAN1, G::VAR1, G::VAR_EPS1, G::INV_STD_S1, G::INV_STD1, G::MEAN2,
         G::VAR2, G::VAR_EPS2, G::INV_STD_S2, G::INV_STD2, G::SUM_DXHAT2,
         G::SUM_DXHAT_XHAT2, G::INV_STD_OVER_D2, G::SUM_DXHAT1,
-        G::SUM_DXHAT_XHAT1, G::INV_STD_OVER_D1},
+        G::SUM_DXHAT_XHAT1, G::INV_STD_OVER_D1, G::SOFTMAX_DOT},
        QNN_TENSOR_TYPE_NATIVE, g.rowDims);
   many({G::SCORES, G::SCALED_SCORES, G::MASKED_SCORES, G::PROBABILITIES,
-        G::DPROBABILITIES, G::SOFTMAX_PRODUCT, G::SOFTMAX_DOT,
+        G::DPROBABILITIES, G::SOFTMAX_PRODUCT,
         G::SOFTMAX_CENTERED, G::DSCORES},
        QNN_TENSOR_TYPE_NATIVE, g.scoreDims);
   many({G::FF1, G::RELU, G::DRELU, G::DFF1}, QNN_TENSOR_TYPE_NATIVE, g.ffDims);
@@ -187,6 +219,26 @@ bool Runtime::prepareTinyTransformerTraining(
         G::XHAT_TIMES_SUM1,
         G::BRACKET1},
        QNN_TENSOR_TYPE_NATIVE, g.activationDims);
+  make(G::DRESIDUAL1, tapType(G::DRESIDUAL1, QNN_TENSOR_TYPE_NATIVE),
+       g.activationDims);
+  make(G::DPROBABILITIES,
+       tapType(G::DPROBABILITIES, QNN_TENSOR_TYPE_NATIVE), g.scoreDims);
+  make(G::DSCORES, tapType(G::DSCORES, QNN_TENSOR_TYPE_NATIVE), g.scoreDims);
+  make(G::DLN1, tapType(G::DLN1, QNN_TENSOR_TYPE_NATIVE), g.activationDims);
+  make(G::DXHAT1, tapType(G::DXHAT1, QNN_TENSOR_TYPE_NATIVE),
+       g.activationDims);
+  make(G::SUM_DXHAT1, tapType(G::SUM_DXHAT1, QNN_TENSOR_TYPE_NATIVE),
+       g.rowDims);
+  make(G::DXHAT_XHAT1, tapType(G::DXHAT_XHAT1, QNN_TENSOR_TYPE_NATIVE),
+       g.activationDims);
+  make(G::SUM_DXHAT_XHAT1,
+       tapType(G::SUM_DXHAT_XHAT1, QNN_TENSOR_TYPE_NATIVE), g.rowDims);
+  if(g.tensors[G::SOFTMAX_DOT].v1.rank!=2 ||
+     g.tensors[G::SOFTMAX_DOT].v1.dimensions[0]!=tokens ||
+     g.tensors[G::SOFTMAX_DOT].v1.dimensions[1]!=1) {
+    error="tiny training softmax reduction output must be tokens x 1";
+    return false;
+  }
   auto diag =
       diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
   make(G::OUTPUT, diag, g.activationDims);
@@ -203,7 +255,8 @@ bool Runtime::prepareTinyTransformerTraining(
     make(G::LM_DIFFERENCE, QNN_TENSOR_TYPE_NATIVE, g.logitsDims);
     make(G::DLOGITS, diag, g.logitsDims);
     make(G::DOUTPUT_PROJECTION, diag, g.outputProjectionDims);
-    make(G::DINPUT_NORM, QNN_TENSOR_TYPE_NATIVE, g.activationDims);
+    make(G::DINPUT_NORM, tapType(G::DINPUT_NORM, QNN_TENSOR_TYPE_NATIVE),
+         g.activationDims);
     make(G::DINPUT,
          (diagnosticOutputs ||
           variant != TinyTransformerTrainingVariant::FULL)
@@ -721,6 +774,8 @@ bool Runtime::executeTinyTransformerTraining(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
+  outputs.taps.clear();
+  outputs.taps.reserve(6);
   const size_t a = size_t(g.tokens) * g.dimension;
   const size_t dd = size_t(g.dimension) * g.dimension;
   const size_t df = size_t(g.dimension) * g.feedForwardDimension;
@@ -772,7 +827,7 @@ bool Runtime::executeTinyTransformerTraining(
   std::uint32_t learningRateBitsBefore = 0;
   std::memcpy(&learningRateBitsBefore, &learningRate, sizeof(learningRateBitsBefore));
   std::vector<Qnn_Tensor_t> out;
-  out.reserve(g.languageModel ? 30 : 23);
+  out.reserve((g.languageModel ? 30 : 23) + 6);
   auto bo = [&](int id, std::vector<float> &v, size_t count) {
     v.resize(count);
     out.push_back(g.tensors[id]);
@@ -838,6 +893,39 @@ bool Runtime::executeTinyTransformerTraining(
     bo(G::DINPUT, outputs.dEmbeddedInput, a);
     if (g.variant == TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING)
       bo(G::DEMBEDDING, outputs.gradients.tokenEmbedding, vd);
+  }
+  auto tap = [&](int id, const char *name, size_t count) {
+    outputs.taps.push_back({name, {}});
+    auto &values = outputs.taps.back().values;
+    values.assign(count, outputs.tapPoison);
+    out.push_back(g.tensors[id]);
+    out.back().v1.clientBuf = {values.data(), uint32_t(count * sizeof(float))};
+  };
+  switch (g.tapSet) {
+  case TinyTransformerTrainingTapSet::NONE:
+    break;
+  case TinyTransformerTrainingTapSet::DSCORES_ONLY:
+    tap(G::DSCORES, "DSCORES", size_t(g.tokens) * g.tokens);
+    break;
+  case TinyTransformerTrainingTapSet::DPROB_DSCORES:
+    tap(G::DPROBABILITIES, "DPROBABILITIES",
+        size_t(g.tokens) * g.tokens);
+    tap(G::DSCORES, "DSCORES", size_t(g.tokens) * g.tokens);
+    break;
+  case TinyTransformerTrainingTapSet::BACKWARD_REGIONS:
+    tap(G::DRESIDUAL1, "DRESIDUAL1", a);
+    tap(G::DSCORES, "DSCORES", size_t(g.tokens) * g.tokens);
+    tap(G::DLN1, "DLN1", a);
+    tap(G::DINPUT_NORM, "DINPUT_NORM", a);
+    break;
+  case TinyTransformerTrainingTapSet::LAYERNORM1:
+    tap(G::DLN1, "DLN1", a);
+    tap(G::DXHAT1, "DXHAT1", a);
+    tap(G::SUM_DXHAT1, "SUM_DXHAT1", g.tokens);
+    tap(G::DXHAT_XHAT1, "DXHAT_XHAT1", a);
+    tap(G::SUM_DXHAT_XHAT1, "SUM_DXHAT_XHAT1", g.tokens);
+    tap(G::DINPUT_NORM, "DINPUT_NORM", a);
+    break;
   }
   g.lastInputTensorCount = static_cast<uint32_t>(in.size());
   g.lastOutputTensorCount = static_cast<uint32_t>(out.size());

@@ -7,3 +7,4 @@ PhoneLMで再現・検証した研究結果の公開用indexです。生ログ�
 - [QNN HTP tiny language model autoregressive-gap result (2026-07)](qnn-htp-tiny-language-model-generation-2026-07/README.md) — same-prefix parity、pattern-balanced phase sampling、oracle/free-running分離、および5 seed exact rolloutの部分成功結果。
 - [QNN HTP fixed-state graph-prefix bisection (2026-07)](qnn-htp-graph-bisection-2026-07/README.md) — 同一input/stateのfull graphが2 fresh processで変動し、後続の`lm_dembedding`境界graphでは決定的になるgraph variant/Runtime順序依存条件。
 - [QNN HTP fixed-state Runtime/context order study (2026-07)](qnn-htp-graph-order-2026-07/README.md) — 60 fresh processの順序直交化で、graph variant固有・固定position・先行graph必須ではないfresh instance関連の数値変動を集計。
+- [QNN HTP fixed-state root-cause study (2026-07)](qnn-htp-root-cause-2026-07/README.md) — Softmax backwardの`SOFTMAX_DOT` ReduceSum出力shape不整合、first-changing区間、修正前後fresh-process対照、および修正後未再発を集計。
