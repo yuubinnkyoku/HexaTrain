@@ -25,6 +25,7 @@ incremental build が既定。clean が必要な場合だけ `-Clean` を使う�
 
 GitHub Actions は `.github/workflows/verify.yml` から同じ
 `.\scripts\verify_local.ps1` を実行する。CI専用のテスト列は追加せず、
+Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` へ取得する。
 QAIRT SDK、ADB端末、repository secrets、APK artifactを使用しない。
 
 ## 実行Tier
