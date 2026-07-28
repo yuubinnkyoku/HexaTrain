@@ -29,7 +29,7 @@ internal object NativeProgressParser {
                 loss = values["loss"]?.toDoubleOrNull(),
             )
         }
-        if (message.startsWith("RESULT")) {
+        if (message.startsWith("RESULT") || (message.contains('\n') && "status" in values)) {
             return when (values["status"]) {
                 "SUCCESS" -> RunProgress.Completed(values["final_loss"]?.let { "loss $it" })
                 "CANCELLED" -> RunProgress.Cancelled

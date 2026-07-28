@@ -19,6 +19,7 @@ class HeadlessDeviceTestRunner {
         val arguments = InstrumentationRegistry.getArguments()
         val suite = arguments.getString("suite") ?: "device-probe"
         val testMode = arguments.getString("testMode") ?: "BACKGROUND_CORRECTNESS"
+        val liveUpdateNotification = arguments.getString("liveUpdateNotification")?.toBooleanStrictOrNull() ?: false
         require(testMode == "BACKGROUND_CORRECTNESS" || testMode == "EXCLUSIVE_BENCHMARK") {
             "Unknown headless test mode"
         }
@@ -56,6 +57,9 @@ class HeadlessDeviceTestRunner {
                 test = suite
                 state.write(HeadlessStatus(runId, suite, "RUNNING", phase, test, 1, 2, startTime = started))
                 val mode = modeFor(suite)
+                val notification = if (liveUpdateNotification) LiveUpdateNotificationController(context) else null
+                notification?.onRunStarted("QNN数値検証", 1)
+                notification?.onProgress(RunProgress.PhaseChanged(suite))
                 val heartbeatRunning = AtomicBoolean(true)
                 val heartbeat = Thread({
                     while (heartbeatRunning.get()) {
@@ -76,13 +80,16 @@ class HeadlessDeviceTestRunner {
                         outputDimension = 3, steps = if (suite == "qnn-reproducibility") 2 else 1,
                         warmupSteps = 0, learningRate = 0.1f, seed = 20_260_710L, sampleCount = 2,
                         epochs = 0, measuredSteps = 0, correctnessInterval = 1, benchmarkMode = false,
-                        progressCallback = ProgressCallback { },
+                        progressCallback = ProgressCallback { message ->
+                            NativeProgressParser.parse(message)?.let { notification?.onProgress(it) }
+                        },
                     )
                 } finally {
                     heartbeatRunning.set(false)
                     heartbeat.interrupt()
                     heartbeat.join(5_000L)
                 }
+                notification?.onProgress(RunProgress.Completed(null))
                 reportPath = state.writeReport(runId, report)
                 val success = Regex("(?m)^status=SUCCESS$").containsMatchIn(report) ||
                     (suite == "generation-diagnostics" &&
@@ -98,6 +105,7 @@ class HeadlessDeviceTestRunner {
                     "\nheadless_test_mode=$testMode" +
                     "\ncompile_time_qairt_build_id=${BuildConfig.QAIRT_BUILD_ID}" +
                     "\nbackend_requested=HTP" +
+                    "\nlive_update_notification_enabled=$liveUpdateNotification" +
                     "\ncpu_fallback=false\n"
                 reportPath = state.writeReport(runId, appended)
                 state.write(HeadlessStatus(runId, suite, if (success && countersOk) "PASSED" else "FAILED", "complete", test, 2, 2,

@@ -33,6 +33,7 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
 
     override fun onRunStarted(kind: String, totalSteps: Long?) {
         val run = ActiveRun(sequence.incrementAndGet(), kind, totalSteps, System.currentTimeMillis())
+        appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(run.id.toString()).apply()
         current = run
         ensureChannel()
         post(run, RunProgress.Started(kind, totalSteps), force = true)
@@ -42,8 +43,11 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
         val run = current ?: return
         if (isDismissed(run.id)) return
         if (!run.throttle.shouldPost(progress, System.currentTimeMillis())) return
-        post(run, progress, force = progress is RunProgress.Completed || progress is RunProgress.Failed || progress is RunProgress.Cancelled)
-        if (progress is RunProgress.Completed || progress is RunProgress.Failed || progress is RunProgress.Cancelled) current = null
+        val finished = progress is RunProgress.Completed || progress is RunProgress.Failed || progress is RunProgress.Cancelled
+        post(run, progress, force = finished)
+        if (finished) {
+            current = null
+        }
     }
 
     fun openPromotionSettings(): Boolean {

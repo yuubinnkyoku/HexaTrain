@@ -13,6 +13,13 @@ class RunProgressTest {
         assertEquals(null, event.total)
     }
 
+    @Test fun parsesQnnTerminalReportWithModeSpecificHeader() {
+        val event = NativeProgressParser.parse(
+            "QNN_LINEAR_TRAINING_RESULT\nstatus=SUCCESS\nfinal_loss=0.125",
+        ) as RunProgress.Completed
+        assertEquals("loss 0.125", event.metric)
+    }
+
     @Test fun throttlePostsPhaseAndOnePercentChangesButNotEveryStep() {
         val throttle = ProgressUpdateThrottle(minimumIntervalMs = 1_000)
         assertTrue(throttle.shouldPost(RunProgress.Started("学習", 100), 0))

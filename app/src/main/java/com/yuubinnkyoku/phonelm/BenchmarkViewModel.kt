@@ -137,12 +137,23 @@ class BenchmarkViewModel(
 
         worker.execute {
             var lastProgress = ""
+            var terminalProgressSent = false
+            fun forwardProgress(message: String) {
+                NativeProgressParser.parse(message)?.let { progress ->
+                    val terminal = progress is RunProgress.Completed ||
+                        progress is RunProgress.Failed || progress is RunProgress.Cancelled
+                    if (!terminal || !terminalProgressSent) {
+                        runNotifications.onProgress(progress)
+                        if (terminal) terminalProgressSent = true
+                    }
+                }
+            }
             try {
                 runNotifications.onProgress(RunProgress.PhaseChanged(runKind(mode)))
                 val report = engine.runMode(mode, config) { message ->
                     lastProgress = message
                     append(message)
-                    NativeProgressParser.parse(message)?.let(runNotifications::onProgress)
+                    forwardProgress(message)
                 }
                 if (report != lastProgress) {
                     append(report)
@@ -150,7 +161,7 @@ class BenchmarkViewModel(
                 synchronized(lock) {
                     lastResult = BenchmarkResult.parse(report)
                 }
-                if (report != lastProgress) NativeProgressParser.parse(report)?.let(runNotifications::onProgress)
+                forwardProgress(report)
             } catch (error: Throwable) {
                 runNotifications.onProgress(RunProgress.Failed(error.message ?: error.javaClass.simpleName))
                 append(
