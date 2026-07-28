@@ -132,6 +132,7 @@ add_library(phonelm_native SHARED
     qnn/qnn_transformer_training.cpp
     qnn/qnn_reproducibility.cpp
     qnn/qnn_training_benchmark.cpp
+    qnn/qnn_graph_shape_validator.cpp
     ${PHONELM_QNN_RUNTIME_SOURCE}
     ${PHONELM_QNN_OPTIONAL_SOURCES}
     qnn/qnn_tensor.cpp

@@ -1,4 +1,5 @@
 #include "qnn_runtime.h"
+#include "qnn_graph_shape_validator.h"
 
 #include <QnnInterface.h>
 #include <QnnOpDef.h>

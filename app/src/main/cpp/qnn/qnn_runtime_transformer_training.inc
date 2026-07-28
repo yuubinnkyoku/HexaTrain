@@ -239,6 +239,19 @@ bool Runtime::prepareTinyTransformerTraining(
     error="tiny training softmax reduction output must be tokens x 1";
     return false;
   }
+  {
+    const shape::Node softmaxDot{
+        "tt_smd", shape::Op::ReduceSum,
+        {{"SOFTMAX_PRODUCT", {tokens, tokens}}},
+        {{"SOFTMAX_DOT", {g.tensors[G::SOFTMAX_DOT].v1.dimensions[0],
+                            g.tensors[G::SOFTMAX_DOT].v1.dimensions[1]}}},
+        {1}, true};
+    const auto validation = shape::validate(softmaxDot);
+    if (!validation.ok) {
+      error = validation.error;
+      return false;
+    }
+  }
   auto diag =
       diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
   make(G::OUTPUT, diag, g.activationDims);

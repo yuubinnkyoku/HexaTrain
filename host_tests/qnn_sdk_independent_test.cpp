@@ -1,12 +1,14 @@
 #include "qnn/qnn_host_quantization.h"
 #include "qnn/qnn_hybrid_training.h"
 #include "qnn/qnn_runtime.h"
+#include "qnn/qnn_graph_shape_validator.h"
 
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 
 namespace {
 
@@ -68,6 +70,37 @@ void testShapeAndBufferChecks() {
     assert(!checkedElementCount({2, 0, 4}));
     assert(!checkedElementCount({std::numeric_limits<std::size_t>::max(), 2}));
     assert(!checkedBufferSize({std::numeric_limits<std::size_t>::max()}, 2));
+}
+
+void testGraphShapeValidator() {
+    using namespace phonelm::qnn::shape;
+    const auto require = [](bool condition, const char* message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+    const Tensor product{"SOFTMAX_PRODUCT", {8, 8}};
+    Node broken{"tt_smd", Op::ReduceSum, {product},
+                {{"SOFTMAX_DOT", {8, 8}}}, {1}, true};
+    const auto rejected = validate(broken);
+    require(!rejected.ok, "shape validator accepted bad Softmax reduction");
+    require(rejected.error.find("node=tt_smd") != std::string::npos,
+            "shape validator error omitted node name");
+    require(rejected.error.find("expected=[8,1]") != std::string::npos,
+            "shape validator error omitted inferred shape");
+    broken.outputs[0].shape = {8, 1};
+    require(validate(broken).ok, "shape validator rejected valid Softmax reduction");
+    const std::vector<Node> validNodes{
+        {"mean", Op::ReduceMean, {product}, {{"out", {8}}}, {1}, false},
+        {"matmul", Op::MatMul, {{"a", {2, 3}}, {"b", {3, 4}}}, {{"out", {2, 4}}}},
+        {"transpose", Op::Transpose, {{"a", {2, 3}}}, {{"out", {3, 2}}}, {}, false, false, false, {1, 0}},
+        {"broadcast", Op::ElementWiseBinary, {{"a", {8, 8}}, {"b", {8, 1}}}, {{"out", {8, 8}}}},
+        {"softmax", Op::Softmax, {{"a", {8, 8}}}, {{"out", {8, 8}}}, {}, false, false, false, {}, {}, 0, {}, 1},
+        {"reshape", Op::Reshape, {{"a", {2, 4}}}, {{"out", {8}}}, {}, false, false, false, {}, {8}},
+        {"concat", Op::Concat, {{"a", {2, 3}}, {"b", {2, 4}}}, {{"out", {2, 7}}}, {}, false, false, false, {}, {}, 1},
+        {"split", Op::Split, {{"a", {2, 7}}}, {{"left", {2, 3}}, {"right", {2, 4}}}, {}, false, false, false, {}, {}, 1, {3, 4}},
+        {"layernorm", Op::LayerNorm, {{"x", {8, 16}}, {"g", {16}}, {"b", {16}}}, {{"out", {8, 16}}}, {1}, true},
+    };
+    for (const auto& node : validNodes)
+        require(validate(node).ok, "shape validator rejected valid op");
 }
 
 void testMockGraphReuseAndRuntimeWeight() {
@@ -185,6 +218,7 @@ int main() {
     testAffineScaleAndZeroPoint();
     testGradientAndSaturationMetrics();
     testShapeAndBufferChecks();
+    testGraphShapeValidator();
     testMockGraphReuseAndRuntimeWeight();
     testMockDWeightAndHybridLossDecrease();
     testQnnDisabledRuntimeIsExplicitlyBlocked();
