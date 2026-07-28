@@ -50,7 +50,25 @@ jobs:
       - name: Select host C++ compiler
         shell: pwsh
         run: |
-          $compilerDirectory = "C:\msys64\ucrt64\bin"
+          $compilerDirectory = @(
+            "C:\msys64\ucrt64\bin"
+            "C:\msys64\mingw64\bin"
+            "C:\mingw64\bin"
+            "C:\ProgramData\mingw64\mingw64\bin"
+          ) | Where-Object {
+            Test-Path -LiteralPath (Join-Path $_ "g++.exe") -PathType Leaf
+          } | Select-Object -First 1
+          if (-not $compilerDirectory) {
+            $msysBash = "C:\msys64\usr\bin\bash.exe"
+            if (-not (Test-Path -LiteralPath $msysBash -PathType Leaf)) {
+              throw "MSYS2 shell not found at $msysBash"
+            }
+            & $msysBash -lc "pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc"
+            if ($LASTEXITCODE -ne 0) {
+              throw "MSYS2 g++ installation failed with exit code $LASTEXITCODE"
+            }
+            $compilerDirectory = "C:\msys64\ucrt64\bin"
+          }
           $compiler = Join-Path $compilerDirectory "g++.exe"
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
             throw "GitHub-hosted runner g++ not found at $compiler"
