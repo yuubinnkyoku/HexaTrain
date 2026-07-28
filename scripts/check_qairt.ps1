@@ -1,10 +1,18 @@
 param(
     [Parameter(Position = 0)]
-    [string]$SdkRoot = ""
+    [string]$SdkRoot = "",
+    # Optional QAIRT build ID (e.g. 2.48.40.260702151143). Verified against
+    # sdk.yaml and include/QNN/QnnSdkBuildId.h inside the selected root only.
+    [string]$ExpectedBuildId = "",
+    # Run self-contained regression checks for the root-selection rules.
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+
+# Exit codes: 2 = SDK not installed / explicit root missing,
+# 3 = inventory incomplete, 4 = build ID mismatch, 1 = self-test failure.
 
 function Write-Result([string]$Key, [object]$Value) {
     $text = if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
@@ -28,6 +36,70 @@ function Convert-GradlePath([string]$Value) {
     $result = $result -replace '\\:', ':'
     $result = $result -replace '\\\\', '\'
     return $result
+}
+
+if ($SelfTest) {
+    $pwshExe = Join-Path $PSHOME "pwsh.exe"
+    $selfTestDir = Join-Path $env:TEMP ("phonelm-qairt-selftest-" + [Guid]::NewGuid().ToString("N"))
+    $fakeRoot = Join-Path $selfTestDir "9.99.0.999999"
+    $fakeVersion = "9.99.0"
+    $fakeBuildNumber = "999999123456"
+    $fakeBuildId = "$fakeVersion.$fakeBuildNumber"
+    New-Item -ItemType Directory -Force -Path (Join-Path $fakeRoot "include\QNN") | Out-Null
+    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnInterface.h") -Value "// selftest stub"
+    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnTypes.h") -Value "// selftest stub"
+    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnSdkBuildId.h") `
+        -Value "#define QNN_SDK_BUILD_ID `"v$fakeBuildId`""
+    Set-Content -LiteralPath (Join-Path $fakeRoot "sdk.yaml") `
+        -Value "version: $fakeVersion`nbuild_id: $fakeBuildNumber"
+
+    $selfFailures = [System.Collections.Generic.List[string]]::new()
+    function Test-Case([string]$Name, [string[]]$Arguments, [scriptblock]$Assert) {
+        $output = & $pwshExe -NoProfile -File $PSCommandPath @Arguments 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        if (& $Assert $output $code) {
+            Write-Result "selftest_$Name" "PASS"
+        } else {
+            Write-Result "selftest_$Name" "FAIL (exit=$code)"
+            $selfFailures.Add($Name)
+        }
+    }
+
+    Test-Case "explicit_root_beats_all_candidates" @("-SdkRoot", $fakeRoot) {
+        param($out, $code)
+        ($out -match "sdk_root_source=argument") -and
+            ($out -match [regex]::Escape("sdk_root=$fakeRoot")) -and
+            ($out -notmatch "common_path_scan")
+    }
+
+    Test-Case "missing_explicit_root_fails_without_fallback" @("-SdkRoot", (Join-Path $selfTestDir "does-not-exist")) {
+        param($out, $code)
+        ($code -eq 2) -and ($out -match "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED") -and
+            ($out -notmatch "sdk_root_source=")
+    }
+
+    Test-Case "no_argument_allows_discovery" @() {
+        param($out, $code)
+        (@(0, 2, 3) -contains $code) -and ($out -notmatch "sdk_root_source=argument")
+    }
+
+    Test-Case "expected_build_id_match_passes" @("-SdkRoot", $fakeRoot, "-ExpectedBuildId", $fakeBuildId) {
+        param($out, $code)
+        ($out -match "expected_build_id_match=true") -and ($code -ne 4)
+    }
+
+    Test-Case "expected_build_id_mismatch_fails" @("-SdkRoot", $fakeRoot, "-ExpectedBuildId", "0.0.0.000000000000") {
+        param($out, $code)
+        ($code -eq 4) -and ($out -match "expected_build_id_match=false") -and
+            ($out -match "QAIRT_BUILD_ID_MISMATCH")
+    }
+
+    Remove-Item -LiteralPath $selfTestDir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($selfFailures.Count -gt 0) {
+        Write-Result "selftest_failed_cases" ($selfFailures -join ";")
+        exit 1
+    }
+    exit 0
 }
 
 function Get-PropertyCandidates {
@@ -93,40 +165,44 @@ function Get-VersionTriplets($HeaderFiles, [string]$PrefixPattern) {
     return @($versions | Sort-Object -Unique)
 }
 
-$candidates = @()
 if (-not [string]::IsNullOrWhiteSpace($SdkRoot)) {
-    $candidates += [pscustomobject]@{ Path = $SdkRoot; Source = "argument" }
-}
-if (-not [string]::IsNullOrWhiteSpace($env:QAIRT_SDK_ROOT)) {
-    $candidates += [pscustomobject]@{ Path = $env:QAIRT_SDK_ROOT; Source = "QAIRT_SDK_ROOT" }
-}
-$candidates += @(Get-PropertyCandidates)
-
-$commonRoots = @(
-    "C:\Qualcomm",
-    "C:\Program Files\Qualcomm",
-    "C:\Program Files (x86)\Qualcomm",
-    (Join-Path $HOME "Qualcomm"),
-    (Join-Path $HOME "qairt"),
-    (Join-Path $HOME ".qairt"),
-    (Join-Path $env:LOCALAPPDATA "Qualcomm")
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-foreach ($commonRoot in $commonRoots) {
-    $header = Get-ChildItem -LiteralPath $commonRoot -Recurse -File -Filter "QnnInterface.h" `
-        -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($header) {
-        $cursor = $header.Directory
-        while ($cursor.Parent -and $cursor.Parent.FullName.StartsWith($commonRoot,
-                [System.StringComparison]::OrdinalIgnoreCase)) {
-            if (Test-Path -LiteralPath (Join-Path $cursor.FullName "include")) { break }
-            $cursor = $cursor.Parent
-        }
-        $candidates += [pscustomobject]@{ Path = $cursor.FullName; Source = "common_path_scan" }
+    # An explicit -SdkRoot wins exclusively: no env/properties/common-path
+    # fallback, so a different installed version is never silently selected.
+    $candidates = @([pscustomobject]@{ Path = $SdkRoot; Source = "argument" })
+} else {
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:QAIRT_SDK_ROOT)) {
+        $candidates += [pscustomobject]@{ Path = $env:QAIRT_SDK_ROOT; Source = "QAIRT_SDK_ROOT" }
     }
+    $candidates += @(Get-PropertyCandidates)
+
+    $commonRoots = @(
+        "C:\Qualcomm",
+        "C:\Program Files\Qualcomm",
+        "C:\Program Files (x86)\Qualcomm",
+        (Join-Path $HOME "Qualcomm"),
+        (Join-Path $HOME "qairt"),
+        (Join-Path $HOME ".qairt"),
+        (Join-Path $env:LOCALAPPDATA "Qualcomm")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    foreach ($commonRoot in $commonRoots) {
+        $header = Get-ChildItem -LiteralPath $commonRoot -Recurse -File -Filter "QnnInterface.h" `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($header) {
+            $cursor = $header.Directory
+            while ($cursor.Parent -and $cursor.Parent.FullName.StartsWith($commonRoot,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                if (Test-Path -LiteralPath (Join-Path $cursor.FullName "include")) { break }
+                $cursor = $cursor.Parent
+            }
+            $candidates += [pscustomobject]@{ Path = $cursor.FullName; Source = "common_path_scan" }
+        }
+    }
+
+    $candidates = @($candidates | Where-Object { $_.Path } |
+        Group-Object { [System.IO.Path]::GetFullPath($_.Path) } | ForEach-Object { $_.Group[0] })
 }
 
-$candidates = @($candidates | Where-Object { $_.Path } |
-    Group-Object { [System.IO.Path]::GetFullPath($_.Path) } | ForEach-Object { $_.Group[0] })
 $selected = $candidates | Where-Object { Test-Path -LiteralPath $_.Path -PathType Container } |
     Where-Object {
         Get-ChildItem -LiteralPath $_.Path -Recurse -File -Filter "QnnInterface.h" `
@@ -148,6 +224,38 @@ if (-not $selected -or -not (Test-Path -LiteralPath $selected.Path -PathType Con
 }
 
 $resolvedRoot = (Resolve-Path -LiteralPath $selected.Path).Path
+
+if (-not [string]::IsNullOrWhiteSpace($SdkRoot)) {
+    $requestedRoot = [System.IO.Path]::GetFullPath($SdkRoot)
+    $resolvedSelected = [System.IO.Path]::GetFullPath($resolvedRoot)
+    if ($requestedRoot -ne $resolvedSelected) {
+        throw "Explicit QAIRT SDK root was not honored: requested=$requestedRoot resolved=$resolvedSelected"
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId)) {
+    $buildIdMatch = $false
+    $sdkYamlPath = Join-Path $resolvedRoot "sdk.yaml"
+    $buildIdHeaderPath = Join-Path $resolvedRoot "include\QNN\QnnSdkBuildId.h"
+    $resolvedBuildId = "N/A"
+    if ((Test-Path -LiteralPath $sdkYamlPath) -and (Test-Path -LiteralPath $buildIdHeaderPath)) {
+        $sdkYaml = Get-Content -LiteralPath $sdkYamlPath -Raw
+        $buildIdHeader = Get-Content -LiteralPath $buildIdHeaderPath -Raw
+        $yamlVersion = [regex]::Match($sdkYaml, '(?m)^version:\s*(\S+)').Groups[1].Value
+        $yamlBuild = [regex]::Match($sdkYaml, '(?m)^build_id:\s*(\S+)').Groups[1].Value
+        $resolvedBuildId = [regex]::Match($buildIdHeader, 'QNN_SDK_BUILD_ID\s+"v([^"]+)"').Groups[1].Value
+        $buildIdMatch = ($resolvedBuildId -eq "$yamlVersion.$yamlBuild") -and
+            ($resolvedBuildId -eq $ExpectedBuildId)
+    }
+    Write-Result "expected_build_id" $ExpectedBuildId
+    Write-Result "resolved_build_id" $resolvedBuildId
+    Write-Result "expected_build_id_match" $buildIdMatch.ToString().ToLowerInvariant()
+    if (-not $buildIdMatch) {
+        Write-Result "status" "QAIRT_BUILD_ID_MISMATCH"
+        exit 4
+    }
+}
+
 $allFiles = @(Get-ChildItem -LiteralPath $resolvedRoot -Recurse -File -Force `
     -ErrorAction SilentlyContinue)
 $interfaceHeaders = @($allFiles | Where-Object { $_.Name -ceq "QnnInterface.h" })

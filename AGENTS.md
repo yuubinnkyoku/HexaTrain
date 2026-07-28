@@ -1,5 +1,99 @@
 必要があれば、このAGENTS.mdを自由に編集して良い。
 
+## 完了前の検証
+
+コードを変更したら、完了を報告する前に必ず次を実行する。
+
+```powershell
+.\scripts\verify_local.ps1
+```
+
+既定の `verify_local.ps1` は実機不要・QAIRT不要・tracked ファイルを変更しない。
+全工程が PASS になるまで完了を報告しない。失敗を隠して完了しない。
+
+```powershell
+.\scripts\verify_local.ps1                               # 通常
+.\scripts\verify_local.ps1 -SkipAndroidBuild             # Android build を省略（速い）
+.\scripts\verify_local.ps1 -Clean                        # clean build（遅いので必要時のみ）
+.\scripts\verify_local.ps1 -WithQairt -QairtSdkRoot $env:QAIRT_SDK_ROOT
+```
+
+incremental build が既定。clean が必要な場合だけ `-Clean` を使う。
+
+## 実行Tier
+
+### Tier 1: 自動実行可（実機不要）
+
+- `.\gradlew.bat :app:testDebugUnitTest --no-daemon` — JVM unit tests
+- `.\scripts\run_host_tests.ps1` — C++ host tests。`qnn_graph_shape_validator` の検証を含む。g++ が必要
+- `.\gradlew.bat :app:assembleDebug --no-daemon` — QNN無効 build
+- `.\gradlew.bat :app:assembleDebugAndroidTest --no-daemon`
+- `.\scripts\verify_local.ps1` — 上記一括 + git/binary/secret 監査
+- `.\scripts\check_qairt.ps1` — QAIRT SDK の読み取り専用検査。明示 `-SdkRoot` は排他的に優先され、存在しない/不完全な場合は別 version へ fallback せず FAIL。選択ルールの回帰は `-SelfTest`
+- `.\scripts\export_qnn_tiny_lm_graph_map.ps1` — graph map の静的 export
+
+### Tier 2: 条件を満たせば自動実行可
+
+対象: 既存の headless QNN suite（`.\scripts\run_qnn_headless_tests.ps1`）、README に記載の既存回帰 runner（`run_qnn_device_tests.ps1`、`run_qnn_training_tests.ps1`、`run_qnn_htp_*_tests.ps1`）、fixed-state 試験、device probe、Skel reuse/recovery。TestMode は `BACKGROUND_CORRECTNESS` を使う。
+
+条件（全て満たすこと）:
+
+- オンライン物理端末を明示的に選択し、`adb devices` で online が 1 台のみであることを確認する
+- QAIRT Stub/Skel の hash が一致している（`-ExpectedBuildId` を指定し、QNN 有効 build 後は `.\scripts\audit_qnn_apk.ps1` を通過する）
+- Activity/focus takeover が 0（headless runner が 2 秒ごとの top-resumed 監視と `focus_takeover_count=0` 確認で自動検出する）
+- root 化、SELinux 変更、システム領域変更を伴わない
+
+### Tier 3: 明示指示が必要
+
+- UI を前面化する試験。`EXCLUSIVE_BENCHMARK` を含む
+- 通知・permission の操作
+- app data の削除
+- firmware や QAIRT SDK のバージョン変更
+- 長時間 training
+- 公開（`docs/results` への export や外部共有）や push
+
+## QNN graph rules
+
+- producer の推論 shape と宣言 output shape を一致させる
+- Reduce の axis、keep_dims、output shape を validator で確認する
+- broadcast を暗黙に仮定しない
+- tensor shape 変更時は graph-map exporter（`.\scripts\export_qnn_tiny_lm_graph_map.ps1`）と negative test を更新する
+- APP_READ/APP_WRITE の方向と全面書き込みを維持する
+- QNN node/tensor を変更したら shape validator tests を必ず実行する。
+  `.\scripts\run_host_tests.ps1`（`host_tests/qnn_sdk_independent_test.cpp` が `qnn_graph_shape_validator.cpp` を直接検証する）
+
+## Numerical rules
+
+- HTP 内部精度を FP32 と断定しない
+- 平方、exp、divide 前の dynamic range を監査する
+- clamp、epsilon 増加、learning rate 低下だけで原因修正扱いにしない
+- CPU との差と、同一 HTP 実行の非決定性を区別する
+
+## Evidence rules
+
+- QNN return code 成功と tensor 有限性を別々に確認する
+- 数値結果を主張する場合は seed 数、step 数、発生率を記載する
+- private report から公開結果を作るときは allow-list exporter（`scripts\export_public_*.ps1`）を使う
+- raw checkpoint、logcat、ADB endpoint、絶対 path を commit しない
+
+## Git 運用
+
+- 作業開始時に `HEAD == origin/main` であることを確認する
+- milestone ごとに commit する
+- 現在の branch を勝手に切り替えない。ユーザーの未 commit 変更を stash しない
+- 指示されていないタスクでは push しない。push する場合は fast-forward のみ
+- reset、rebase、amend は禁止
+- 作業終了時に `git status` を確認し、検証生成物が `build/` 以下だけであることを確かめる
+- commit message は `type(scope): 概要` とする。
+  type は `feat` `fix` `test` `build` `docs`、scope は `qnn` `android` `lm` などを使う
+
+## 表現とドキュメント
+
+- 「学習 step の数値演算を HTP で実行した」と表現する。「NPU だけで学習した」「CPU を完全に使用していない」「QNN が自動微分した」とは表現しない
+- QAIRT 2.47 との混在は禁止
+- QAIRT ライブラリ、Stub、Skel、MNN source tree を Git へ追加しない
+- 数値結果や実験手順を変更したら、対応する `docs/` も同じタスクで更新する
+
 ## Windows でのファイル編集
 
 Codex Desktop の Windows 環境では、組み込みの `apply_patch` が次の sandbox
