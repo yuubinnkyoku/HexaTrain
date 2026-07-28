@@ -126,6 +126,12 @@ try {
         "$($changed.Count) changed/untracked file(s) scanned"
     }
 
+    Invoke-Step "qairt-selection-self-test" {
+        Invoke-PwshScript "check_qairt self-test" (Join-Path $Root "scripts\check_qairt.ps1") @(
+            "-SelfTest")
+        "5/5 root-selection cases ok (temp-only; no SDK required)"
+    }
+
     if ($Clean) {
         Invoke-Step "gradle-clean" {
             Invoke-Gradle "clean" @(":app:clean")
@@ -221,9 +227,7 @@ try {
     Write-Host "===== verify_local summary ====="
     foreach ($row in $results) {
         $line = "{0,-24} {1,-4} {2,8:N1}s  {3}" -f $row.Step, $row.Status, $row.Seconds, $row.Detail
-        if ($row.Status -eq "FAIL") { Write-Host $line -ForegroundColor Red }
-        elseif ($row.Status -eq "SKIP") { Write-Host $line -ForegroundColor DarkGray }
-        else { Write-Host $line -ForegroundColor Green }
+        Write-Host $line
     }
     $passCount = @($results | Where-Object { $_.Status -eq "PASS" }).Count
     $failCount = @($results | Where-Object { $_.Status -eq "FAIL" }).Count

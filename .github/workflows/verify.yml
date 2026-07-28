@@ -1,0 +1,66 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android build packages
+        shell: pwsh
+        run: |
+          $sdkManager = Join-Path $env:ANDROID_HOME "cmdline-tools\latest\bin\sdkmanager.bat"
+          if (-not (Test-Path -LiteralPath $sdkManager -PathType Leaf)) {
+            throw "sdkmanager not found at $sdkManager"
+          }
+          & $sdkManager --install `
+            "platforms;android-36.1" `
+            "build-tools;36.1.0" `
+            "cmake;3.22.1" `
+            "ndk;26.2.11394342"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Android package setup failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Select host C++ compiler
+        shell: pwsh
+        run: |
+          $compilerDirectory = "C:\msys64\ucrt64\bin"
+          $compiler = Join-Path $compilerDirectory "g++.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "GitHub-hosted runner g++ not found at $compiler"
+          }
+          $compilerDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "g++ preflight failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run the repository verification gate
+        shell: pwsh
+        run: .\scripts\verify_local.ps1

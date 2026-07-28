@@ -5,11 +5,28 @@ param(
     # sdk.yaml and include/QNN/QnnSdkBuildId.h inside the selected root only.
     [string]$ExpectedBuildId = "",
     # Run self-contained regression checks for the root-selection rules.
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    # Internal injection point used only by -SelfTest. It replaces every real
+    # environment/property/common-path candidate so the test cannot inventory
+    # an installed SDK.
+    [Parameter(DontShow = $true)]
+    [string]$SelfTestDiscoveryRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+
+if (-not [string]::IsNullOrWhiteSpace($SelfTestDiscoveryRoot)) {
+    if ([string]::IsNullOrWhiteSpace($env:PHONELM_QAIRT_SELFTEST_ROOT)) {
+        throw "-SelfTestDiscoveryRoot is restricted to check_qairt.ps1 -SelfTest child processes"
+    }
+    $allowedRoot = [IO.Path]::GetFullPath($env:PHONELM_QAIRT_SELFTEST_ROOT).
+        TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $injectedRoot = [IO.Path]::GetFullPath($SelfTestDiscoveryRoot)
+    if (-not $injectedRoot.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "-SelfTestDiscoveryRoot must remain under the active self-test temp directory"
+    }
+}
 
 # Exit codes: 2 = SDK not installed / explicit root missing,
 # 3 = inventory incomplete, 4 = build ID mismatch, 1 = self-test failure.
@@ -41,64 +58,91 @@ function Convert-GradlePath([string]$Value) {
 if ($SelfTest) {
     $pwshExe = Join-Path $PSHOME "pwsh.exe"
     $selfTestDir = Join-Path $env:TEMP ("phonelm-qairt-selftest-" + [Guid]::NewGuid().ToString("N"))
-    $fakeRoot = Join-Path $selfTestDir "9.99.0.999999"
+    $fakeRoot = Join-Path $selfTestDir "explicit\9.99.0.999999"
+    $fakeDiscoveryRoot = Join-Path $selfTestDir "discovery\8.88.0.888888"
     $fakeVersion = "9.99.0"
     $fakeBuildNumber = "999999123456"
     $fakeBuildId = "$fakeVersion.$fakeBuildNumber"
-    New-Item -ItemType Directory -Force -Path (Join-Path $fakeRoot "include\QNN") | Out-Null
-    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnInterface.h") -Value "// selftest stub"
-    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnTypes.h") -Value "// selftest stub"
-    Set-Content -LiteralPath (Join-Path $fakeRoot "include\QNN\QnnSdkBuildId.h") `
-        -Value "#define QNN_SDK_BUILD_ID `"v$fakeBuildId`""
-    Set-Content -LiteralPath (Join-Path $fakeRoot "sdk.yaml") `
-        -Value "version: $fakeVersion`nbuild_id: $fakeBuildNumber"
-
     $selfFailures = [System.Collections.Generic.List[string]]::new()
-    function Test-Case([string]$Name, [string[]]$Arguments, [scriptblock]$Assert) {
-        $output = & $pwshExe -NoProfile -File $PSCommandPath @Arguments 2>&1 | Out-String
-        $code = $LASTEXITCODE
-        if (& $Assert $output $code) {
-            Write-Result "selftest_$Name" "PASS"
-        } else {
-            Write-Result "selftest_$Name" "FAIL (exit=$code)"
-            $selfFailures.Add($Name)
+    $previousSelfTestRoot = $env:PHONELM_QAIRT_SELFTEST_ROOT
+    try {
+        $env:PHONELM_QAIRT_SELFTEST_ROOT = $selfTestDir
+
+        function New-FakeSdk([string]$Root, [string]$Version, [string]$BuildNumber) {
+            $buildId = "$Version.$BuildNumber"
+            New-Item -ItemType Directory -Force -Path (Join-Path $Root "include\QNN") | Out-Null
+            Set-Content -LiteralPath (Join-Path $Root "include\QNN\QnnInterface.h") -Value "// selftest stub"
+            Set-Content -LiteralPath (Join-Path $Root "include\QNN\QnnTypes.h") -Value "// selftest stub"
+            Set-Content -LiteralPath (Join-Path $Root "include\QNN\QnnSdkBuildId.h") `
+                -Value "#define QNN_SDK_BUILD_ID `"v$buildId`""
+            Set-Content -LiteralPath (Join-Path $Root "sdk.yaml") `
+                -Value "version: $Version`nbuild_id: $BuildNumber"
         }
+
+        New-FakeSdk $fakeRoot $fakeVersion $fakeBuildNumber
+        New-FakeSdk $fakeDiscoveryRoot "8.88.0" "888888123456"
+
+        function Test-Case([string]$Name, [string[]]$Arguments, [scriptblock]$Assert) {
+            $output = & $pwshExe -NoProfile -File $PSCommandPath @Arguments 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            if (& $Assert $output $code) {
+                Write-Result "selftest_$Name" "PASS"
+            } else {
+                Write-Result "selftest_$Name" "FAIL (exit=$code)"
+                $selfFailures.Add($Name)
+            }
+        }
+
+        Test-Case "explicit_root_beats_all_candidates" @(
+            "-SdkRoot", $fakeRoot, "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 3) -and
+                ($out -match "sdk_root_source=argument") -and
+                ($out -match [regex]::Escape("sdk_root=$fakeRoot")) -and
+                ($out -notmatch [regex]::Escape($fakeDiscoveryRoot))
+        }
+
+        Test-Case "missing_explicit_root_fails_without_fallback" @(
+            "-SdkRoot", (Join-Path $selfTestDir "does-not-exist"),
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 2) -and ($out -match "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED") -and
+                ($out -notmatch "sdk_root_source=") -and
+                ($out -notmatch [regex]::Escape($fakeDiscoveryRoot))
+        }
+
+        Test-Case "no_argument_allows_discovery" @(
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 3) -and
+                ($out -match "sdk_root_source=common_path_scan") -and
+                ($out -match [regex]::Escape("sdk_root=$fakeDiscoveryRoot"))
+        }
+
+        Test-Case "expected_build_id_match_passes" @(
+            "-SdkRoot", $fakeRoot, "-ExpectedBuildId", $fakeBuildId,
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 3) -and ($out -match "expected_build_id_match=true")
+        }
+
+        Test-Case "expected_build_id_mismatch_fails" @(
+            "-SdkRoot", $fakeRoot, "-ExpectedBuildId", "0.0.0.000000000000",
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 4) -and ($out -match "expected_build_id_match=false") -and
+                ($out -match "QAIRT_BUILD_ID_MISMATCH")
+        }
+    } finally {
+        $env:PHONELM_QAIRT_SELFTEST_ROOT = $previousSelfTestRoot
+        Remove-Item -LiteralPath $selfTestDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Test-Case "explicit_root_beats_all_candidates" @("-SdkRoot", $fakeRoot) {
-        param($out, $code)
-        ($out -match "sdk_root_source=argument") -and
-            ($out -match [regex]::Escape("sdk_root=$fakeRoot")) -and
-            ($out -notmatch "common_path_scan")
-    }
-
-    Test-Case "missing_explicit_root_fails_without_fallback" @("-SdkRoot", (Join-Path $selfTestDir "does-not-exist")) {
-        param($out, $code)
-        ($code -eq 2) -and ($out -match "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED") -and
-            ($out -notmatch "sdk_root_source=")
-    }
-
-    Test-Case "no_argument_allows_discovery" @() {
-        param($out, $code)
-        (@(0, 2, 3) -contains $code) -and ($out -notmatch "sdk_root_source=argument")
-    }
-
-    Test-Case "expected_build_id_match_passes" @("-SdkRoot", $fakeRoot, "-ExpectedBuildId", $fakeBuildId) {
-        param($out, $code)
-        ($out -match "expected_build_id_match=true") -and ($code -ne 4)
-    }
-
-    Test-Case "expected_build_id_mismatch_fails" @("-SdkRoot", $fakeRoot, "-ExpectedBuildId", "0.0.0.000000000000") {
-        param($out, $code)
-        ($code -eq 4) -and ($out -match "expected_build_id_match=false") -and
-            ($out -match "QAIRT_BUILD_ID_MISMATCH")
-    }
-
-    Remove-Item -LiteralPath $selfTestDir -Recurse -Force -ErrorAction SilentlyContinue
     if ($selfFailures.Count -gt 0) {
         Write-Result "selftest_failed_cases" ($selfFailures -join ";")
         exit 1
     }
+    Write-Result "selftest_passed_cases" "5/5"
     exit 0
 }
 
@@ -169,6 +213,10 @@ if (-not [string]::IsNullOrWhiteSpace($SdkRoot)) {
     # An explicit -SdkRoot wins exclusively: no env/properties/common-path
     # fallback, so a different installed version is never silently selected.
     $candidates = @([pscustomobject]@{ Path = $SdkRoot; Source = "argument" })
+} elseif (-not [string]::IsNullOrWhiteSpace($SelfTestDiscoveryRoot)) {
+    $candidates = @(
+        [pscustomobject]@{ Path = $SelfTestDiscoveryRoot; Source = "common_path_scan" }
+    )
 } else {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:QAIRT_SDK_ROOT)) {

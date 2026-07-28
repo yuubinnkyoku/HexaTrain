@@ -9,6 +9,9 @@
 ```
 
 既定の `verify_local.ps1` は実機不要・QAIRT不要・tracked ファイルを変更しない。
+`git-diff-check`、`tracked-binary-audit`、`secret-path-audit`、
+`qairt-selection-self-test`（temp内の5ケース）、JVM unit tests、C++ host tests、
+`assembleDebug`、`assembleDebugAndroidTest` の8工程が唯一のローカル検証ゲートである。
 全工程が PASS になるまで完了を報告しない。失敗を隠して完了しない。
 
 ```powershell
@@ -19,6 +22,10 @@
 ```
 
 incremental build が既定。clean が必要な場合だけ `-Clean` を使う。
+
+GitHub Actions は `.github/workflows/verify.yml` から同じ
+`.\scripts\verify_local.ps1` を実行する。CI専用のテスト列は追加せず、
+QAIRT SDK、ADB端末、repository secrets、APK artifactを使用しない。
 
 ## 実行Tier
 
