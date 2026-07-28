@@ -88,6 +88,10 @@ enum class ExecutionMode : int {
     QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1 = 77,
     QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY = 78,
     QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES = 79,
+    // Investigation outcomes are SUCCESS even when the measured trajectory
+    // contains non-finite values; non-finites are the subject under test.
+    QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE = 80,
+    QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC = 81,
 };
 
 const char* executionModeName(ExecutionMode mode);

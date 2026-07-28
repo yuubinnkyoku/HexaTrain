@@ -21,14 +21,17 @@ enum class TinyTransformerTrainingVariant {
     STOP_AFTER_DEMBEDDING,
 };
 
-// Selects a small, graph-preserving APP_READ tap set for language-model
-// backward diagnostics. NONE preserves the established graph/output contract.
+// Selects graph-preserving APP_READ taps for language-model backward
+// diagnostics. NONE preserves the established graph/output contract.
 enum class TinyTransformerTrainingTapSet {
     NONE,
     DSCORES_ONLY,
     DPROB_DSCORES,
     BACKWARD_REGIONS,
     LAYERNORM1,
+    // Exposes forward/backward intermediates in producer order. Existing
+    // regular APP_READ outputs are not rebound as taps.
+    ALL_INTERNAL,
 };
 
 const char* backendKindName(QnnBackendKind kind);
@@ -113,6 +116,7 @@ struct RuntimeOptions {
     int qnnLogLevel = 4;
     std::int64_t failGraphExecuteAt = -1;
     bool failGraphFinalize = false;
+    float tinyTransformerCenteredScale = 8.0f;
 };
 
 struct LayerNormBackwardOutputs {

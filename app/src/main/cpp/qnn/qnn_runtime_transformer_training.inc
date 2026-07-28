@@ -10,6 +10,21 @@ bool Runtime::prepareTinyTransformerTraining(
   }
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
+  if (!std::isfinite(options_.tinyTransformerCenteredScale) ||
+      options_.tinyTransformerCenteredScale <= 0) {
+    error = "tiny training invalid centered scale";
+    return false;
+  }
+  g.centeredScaleData = options_.tinyTransformerCenteredScale;
+  const double epsilonScaled =
+      double(epsilon) * double(g.centeredScaleData) *
+      double(g.centeredScaleData);
+  if (!std::isfinite(epsilonScaled) || epsilonScaled <= 0.0 ||
+      epsilonScaled > double(std::numeric_limits<float>::max()) ||
+      !std::isfinite(float(epsilonScaled)) || float(epsilonScaled) <= 0.0f) {
+    error = "tiny training centered scale makes epsilon unrepresentable";
+    return false;
+  }
   g.tokens = tokens;
   g.dimension = dimension;
   g.feedForwardDimension = feedForwardDimension;
@@ -43,6 +58,7 @@ bool Runtime::prepareTinyTransformerTraining(
   case TinyTransformerTrainingTapSet::DPROB_DSCORES:
   case TinyTransformerTrainingTapSet::BACKWARD_REGIONS:
   case TinyTransformerTrainingTapSet::LAYERNORM1:
+  case TinyTransformerTrainingTapSet::ALL_INTERNAL:
     break;
   default:
     error = "tiny training invalid tap set";
@@ -76,7 +92,7 @@ bool Runtime::prepareTinyTransformerTraining(
   g.rowDims[0] = tokens;
   g.rowDims[1] = 1;
   g.scaleData = 1.0f / std::sqrt(float(dimension));
-  g.epsilonScaledData = epsilon * g.centeredScaleData * g.centeredScaleData;
+  g.epsilonScaledData = float(epsilonScaled);
   g.dimensionData = float(dimension);
   g.inverseDimensionData = 1.0f / float(dimension);
   g.gradientScaleData = g.languageModel ? 1.0f / float(tokens) :
@@ -101,18 +117,49 @@ bool Runtime::prepareTinyTransformerTraining(
     g.tensors[i] = initialized;
     g.names[i] = "tiny_train_" + std::to_string(i);
   }
-  auto make = [&](int i, Qnn_TensorType_t type, uint32_t *d, uint32_t rank = 2,
-                  Qnn_DataType_t dt = QNN_DATATYPE_FLOAT_32) {
-    tensor(g.tensors[i], g.names[i].c_str(), type, d, dt, rank);
-  };
-  auto many = [&](std::initializer_list<int> ids, Qnn_TensorType_t type,
-                  uint32_t *d, uint32_t rank = 2,
-                  Qnn_DataType_t dt = QNN_DATATYPE_FLOAT_32) {
-    for (int i : ids)
-      make(i, type, d, rank, dt);
-  };
   auto tapType = [&](int id, Qnn_TensorType_t type) {
+    const bool allInternal =
+        g.tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL &&
+        (id == G::EMBEDDED_TOKEN || id == G::X ||
+         id == G::MEAN1 || id == G::CENTERED1 || id == G::CENTERED_S1 ||
+         id == G::SQUARE1 || id == G::VAR1 || id == G::VAR_EPS1 ||
+         id == G::INV_STD_S1 || id == G::INV_STD1 || id == G::XHAT1 ||
+         id == G::XHAT_G1 || id == G::LN1 || id == G::Q || id == G::K ||
+         id == G::V || id == G::SCORES || id == G::SCALED_SCORES ||
+         id == G::MASKED_SCORES || id == G::PROBABILITIES ||
+         id == G::CONTEXT || id == G::PROJECTED || id == G::RESIDUAL1 ||
+         id == G::MEAN2 || id == G::CENTERED2 || id == G::CENTERED_S2 ||
+         id == G::SQUARE2 || id == G::VAR2 || id == G::VAR_EPS2 ||
+         id == G::INV_STD_S2 || id == G::INV_STD2 || id == G::XHAT2 ||
+         id == G::XHAT_G2 || id == G::LN2 || id == G::FF1 || id == G::RELU ||
+         id == G::FF2 || id == G::OUTPUT || id == G::LM_PROBABILITIES ||
+         id == G::LM_DIFFERENCE || id == G::DLOGITS || id == G::DOUTPUT ||
+         id == G::DOUTPUT_PROJECTION || id == G::DW2 || id == G::DRELU ||
+         id == G::DFF1 || id == G::DW1 || id == G::DLN2 ||
+         id == G::DXHAT2 || id == G::SUM_DXHAT2 ||
+         id == G::DXHAT_XHAT2 || id == G::DY_XHAT2 ||
+         id == G::SUM_DXHAT_XHAT2 || id == G::D_TIMES_DXHAT2 ||
+         id == G::FIRST_DIFF2 || id == G::XHAT_TIMES_SUM2 ||
+         id == G::BRACKET2 || id == G::INV_STD_OVER_D2 ||
+         id == G::DRESIDUAL1_LN || id == G::DG2 || id == G::DB2 ||
+         id == G::DRESIDUAL1 || id == G::DWO || id == G::DCONTEXT ||
+         id == G::DPROBABILITIES || id == G::DV ||
+         id == G::SOFTMAX_PRODUCT || id == G::SOFTMAX_DOT ||
+         id == G::SOFTMAX_CENTERED || id == G::DSCORES ||
+         id == G::DQ_RAW || id == G::DK_RAW || id == G::DQ || id == G::DK ||
+         id == G::DWQ || id == G::DWK || id == G::DWV ||
+         id == G::DLN1_Q || id == G::DLN1_K || id == G::DLN1_V ||
+         id == G::DLN1_QK || id == G::DLN1 || id == G::DXHAT1 ||
+         id == G::SUM_DXHAT1 || id == G::DXHAT_XHAT1 ||
+         id == G::DY_XHAT1 || id == G::SUM_DXHAT_XHAT1 ||
+         id == G::D_TIMES_DXHAT1 || id == G::FIRST_DIFF1 ||
+         id == G::XHAT_TIMES_SUM1 || id == G::BRACKET1 ||
+         id == G::INV_STD_OVER_D1 || id == G::DINPUT_NORM ||
+         id == G::DG1 || id == G::DB1 || id == G::DINPUT ||
+         (id == G::DEMBEDDING &&
+          variant != TinyTransformerTrainingVariant::STOP_AFTER_DINPUT));
     const bool selected =
+        allInternal ||
         (g.tapSet == TinyTransformerTrainingTapSet::DSCORES_ONLY &&
          id == G::DSCORES) ||
         (g.tapSet == TinyTransformerTrainingTapSet::DPROB_DSCORES &&
@@ -125,6 +172,16 @@ bool Runtime::prepareTinyTransformerTraining(
           id == G::DXHAT_XHAT1 || id == G::SUM_DXHAT_XHAT1 ||
           id == G::DINPUT_NORM));
     return selected ? QNN_TENSOR_TYPE_APP_READ : type;
+  };
+  auto make = [&](int i, Qnn_TensorType_t type, uint32_t *d, uint32_t rank = 2,
+                  Qnn_DataType_t dt = QNN_DATATYPE_FLOAT_32) {
+    tensor(g.tensors[i], g.names[i].c_str(), tapType(i, type), d, dt, rank);
+  };
+  auto many = [&](std::initializer_list<int> ids, Qnn_TensorType_t type,
+                  uint32_t *d, uint32_t rank = 2,
+                  Qnn_DataType_t dt = QNN_DATATYPE_FLOAT_32) {
+    for (int i : ids)
+      make(i, type, d, rank, dt);
   };
   if (g.languageModel) {
     make(G::X, diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ :
@@ -788,7 +845,9 @@ bool Runtime::executeTinyTransformerTraining(
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
   outputs.taps.clear();
-  outputs.taps.reserve(6);
+  outputs.taps.reserve(g.tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL
+                           ? 100
+                           : 6);
   const size_t a = size_t(g.tokens) * g.dimension;
   const size_t dd = size_t(g.dimension) * g.dimension;
   const size_t df = size_t(g.dimension) * g.feedForwardDimension;
@@ -914,6 +973,29 @@ bool Runtime::executeTinyTransformerTraining(
     out.push_back(g.tensors[id]);
     out.back().v1.clientBuf = {values.data(), uint32_t(count * sizeof(float))};
   };
+  auto isRegularOutput = [&](int id) {
+    if (id == G::LOGITS)
+      return true;
+    if (!g.diagnosticOutputs)
+      return (id == G::DINPUT &&
+              g.variant != TinyTransformerTrainingVariant::FULL) ||
+             (id == G::DEMBEDDING &&
+              g.variant == TinyTransformerTrainingVariant::STOP_AFTER_DEMBEDDING);
+    if (id == G::OUTPUT || id == G::DOUTPUT || id == G::DG1 ||
+        id == G::DB1 || id == G::DWQ || id == G::DWK || id == G::DWV ||
+        id == G::DWO || id == G::DG2 || id == G::DB2 || id == G::DW1 ||
+        id == G::DW2)
+      return true;
+    return g.languageModel &&
+           (id == G::X || id == G::LM_PROBABILITIES || id == G::DLOGITS ||
+            id == G::DINPUT || id == G::DOUTPUT_PROJECTION ||
+            (id == G::DEMBEDDING &&
+             g.variant != TinyTransformerTrainingVariant::STOP_AFTER_DINPUT));
+  };
+  auto internalTap = [&](int id, const char *name, size_t count) {
+    if (!isRegularOutput(id))
+      tap(id, name, count);
+  };
   switch (g.tapSet) {
   case TinyTransformerTrainingTapSet::NONE:
     break;
@@ -938,6 +1020,114 @@ bool Runtime::executeTinyTransformerTraining(
     tap(G::DXHAT_XHAT1, "DXHAT_XHAT1", a);
     tap(G::SUM_DXHAT_XHAT1, "SUM_DXHAT_XHAT1", g.tokens);
     tap(G::DINPUT_NORM, "DINPUT_NORM", a);
+    break;
+  case TinyTransformerTrainingTapSet::ALL_INTERNAL:
+    // Order is the graph's producer order. LOGITS is intentionally omitted
+    // here because it is always the regular APP_READ output.
+    internalTap(G::EMBEDDED_TOKEN, "EMBEDDED_TOKEN", a);
+    internalTap(G::X, "INPUT", a);
+    internalTap(G::MEAN1, "MEAN1", g.tokens);
+    internalTap(G::CENTERED1, "CENTERED1", a);
+    internalTap(G::CENTERED_S1, "CENTERED_S1", a);
+    internalTap(G::SQUARE1, "SQUARE1", a);
+    internalTap(G::VAR1, "VAR1", g.tokens);
+    internalTap(G::VAR_EPS1, "VAR_EPS1", g.tokens);
+    internalTap(G::INV_STD_S1, "INV_STD_S1", g.tokens);
+    internalTap(G::INV_STD1, "INV_STD1", g.tokens);
+    internalTap(G::XHAT1, "XHAT1", a);
+    internalTap(G::XHAT_G1, "XHAT_G1", a);
+    internalTap(G::LN1, "LN1", a);
+    internalTap(G::Q, "Q", a);
+    internalTap(G::K, "K", a);
+    internalTap(G::V, "V", a);
+    internalTap(G::SCORES, "SCORES", size_t(g.tokens) * g.tokens);
+    internalTap(G::SCALED_SCORES, "SCALED_SCORES",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::MASKED_SCORES, "MASKED_SCORES",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::PROBABILITIES, "PROBABILITIES",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::CONTEXT, "CONTEXT", a);
+    internalTap(G::PROJECTED, "PROJECTED", a);
+    internalTap(G::RESIDUAL1, "RESIDUAL1", a);
+    internalTap(G::MEAN2, "MEAN2", g.tokens);
+    internalTap(G::CENTERED2, "CENTERED2", a);
+    internalTap(G::CENTERED_S2, "CENTERED_S2", a);
+    internalTap(G::SQUARE2, "SQUARE2", a);
+    internalTap(G::VAR2, "VAR2", g.tokens);
+    internalTap(G::VAR_EPS2, "VAR_EPS2", g.tokens);
+    internalTap(G::INV_STD_S2, "INV_STD_S2", g.tokens);
+    internalTap(G::INV_STD2, "INV_STD2", g.tokens);
+    internalTap(G::XHAT2, "XHAT2", a);
+    internalTap(G::XHAT_G2, "XHAT_G2", a);
+    internalTap(G::LN2, "LN2", a);
+    internalTap(G::FF1, "FF1", size_t(g.tokens) * g.feedForwardDimension);
+    internalTap(G::RELU, "RELU", size_t(g.tokens) * g.feedForwardDimension);
+    internalTap(G::FF2, "FF2", a);
+    internalTap(G::OUTPUT, "OUTPUT", a);
+    internalTap(G::LM_PROBABILITIES, "LM_PROBABILITIES", tv);
+    internalTap(G::LM_DIFFERENCE, "LM_DIFFERENCE", tv);
+    internalTap(G::DLOGITS, "DLOGITS", tv);
+    internalTap(G::DOUTPUT, "DOUTPUT", a);
+    internalTap(G::DOUTPUT_PROJECTION, "DOUTPUT_PROJECTION", dv);
+    internalTap(G::DW2, "DW2", fd);
+    internalTap(G::DRELU, "DRELU", size_t(g.tokens) * g.feedForwardDimension);
+    internalTap(G::DFF1, "DFF1", size_t(g.tokens) * g.feedForwardDimension);
+    internalTap(G::DW1, "DW1", df);
+    internalTap(G::DLN2, "DLN2", a);
+    internalTap(G::DXHAT2, "DXHAT2", a);
+    internalTap(G::SUM_DXHAT2, "SUM_DXHAT2", g.tokens);
+    internalTap(G::DXHAT_XHAT2, "DXHAT_XHAT2", a);
+    internalTap(G::SUM_DXHAT_XHAT2, "SUM_DXHAT_XHAT2", g.tokens);
+    internalTap(G::D_TIMES_DXHAT2, "D_TIMES_DXHAT2", a);
+    internalTap(G::FIRST_DIFF2, "FIRST_DIFF2", a);
+    internalTap(G::XHAT_TIMES_SUM2, "XHAT_TIMES_SUM2", a);
+    internalTap(G::BRACKET2, "BRACKET2", a);
+    internalTap(G::INV_STD_OVER_D2, "INV_STD_OVER_D2", g.tokens);
+    internalTap(G::DRESIDUAL1_LN, "DRESIDUAL1_LN", a);
+    internalTap(G::DY_XHAT2, "DY_XHAT2", a);
+    internalTap(G::DG2, "DG2", n);
+    internalTap(G::DB2, "DB2", n);
+    internalTap(G::DRESIDUAL1, "DRESIDUAL1", a);
+    internalTap(G::DWO, "DWO", dd);
+    internalTap(G::DCONTEXT, "DCONTEXT", a);
+    internalTap(G::DPROBABILITIES, "DPROBABILITIES",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::DV, "DV", a);
+    internalTap(G::SOFTMAX_PRODUCT, "SOFTMAX_PRODUCT",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::SOFTMAX_DOT, "SOFTMAX_DOT", g.tokens);
+    internalTap(G::SOFTMAX_CENTERED, "SOFTMAX_CENTERED",
+                size_t(g.tokens) * g.tokens);
+    internalTap(G::DSCORES, "DSCORES", size_t(g.tokens) * g.tokens);
+    internalTap(G::DQ_RAW, "DQ_RAW", a);
+    internalTap(G::DK_RAW, "DK_RAW", a);
+    internalTap(G::DQ, "DQ", a);
+    internalTap(G::DK, "DK", a);
+    internalTap(G::DWQ, "DWQ", dd);
+    internalTap(G::DWK, "DWK", dd);
+    internalTap(G::DWV, "DWV", dd);
+    internalTap(G::DLN1_Q, "DLN1_Q", a);
+    internalTap(G::DLN1_K, "DLN1_K", a);
+    internalTap(G::DLN1_V, "DLN1_V", a);
+    internalTap(G::DLN1_QK, "DLN1_QK", a);
+    internalTap(G::DLN1, "DLN1", a);
+    internalTap(G::DXHAT1, "DXHAT1", a);
+    internalTap(G::SUM_DXHAT1, "SUM_DXHAT1", g.tokens);
+    internalTap(G::DXHAT_XHAT1, "DXHAT_XHAT1", a);
+    internalTap(G::SUM_DXHAT_XHAT1, "SUM_DXHAT_XHAT1", g.tokens);
+    internalTap(G::D_TIMES_DXHAT1, "D_TIMES_DXHAT1", a);
+    internalTap(G::FIRST_DIFF1, "FIRST_DIFF1", a);
+    internalTap(G::XHAT_TIMES_SUM1, "XHAT_TIMES_SUM1", a);
+    internalTap(G::BRACKET1, "BRACKET1", a);
+    internalTap(G::INV_STD_OVER_D1, "INV_STD_OVER_D1", g.tokens);
+    internalTap(G::DINPUT_NORM, "DINPUT_NORM", a);
+    internalTap(G::DY_XHAT1, "DY_XHAT1", a);
+    internalTap(G::DG1, "DG1", n);
+    internalTap(G::DB1, "DB1", n);
+    internalTap(G::DINPUT, "DINPUT", a);
+    if (g.variant != TinyTransformerTrainingVariant::STOP_AFTER_DINPUT)
+      internalTap(G::DEMBEDDING, "DEMBEDDING", vd);
     break;
   }
   g.lastInputTensorCount = static_cast<uint32_t>(in.size());

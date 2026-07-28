@@ -163,6 +163,8 @@ class HeadlessDeviceTestRunner {
         "qnn-tap-dscores-only" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY
         "qnn-tap-dprob-dscores" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES
         "qnn-adam-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP
+        "qnn-adam-late-baseline" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE
+        "qnn-adam-late-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }
 }

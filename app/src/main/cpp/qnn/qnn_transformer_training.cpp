@@ -8,10 +8,13 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <tuple>
 
 namespace phonelm::qnn {
 namespace {
@@ -1052,6 +1055,11 @@ Params unflattenLanguageParameters(const std::vector<float> &flat,
   if (offset != flat.size()) throw std::invalid_argument("momentum flat shape");
   return result;
 }
+Params scaleLanguageParameters(const Params &parameters, float scale) {
+  auto flat = flattenLanguageParameters(parameters);
+  for (float &value : flat) value *= scale;
+  return unflattenLanguageParameters(flat, parameters);
+}
 Params zeroLanguageParameters(const Params &shape) {
   Params result = shape;
   for (const auto &[name, member] : languageFields()) {
@@ -1613,7 +1621,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     const bool finiteResult = lastFiniteStep > 0;
     const bool changed = maxParamError(shape, freeCurrent) > 0;
     const bool ok = compared == int(checkpoints.size()) && checkpointRoundtrip &&
-                    finiteResult && changed && firstNonfiniteStep > 0;
+                    finiteResult && changed &&
+                    (firstNonfiniteStep > 0 ||
+                     lastFiniteStep == selected.steps);
     std::ostringstream report;
     report << std::setprecision(10)
            << "TINY_LANGUAGE_MODEL\ntest=adam_synchronized_checkpoint_and_path_split\nstatus="
@@ -2407,6 +2417,676 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   return report.str();
 }
 
+// This is deliberately an in-memory checkpoint.  The data is diagnostic input
+// and can be large enough to make a checked-in raw checkpoint inappropriate.
+struct LateNonfiniteCheckpoint {
+  int seed = 0, completedStep = 0;
+  Params parameters, firstMoment, secondMoment;
+  std::vector<float> input, target;
+};
+
+struct LateVectorAudit {
+  bool allFinite = true;
+  size_t firstBadIndex = std::numeric_limits<size_t>::max();
+  double minimum = 0, maximum = 0, mean = 0, l2 = 0;
+  std::string hash;
+};
+
+LateVectorAudit auditLateVector(const std::string &prefix,
+                                const std::vector<float> &values,
+                                std::ostringstream &report) {
+  LateVectorAudit result;
+  result.hash = canonicalFloatSha256(values);
+  if (!values.empty()) {
+    result.minimum = std::numeric_limits<double>::infinity();
+    result.maximum = -result.minimum;
+  }
+  for (size_t index = 0; index < values.size(); ++index) {
+    const float value = values[index];
+    if (!std::isfinite(value)) {
+      result.allFinite = false;
+      if (result.firstBadIndex == std::numeric_limits<size_t>::max())
+        result.firstBadIndex = index;
+      continue;
+    }
+    result.minimum = std::min(result.minimum, double(value));
+    result.maximum = std::max(result.maximum, double(value));
+    result.mean += value;
+    result.l2 += double(value) * value;
+  }
+  const size_t finiteCount = result.allFinite ? values.size() :
+      std::count_if(values.begin(), values.end(),
+                    [](float value) { return std::isfinite(value); });
+  result.mean = finiteCount ? result.mean / finiteCount : 0;
+  result.l2 = std::sqrt(result.l2);
+  report << prefix << "_finite=" << (result.allFinite ? "true" : "false")
+         << '\n' << prefix << "_length=" << values.size() << '\n'
+         << prefix << "_min=" << result.minimum << '\n'
+         << prefix << "_max=" << result.maximum << '\n'
+         << prefix << "_mean=" << result.mean << '\n'
+         << prefix << "_l2=" << result.l2 << '\n'
+         << prefix << "_raw_float_sha256=" << rawFloatSha256(values) << '\n'
+         << prefix << "_canonical_hash=" << result.hash << '\n'
+         << prefix << "_first_bad_index="
+         << (result.firstBadIndex == std::numeric_limits<size_t>::max()
+                 ? -1 : static_cast<long long>(result.firstBadIndex)) << '\n';
+  return result;
+}
+
+std::string lateRawFloatHex(const std::vector<float> &values) {
+  std::ostringstream hex;
+  hex << std::hex << std::setfill('0');
+  for (float value : values) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    hex << std::setw(8) << bits;
+  }
+  return hex.str();
+}
+
+std::vector<float> lateStateFlat(const LateNonfiniteCheckpoint &state,
+                                 float lr, float clipThreshold) {
+  // The metadata is part of the hash so a checkpoint cannot be replayed with
+  // a different step/bias correction or clipping contract by accident.
+  std::vector<float> values{float(state.seed), float(state.completedStep),
+                            float(state.completedStep + 1), lr, .9f, .999f,
+                            1.0e-8f, clipThreshold};
+  const auto parameters = flattenLanguageParameters(state.parameters);
+  values.insert(values.end(), parameters.begin(), parameters.end());
+  const auto first = flattenLanguageParameters(state.firstMoment);
+  const auto second = flattenLanguageParameters(state.secondMoment);
+  values.insert(values.end(), first.begin(), first.end());
+  values.insert(values.end(), second.begin(), second.end());
+  values.insert(values.end(), state.input.begin(), state.input.end());
+  values.insert(values.end(), state.target.begin(), state.target.end());
+  return values;
+}
+
+std::string firstBadLateStage(const TinyTransformerTrainingOutputs &gradient,
+                              const AdamOptimizerOutputs *adam,
+                              std::vector<float> *badValues) {
+  // ALL_INTERNAL is emitted in graph producer order. It closes the blind spot
+  // between the public forward outputs and the coarse backward-region taps.
+  for (const auto &tap : gradient.taps)
+    if (!finite(tap.values)) {
+      if (badValues) *badValues = tap.values;
+      return "tap_" + tap.name;
+    }
+  const std::array<std::pair<const char *, const std::vector<float> *>, 7> gradientStages{{
+      {"forward_embedded_input", &gradient.embeddedInput},
+      {"forward_transformer_output", &gradient.output},
+      {"forward_logits", &gradient.logits},
+      {"forward_probabilities", &gradient.probabilities},
+      {"dlogits", &gradient.dLogits},
+      {"transformer_backward_dembedded_input", &gradient.dEmbeddedInput},
+      {"parameter_gradients", nullptr},
+  }};
+  for (const auto &[name, values] : gradientStages) {
+    const auto flat = values ? *values : flattenLanguageParameters(gradient.gradients);
+    if (!finite(flat)) {
+      if (badValues) *badValues = flat;
+      return name;
+    }
+  }
+  if (!adam) return "NONE";
+  const std::array<std::pair<const char *, const std::vector<float> *>, 8> optimizerStages{{
+      {"adam_m", &adam->firstMomentNext}, {"adam_v", &adam->secondMomentNext},
+      {"adam_m_hat", &adam->firstMomentHat}, {"adam_v_hat", &adam->secondMomentHat},
+      {"adam_sqrt_v", &adam->secondRoot}, {"adam_denominator", &adam->denominator},
+      {"adam_update", &adam->scaledUpdate}, {"next_parameters", &adam->weightNext},
+  }};
+  for (const auto &[name, values] : optimizerStages)
+    if (!finite(*values)) {
+      if (badValues) *badValues = *values;
+      return name;
+    }
+  return "NONE";
+}
+
+std::string lateProducerNode(const std::string &stage) {
+  if (stage == "tap_CENTERED_S2") return "tt_ln2_center_scale";
+  if (stage == "tap_SQUARE2") return "tt_ln2_square";
+  if (stage.rfind("tap_", 0) == 0) return stage.substr(4);
+  if (stage.rfind("forward_", 0) == 0) return "tiny_lm_transformer_forward";
+  if (stage == "dlogits") return "cross_entropy_dlogits";
+  if (stage.find("embedded") != std::string::npos) return "lm_dembedding";
+  if (stage == "parameter_gradients") return "tiny_lm_transformer_backward";
+  if (stage.rfind("adam_", 0) == 0 || stage == "next_parameters") return "adam_optimizer";
+  return "NONE";
+}
+
+void reportLateTapBoundary(const std::string &prefix,
+                           const TinyTransformerTrainingOutputs &gradient,
+                           const std::string &stage,
+                           const LateVectorAudit &badAudit,
+                           std::ostringstream &report) {
+  if (stage.rfind("tap_", 0) != 0) return;
+  const std::string tapName = stage.substr(4);
+  for (size_t index = 0; index < gradient.taps.size(); ++index) {
+    if (gradient.taps[index].name != tapName) continue;
+    report << prefix << "_tap_name=" << tapName << '\n'
+           << prefix << "_tap_producer_node=" << lateProducerNode(stage) << '\n';
+    if (index == 0) return;
+    const auto &previous = gradient.taps[index - 1];
+    report << prefix << "_previous_tap_name=" << previous.name << '\n'
+           << prefix << "_previous_tap_producer_node="
+           << lateProducerNode("tap_" + previous.name) << '\n';
+    auditLateVector(prefix + "_previous_tap", previous.values, report);
+    if (badAudit.firstBadIndex >= previous.values.size()) return;
+    const float previousValue = previous.values[badAudit.firstBadIndex];
+    std::uint32_t previousBits = 0;
+    std::memcpy(&previousBits, &previousValue, sizeof(previousBits));
+    report << prefix << "_previous_tap_value_at_first_bad_index="
+           << previousValue << '\n'
+           << prefix << "_previous_tap_value_bits_at_first_bad_index=0x"
+           << std::hex << std::setw(8) << std::setfill('0') << previousBits
+           << std::dec << std::setfill(' ') << '\n';
+    return;
+  }
+}
+
+void reportLateCheckpoint(const std::string &prefix,
+                          const LateNonfiniteCheckpoint &checkpoint,
+                          float lr, float clipThreshold,
+                          std::ostringstream &report) {
+  report << prefix << "_checkpoint_format=phonelm.qnn.late_nonfinite.v1\n"
+         << prefix << "_checkpoint_private_raw=true\n"
+         << prefix << "_checkpoint_seed=" << checkpoint.seed << '\n'
+         << prefix << "_checkpoint_completed_step=" << checkpoint.completedStep << '\n'
+         << prefix << "_checkpoint_optimizer_next_step=" << checkpoint.completedStep + 1 << '\n';
+  const auto parameters = flattenLanguageParameters(checkpoint.parameters);
+  const auto first = flattenLanguageParameters(checkpoint.firstMoment);
+  const auto second = flattenLanguageParameters(checkpoint.secondMoment);
+  auditLateVector(prefix + "_parameters", parameters, report);
+  auditLateVector(prefix + "_adam_m", first, report);
+  auditLateVector(prefix + "_adam_v", second, report);
+  auditLateVector(prefix + "_input", checkpoint.input, report);
+  auditLateVector(prefix + "_target", checkpoint.target, report);
+  report << prefix << "_parameters_private_raw_hex_le_u32=" << lateRawFloatHex(parameters) << '\n'
+         << prefix << "_adam_m_private_raw_hex_le_u32=" << lateRawFloatHex(first) << '\n'
+         << prefix << "_adam_v_private_raw_hex_le_u32=" << lateRawFloatHex(second) << '\n'
+         << prefix << "_input_private_raw_hex_le_u32=" << lateRawFloatHex(checkpoint.input) << '\n'
+         << prefix << "_target_private_raw_hex_le_u32=" << lateRawFloatHex(checkpoint.target) << '\n'
+         << prefix << "_checkpoint_learning_rate=" << lr << '\n'
+         << prefix << "_checkpoint_beta1=0.9\n"
+         << prefix << "_checkpoint_beta2=0.999\n"
+         << prefix << "_checkpoint_epsilon=1e-8\n"
+         << prefix << "_checkpoint_clip_threshold=" << clipThreshold << '\n';
+  report << prefix << "_combined_state_canonical_hash="
+         << canonicalFloatSha256(lateStateFlat(checkpoint, lr, clipThreshold)) << '\n'
+         << prefix << "_combined_state_raw_float_sha256="
+         << rawFloatSha256(lateStateFlat(checkpoint, lr, clipThreshold)) << '\n';
+}
+
+bool reportTwoByTwo(Runtime &runtime, const tiny_lm::Config &config,
+                    const LateNonfiniteCheckpoint &checkpoint, float lr,
+                    float clipThreshold, std::ostringstream &report,
+                    std::string &error) {
+  const auto cpuGradient = tiny_lm::forwardBackward(
+      config, checkpoint.input, checkpoint.target, checkpoint.parameters, 0.0f);
+  TinyTransformerTrainingOutputs htpGradient;
+  if (!runtime.executeTinyTransformerTraining(checkpoint.input, checkpoint.target,
+                                               checkpoint.parameters, 0.0f,
+                                               htpGradient, error))
+    return false;
+  const double cpuNorm = gradientNorm(cpuGradient.gradients);
+  const double htpNorm = gradientNorm(htpGradient.gradients);
+  const float cpuClipScale =
+      clipThreshold > 0 && std::isfinite(cpuNorm) && cpuNorm > 0
+          ? float(std::min(1.0,
+                           double(clipThreshold) / (cpuNorm + 1.0e-6)))
+          : 1.0f;
+  const float htpClipScale = clipThreshold > 0 && std::isfinite(htpNorm) && htpNorm > 0
+      ? float(std::min(1.0, double(clipThreshold) / (htpNorm + 1.0e-6))) : 1.0f;
+  const auto cpuClipped =
+      scaleLanguageParameters(cpuGradient.gradients, cpuClipScale);
+  const auto htpClipped =
+      scaleLanguageParameters(htpGradient.gradients, htpClipScale);
+  const int step = checkpoint.completedStep + 1;
+  const float c1 = float(1.0 / (1.0 - std::pow(.9, double(step))));
+  const float c2 = float(1.0 / (1.0 - std::pow(.999, double(step))));
+  const auto pathA = tiny_lm::adamUpdate(checkpoint.parameters, cpuClipped,
+      checkpoint.firstMoment, checkpoint.secondMoment, lr, .9f, .999f, 1e-8f, c1, c2);
+  const auto pathB = tiny_lm::adamUpdate(checkpoint.parameters, htpClipped,
+      checkpoint.firstMoment, checkpoint.secondMoment, lr, .9f, .999f, 1e-8f, c1, c2);
+  Params pathC, cM, cV, pathD, dM, dV;
+  AdamOptimizerOutputs rawC, rawD;
+  const bool optimizerOk = executeLanguageAdam(runtime, checkpoint.parameters,
+      cpuGradient.gradients, checkpoint.firstMoment, checkpoint.secondMoment, lr, step,
+      cpuClipScale, pathC, cM, cV, &rawC, error) && executeLanguageAdam(runtime,
+      checkpoint.parameters, htpGradient.gradients, checkpoint.firstMoment,
+      checkpoint.secondMoment, lr, step, htpClipScale, pathD, dM, dV, &rawD, error);
+  auditLateVector("two_by_two_cpu_gradient",
+                  flattenLanguageParameters(cpuGradient.gradients), report);
+  auditLateVector("two_by_two_htp_gradient",
+                  flattenLanguageParameters(htpGradient.gradients), report);
+  auditLateVector("two_by_two_cpu_clipped_gradient",
+                  flattenLanguageParameters(cpuClipped), report);
+  auditLateVector("two_by_two_htp_clipped_gradient",
+                  flattenLanguageParameters(htpClipped), report);
+  report << "two_by_two_checkpoint_seed=" << checkpoint.seed << '\n'
+         << "two_by_two_checkpoint_step=" << step << '\n'
+         << "two_by_two_cpu_htp_gradient_max_abs_error="
+         << maxParamError(cpuGradient.gradients, htpGradient.gradients) << '\n'
+         << "two_by_two_cpu_gradient_global_norm=" << cpuNorm << '\n'
+         << "two_by_two_htp_gradient_global_norm=" << htpNorm << '\n'
+         << "two_by_two_clip_threshold=" << clipThreshold << '\n'
+         << "two_by_two_cpu_clip_scale=" << cpuClipScale << '\n'
+         << "two_by_two_htp_clip_scale=" << htpClipScale << '\n'
+         << "two_by_two_clip_scale=" << htpClipScale << '\n'
+         << "two_by_two_beta1=0.9\ntwo_by_two_beta2=0.999\n"
+         << "two_by_two_epsilon=1e-8\ntwo_by_two_bias_correction_first=" << c1 << '\n'
+         << "two_by_two_bias_correction_second=" << c2 << '\n'
+         << "two_by_two_step_index=" << step << '\n'
+         << "two_by_two_clip_order=global_norm_then_gradient_scale_then_adam\n"
+         << "two_by_two_optimizer_execute_success=" << (optimizerOk ? "true" : "false") << '\n';
+  const std::array<std::tuple<const char *, const Params *, const Params *>, 4> paths{{
+      {"A_cpu_gradient_cpu_adam", &pathA.next, nullptr},
+      {"B_htp_gradient_cpu_adam", &pathB.next, nullptr},
+      {"C_cpu_gradient_htp_adam", &pathC, &pathA.next},
+      {"D_htp_gradient_htp_adam", &pathD, &pathB.next},
+  }};
+  std::array<bool, 4> pathFinite{};
+  size_t pathIndex = 0;
+  for (const auto &[name, actual, cpuReference] : paths) {
+    const auto flat = flattenLanguageParameters(*actual);
+    const auto audit = auditLateVector("two_by_two_" + std::string(name) + "_parameters", flat, report);
+    pathFinite[pathIndex++] = audit.allFinite;
+    report << "two_by_two_" << name << "_finite=" << (audit.allFinite ? "true" : "false") << '\n'
+           << "two_by_two_" << name << "_parameter_max_abs_error="
+           << (cpuReference ? maxParamError(*actual, *cpuReference) : 0) << '\n';
+  }
+  if (optimizerOk) {
+    report << "two_by_two_C_m_next_max_abs_error=" << maxParamError(cM, pathA.firstMoment) << '\n'
+           << "two_by_two_C_v_next_max_abs_error=" << maxParamError(cV, pathA.secondMoment) << '\n'
+           << "two_by_two_D_m_next_max_abs_error=" << maxParamError(dM, pathB.firstMoment) << '\n'
+           << "two_by_two_D_v_next_max_abs_error=" << maxParamError(dV, pathB.secondMoment) << '\n';
+    auditLateVector("two_by_two_C_adam_sqrt_v", rawC.secondRoot, report);
+    auditLateVector("two_by_two_C_adam_denominator", rawC.denominator, report);
+    auditLateVector("two_by_two_C_adam_update", rawC.scaledUpdate, report);
+    auditLateVector("two_by_two_D_adam_sqrt_v", rawD.secondRoot, report);
+    auditLateVector("two_by_two_D_adam_denominator", rawD.denominator, report);
+    auditLateVector("two_by_two_D_adam_update", rawD.scaledUpdate, report);
+  }
+  std::vector<float> bad;
+  const auto firstBad = firstBadLateStage(htpGradient, optimizerOk ? &rawD : nullptr, &bad);
+  report << "two_by_two_first_bad_stage=" << firstBad << '\n'
+         << "two_by_two_first_bad_producer_node=" << lateProducerNode(firstBad) << '\n';
+  if (firstBad != "NONE") {
+    const auto badAudit =
+        auditLateVector("two_by_two_first_bad", bad, report);
+    reportLateTapBoundary("two_by_two_first_bad", htpGradient, firstBad,
+                          badAudit, report);
+  }
+  return optimizerOk && pathFinite[0] && !pathFinite[1] &&
+         pathFinite[2] && !pathFinite[3] &&
+         firstBad == "tap_SQUARE2";
+}
+
+bool reportPostFixCheckpointReplay(
+    const tiny_lm::Config &config,
+    const LateNonfiniteCheckpoint &checkpoint, float lr,
+    float clipThreshold, std::ostringstream &report, std::string &error) {
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  options.tinyTransformerCenteredScale = 8.0f;
+  runtime.setOptions(options);
+  const auto parameterCount =
+      uint32_t(flattenLanguageParameters(checkpoint.parameters).size());
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::ALL_INTERNAL) ||
+      !runtime.prepareAdamOptimizer(parameterCount, error))
+    return false;
+
+  const int step = checkpoint.completedStep + 1;
+  const float c1 = float(1.0 / (1.0 - std::pow(.9, double(step))));
+  const float c2 = float(1.0 / (1.0 - std::pow(.999, double(step))));
+  const auto cpuGradient = tiny_lm::forwardBackward(
+      config, checkpoint.input, checkpoint.target, checkpoint.parameters,
+      0.0f);
+  const double cpuNorm = gradientNorm(cpuGradient.gradients);
+  const float cpuScale =
+      clipThreshold > 0 && std::isfinite(cpuNorm) && cpuNorm > 0
+          ? float(std::min(1.0,
+                           double(clipThreshold) / (cpuNorm + 1.0e-6)))
+          : 1.0f;
+  const auto cpuClipped =
+      scaleLanguageParameters(cpuGradient.gradients, cpuScale);
+  const auto pathA = tiny_lm::adamUpdate(
+      checkpoint.parameters, cpuClipped, checkpoint.firstMoment,
+      checkpoint.secondMoment, lr, .9f, .999f, 1e-8f, c1, c2);
+
+  bool allFinite = true, deterministic = true;
+  std::string firstSignature;
+  TinyTransformerTrainingOutputs representativeGradient;
+  Params representativeNext, representativeM, representativeV;
+  for (int replay = 0; replay < 100; ++replay) {
+    TinyTransformerTrainingOutputs gradient;
+    if (!runtime.executeTinyTransformerTraining(
+            checkpoint.input, checkpoint.target, checkpoint.parameters, 0.0f,
+            gradient, error)) {
+      allFinite = false;
+      return false;
+    }
+    const double norm = gradientNorm(gradient.gradients);
+    const float scale =
+        clipThreshold > 0 && std::isfinite(norm) && norm > 0
+            ? float(std::min(1.0, double(clipThreshold) / (norm + 1.0e-6)))
+            : 1.0f;
+    Params next, nextM, nextV;
+    AdamOptimizerOutputs adam;
+    if (!executeLanguageAdam(
+            runtime, checkpoint.parameters, gradient.gradients,
+            checkpoint.firstMoment, checkpoint.secondMoment, lr, step, scale,
+            next, nextM, nextV, &adam, error)) {
+      allFinite = false;
+      return false;
+    }
+    std::vector<float> bad;
+    const auto badStage = firstBadLateStage(gradient, &adam, &bad);
+    const std::string signature =
+        rawFloatSha256(gradient.logits) + ":" +
+        rawFloatSha256(adam.weightNext);
+    if (replay == 0) {
+      firstSignature = signature;
+      representativeGradient = gradient;
+      representativeNext = next;
+      representativeM = nextM;
+      representativeV = nextV;
+    } else {
+      deterministic = deterministic && signature == firstSignature;
+    }
+    allFinite =
+        allFinite && badStage == "NONE" && std::isfinite(gradient.loss);
+  }
+
+  const double htpNorm = gradientNorm(representativeGradient.gradients);
+  const float htpScale =
+      clipThreshold > 0 && std::isfinite(htpNorm) && htpNorm > 0
+          ? float(std::min(1.0,
+                           double(clipThreshold) / (htpNorm + 1.0e-6)))
+          : 1.0f;
+  const auto pathB = tiny_lm::adamUpdate(
+      checkpoint.parameters,
+      scaleLanguageParameters(representativeGradient.gradients, htpScale),
+      checkpoint.firstMoment, checkpoint.secondMoment, lr, .9f, .999f,
+      1e-8f, c1, c2);
+  Params pathC, cM, cV;
+  AdamOptimizerOutputs rawC;
+  if (!executeLanguageAdam(
+          runtime, checkpoint.parameters, cpuGradient.gradients,
+          checkpoint.firstMoment, checkpoint.secondMoment, lr, step, cpuScale,
+          pathC, cM, cV, &rawC, error))
+    return false;
+  report << "post_fix_same_checkpoint_seed=" << checkpoint.seed << '\n'
+         << "post_fix_same_checkpoint_step=" << step << '\n'
+         << "post_fix_same_checkpoint_centered_scale=8\n"
+         << "post_fix_same_checkpoint_replay_count=100\n"
+         << "post_fix_same_checkpoint_all_finite="
+         << (allFinite ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_deterministic="
+         << (deterministic ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_signature=" << firstSignature << '\n'
+         << "post_fix_same_checkpoint_cpu_htp_gradient_max_abs_error="
+         << maxParamError(cpuGradient.gradients,
+                          representativeGradient.gradients)
+         << '\n'
+         << "post_fix_same_checkpoint_cpu_gradient_norm="
+         << cpuNorm << '\n'
+         << "post_fix_same_checkpoint_htp_gradient_norm=" << htpNorm << '\n'
+         << "post_fix_same_checkpoint_cpu_clip_scale=" << cpuScale << '\n'
+         << "post_fix_same_checkpoint_htp_clip_scale=" << htpScale << '\n'
+         << "post_fix_same_checkpoint_path_a_finite="
+         << (finiteParams(pathA.next) ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_path_b_finite="
+         << (finiteParams(pathB.next) ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_path_c_finite="
+         << (finiteParams(pathC) ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_path_d_finite="
+         << (finiteParams(representativeNext) ? "true" : "false") << '\n'
+         << "post_fix_same_checkpoint_path_c_parameter_max_abs_error="
+         << maxParamError(pathC, pathA.next) << '\n'
+         << "post_fix_same_checkpoint_path_d_parameter_max_abs_error="
+         << maxParamError(representativeNext, pathB.next) << '\n'
+         << "post_fix_same_checkpoint_path_c_m_max_abs_error="
+         << maxParamError(cM, pathA.firstMoment) << '\n'
+         << "post_fix_same_checkpoint_path_c_v_max_abs_error="
+         << maxParamError(cV, pathA.secondMoment) << '\n'
+         << "post_fix_same_checkpoint_path_d_m_max_abs_error="
+         << maxParamError(representativeM, pathB.firstMoment) << '\n'
+         << "post_fix_same_checkpoint_path_d_v_max_abs_error="
+         << maxParamError(representativeV, pathB.secondMoment) << '\n'
+         << "post_fix_same_checkpoint_qnn_execute_count="
+         << runtime.metrics().graphExecuteCount << '\n';
+  return allFinite && deterministic && finiteParams(pathA.next) &&
+         finiteParams(pathB.next) && finiteParams(pathC) &&
+         finiteParams(representativeNext);
+}
+
+std::string runLateNonfiniteExperiment(bool diagnostic) {
+  constexpr int kSeedCount = 5;
+  const int steps = diagnostic ? 1000 : 320;
+  const float lr = diagnostic ? .0003f : .003f;
+  const float clipThreshold = diagnostic ? 5.0f : 0.0f;
+  tiny_lm::Config config;
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  // The diagnostic deliberately reconstructs the original scale-64
+  // trajectory. Its captured checkpoint is then replayed below by a separate
+  // scale-8 runtime, giving a same-state pre/post-fix comparison.
+  options.tinyTransformerCenteredScale = diagnostic ? 64.0f : 8.0f;
+  runtime.setOptions(options);
+  std::string error;
+  const auto shape = tiny_lm::initialParameters(config, 1);
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(config.tokens, config.dimension,
+          config.feedForwardDimension, config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          diagnostic ? TinyTransformerTrainingTapSet::ALL_INTERNAL
+                     : TinyTransformerTrainingTapSet::NONE) ||
+      !runtime.prepareAdamOptimizer(uint32_t(flattenLanguageParameters(shape).size()), error))
+    return failure("late_nonfinite_prepare", error, runtime);
+  std::ostringstream report;
+  report << std::setprecision(10) << "TINY_LANGUAGE_MODEL\ntest=adam_late_nonfinite_"
+         << (diagnostic ? "diagnostic" : "baseline")
+         << "\nstatus=SUCCESS\noptimizer=ADAM\nlearning_rate=" << lr
+         << "\nsteps=" << steps << "\nseeds=" << kSeedCount
+         << "\nclip_threshold=" << (diagnostic ? "5" : "NONE")
+         << "\ntransformer_centered_scale="
+         << options.tinyTransformerCenteredScale
+         << "\nclipping=" << (diagnostic ? "global_norm_5" : "disabled")
+         << "\nbeta1=0.9\nbeta2=0.999\nepsilon=1e-8\n"
+          << "experiment_outcome_nonfinite_is_not_harness_failure=true\n"
+          << "checkpoint_storage=PRIVATE_DEVICE_REPORT_ONLY\n"
+          << "checkpoint_raw_fields_emitted=PRIVATE_DEVICE_REPORT_ONLY\n";
+  int finiteSeeds = 0, failingCheckpoints = 0;
+  bool fixedReplayChecks = true;
+  bool twoByTwoChecks = true;
+  bool postFixReplayChecks = true;
+  for (int seed = 1; seed <= kSeedCount; ++seed) {
+    auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
+    auto htpM = zeroLanguageParameters(htp), htpV = htpM, cpuM = htpM, cpuV = htpM;
+    LanguageQuality initial;
+    if (!htpLanguageQuality(runtime, config, htp, 1, initial, error))
+      return failure("late_nonfinite_initial", error, runtime);
+    int lastFinite = 0, firstNonfinite = -1;
+    std::string firstTensor = "NONE";
+    LateNonfiniteCheckpoint checkpoint;
+    double lastGradientNorm = 0, lastParameterNorm = paramNorm(htp);
+    double lastDenominatorNorm = 0, lastDenominatorMinimum = 0;
+    float lastLoss = initial.loss, lastAccuracy = initial.accuracy;
+    bool executeOk = true;
+    const auto seedExecuteStart = runtime.metrics().graphExecuteCount;
+    for (int step = 1; step <= steps; ++step) {
+      const auto batch = languageBatch(config, uint32_t((step - 1) % 4));
+      LateNonfiniteCheckpoint before{seed, step - 1, htp, htpM, htpV, batch.first, batch.second};
+      const auto cpuGradient = tiny_lm::forwardBackward(config, batch.first, batch.second, cpu, 0.0f);
+      const float c1 = float(1.0 / (1.0 - std::pow(.9, double(step))));
+      const float c2 = float(1.0 / (1.0 - std::pow(.999, double(step))));
+      const auto cpuUpdate = tiny_lm::adamUpdate(cpu, cpuGradient.gradients, cpuM, cpuV,
+          lr, .9f, .999f, 1e-8f, c1, c2);
+      TinyTransformerTrainingOutputs gradient;
+      if (!runtime.executeTinyTransformerTraining(batch.first, batch.second, htp, 0.0f,
+                                                   gradient, error)) {
+        executeOk = false;
+        firstNonfinite = step;
+        firstTensor = "qnn_execute";
+        checkpoint = std::move(before);
+        break;
+      }
+      lastLoss = gradient.loss;
+      lastAccuracy = tokenAccuracy(gradient.logits, batch.second, config.tokens, config.vocabularySize);
+      lastGradientNorm = gradientNorm(gradient.gradients);
+      const float clipScale = clipThreshold > 0 && std::isfinite(lastGradientNorm) && lastGradientNorm > 0
+          ? float(std::min(1.0, double(clipThreshold) / (lastGradientNorm + 1.0e-6))) : 1.0f;
+      Params next, nextM, nextV;
+      AdamOptimizerOutputs raw;
+      if (!executeLanguageAdam(runtime, htp, gradient.gradients, htpM, htpV, lr, step,
+                               clipScale, next, nextM, nextV, &raw, error)) {
+        executeOk = false;
+        firstNonfinite = step;
+        firstTensor = "qnn_adam_execute";
+        checkpoint = std::move(before);
+        break;
+      }
+      // Preserve the attempted optimizer evidence even when this exact step
+      // is the first non-finite one.
+      lastDenominatorNorm = vectorNorm(raw.denominator);
+      lastDenominatorMinimum = raw.denominator.empty() ? 0 :
+          *std::min_element(raw.denominator.begin(), raw.denominator.end());
+      std::vector<float> badValues;
+      const auto bad = firstBadLateStage(gradient, &raw, &badValues);
+      if (bad != "NONE" || !std::isfinite(gradient.loss)) {
+        firstNonfinite = step;
+        firstTensor = bad == "NONE" ? "loss" : bad;
+        checkpoint = std::move(before);
+        report << "seed_" << seed << "_first_bad_producer_node="
+               << lateProducerNode(firstTensor) << '\n';
+        if (!badValues.empty()) {
+          const std::string prefix =
+              "seed_" + std::to_string(seed) + "_first_bad";
+          const auto badAudit = auditLateVector(prefix, badValues, report);
+          reportLateTapBoundary(prefix, gradient, firstTensor, badAudit,
+                                report);
+        }
+        break;
+      }
+      htp = std::move(next); htpM = std::move(nextM); htpV = std::move(nextV);
+      cpu = cpuUpdate.next; cpuM = cpuUpdate.firstMoment; cpuV = cpuUpdate.secondMoment;
+      lastFinite = step;
+      lastParameterNorm = paramNorm(htp);
+    }
+    report << "seed_" << seed << "_initial_loss=" << initial.loss << '\n'
+           << "seed_" << seed << "_initial_accuracy=" << initial.accuracy << '\n'
+           << "seed_" << seed << "_final_loss=" << lastLoss << '\n'
+           << "seed_" << seed << "_final_accuracy=" << lastAccuracy << '\n'
+           << "seed_" << seed << "_last_finite_step=" << lastFinite << '\n'
+           << "seed_" << seed << "_first_nonfinite_step=" << firstNonfinite << '\n'
+           << "seed_" << seed << "_first_nonfinite_tensor=" << firstTensor << '\n'
+           << "seed_" << seed << "_gradient_norm=" << lastGradientNorm << '\n'
+           << "seed_" << seed << "_adam_m_norm=" << paramNorm(htpM) << '\n'
+           << "seed_" << seed << "_adam_v_norm=" << paramNorm(htpV) << '\n'
+           << "seed_" << seed << "_adam_denominator_norm=" << lastDenominatorNorm << '\n'
+           << "seed_" << seed << "_adam_denominator_min=" << lastDenominatorMinimum << '\n'
+           << "seed_" << seed << "_parameter_norm=" << lastParameterNorm << '\n'
+           << "seed_" << seed << "_qnn_execute_result=" << (executeOk ? "SUCCESS" : "FAILED") << '\n'
+           << "seed_" << seed << "_qnn_execute_count="
+           << (runtime.metrics().graphExecuteCount - seedExecuteStart) << '\n'
+           << "seed_" << seed << "_cpu_control_backend=HOST_CPP\n"
+           << "seed_" << seed << "_cpu_control_all_steps_finite="
+           << (finiteParams(cpu) && finiteParams(cpuM) && finiteParams(cpuV) ? "true" : "false") << '\n'
+           << "seed_" << seed << "_cpu_control_parameter_norm=" << paramNorm(cpu) << '\n';
+    if (firstNonfinite < 0) ++finiteSeeds;
+    if (diagnostic && firstNonfinite > 0) {
+      ++failingCheckpoints;
+      const std::string checkpointPrefix = "seed_" + std::to_string(seed) + "_checkpoint";
+      reportLateCheckpoint(checkpointPrefix, checkpoint, lr, clipThreshold, report);
+      std::string firstSignature;
+      bool stable = true;
+      int completedReplays = 0;
+      for (int replay = 0; replay < 100; ++replay) {
+        TinyTransformerTrainingOutputs replayGradient;
+        if (!runtime.executeTinyTransformerTraining(checkpoint.input, checkpoint.target,
+              checkpoint.parameters, 0.0f, replayGradient, error)) { stable = false; break; }
+        const double replayNorm = gradientNorm(replayGradient.gradients);
+        const float replayScale = std::isfinite(replayNorm) && replayNorm > 0
+            ? float(std::min(1.0, 5.0 / (replayNorm + 1.0e-6))) : 1.0f;
+        Params replayNext, replayM, replayV;
+        AdamOptimizerOutputs replayAdam;
+        if (!executeLanguageAdam(runtime, checkpoint.parameters, replayGradient.gradients,
+              checkpoint.firstMoment, checkpoint.secondMoment, lr, checkpoint.completedStep + 1,
+              replayScale, replayNext, replayM, replayV, &replayAdam, error)) { stable = false; break; }
+        std::vector<float> replayBad;
+        const auto replayStage = firstBadLateStage(replayGradient, &replayAdam, &replayBad);
+        size_t replayBadIndex = std::numeric_limits<size_t>::max();
+        for (size_t index = 0; index < replayBad.size(); ++index)
+          if (!std::isfinite(replayBad[index])) { replayBadIndex = index; break; }
+        std::uint32_t replayBadBits = 0;
+        if (replayBadIndex != std::numeric_limits<size_t>::max())
+          std::memcpy(&replayBadBits, &replayBad[replayBadIndex], sizeof(replayBadBits));
+        std::ostringstream signatureStream;
+        signatureStream << replayStage << ":raw=" << rawFloatSha256(replayBad)
+                        << ":canonical=" << canonicalFloatSha256(replayBad)
+                        << ":index=" << (replayBadIndex == std::numeric_limits<size_t>::max()
+                              ? -1 : static_cast<long long>(replayBadIndex))
+                        << ":value_bits=0x" << std::hex << replayBadBits;
+        const std::string signature = signatureStream.str();
+        stable = stable && replayStage == firstTensor &&
+                 replayStage != "NONE" &&
+                 replayBadIndex != std::numeric_limits<size_t>::max();
+        if (replay == 0) firstSignature = signature;
+        else stable = stable && signature == firstSignature;
+        ++completedReplays;
+      }
+      stable = stable && completedReplays == 100;
+      fixedReplayChecks = fixedReplayChecks && stable;
+      report << "seed_" << seed << "_fixed_replay_count=" << completedReplays
+             << "\nseed_" << seed
+             << "_fixed_replay_signature=" << firstSignature << '\n'
+             << "seed_" << seed << "_fixed_replay_reproducible=" << (stable ? "true" : "false") << '\n';
+      twoByTwoChecks = reportTwoByTwo(
+          runtime, config, checkpoint, lr, clipThreshold, report, error) &&
+          twoByTwoChecks;
+      if (!error.empty()) return failure("late_nonfinite_two_by_two", error, runtime);
+      postFixReplayChecks = reportPostFixCheckpointReplay(
+          config, checkpoint, lr, clipThreshold, report, error) &&
+          postFixReplayChecks;
+      if (!error.empty())
+        return failure("late_nonfinite_post_fix_replay", error, runtime);
+    }
+  }
+  if (diagnostic &&
+      (finiteSeeds != 0 || failingCheckpoints != kSeedCount ||
+       !fixedReplayChecks || !twoByTwoChecks || !postFixReplayChecks)) {
+    return failure(
+        "late_nonfinite_diagnostic_assertions",
+        "Expected five deterministic legacy failures, A/C finite and B/D "
+        "non-finite path isolation, and five finite deterministic post-fix "
+        "same-checkpoint replays.",
+        runtime);
+  }
+  if (!diagnostic && finiteSeeds != kSeedCount) {
+    return failure("late_nonfinite_baseline_assertions",
+                   "Expected all five post-fix seeds to remain finite.",
+                   runtime);
+  }
+  report << "finite_seed_count=" << finiteSeeds << "/5\n"
+         << "htp_finite_seed_count=" << finiteSeeds << "/5\n"
+         << "failing_checkpoint_count=" << failingCheckpoints << '\n'
+         << "cpu_optimizer_formula=adam_m_v_bias_correction_epsilon_1e-8\n"
+         << "htp_optimizer_formula=adam_m_v_bias_correction_epsilon_1e-8\n"
+         << "cpu_fallback=false\n" << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+
 } // namespace
 std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
@@ -2473,6 +3153,10 @@ std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
     return languageModelAdam(false, 2, false);
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_INFERENCE)
     return languageModelAdam(false, 2, true);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE)
+    return runLateNonfiniteExperiment(false);
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC)
+    return runLateNonfiniteExperiment(true);
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn

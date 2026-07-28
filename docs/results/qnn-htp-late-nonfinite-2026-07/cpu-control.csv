@@ -1,0 +1,6 @@
+"backend","configuration","learning_rate","steps","clipping","seed","initial_train_loss","final_train_loss","initial_eval_loss","final_eval_loss","initial_train_accuracy","final_train_accuracy","initial_eval_accuracy","final_eval_accuracy","finite_through_step","first_nonfinite_step","deterministic_replay"
+"CPU","adam_lr0.003_s320_no_clip","0.003","320","disabled","1","3.44521606","0.00277431673","3.444429696","0.1674873412","0","1","0","0.96875","320","NONE","true"
+"CPU","adam_lr0.003_s320_no_clip","0.003","320","disabled","2","3.470889747","0.004909123352","3.475229263","0.1890414425","0","1","0","0.96875","320","NONE","true"
+"CPU","adam_lr0.003_s320_no_clip","0.003","320","disabled","3","3.468191445","0.002738176612","3.462803364","0.1699577152","0","1","0.03125","0.9375","320","NONE","true"
+"CPU","adam_lr0.003_s320_no_clip","0.003","320","disabled","4","3.461746573","0.4379360076","3.462248445","0.2480120268","0","0.9375","0","0.90625","320","NONE","true"
+"CPU","adam_lr0.003_s320_no_clip","0.003","320","disabled","5","3.465836406","0.009619960212","3.464650035","1.678232118","0","1","0","0.84375","320","NONE","true"

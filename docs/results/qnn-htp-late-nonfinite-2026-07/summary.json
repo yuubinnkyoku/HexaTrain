@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "classification": "HTP_BACKWARD_NUMERIC_ERROR",
+  "root_cause": "Training-graph LayerNorm2 centered scale 64 crosses the HTP FP16-like multiplication limit when a finite centered activation reaches about 257; the following square becomes positive infinity.",
+  "fix": "Reduce the application centered scale from 64 to 8.",
+  "pre_fix": {
+    "lr_003_htp_finite_seeds": "0/5",
+    "lr_003_cpu_control_finite_seeds": "5/5",
+    "lr_0003_finite_seeds": "0/5",
+    "first_bad_tensor": "tap_SQUARE2",
+    "producer_node": "tt_ln2_square"
+  },
+  "post_fix": {
+    "lr_003_finite_seeds": "5/5",
+    "lr_0003_finite_seeds": "5/5",
+    "same_checkpoint_replay_finite": "500/500",
+    "deterministic": true
+  },
+  "optimizer_formula": {
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "epsilon": "1e-8",
+    "bias_correction": "CPU",
+    "clip_order": "global_norm_then_gradient_scale_then_adam",
+    "formula_match": true
+  },
+  "caveat": "At legacy accumulated HTP states, path C/D parameter maximum differences can be large while m/v differences remain small and all paths are finite after the fix; numerical parity remains an open follow-up."
+}

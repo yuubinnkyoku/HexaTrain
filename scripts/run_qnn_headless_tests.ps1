@@ -16,7 +16,7 @@ param(
         "qnn-graph-order-dembedding-dembedding-dembedding",
         "qnn-tap-backward-regions", "qnn-tap-layernorm1", "qnn-tap-dscores-only",
         "qnn-tap-dprob-dscores",
-        "qnn-adam-diagnostic"
+        "qnn-adam-diagnostic", "qnn-adam-late-baseline", "qnn-adam-late-diagnostic"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",

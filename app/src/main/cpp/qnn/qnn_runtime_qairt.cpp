@@ -17,6 +17,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <list>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <utility>
@@ -395,7 +396,12 @@ struct Runtime::Impl {
         TinyTransformerTrainingTapSet tapSet =
             TinyTransformerTrainingTapSet::NONE;
         float scaleData = 1.0f, epsilonScaledData = 1.0e-5f;
-        float centeredScaleData = 64.0f, dimensionData = 1.0f;
+        // The HTP ElementWiseMultiply kernel overflows near the FP16 square
+        // limit even though these tensors are declared FP32.  A scale of 64
+        // made ordinary late-training centered values around +/-4 become
+        // +/-256 and produced Inf in tt_ln2_square.  Eight retains the
+        // low-variance precision aid while leaving an 8x measured headroom.
+        float centeredScaleData = 8.0f, dimensionData = 1.0f;
         float inverseDimensionData = 1.0f, gradientScaleData = 1.0f;
         std::vector<float> maskData, zeroFfData, positionData;
     } tinyTransformerTraining;

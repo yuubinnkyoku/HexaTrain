@@ -144,6 +144,8 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1: return "QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY: return "QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES: return "QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC";
         default: return "UNKNOWN";
     }
 }
@@ -249,6 +251,8 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_LAYERNORM1:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DSCORES_ONLY:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_TAP_DPROB_DSCORES:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC:
             return qnn::runTinyTransformerTrainingExperiment(mode);
         default: {
             const std::string report =
