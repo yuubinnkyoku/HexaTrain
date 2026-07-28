@@ -12,3 +12,5 @@
 /diagnostics/*.log
 /diagnostics/*.txt
 *.iml
+# Local agent state
+.omo/
