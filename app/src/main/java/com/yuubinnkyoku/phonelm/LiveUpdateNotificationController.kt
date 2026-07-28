@@ -11,7 +11,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.provider.Settings
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -48,11 +47,9 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
     }
 
     fun openPromotionSettings(): Boolean {
-        if (Build.VERSION.SDK_INT < 36) return false
+        if (!supportsQpr2Promotion()) return false
         return runCatching {
-            // API 36's locally installed stub predates the named constant. The value is the
-            // public Android 16 action documented for this feature, not an OEM action.
-            appContext.startActivity(Intent(ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS).apply {
+            appContext.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS).apply {
                 data = Uri.parse("package:${appContext.packageName}")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             })
@@ -85,10 +82,8 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
             builder.setStyle(Notification.ProgressStyle()
                 .setProgress(snapshot.percent ?: 0)
                 .setProgressIndeterminate(snapshot.percent == null))
-            if (!finished && manager.canPostPromotedNotifications()) {
-                // Public Android 16 EXTRA_REQUEST_PROMOTED_ONGOING.  Use the documented
-                // extra so this source remains compatible with the installed API 36 stub.
-                builder.addExtras(Bundle().apply { putBoolean(EXTRA_REQUEST_PROMOTED_ONGOING, true) })
+            if (!finished && supportsQpr2Promotion() && manager.canPostPromotedNotifications()) {
+                builder.setRequestPromotedOngoing(true)
             }
             builder.setShortCriticalText(snapshot.chipText())
         } else {
@@ -102,6 +97,9 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
 
     private fun notificationsAllowed() = Build.VERSION.SDK_INT < 33 ||
         appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    private fun supportsQpr2Promotion() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA &&
+        Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.BAKLAVA_1
 
     private fun ensureChannel() {
         manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "PhoneLM runs", NotificationManager.IMPORTANCE_LOW))
@@ -136,8 +134,6 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
     companion object {
         private const val CHANNEL_ID = "phonelm_runs"
         private const val PREFS = "phonelm_live_update"
-        private const val ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS = "android.settings.MANAGE_APP_PROMOTED_NOTIFICATIONS"
-        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
         const val EXTRA_RUN_ID = "run_id"
     }
 }

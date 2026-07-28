@@ -105,9 +105,11 @@ val stageQnnJni by tasks.registering(Sync::class) {
 
 android {
     namespace = "com.yuubinnkyoku.phonelm"
-    compileSdk = 36
-    // Android 16 QPR APIs provide the formal promoted-ongoing request API.
-    compileSdkExtension = 1
+    compileSdk {
+        version = release(36) {
+            minorApiLevel = 1
+        }
+    }
     // Match the Android NDK declared by the selected QAIRT distribution.
     ndkVersion = androidNdkVersion
 
