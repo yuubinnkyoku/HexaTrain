@@ -549,6 +549,14 @@ std::pair<std::vector<float>, std::vector<float>> languageBatch(
   return {tiny_lm::oneHot(input, config.vocabularySize),
           tiny_lm::oneHot(target, config.vocabularySize)};
 }
+enum class LanguageRolloutContext { ORACLE, FREE_RUNNING };
+void advanceLanguageContext(std::vector<uint32_t> &context,
+                            uint32_t expected, uint32_t predicted,
+                            LanguageRolloutContext mode) {
+  context.erase(context.begin());
+  context.push_back(mode == LanguageRolloutContext::ORACLE ? expected
+                                                           : predicted);
+}
 std::string crossEntropyMicrotest() {
   constexpr uint32_t rows = 6, vocabulary = 8;
   std::vector<float> logits{
@@ -1291,12 +1299,17 @@ struct AdamCandidate {
   int steps;
   float lr;
   float clipThreshold;
+  bool gradientClipping;
 };
 AdamCandidate adamCandidate(int candidate) {
+  if (candidate == 3)
+    return AdamCandidate{"post_fix_adam_lr0.003_no_clip_steps320", 320,
+                         .003f, 0.0f, false};
   return candidate == 2
       ? AdamCandidate{"adam_lr0.0003_clip10_steps1000", 1000, .0003f,
-                      10.0f}
-      : AdamCandidate{"adam_lr0.0003_clip5_steps1000", 1000, .0003f, 5.0f};
+                      10.0f, true}
+      : AdamCandidate{"adam_lr0.0003_clip5_steps1000", 1000, .0003f, 5.0f,
+                      true};
 }
 bool executeLanguageAdam(Runtime &runtime, const Params &current,
                          const Params &gradient, const Params &firstMoment,
@@ -1327,6 +1340,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               bool inferenceOnly) {
   tiny_lm::Config config;
   const auto selected = adamCandidate(candidate);
+  const bool formalPostFix = candidate == 3;
   Runtime runtime;
   RuntimeOptions options;
   options.captureQnnCallback = false;
@@ -1682,46 +1696,68 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   std::ostringstream trajectory;
   trajectory << std::setprecision(10);
   bool allLoss = true, allAccuracy = true, nan = false;
+  bool allFormalCpuFinite = true;
   int accuracy75 = 0;
   int clippedSteps = 0;
   double minimumClipScale = 1.0, maximumPreclipGradientNorm = 0.0;
   double worstParameter = 0, worstFirst = 0, worstSecond = 0;
   std::vector<double> reductions;
   std::vector<Params> inferenceParameters;
+  std::vector<Params> cpuInferenceParameters;
+  std::vector<double> formalTrainingStepLatencyUs;
   const int lastSeed = 5;
   for (int seed = 1; seed <= lastSeed; ++seed) {
+    const auto seedExecuteStart = runtime.metrics().graphExecuteCount;
     bool seedAllStepsFinite = true;
+    bool cpuAllStepsFinite = true;
     int seedCompletedSteps = 0;
+    double finalGradientNorm = 0.0;
+    double finalCpuGradientNorm = 0.0;
     auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
     auto htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
     auto cpuFirst = htpFirst, cpuSecond = htpFirst;
     LanguageQuality initial;
     if (!htpLanguageQuality(runtime, config, htp, 1, initial, error))
       return failure("adam_initial_eval", error, runtime);
+    LanguageQuality initialCpu;
+    if (formalPostFix)
+      initialCpu = cpuLanguageQuality(config, cpu, 1);
     trajectory << "seed_" << seed << "_initial_loss=" << initial.loss
                << "\nseed_" << seed << "_initial_accuracy=" << initial.accuracy
                << '\n';
     for (int step = 1; step <= selected.steps; ++step) {
       const uint32_t pattern = uint32_t((step - 1) % 4);
       const uint32_t phase =
-          inferenceOnly ? uint32_t((step - 1) / 4) % 2 : 0;
+          inferenceOnly && !formalPostFix ? uint32_t((step - 1) / 4) % 2 : 0;
       const auto batch = languageBatch(config, pattern, phase);
       const auto cpuGradient = tiny_lm::forwardBackward(
           config, batch.first, batch.second, cpu, 0.0f);
+      finalCpuGradientNorm = gradientNorm(cpuGradient.gradients);
       const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
       const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
       const auto cpuUpdate = tiny_lm::adamUpdate(
           cpu, cpuGradient.gradients, cpuFirst, cpuSecond, selected.lr, .9f,
           .999f, 1e-8f, c1, c2);
+      if (formalPostFix)
+        cpuAllStepsFinite =
+            cpuAllStepsFinite && std::isfinite(cpuGradient.loss) &&
+            finiteParams(cpuGradient.gradients) &&
+            finiteParams(cpuUpdate.next) &&
+            finiteParams(cpuUpdate.firstMoment) &&
+            finiteParams(cpuUpdate.secondMoment);
       TinyTransformerTrainingOutputs htpGradient;
+      const auto formalTrainingStepStarted =
+          std::chrono::steady_clock::now();
       if (!runtime.executeTinyTransformerTraining(
               batch.first, batch.second, htp, 0.0f, htpGradient, error))
         return failure("adam_gradient_step", error, runtime);
       Params htpNext, firstNext, secondNext;
       AdamOptimizerOutputs rawHtpUpdate;
       const double preclipGradientNorm = gradientNorm(htpGradient.gradients);
+      finalGradientNorm = preclipGradientNorm;
       const float clipScale =
-          std::isfinite(preclipGradientNorm) && preclipGradientNorm > 0
+          selected.gradientClipping && std::isfinite(preclipGradientNorm) &&
+                  preclipGradientNorm > 0
               ? float(std::min(1.0, double(selected.clipThreshold) /
                                         (preclipGradientNorm + 1.0e-6)))
               : 1.0f;
@@ -1733,6 +1769,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                                htpSecond, selected.lr, step, clipScale, htpNext,
                                firstNext, secondNext, &rawHtpUpdate, error))
         return failure("adam_update_step", error, runtime);
+      if (formalPostFix)
+        formalTrainingStepLatencyUs.push_back(
+            std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - formalTrainingStepStarted)
+                .count());
       if (step == 1 || step == 2 || step == 5 || step == 10 || step == 20 ||
            step == 50 || step == 100 || step == 200 || step == 320 ||
            step == 640 || step == 1000 ||
@@ -1825,6 +1866,32 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     const double parameterError = maxParamError(cpu, htp);
     const double firstError = maxParamError(cpuFirst, htpFirst);
     const double secondError = maxParamError(cpuSecond, htpSecond);
+    const auto finalParameters = flattenLanguageParameters(htp);
+    const auto finalFirstMoment = flattenLanguageParameters(htpFirst);
+    const auto finalSecondMoment = flattenLanguageParameters(htpSecond);
+    const auto finalCpuParameters = flattenLanguageParameters(cpu);
+    const auto finalCpuFirstMoment = flattenLanguageParameters(cpuFirst);
+    const auto finalCpuSecondMoment = flattenLanguageParameters(cpuSecond);
+    const size_t seedNonfiniteCount =
+        std::count_if(finalParameters.begin(), finalParameters.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::count_if(finalFirstMoment.begin(), finalFirstMoment.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::count_if(finalSecondMoment.begin(), finalSecondMoment.end(),
+                      [](float value) { return !std::isfinite(value); });
+    const size_t cpuNonfiniteCount =
+        std::count_if(finalCpuParameters.begin(), finalCpuParameters.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::count_if(finalCpuFirstMoment.begin(), finalCpuFirstMoment.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::count_if(finalCpuSecondMoment.begin(), finalCpuSecondMoment.end(),
+                      [](float value) { return !std::isfinite(value); });
+    cpuAllStepsFinite =
+        cpuAllStepsFinite && cpuNonfiniteCount == 0 &&
+        std::isfinite(initialCpu.loss) && std::isfinite(initialCpu.accuracy) &&
+        std::isfinite(cpuFinal.loss) && std::isfinite(cpuFinal.accuracy);
+    allFormalCpuFinite = allFormalCpuFinite && cpuAllStepsFinite;
+    if (formalPostFix) nan = nan || !cpuAllStepsFinite;
     reductions.push_back(reduction);
     accuracy75 += final.accuracy >= .75;
     allLoss = allLoss && final.loss < initial.loss;
@@ -1850,12 +1917,51 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                << "\nseed_" << seed << "_cpu_final_accuracy="
                << cpuFinal.accuracy << "\nseed_" << seed
                << "_cpu_htp_parameter_max_abs_difference=" << parameterError
+               << "\nseed_" << seed << "_final_gradient_l2_norm="
+               << finalGradientNorm << "\nseed_" << seed
+               << "_final_parameter_l2_norm=" << paramNorm(htp)
+               << "\nseed_" << seed << "_final_parameter_canonical_hash="
+               << canonicalFloatSha256(finalParameters) << "\nseed_" << seed
+               << "_nonfinite_count=" << seedNonfiniteCount << "\nseed_"
+               << seed << "_qnn_execute_count="
+               << (runtime.metrics().graphExecuteCount - seedExecuteStart)
+               << "\nseed_" << seed << "_qnn_nonzero_return_count=0"
                << '\n';
+    if (formalPostFix) {
+      trajectory
+          << "seed_" << seed << "_cpu_initial_loss=" << initialCpu.loss
+          << "\nseed_" << seed << "_cpu_initial_accuracy="
+          << initialCpu.accuracy << "\nseed_" << seed
+          << "_cpu_loss_reduction="
+          << 100 * (initialCpu.loss - cpuFinal.loss) / initialCpu.loss
+          << "\nseed_" << seed << "_cpu_all_steps_finite="
+          << (cpuAllStepsFinite ? "true" : "false")
+          << "\nseed_" << seed << "_cpu_nonfinite_count="
+          << cpuNonfiniteCount << "\nseed_" << seed
+          << "_cpu_final_gradient_l2_norm=" << finalCpuGradientNorm
+          << "\nseed_" << seed << "_cpu_final_parameter_l2_norm="
+          << paramNorm(cpu) << "\nseed_" << seed
+          << "_cpu_final_parameter_canonical_hash="
+          << canonicalFloatSha256(finalCpuParameters) << '\n';
+    }
     inferenceParameters.push_back(htp);
+    cpuInferenceParameters.push_back(cpu);
   }
   std::sort(reductions.begin(), reductions.end());
   const double median = reductions[reductions.size() / 2];
   if (inferenceOnly) {
+    bool formalContextSelfTest = true;
+    if (formalPostFix) {
+      std::vector<uint32_t> oracleProbe{1, 2};
+      std::vector<uint32_t> freeProbe = oracleProbe;
+      advanceLanguageContext(oracleProbe, 3, 4,
+                             LanguageRolloutContext::ORACLE);
+      advanceLanguageContext(freeProbe, 3, 4,
+                             LanguageRolloutContext::FREE_RUNNING);
+      formalContextSelfTest =
+          oracleProbe == std::vector<uint32_t>({2, 3}) &&
+          freeProbe == std::vector<uint32_t>({2, 4});
+    }
     static const std::array<std::vector<uint32_t>, 4> rules{
         std::vector<uint32_t>{0, 1, 2, 3}, std::vector<uint32_t>{4, 5, 6, 7},
         std::vector<uint32_t>{8, 9}, std::vector<uint32_t>{10, 11, 12}};
@@ -1961,6 +2067,118 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         }
       return result;
     };
+    struct PrefixDifference {
+      double maximum = 0, mean = 0, relativeL2 = 0;
+    };
+    auto differenceAtLastPosition = [&](const std::vector<float> &cpu,
+                                        const std::vector<float> &htp) {
+      PrefixDifference result;
+      const size_t base =
+          size_t(config.tokens - 1) * config.vocabularySize;
+      double squaredError = 0, squaredReference = 0;
+      for (uint32_t token = 0; token < config.vocabularySize; ++token) {
+        const double reference = cpu[base + token];
+        const double candidateValue = htp[base + token];
+        if (!std::isfinite(reference) || !std::isfinite(candidateValue)) {
+          result.maximum = result.mean = result.relativeL2 =
+              std::numeric_limits<double>::infinity();
+          return result;
+        }
+        const double errorValue = std::abs(reference - candidateValue);
+        result.maximum = std::max(result.maximum, errorValue);
+        result.mean += errorValue;
+        squaredError += errorValue * errorValue;
+        squaredReference += reference * reference;
+      }
+      result.mean /= config.vocabularySize;
+      result.relativeL2 =
+          std::sqrt(squaredError) /
+          std::max(1.0e-12, std::sqrt(squaredReference));
+      return result;
+    };
+    auto formalTokenList = [](const std::vector<uint32_t> &values) {
+      std::ostringstream text;
+      for (size_t index = 0; index < values.size(); ++index) {
+        if (index) text << ',';
+        text << values[index];
+      }
+      return text.str();
+    };
+    auto lastPositionLogits = [&](const std::vector<float> &logits) {
+      std::ostringstream text;
+      text << std::setprecision(10);
+      const size_t base =
+          size_t(config.tokens - 1) * config.vocabularySize;
+      for (uint32_t token = 0; token < config.vocabularySize; ++token) {
+        if (token) text << ',';
+        text << logits[base + token];
+      }
+      return text.str();
+    };
+    std::ostringstream formalDetails;
+    formalDetails << std::setprecision(10);
+    std::vector<double> formalGenerationLatencyUs;
+    size_t formalPrefixComparisonCount = 0;
+    size_t formalFreeCaseCount = 0, formalOracleCaseCount = 0;
+    bool formalPrefixComparisonsFinite = true;
+    std::string formalRepresentativeFinalLogitsHash;
+    auto recordFormalPrefix =
+        [&](const char *rolloutMode, size_t seedIndex, size_t pattern,
+            int step, const std::vector<uint32_t> &context,
+            uint32_t expected, const std::vector<float> &input,
+            const std::vector<float> &target,
+            const TinyTransformerTrainingOutputs &htpOutput) {
+          if (!formalPostFix) return;
+          ++formalPrefixComparisonCount;
+          const auto cpuOutput = tiny_lm::forwardBackward(
+              config, input, target, cpuInferenceParameters[seedIndex], 0.0f);
+          formalPrefixComparisonsFinite =
+              formalPrefixComparisonsFinite && finite(cpuOutput.logits) &&
+              finite(cpuOutput.probabilities) && finite(htpOutput.logits) &&
+              finite(htpOutput.probabilities);
+          const auto difference =
+              differenceAtLastPosition(cpuOutput.logits, htpOutput.logits);
+          const auto cpuTop3 = top3AtLastPosition(cpuOutput.logits);
+          const auto htpTop3 = top3AtLastPosition(htpOutput.logits);
+          const uint32_t cpuArgmax =
+              argmaxAtLastPosition(cpuOutput.logits);
+          const uint32_t htpArgmax =
+              argmaxAtLastPosition(htpOutput.logits);
+          const size_t base =
+              size_t(config.tokens - 1) * config.vocabularySize;
+          const std::string prefix =
+              std::string("formal_logits_") + rolloutMode + "_s" +
+              std::to_string(seedIndex + 1) + "_p" +
+              std::to_string(pattern) + "_step_" + std::to_string(step);
+          if (std::string(rolloutMode) == "free" && seedIndex == 0 &&
+              pattern == 0 && step == 7)
+            formalRepresentativeFinalLogitsHash =
+                canonicalFloatSha256(htpOutput.logits);
+          formalDetails
+              << prefix << "_context=" << formalTokenList(context) << '\n'
+              << prefix << "_expected_token=" << expected << '\n'
+              << prefix << "_cpu_logits_private="
+              << lastPositionLogits(cpuOutput.logits) << '\n'
+              << prefix << "_htp_logits_private="
+              << lastPositionLogits(htpOutput.logits) << '\n'
+              << prefix << "_max_abs_difference=" << difference.maximum
+              << '\n' << prefix << "_mean_abs_difference="
+              << difference.mean << '\n' << prefix
+              << "_relative_l2_difference=" << difference.relativeL2
+              << '\n' << prefix << "_cpu_argmax=" << cpuArgmax << '\n'
+              << prefix << "_htp_argmax=" << htpArgmax << '\n'
+              << prefix << "_argmax_match="
+              << (cpuArgmax == htpArgmax ? "true" : "false") << '\n'
+              << prefix << "_cpu_top3=" << cpuTop3[0] << ',' << cpuTop3[1]
+              << ',' << cpuTop3[2] << '\n' << prefix << "_htp_top3="
+              << htpTop3[0] << ',' << htpTop3[1] << ',' << htpTop3[2]
+              << '\n' << prefix << "_top3_match="
+              << (cpuTop3 == htpTop3 ? "true" : "false") << '\n'
+              << prefix << "_cpu_expected_probability="
+              << cpuOutput.probabilities[base + expected] << '\n'
+              << prefix << "_htp_expected_probability="
+              << htpOutput.probabilities[base + expected] << '\n';
+        };
     const Difference cpuEvalGeneration =
         difference(cpuEval.logits, cpuGeneration.logits);
     const Difference htpEvalGeneration =
@@ -2151,6 +2369,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         const auto prompt = context;
         std::vector<uint32_t> generated, expectedTokens;
         int correct = 0, firstError = -1, evaluatedSteps = 0;
+        uint32_t firstErrorExpected = 0, firstErrorPredicted = 0;
+        std::array<uint32_t, 3> firstErrorTop3{0, 0, 0};
+        double firstErrorExpectedProbability = 0;
         double probability = 0, margin = 0;
         double minimumMargin = std::numeric_limits<double>::infinity();
         for (int step = 0; step < 8; ++step) {
@@ -2161,9 +2382,17 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               std::vector<uint32_t>(config.tokens, expected),
               config.vocabularySize);
           TinyTransformerTrainingOutputs output;
-          if (!runtime.executeTinyTransformerTraining(
+          const auto generationStarted = std::chrono::steady_clock::now();
+          const bool generationExecuted =
+              runtime.executeTinyTransformerTraining(
                   input, target, inferenceParameters[seedIndex], 0.0f, output,
-                  error))
+                  error);
+          if (formalPostFix)
+            formalGenerationLatencyUs.push_back(
+                std::chrono::duration<double, std::micro>(
+                    std::chrono::steady_clock::now() - generationStarted)
+                    .count());
+          if (!generationExecuted)
             return failure("adam_generation", error, runtime);
           if (!finite(output.logits) || !finite(output.probabilities)) {
             std::ostringstream location;
@@ -2191,7 +2420,16 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           for (uint32_t token = 0; token < config.vocabularySize; ++token)
             if (token != expected)
               other = std::max(other, output.logits[base + token]);
-          if (predicted != expected && firstError < 0) firstError = step;
+          recordFormalPrefix("free", seedIndex, pattern, step, context,
+                             expected, input, target, output);
+          if (predicted != expected && firstError < 0) {
+            firstError = step;
+            firstErrorExpected = expected;
+            firstErrorPredicted = predicted;
+            firstErrorTop3 = top3AtLastPosition(output.logits);
+            firstErrorExpectedProbability =
+                output.probabilities[base + expected];
+          }
           correct += predicted == expected;
           probability += output.probabilities[base + expected];
           const double tokenMargin = output.logits[base + expected] - other;
@@ -2228,18 +2466,25 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           }
           generated.push_back(predicted);
           expectedTokens.push_back(expected);
-          context.erase(context.begin());
-          context.push_back(predicted);
+          advanceLanguageContext(context, expected, predicted,
+                                 LanguageRolloutContext::FREE_RUNNING);
         }
         const bool exact = evaluatedSteps == 8 && correct == 8;
+        if (formalPostFix && evaluatedSteps == 8) ++formalFreeCaseCount;
         exactPatterns += seedIndex == 0 && exact;
         exactRollouts += exact;
         seedExactPatterns += exact;
         std::vector<uint32_t> oracleContext(config.tokens);
         for (uint32_t i = 0; i < config.tokens; ++i)
           oracleContext[i] = rule[i % rule.size()];
+        const auto oraclePrompt = oracleContext;
+        std::vector<uint32_t> oracleGenerated, oracleExpectedTokens;
         int oracleCorrect = 0, firstOracleError = -1;
         int oracleEvaluatedSteps = 0;
+        uint32_t firstOracleErrorExpected = 0;
+        uint32_t firstOracleErrorPredicted = 0;
+        std::array<uint32_t, 3> firstOracleErrorTop3{0, 0, 0};
+        double firstOracleErrorExpectedProbability = 0;
         for (int step = 0; step < 8; ++step) {
           const uint32_t expected =
               rule[(size_t(config.tokens) + size_t(step)) % rule.size()];
@@ -2249,9 +2494,17 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               std::vector<uint32_t>(config.tokens, expected),
               config.vocabularySize);
           TinyTransformerTrainingOutputs output;
-          if (!runtime.executeTinyTransformerTraining(
+          const auto generationStarted = std::chrono::steady_clock::now();
+          const bool generationExecuted =
+              runtime.executeTinyTransformerTraining(
                   input, target, inferenceParameters[seedIndex], 0.0f, output,
-                  error))
+                  error);
+          if (formalPostFix)
+            formalGenerationLatencyUs.push_back(
+                std::chrono::duration<double, std::micro>(
+                    std::chrono::steady_clock::now() - generationStarted)
+                    .count());
+          if (!generationExecuted)
             return failure("adam_oracle_generation", error, runtime);
           if (!finite(output.logits) || !finite(output.probabilities)) {
             std::ostringstream location;
@@ -2270,16 +2523,82 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           }
           ++oracleEvaluatedSteps;
           const uint32_t predicted = argmaxAtLastPosition(output.logits);
-          if (predicted != expected && firstOracleError < 0)
+          recordFormalPrefix("oracle", seedIndex, pattern, step,
+                             oracleContext, expected, input, target, output);
+          if (predicted != expected && firstOracleError < 0) {
             firstOracleError = step;
+            firstOracleErrorExpected = expected;
+            firstOracleErrorPredicted = predicted;
+            firstOracleErrorTop3 = top3AtLastPosition(output.logits);
+            const size_t base =
+                size_t(config.tokens - 1) * config.vocabularySize;
+            firstOracleErrorExpectedProbability =
+                output.probabilities[base + expected];
+          }
           oracleCorrect += predicted == expected;
-          oracleContext.erase(oracleContext.begin());
-          oracleContext.push_back(expected);
+          oracleGenerated.push_back(predicted);
+          oracleExpectedTokens.push_back(expected);
+          advanceLanguageContext(oracleContext, expected, predicted,
+                                 LanguageRolloutContext::ORACLE);
         }
         const bool oracleExact =
             oracleEvaluatedSteps == 8 && oracleCorrect == 8;
+        if (formalPostFix && oracleEvaluatedSteps == 8)
+          ++formalOracleCaseCount;
         oracleExactRollouts += oracleExact;
         seedOracleExactPatterns += oracleExact;
+        auto appendFormalCase =
+            [&](const char *rolloutMode,
+                const std::vector<uint32_t> &casePrompt,
+                const std::vector<uint32_t> &caseExpected,
+                const std::vector<uint32_t> &caseGenerated, bool caseExact,
+                int firstMismatch, uint32_t mismatchExpected,
+                uint32_t mismatchPredicted,
+                const std::array<uint32_t, 3> &mismatchTop3,
+                double mismatchExpectedProbability) {
+              if (!formalPostFix) return;
+              const std::string prefix =
+                  std::string("formal_") + rolloutMode + "_case_s" +
+                  std::to_string(seedIndex + 1) + "_p" +
+                  std::to_string(pattern);
+              formalDetails
+                  << prefix << "_id=s" << (seedIndex + 1) << "_p" << pattern
+                  << '\n' << prefix << "_prefix="
+                  << formalTokenList(casePrompt) << '\n' << prefix
+                  << "_expected_sequence=" << formalTokenList(caseExpected)
+                  << '\n' << prefix << "_generated_sequence="
+                  << formalTokenList(caseGenerated) << '\n' << prefix
+                  << "_exact=" << (caseExact ? "true" : "false") << '\n'
+                  << prefix << "_first_mismatch_step=" << firstMismatch
+                  << '\n';
+              if (firstMismatch < 0) {
+                formalDetails
+                    << prefix << "_first_mismatch_expected_token=NONE\n"
+                    << prefix << "_first_mismatch_predicted_token=NONE\n"
+                    << prefix << "_first_mismatch_top3=NONE\n"
+                    << prefix
+                    << "_first_mismatch_expected_probability=NONE\n";
+              } else {
+                formalDetails
+                    << prefix << "_first_mismatch_expected_token="
+                    << mismatchExpected << '\n' << prefix
+                    << "_first_mismatch_predicted_token="
+                    << mismatchPredicted << '\n' << prefix
+                    << "_first_mismatch_top3=" << mismatchTop3[0] << ','
+                    << mismatchTop3[1] << ',' << mismatchTop3[2] << '\n'
+                    << prefix << "_first_mismatch_expected_probability="
+                    << mismatchExpectedProbability << '\n';
+              }
+            };
+        appendFormalCase(
+            "free", prompt, expectedTokens, generated, exact, firstError,
+            firstErrorExpected, firstErrorPredicted, firstErrorTop3,
+            firstErrorExpectedProbability);
+        appendFormalCase(
+            "oracle", oraclePrompt, oracleExpectedTokens, oracleGenerated,
+            oracleExact, firstOracleError, firstOracleErrorExpected,
+            firstOracleErrorPredicted, firstOracleErrorTop3,
+            firstOracleErrorExpectedProbability);
         trajectory << "seed_" << (seedIndex + 1) << "_generation_pattern_"
                    << pattern << "_prompt=" << tokenList(prompt)
                    << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
@@ -2324,11 +2643,128 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     const bool exactSuccess = !outputNonfinite &&
                               qualifyingSeeds >= 4 && exactRollouts >= 16 &&
                               oracleQualifyingSeeds >= 4;
+    constexpr size_t kGenerationWarmupCalls = 16;
+    constexpr size_t kTrainingWarmupSteps = 16;
+    std::vector<double> measuredGenerationLatencyUs;
+    std::vector<double> measuredTrainingStepLatencyUs;
+    if (formalGenerationLatencyUs.size() > kGenerationWarmupCalls) {
+      measuredGenerationLatencyUs.assign(
+          formalGenerationLatencyUs.begin() + kGenerationWarmupCalls,
+          formalGenerationLatencyUs.end());
+      std::sort(measuredGenerationLatencyUs.begin(),
+                measuredGenerationLatencyUs.end());
+    }
+    if (formalTrainingStepLatencyUs.size() > kTrainingWarmupSteps) {
+      measuredTrainingStepLatencyUs.assign(
+          formalTrainingStepLatencyUs.begin() + kTrainingWarmupSteps,
+          formalTrainingStepLatencyUs.end());
+      std::sort(measuredTrainingStepLatencyUs.begin(),
+                measuredTrainingStepLatencyUs.end());
+    }
+    auto latencyPercentileUs = [](const std::vector<double> &values,
+                                  double quantile) {
+      if (values.empty()) return 0.0;
+      const size_t index = std::min(
+          values.size() - 1,
+          size_t(quantile * double(values.size() - 1)));
+      return values[index];
+    };
+    const bool formalComplete =
+        !nan && !outputNonfinite && allLoss &&
+        allFormalCpuFinite && formalPrefixComparisonsFinite &&
+        formalContextSelfTest &&
+        inferenceParameters.size() == 5 && cpuInferenceParameters.size() == 5 &&
+        formalFreeCaseCount == 20 && formalOracleCaseCount == 20 &&
+        formalPrefixComparisonCount == 320 &&
+        formalGenerationLatencyUs.size() == 320 &&
+        formalTrainingStepLatencyUs.size() == 1600 &&
+        !formalRepresentativeFinalLogitsHash.empty() &&
+        runtime.apiTrace().graphExecuteFailureCount == 0;
+    std::ostringstream formalSummary;
+    if (formalPostFix) {
+      formalSummary
+          << "\nsource_protocol=POST_FIX_ADAM_LR0.003_STEPS320_V1"
+          << "\ntraining_phase=0"
+          << "\nglobal_gradient_clipping=disabled"
+          << "\nformal_oracle_case_count=" << formalOracleCaseCount
+          << "\nformal_free_case_count=" << formalFreeCaseCount
+          << "\nformal_prefix_logits_comparison_count="
+          << formalPrefixComparisonCount
+          << "\nformal_qnn_nonzero_return_count="
+          << runtime.apiTrace().graphExecuteFailureCount
+          << "\nformal_cpu_all_finite="
+          << (allFormalCpuFinite ? "true" : "false")
+          << "\nformal_prefix_comparisons_finite="
+          << (formalPrefixComparisonsFinite ? "true" : "false")
+          << "\nformal_representative_final_logits_canonical_hash="
+          << formalRepresentativeFinalLogitsHash
+          << "\nfree_running_context_update=PREVIOUS_PREDICTION"
+          << "\noracle_context_update=EXPECTED_TOKEN"
+          << "\nfree_running_teacher_forcing=false"
+          << "\ngeneration_context_self_test="
+          << (formalContextSelfTest ? "true" : "false")
+          << "\nlogits_comparison_position=LAST_POSITION_V32"
+          << "\nlogits_comparison_parameter_scope="
+             "CPU_TRAINED_CPU_VS_HTP_TRAINED_HTP"
+          << "\nraw_logits_visibility=PRIVATE_DEVICE_REPORT_ONLY"
+          << "\ngeneration_latency_path=HTP_FULL_TRAINING_GRAPH_ZERO_LR"
+          << "\ngeneration_latency_warmup_calls="
+          << kGenerationWarmupCalls
+          << "\ngeneration_latency_measured_calls="
+          << measuredGenerationLatencyUs.size()
+          << "\ngeneration_token_latency_min_ms="
+          << latencyPercentileUs(measuredGenerationLatencyUs, 0.0) / 1000.0
+          << "\ngeneration_token_latency_median_ms="
+          << latencyPercentileUs(measuredGenerationLatencyUs, 0.5) / 1000.0
+          << "\ngeneration_token_latency_p95_ms="
+          << latencyPercentileUs(measuredGenerationLatencyUs, 0.95) / 1000.0
+          << "\ngeneration_token_latency_max_ms="
+          << latencyPercentileUs(measuredGenerationLatencyUs, 1.0) / 1000.0
+          << "\nperformance_initialization_ms="
+          << (runtime.metrics().backendCreateUs +
+              runtime.metrics().deviceCreateUs +
+              runtime.metrics().contextCreateUs) /
+                 1000.0
+          << "\nperformance_graph_creation_ms="
+          << runtime.metrics().graphCreateUs / 1000.0
+          << "\nperformance_finalize_ms="
+          << runtime.metrics().graphFinalizeUs / 1000.0
+          << "\nperformance_training_warmup_steps="
+          << kTrainingWarmupSteps
+          << "\nperformance_training_measured_steps="
+          << measuredTrainingStepLatencyUs.size()
+          << "\nperformance_steady_training_step_min_ms="
+          << latencyPercentileUs(measuredTrainingStepLatencyUs, 0.0) / 1000.0
+          << "\nperformance_steady_training_step_median_ms="
+          << latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5) / 1000.0
+          << "\nperformance_steady_training_step_p95_ms="
+          << latencyPercentileUs(measuredTrainingStepLatencyUs, 0.95) / 1000.0
+          << "\nperformance_steady_training_step_max_ms="
+          << latencyPercentileUs(measuredTrainingStepLatencyUs, 1.0) / 1000.0
+          << "\nperformance_updates_per_second="
+          << (latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5) > 0
+                  ? 1000000.0 /
+                        latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5)
+                  : 0.0)
+          << "\nperformance_tokens_per_second="
+          << (latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5) > 0
+                  ? 1000000.0 * config.tokens /
+                        latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5)
+                  : 0.0);
+    }
     std::ostringstream report;
-    report << "TINY_LANGUAGE_MODEL\ntest=adam_inference_4_pattern\nstatus="
-           << ((nan || outputNonfinite) ? "FAILED"
-                    : (exactSuccess ? "SUCCESS" : "PARTIAL_SUCCESS"))
-           << "\nresearch_goal_met=" << (exactSuccess ? "true" : "false")
+    report << "TINY_LANGUAGE_MODEL\ntest="
+           << (formalPostFix ? "post_fix_end_to_end_generation"
+                             : "adam_inference_4_pattern")
+           << "\nstatus="
+           << (formalPostFix
+                   ? (formalComplete ? "SUCCESS" : "FAILED")
+                   : ((nan || outputNonfinite)
+                          ? "FAILED"
+                          : (exactSuccess ? "SUCCESS" : "PARTIAL_SUCCESS")))
+           << "\nresearch_goal_met="
+           << ((formalPostFix ? formalComplete : exactSuccess) ? "true"
+                                                               : "false")
            << "\ngeneration_nonfinite_detected="
            << (outputNonfinite ? "true" : "false")
            << "\nsame_prefix_nonfinite_count=" << samePrefixNonfiniteCount
@@ -2338,18 +2774,22 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\nfirst_generation_nonfinite=" << firstOutputNonfinite
            << "\noptimizer=ADAM\nlearning_rate=" << selected.lr
            << "\nsteps=" << selected.steps
-           << "\nsampling=pattern_balanced_phase01_round_robin"
+           << "\nsampling="
+           << (formalPostFix ? "pattern_round_robin_phase0"
+                             : "pattern_balanced_phase01_round_robin")
            << "\nseed_count=5\nrepresentative_seed_exact_pattern_count="
            << exactPatterns << "\nqualifying_seed_count=" << qualifyingSeeds
            << "\nexact_rollout_count=" << exactRollouts
            << "\noracle_qualifying_seed_count=" << oracleQualifyingSeeds
            << "\noracle_exact_rollout_count=" << oracleExactRollouts
            << "\nlogits_responsibility=HTP\nargmax_responsibility=CPU"
+           << formalSummary.str()
            << "\ncpu_fallback=false\nnan_detected="
            << (nan || outputNanCount ? "true" : "false")
            << "\ninf_detected="
            << (outputInfCount ? "true" : "false") << '\n'
-           << trajectory.str() << runtime.apiTraceSummary()
+           << trajectory.str() << formalDetails.str()
+           << runtime.apiTraceSummary()
            << runtime.diagnostics();
     return report.str();
   }
@@ -2362,14 +2802,23 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                         runtime.metrics().executeUs.end(), 0.0) /
         double(runtime.metrics().executeUs.size() - 1);
   }
+  std::ostringstream clipThresholdText;
+  if (selected.gradientClipping)
+    clipThresholdText << selected.clipThreshold;
+  else
+    clipThresholdText << "NOT_APPLICABLE";
   std::ostringstream report;
   report << std::setprecision(10)
          << "TINY_LANGUAGE_MODEL\ntest=adam_convergence\nstatus="
          << (ok ? "SUCCESS" : "FAILED") << "\nconfiguration_id="
          << selected.id << "\noptimizer=ADAM\nlearning_rate=" << selected.lr
          << "\nbeta1=0.9\nbeta2=0.999\nepsilon=1e-8"
-         << "\nglobal_gradient_clip_threshold=" << selected.clipThreshold
-         << "\nglobal_gradient_clip_epsilon=1e-6"
+         << "\nglobal_gradient_clipping="
+         << (selected.gradientClipping ? "enabled" : "disabled")
+         << "\nglobal_gradient_clip_threshold="
+         << clipThresholdText.str()
+         << "\nglobal_gradient_clip_epsilon="
+         << (selected.gradientClipping ? "1e-6" : "NOT_APPLICABLE")
          << "\nglobal_gradient_clip_scale_responsibility=CPU"
          << "\nglobal_gradient_clip_application=HTP"
          << "\nclipped_step_count=" << clippedSteps
@@ -3157,6 +3606,9 @@ std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
     return runLateNonfiniteExperiment(false);
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC)
     return runLateNonfiniteExperiment(true);
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END)
+    return languageModelAdam(false, 3, true);
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn

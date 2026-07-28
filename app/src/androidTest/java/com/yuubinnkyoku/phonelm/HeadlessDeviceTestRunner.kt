@@ -165,6 +165,7 @@ class HeadlessDeviceTestRunner {
         "qnn-adam-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_STEP
         "qnn-adam-late-baseline" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE
         "qnn-adam-late-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC
+        "post-fix-end-to-end" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }
 }

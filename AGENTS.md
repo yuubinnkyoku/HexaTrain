@@ -10,8 +10,9 @@
 
 既定の `verify_local.ps1` は実機不要・QAIRT不要・tracked ファイルを変更しない。
 `git-diff-check`、`tracked-binary-audit`、`secret-path-audit`、
-`qairt-selection-self-test`（temp内の5ケース）、JVM unit tests、C++ host tests、
-`assembleDebug`、`assembleDebugAndroidTest` の8工程が唯一のローカル検証ゲートである。
+`qairt-selection-self-test`（temp内の5ケース）、公開結果exporter self-test、
+JVM unit tests、C++ host tests、`assembleDebug`、`assembleDebugAndroidTest` の
+9工程が唯一のローカル検証ゲートである。
 全工程が PASS になるまで完了を報告しない。失敗を隠して完了しない。
 
 ```powershell

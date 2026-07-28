@@ -92,6 +92,7 @@ enum class ExecutionMode : int {
     // contains non-finite values; non-finites are the subject under test.
     QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE = 80,
     QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC = 81,
+    QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END = 82,
 };
 
 const char* executionModeName(ExecutionMode mode);

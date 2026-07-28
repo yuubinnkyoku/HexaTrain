@@ -132,6 +132,13 @@ try {
         "5/5 root-selection cases ok (temp-only; no SDK required)"
     }
 
+    Invoke-Step "public-exporter-self-test" {
+        Invoke-PwshScript "post-fix public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
+                "-SelfTest")
+        "allow-list export and negative rejection ok (temp-only)"
+    }
+
     if ($Clean) {
         Invoke-Step "gradle-clean" {
             Invoke-Gradle "clean" @(":app:clean")
