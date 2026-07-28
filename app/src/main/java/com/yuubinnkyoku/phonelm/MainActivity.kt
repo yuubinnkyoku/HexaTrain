@@ -1,6 +1,8 @@
 package com.yuubinnkyoku.phonelm
 
 import android.app.Activity
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.content.pm.ApplicationInfo
 import android.util.Log
@@ -60,7 +62,7 @@ class MainActivity : Activity() {
             ExecutionMode.values().map(ExecutionMode::name),
         )
 
-        viewModel = BenchmarkViewModel()
+        viewModel = BenchmarkViewModel(runNotifications = LiveUpdateNotificationController(applicationContext))
         viewModel.setListener(::render)
 
         findViewById<Button>(R.id.smallPresetButton).setOnClickListener {
@@ -163,6 +165,7 @@ class MainActivity : Activity() {
     }
 
     private fun start(backend: Backend) {
+        requestNotificationPermissionForUserRun()
         val config = readConfig(backend) ?: return
         val error = config.validationError()
         if (error != null) {
@@ -175,6 +178,7 @@ class MainActivity : Activity() {
     }
 
     private fun startMode(mode: ExecutionMode) {
+        requestNotificationPermissionForUserRun()
         val backend = when (mode) {
             ExecutionMode.MNN_OPENCL -> Backend.OPENCL
             ExecutionMode.MNN_VULKAN -> Backend.VULKAN
@@ -239,9 +243,19 @@ class MainActivity : Activity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    private fun requestNotificationPermissionForUserRun() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+    }
+
     override fun onDestroy() {
         viewModel.setListener(null)
         if (isFinishing) viewModel.close()
         super.onDestroy()
     }
+
+    private companion object { const val REQUEST_NOTIFICATIONS = 91 }
 }

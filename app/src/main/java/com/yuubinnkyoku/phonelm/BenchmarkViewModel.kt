@@ -75,6 +75,7 @@ object NativeBenchmarkEngine : BenchmarkEngine {
 
 class BenchmarkViewModel(
     private val engine: BenchmarkEngine = NativeBenchmarkEngine,
+    private val runNotifications: RunNotificationSink = NoOpRunNotificationSink,
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "PhoneLM-benchmark").apply { isDaemon = true }
     },
@@ -132,13 +133,16 @@ class BenchmarkViewModel(
             currentStateLocked()
         }
         publish(state)
+        runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
 
         worker.execute {
             var lastProgress = ""
             try {
+                runNotifications.onProgress(RunProgress.PhaseChanged(runKind(mode)))
                 val report = engine.runMode(mode, config) { message ->
                     lastProgress = message
                     append(message)
+                    NativeProgressParser.parse(message)?.let(runNotifications::onProgress)
                 }
                 if (report != lastProgress) {
                     append(report)
@@ -146,7 +150,9 @@ class BenchmarkViewModel(
                 synchronized(lock) {
                     lastResult = BenchmarkResult.parse(report)
                 }
+                if (report != lastProgress) NativeProgressParser.parse(report)?.let(runNotifications::onProgress)
             } catch (error: Throwable) {
+                runNotifications.onProgress(RunProgress.Failed(error.message ?: error.javaClass.simpleName))
                 append(
                     "RESULT\nbackend_requested=${config.backend.name}\n" +
                         "backend_actual=UNINITIALIZED\nstatus=FAILED\n" +
@@ -204,6 +210,12 @@ class BenchmarkViewModel(
         }
         if (stop) engine.requestStop()
         worker.shutdown()
+    }
+
+    private fun runKind(mode: ExecutionMode) = when {
+        mode.name.contains("INFERENCE") || mode.name.contains("FORWARD") -> "推論"
+        mode.name.contains("BENCHMARK") -> "ベンチマーク"
+        else -> "学習"
     }
 
     private class AndroidUiDispatcher : UiDispatcher {
