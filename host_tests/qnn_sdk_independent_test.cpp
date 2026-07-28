@@ -9,11 +9,40 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
 void near(double actual, double expected, double tolerance = 1.0e-6) {
     assert(std::fabs(actual - expected) <= tolerance);
+}
+
+phonelm::qnn::shape::Node makeShapeNode(
+        std::string name,
+        phonelm::qnn::shape::Op op,
+        std::vector<phonelm::qnn::shape::Tensor> inputs,
+        std::vector<phonelm::qnn::shape::Tensor> outputs) {
+    phonelm::qnn::shape::Node node{};
+    node.name = std::move(name);
+    node.op = op;
+    node.inputs = std::move(inputs);
+    node.outputs = std::move(outputs);
+    return node;
+}
+
+template <typename Configure>
+phonelm::qnn::shape::Node makeShapeNode(
+        std::string name,
+        phonelm::qnn::shape::Op op,
+        std::vector<phonelm::qnn::shape::Tensor> inputs,
+        std::vector<phonelm::qnn::shape::Tensor> outputs,
+        Configure&& configure) {
+    auto node = makeShapeNode(
+            std::move(name), op, std::move(inputs), std::move(outputs));
+    std::forward<Configure>(configure)(node);
+    return node;
 }
 
 void testSymmetricQuantizeAndDequantize() {
@@ -78,8 +107,12 @@ void testGraphShapeValidator() {
         if (!condition) throw std::runtime_error(message);
     };
     const Tensor product{"SOFTMAX_PRODUCT", {8, 8}};
-    Node broken{"tt_smd", Op::ReduceSum, {product},
-                {{"SOFTMAX_DOT", {8, 8}}}, {1}, true};
+    Node broken = makeShapeNode(
+            "tt_smd", Op::ReduceSum, {product}, {{"SOFTMAX_DOT", {8, 8}}},
+            [](Node& node) {
+                node.axes = {1};
+                node.keepDims = true;
+            });
     const auto rejected = validate(broken);
     require(!rejected.ok, "shape validator accepted bad Softmax reduction");
     require(rejected.error.find("node=tt_smd") != std::string::npos,
@@ -89,15 +122,37 @@ void testGraphShapeValidator() {
     broken.outputs[0].shape = {8, 1};
     require(validate(broken).ok, "shape validator rejected valid Softmax reduction");
     const std::vector<Node> validNodes{
-        {"mean", Op::ReduceMean, {product}, {{"out", {8}}}, {1}, false},
-        {"matmul", Op::MatMul, {{"a", {2, 3}}, {"b", {3, 4}}}, {{"out", {2, 4}}}},
-        {"transpose", Op::Transpose, {{"a", {2, 3}}}, {{"out", {3, 2}}}, {}, false, false, false, {1, 0}},
-        {"broadcast", Op::ElementWiseBinary, {{"a", {8, 8}}, {"b", {8, 1}}}, {{"out", {8, 8}}}},
-        {"softmax", Op::Softmax, {{"a", {8, 8}}}, {{"out", {8, 8}}}, {}, false, false, false, {}, {}, 0, {}, 1},
-        {"reshape", Op::Reshape, {{"a", {2, 4}}}, {{"out", {8}}}, {}, false, false, false, {}, {8}},
-        {"concat", Op::Concat, {{"a", {2, 3}}, {"b", {2, 4}}}, {{"out", {2, 7}}}, {}, false, false, false, {}, {}, 1},
-        {"split", Op::Split, {{"a", {2, 7}}}, {{"left", {2, 3}}, {"right", {2, 4}}}, {}, false, false, false, {}, {}, 1, {3, 4}},
-        {"layernorm", Op::LayerNorm, {{"x", {8, 16}}, {"g", {16}}, {"b", {16}}}, {{"out", {8, 16}}}, {1}, true},
+        makeShapeNode("mean", Op::ReduceMean, {product}, {{"out", {8}}},
+                [](Node& node) { node.axes = {1}; }),
+        makeShapeNode("matmul", Op::MatMul,
+                {{"a", {2, 3}}, {"b", {3, 4}}}, {{"out", {2, 4}}}),
+        makeShapeNode("transpose", Op::Transpose,
+                {{"a", {2, 3}}}, {{"out", {3, 2}}},
+                [](Node& node) { node.permutation = {1, 0}; }),
+        makeShapeNode("broadcast", Op::ElementWiseBinary,
+                {{"a", {8, 8}}, {"b", {8, 1}}}, {{"out", {8, 8}}}),
+        makeShapeNode("softmax", Op::Softmax,
+                {{"a", {8, 8}}}, {{"out", {8, 8}}},
+                [](Node& node) { node.softmaxAxis = 1; }),
+        makeShapeNode("reshape", Op::Reshape,
+                {{"a", {2, 4}}}, {{"out", {8}}},
+                [](Node& node) { node.reshape = {8}; }),
+        makeShapeNode("concat", Op::Concat,
+                {{"a", {2, 3}}, {"b", {2, 4}}}, {{"out", {2, 7}}},
+                [](Node& node) { node.concatAxis = 1; }),
+        makeShapeNode("split", Op::Split,
+                {{"a", {2, 7}}}, {{"left", {2, 3}}, {"right", {2, 4}}},
+                [](Node& node) {
+                    node.concatAxis = 1;
+                    node.splitSizes = {3, 4};
+                }),
+        makeShapeNode("layernorm", Op::LayerNorm,
+                {{"x", {8, 16}}, {"g", {16}}, {"b", {16}}},
+                {{"out", {8, 16}}},
+                [](Node& node) {
+                    node.axes = {1};
+                    node.keepDims = true;
+                }),
     };
     for (const auto& node : validNodes)
         require(validate(node).ok, "shape validator rejected valid op");

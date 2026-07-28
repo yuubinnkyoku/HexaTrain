@@ -92,7 +92,15 @@ Result validate(const Node& node) {
       std::vector<std::size_t> out; for (auto axis : node.permutation) out.push_back(input[axis]); expected.push_back(std::move(out)); break;
     }
     case Op::ElementWiseBinary: {
-      if (node.inputs.size() != 2 || node.outputs.size() != 1) return fail(node, "binary op requires two inputs"); std::vector<std::size_t> out; if (!broadcast(input, node.inputs[1].shape, &out)) return fail(node, "broadcast incompatible"); expected.push_back(std::move(out)); break;
+      if (node.inputs.size() != 2 || node.outputs.size() != 1) {
+        return fail(node, "binary op requires two inputs");
+      }
+      std::vector<std::size_t> out;
+      if (!broadcast(input, node.inputs[1].shape, &out)) {
+        return fail(node, "broadcast incompatible");
+      }
+      expected.push_back(std::move(out));
+      break;
     }
     case Op::Softmax: if (node.inputs.size()!=1 || node.outputs.size()!=1 || node.softmaxAxis >= input.size()) return fail(node, "invalid Softmax axis"); expected.push_back(input); break;
     case Op::Reshape: { if (node.inputs.size()!=1 || node.outputs.size()!=1) return fail(node, "Reshape requires one input and output"); std::size_t inCount, outCount; if (!count(input,&inCount) || !count(node.reshape,&outCount) || inCount != outCount) return fail(node, "Reshape element count mismatch"); expected.push_back(node.reshape); break; }
