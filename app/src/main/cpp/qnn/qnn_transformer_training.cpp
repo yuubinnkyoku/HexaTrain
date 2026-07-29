@@ -301,6 +301,8 @@ double maxParamError(const Params &a, const Params &b) {
   for (size_t i = 0; i < ar.size(); ++i) {
     if (ar[i].name != br[i].name || ar[i].values->size() != br[i].values->size())
       return std::numeric_limits<double>::infinity();
+    if (!finite(*ar[i].values) || !finite(*br[i].values))
+      return std::numeric_limits<double>::infinity();
     maximum = std::max(maximum, maxAbs(*ar[i].values, *br[i].values));
   }
   return maximum;
@@ -1487,11 +1489,21 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     int compared = 0, firstMajorDivergence = -1;
     int firstOptimizerDivergence = -1;
     double maximumGradientError = 0.0, maximumOptimizerIsolationError = 0.0;
+    double maximumLayerInputError = 0.0, maximumHeadProbabilityError = 0.0;
+    bool diagnosticsSchemaValid = true, diagnosticsFinite = true;
     std::ostringstream detail;
     detail << std::setprecision(10);
     auto appendStats = [&](const std::string &prefix,
                            const std::vector<float> &cpu,
                            const std::vector<float> &htp) {
+      if (cpu.size() != htp.size()) {
+        diagnosticsSchemaValid = false;
+        detail << prefix << "_schema_match=false\n"
+               << prefix << "_cpu_element_count=" << cpu.size() << '\n'
+               << prefix << "_htp_element_count=" << htp.size() << '\n';
+        return std::numeric_limits<double>::infinity();
+      }
+      detail << prefix << "_schema_match=true\n";
       double maxError = 0, meanError = 0, maxRelative = 0, l2 = 0;
       double cpuL2 = 0, htpL2 = 0, dot = 0;
       size_t nonfinite = 0;
@@ -1531,6 +1543,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
              << prefix << "_htp_min=" << htpMin << '\n'
              << prefix << "_htp_max=" << htpMax << '\n'
              << prefix << "_nonfinite_count=" << nonfinite << '\n';
+      if (nonfinite != 0) {
+        diagnosticsFinite = false;
+        return std::numeric_limits<double>::infinity();
+      }
       return maxError;
     };
     auto appendParameterStats = [&](const std::string &prefix, const Params &cpu,
@@ -1592,6 +1608,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                     htpGradient.probabilities);
         appendStats(prefix + "_dlogits", cpuGradient.dLogits,
                     htpGradient.dLogits);
+        double checkpointLayerError = 0.0, checkpointHeadError = 0.0;
         if (cpuGradient.layerInputGradients.size() !=
                 htpGradient.layerInputGradients.size() ||
             cpuGradient.attentionHeadProbabilities.size() !=
@@ -1601,19 +1618,28 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                          runtime);
         for (size_t layer = 0; layer < cpuGradient.layerInputGradients.size();
              ++layer)
-          appendStats(prefix + "_layer_" + std::to_string(layer) +
-                          "_input_gradient",
-                      cpuGradient.layerInputGradients[layer],
-                      htpGradient.layerInputGradients[layer]);
+          checkpointLayerError = std::max(
+              checkpointLayerError,
+              appendStats(prefix + "_layer_" + std::to_string(layer) +
+                              "_input_gradient",
+                          cpuGradient.layerInputGradients[layer],
+                          htpGradient.layerInputGradients[layer]));
         for (size_t index = 0;
              index < cpuGradient.attentionHeadProbabilities.size(); ++index) {
           const size_t layer = index / config.numHeads;
           const size_t head = index % config.numHeads;
-          appendStats(prefix + "_layer_" + std::to_string(layer) + "_head_" +
-                          std::to_string(head) + "_attention_probabilities",
-                      cpuGradient.attentionHeadProbabilities[index],
-                      htpGradient.taps[index].values);
+          checkpointHeadError = std::max(
+              checkpointHeadError,
+              appendStats(prefix + "_layer_" + std::to_string(layer) +
+                              "_head_" + std::to_string(head) +
+                              "_attention_probabilities",
+                          cpuGradient.attentionHeadProbabilities[index],
+                          htpGradient.taps[index].values));
         }
+        maximumLayerInputError =
+            std::max(maximumLayerInputError, checkpointLayerError);
+        maximumHeadProbabilityError =
+            std::max(maximumHeadProbabilityError, checkpointHeadError);
         const double gradientError = appendParameterStats(
             prefix + "_gradient", cpuGradient.gradients,
             htpGradient.gradients);
@@ -1625,6 +1651,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             std::max({maxParamError(pathB.next, pathD),
                       maxParamError(pathB.firstMoment, pathDFirst),
                       maxParamError(pathB.secondMoment, pathDSecond)});
+        appendParameterStats(prefix + "_path_c_next_parameter", pathA.next,
+                             pathC);
+        appendParameterStats(prefix + "_path_c_first_moment",
+                             pathA.firstMoment, pathCFirst);
+        appendParameterStats(prefix + "_path_c_second_moment",
+                             pathA.secondMoment, pathCSecond);
+        appendParameterStats(prefix + "_path_d_next_parameter", pathB.next,
+                             pathD);
+        appendParameterStats(prefix + "_path_d_first_moment",
+                             pathB.firstMoment, pathDFirst);
+        appendParameterStats(prefix + "_path_d_second_moment",
+                             pathB.secondMoment, pathDSecond);
         maximumGradientError = std::max(maximumGradientError, gradientError);
         maximumOptimizerIsolationError = std::max(
             maximumOptimizerIsolationError, std::max(optimizerC, optimizerD));
@@ -1635,7 +1673,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           firstOptimizerDivergence = completed;
         if (completed == 0)
           initialOneStepCorrect =
-              gradientError < .03 && optimizerC < .03 && optimizerD < .03;
+              gradientError < .03 && checkpointLayerError < .03 &&
+              checkpointHeadError < .03 && optimizerC < .03 &&
+              optimizerD < .03;
         detail << prefix << "_path_a_cpu_gradient_cpu_optimizer_finite="
                << (finiteParams(pathA.next) ? "true" : "false") << '\n'
                << prefix << "_path_b_htp_gradient_cpu_optimizer_finite="
@@ -1771,8 +1811,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                           : "ACCUMULATED_TRAJECTORY_ONLY"));
     const bool finiteResult = lastFiniteStep > 0;
     const bool changed = maxParamError(shape, freeCurrent) > 0;
-    const bool ok = compared == int(checkpoints.size()) && checkpointRoundtrip &&
-                    finiteResult && changed &&
+    const bool ok = diagnosticsSchemaValid && diagnosticsFinite &&
+                    compared == int(checkpoints.size()) && checkpointRoundtrip &&
+                    initialOneStepCorrect && maximumLayerInputError < .03 &&
+                    maximumHeadProbabilityError < .03 && finiteResult && changed &&
                     (firstNonfiniteStep > 0 ||
                      lastFiniteStep == selected.steps);
     std::ostringstream report;
@@ -1793,11 +1835,22 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\npath_c=CPU_GRADIENT_HTP_OPTIMIZER"
            << "\npath_d=HTP_GRADIENT_HTP_OPTIMIZER"
            << "\nmaximum_gradient_max_abs_error=" << maximumGradientError
+           << "\nmaximum_layer_input_gradient_max_abs_error="
+           << maximumLayerInputError
+           << "\nmaximum_head_probability_max_abs_error="
+           << maximumHeadProbabilityError
+           << "\ndiagnostic_max_abs_error_limit=0.03"
+           << "\ndiagnostics_schema_valid="
+           << (diagnosticsSchemaValid ? "true" : "false")
+           << "\ndiagnostics_finite="
+           << (diagnosticsFinite ? "true" : "false")
            << "\nmaximum_optimizer_isolation_max_abs_error="
            << maximumOptimizerIsolationError
            << "\nfirst_major_divergence_checkpoint=" << firstMajorDivergence
-           << "\nfirst_major_divergence_tensor=token_embedding_gradient"
-           << "\nfirst_major_divergence_node=lm_dembedding"
+           << "\nfirst_major_divergence_tensor="
+           << (firstMajorDivergence < 0 ? "NONE" : "token_embedding_gradient")
+           << "\nfirst_major_divergence_node="
+           << (firstMajorDivergence < 0 ? "NONE" : "lm_dembedding")
            << "\nfirst_optimizer_divergence_checkpoint="
            << firstOptimizerDivergence
            << "\nfirst_divergence_classification=" << classification
@@ -1813,15 +1866,25 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\nexecute_count_per_training_step=2"
            << "\nbias_correction_scalar_responsibility=CPU"
            << "\noptimizer_math_responsibility=HTP"
-           << "\nbinding_training_inputs=one_hot,target,12_parameter_tensors,learning_rate"
+           << "\nbinding_training_inputs=one_hot,target,"
+           << tiny_lm::parameterRegistry(shape).size() << "_parameter_tensors"
+           << (generalizedNoSgdNext ? "" : ",learning_rate")
            << "\nbinding_training_input_type=APP_WRITE_FP32"
-           << "\nbinding_training_outputs=logits,forward_diagnostics,12_gradients,12_next_parameters"
+           << "\nbinding_training_outputs=logits,forward_diagnostics,"
+           << tiny_lm::parameterRegistry(shape).size() << "_gradients,"
+           << config.numLayers << "_layer_input_gradients,"
+           << (config.numHeads > 1 ? config.numLayers * config.numHeads : 0)
+           << "_head_probability_taps"
+           << (generalizedNoSgdNext ? "" : ",next_parameters")
            << "\nbinding_training_output_type=APP_READ_FP32"
+           << "\nbinding_training_learning_rate="
+           << (generalizedNoSgdNext ? "ZERO_CONTROL_NOT_BOUND"
+                                    : "APP_WRITE_FP32")
            << "\nbinding_adam_inputs=current,gradient,gradient_scale,m,v,lr,beta_scalars,bias_corrections,zero"
            << "\nbinding_adam_input_type=APP_WRITE_FP32"
            << "\nbinding_adam_outputs=m_next,v_next,m_hat,v_hat,sqrt_v_hat,denominator,normalized_update,scaled_update,weight_next"
            << "\nbinding_adam_output_type=APP_READ_FP32"
-           << "\nbinding_flat_parameter_shape=3136x1"
+           << "\nbinding_flat_parameter_shape=" << optimizerElements << "x1"
            << "\nbinding_scalar_shape=1x1"
            << "\ncurrent_next_in_place_alias=false\ncpu_fallback=false"
            << "\nnan_detected=" << (firstNanCount ? "true" : "false")
