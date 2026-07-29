@@ -176,6 +176,40 @@ void testGraphShapeValidator() {
     badAttentionProjected.outputs[0].shape = {8, 8};
     require(!validate(badAttentionProjected).ok,
             "shape validator accepted attention projected declared as [T,T]");
+    const auto headQuery = makeShapeNode(
+            "layer_00_head_00_query", Op::MatMul,
+            {{"q", {8, 16}}, {"selector", {16, 8}}}, {{"head_q", {8, 8}}});
+    require(validate(headQuery).ok, "shape validator rejected [D,Dh] head selector");
+    auto badHeadSelector = headQuery;
+    badHeadSelector.inputs[1].shape = {16, 7};
+    require(!validate(badHeadSelector).ok,
+            "shape validator accepted wrong head selector dimension");
+    const auto headContext = makeShapeNode(
+            "layer_00_head_00_context", Op::MatMul,
+            {{"probabilities", {8, 8}}, {"head_v", {8, 8}}}, {{"context", {8, 8}}});
+    require(validate(headContext).ok, "shape validator rejected head context [T,Dh]");
+    auto badHeadScores = headContext;
+    badHeadScores.inputs[0].shape = {8, 7};
+    require(!validate(badHeadScores).ok,
+            "shape validator accepted wrong head score shape");
+    const auto headScatter = makeShapeNode(
+            "layer_00_head_00_context_scatter", Op::MatMul,
+            {{"context", {8, 8}}, {"selector", {16, 8}}}, {{"scatter", {8, 16}}},
+            [](Node& node) { node.transposeInput1 = true; });
+    require(validate(headScatter).ok, "shape validator rejected head context scatter [T,D]");
+    auto badHeadScatter = headScatter;
+    badHeadScatter.outputs[0].shape = {8, 8};
+    require(!validate(badHeadScatter).ok,
+            "shape validator accepted head scatter instead of [T,D]");
+    const auto headSum = makeShapeNode(
+            "layer_00_head_context_sum_1", Op::ElementWiseBinary,
+            {{"head_00_scatter", {8, 16}}, {"head_01_scatter", {8, 16}}},
+            {{"full_context", {8, 16}}});
+    require(validate(headSum).ok, "shape validator rejected full head context sum");
+    auto badHeadSum = headSum;
+    badHeadSum.inputs[1].shape = {8, 8};
+    require(!validate(badHeadSum).ok,
+            "shape validator accepted head binding with incompatible scatter shape");
 
     const auto makeLayer = [](std::size_t layer, std::size_t tokens,
                               std::size_t dimension, std::size_t heads) {

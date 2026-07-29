@@ -39,26 +39,27 @@ Assert-True ($graphText -match 'g\.names\[i\]\s*=\s*"layer_00_tensor_"') `
     'runtime tensor naming must retain the layer_00 indexed contract'
 Assert-True ($graphText -match 'g\.names\[id\]\s*=\s*std::string\("layer_00_"\)') `
     'runtime parameter naming must retain the layer_00 indexed contract'
-$hasL2H1Builder = $generalizedText.Contains('prepareTinyTransformerTrainingGeneralized(') -and
-    $generalizedText.Contains('numHeads != 1 || numLayers != 2') -and
+$hasGeneralizedBuilder = $generalizedText.Contains('prepareTinyTransformerTrainingGeneralized(') -and
+    $generalizedText.Contains('numLayers == 0 || numLayers > 2 || numHeads == 0 || numHeads > 2') -and
     $generalizedText.Contains('for (uint32_t layer = 0; layer < numLayers; ++layer)') -and
     $generalizedText.Contains('const std::string prefix = "layer_0" + std::to_string(layer) + "_";') -and
     $generalizedText.Contains('record.input = layer == 0 ? input : g.layers[layer - 1].output;') -and
     $generalizedText.Contains('g.layers.back().output, outputProjection') -and
-    $generalizedText.Contains('"l2h1_lm_logits"')
-$hasL2H1Backward = $hasL2H1Builder -and
+    $generalizedText.Contains('topologyName + "_lm_logits"')
+$hasL2H1Backward = $hasGeneralizedBuilder -and
     $generalizedText.Contains('for (int layer = int(numLayers) - 1; layer >= 0; --layer)') -and
     $generalizedText.Contains(': g.layers[size_t(layer + 1)].backward[DINPUT]') -and
     $generalizedText.Contains('layerNorm.backward((prefix + "ln2").c_str()') -and
     $generalizedText.Contains('layerNorm.backward((prefix + "ln1").c_str()') -and
-    $generalizedText.Contains('reduceParams[1].scalarParam.bool8Value = true') -and
+    $generalizedText.Contains('auto reduceSumLast =') -and
+    $generalizedText.Contains('parameters[1].scalarParam.bool8Value = true') -and
     $generalizedText.Contains('g.tensors[lastAxis]') -and
     $generalizedText.Contains('backward(SOFTMAX_DOT)') -and
     $generalizedText.Contains('QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0') -and
     $generalizedText.Contains('backward(DQ_RAW),') -and
     $generalizedText.Contains('backward(DK_RAW),') -and
     $generalizedText.Contains('g.layers.front().backward[DINPUT], dEmbedding') -and
-    $generalizedText.Contains('g.parameterRegistry.size() != 22') -and
+    $generalizedText.Contains('const size_t expectedParameterCount = 2 + size_t(10) * numLayers') -and
     $generalizedText.Contains('g.gradientRegistry.size() != g.parameterRegistry.size()') -and
     $generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')
 $hasL2H1AttentionLayout = $hasL2H1Backward -and
@@ -69,7 +70,24 @@ $hasL2H1AttentionLayout = $hasL2H1Backward -and
     $generalizedText.Contains('activationName == "attention_probabilities"') -and
     $generalizedText.Contains('cache(ATTENTION_PROBABILITIES), cache(V),') -and
     $generalizedText.Contains('cache(ATTENTION_CONTEXT), record.wo,')
-if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not ($NumLayers -eq 2 -and $NumHeads -eq 1 -and $hasL2H1AttentionLayout)) {
+$hasH2Builder = $hasL2H1AttentionLayout -and
+    $generalizedText.Contains('const uint32_t headDimension = dimension / numHeads;') -and
+    $generalizedText.Contains('{dimension, headDimension}') -and
+    $generalizedText.Contains('for (uint32_t head = 0; head < numHeads; ++head)') -and
+    $generalizedText.Contains('headRecord.query = add(headPrefix + "query"') -and
+    $generalizedText.Contains('headRecord.contextScatter = add(headPrefix + "context_scatter"') -and
+    $generalizedText.Contains('headRecord.softmaxDot = add(headPrefix + "softmax_dot"') -and
+    $generalizedText.Contains('{tokens, 1}') -and
+    $generalizedText.Contains('headRecord.dQueryScatter = add(headPrefix + "dquery_scatter"') -and
+    $generalizedText.Contains('headRecord.dValueScatter = add(headPrefix + "dvalue_scatter"') -and
+    $generalizedText.Contains('head_context_sum_') -and
+    $generalizedText.Contains('{"dq", &record.headDqAccumulators') -and
+    $generalizedText.Contains('{"dk", &record.headDkAccumulators') -and
+    $generalizedText.Contains('{"dv", &record.headDvAccumulators') -and
+    $generalizedText.Contains('g.appReadRegistry.push_back(head.probabilities)')
+$supportedRequestedTopology = ($NumHeads -eq 1 -and $hasL2H1AttentionLayout) -or
+    ($NumHeads -eq 2 -and $hasH2Builder)
+if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not $supportedRequestedTopology) {
     Fail 'runtime source does not provide the requested indexed multi-layer/multi-head builder'
 }
 foreach ($marker in @('auto make =', 'auto many =', 'auto tapType =', 'TransformerTrainingLayerNormBuilder', 'layerNorm.forward(', 'layerNorm.backward(')) {
@@ -317,7 +335,32 @@ $tensorRows | Export-Csv -LiteralPath $tensorPath -NoTypeInformation -Encoding u
 # The L2/H1 rows below are derived from the generalized builder's exact `add`
 # names and layer chaining expression, not a hypothetical head/layer layout.
 $topologyRows = [Collections.Generic.List[object]]::new()
-if ($NumLayers -eq 2 -and $NumHeads -eq 1) {
+if ($NumHeads -eq 2 -and ($NumLayers -eq 1 -or $NumLayers -eq 2)) {
+    # H2 rows mirror the generalized HeadRegistry add calls exactly.  Wq/Wk/Wv
+    # remain one [D,D] parameter each per layer; selectors only slice their
+    # projected [T,D] activations into head-local [T,Dh] tensors.
+    $headNames = @('selector','query','key','value','scores','scaled','masked','probabilities','context','context_scatter','dcontext','dprobabilities','dvalue','softmax_product','softmax_dot','softmax_centered','dscores','dquery_raw','dkey_raw','dquery','dkey','dquery_scatter','dkey_scatter','dvalue_scatter')
+    for ($layer = 0; $layer -lt $NumLayers; ++$layer) {
+        $prefix = 'layer_{0:D2}' -f $layer
+        foreach ($parameter in @('wq','wk','wv','wo')) {
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=''; tensor="$prefix`_$parameter"; shape="$EmbeddingDim`x$EmbeddingDim"; role='single shared [D,D] layer parameter (not per-head)' })
+        }
+        for ($head = 0; $head -lt $NumHeads; ++$head) {
+            $headPrefix = "$prefix`_head_{0:D2}" -f $head
+            foreach ($name in $headNames) {
+                $headShape = if ($name -eq 'selector') { "$EmbeddingDim`x$HeadDim" } elseif ($name -in @('scores','scaled','masked','probabilities','dprobabilities','softmax_product','softmax_centered','dscores')) { "$Tokens`x$Tokens" } elseif ($name -eq 'softmax_dot') { "$Tokens`x1" } elseif ($name -in @('context_scatter','dquery_scatter','dkey_scatter','dvalue_scatter')) { "$Tokens`x$EmbeddingDim" } else { "$Tokens`x$HeadDim" }
+                $role = if ($name -eq 'selector') { 'STATIC [D,Dh] selector; unique layer/head binding' } elseif ($name -eq 'probabilities') { 'APP_READ head probability; layer-major/head-major order' } elseif ($name -eq 'softmax_dot') { 'key-axis ReduceSum keep_dims=true' } elseif ($name -in @('dquery','dkey')) { 'scaled head Q/K gradient' } elseif ($name -in @('context_scatter','dquery_scatter','dkey_scatter','dvalue_scatter')) { 'scatter [T,Dh] into [T,D] before ordered sum' } else { 'head-local forward/backward tensor' }
+                $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=$head; tensor="$headPrefix`_$name"; shape=$headShape; role=$role })
+            }
+        }
+        foreach ($accumulator in @('context','dq','dk','dv')) {
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head='sum'; tensor="$prefix`_head_accumulator_00_$accumulator"; shape="$Tokens`x$EmbeddingDim"; role='ordered head scatter sum output' })
+        }
+    }
+    $appReadCount = 7 + 11 * $NumLayers + $NumLayers * $NumHeads
+    $topologyRows.Add([pscustomobject][ordered]@{ layer='APP_READ'; head=''; tensor='registry'; shape="$appReadCount entries"; role="formula=7+11*layers+layers*heads; L$NumLayers H2 head probabilities are ordered layer-major/head-major" })
+    Assert-True ($topologyRows.Count -eq ($NumLayers * 56 + 1)) 'H2 topology row count assertion failed'
+} elseif ($NumLayers -eq 2 -and $NumHeads -eq 1) {
     $activationNames = @('ln1_mean','ln1_centered','ln1_centered_s','ln1_square','ln1_variance','ln1_variance_eps','ln1_inv_s','ln1_inv','ln1_xhat','ln1_xhat_gamma','ln1','q','k','v','attention_scores','attention_scaled','attention_masked','attention_probabilities','attention_context','attention_projected','residual1','ln2_mean','ln2_centered','ln2_centered_s','ln2_square','ln2_variance','ln2_variance_eps','ln2_inv_s','ln2_inv','ln2_xhat','ln2_xhat_gamma','ln2','ff1','relu','ff2','output')
     $gradientNames = @('dwq','dwk','dwv','dwo','dg1','db1','dg2','db2','dw1','dw2')
     $backwardNames = @('drelu','relu_mask','dff1','dln2','dxhat2','sum_dxhat2','dxhat_xhat2','dy_xhat2','sum_dxhat_xhat2','d_times_dxhat2','first_diff2','xhat_times_sum2','bracket2','inv_std_over_d2','dresidual1_ln','dresidual1','dcontext','dprobabilities','dv','softmax_product','softmax_dot','softmax_centered','dscores','dq_raw','dk_raw','dq','dk','dln1_q','dln1_k','dln1_v','dln1_qk','dln1','dxhat1','sum_dxhat1','dxhat_xhat1','dy_xhat1','sum_dxhat_xhat1','d_times_dxhat1','first_diff1','xhat_times_sum1','bracket1','inv_std_over_d1','dinput_norm','dinput')
@@ -370,6 +413,11 @@ if ($SelfTest) {
     Assert-True $hasL2H1AttentionLayout 'L2/H1 generalized forward/backward attention layout source contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.push_back(record.backward[DINPUT])')) 'layer DINPUT APP_READ contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')) 'gradient APP_READ contract self-test failed'
-    Assert-True (-not ($generalizedText.Contains('numHeads != 1') -eq $false)) 'L2/H1 source must reject unsupported head counts'
+    Assert-True $hasH2Builder 'H2 generalized builder source contract self-test failed'
+    Assert-True $generalizedText.Contains('numHeads > 2') 'source must reject unsupported head counts above H2'
+    if ($NumHeads -eq 2) {
+        $expectedAppRead = if ($NumLayers -eq 1) { 20 } elseif ($NumLayers -eq 2) { 33 } else { -1 }
+        Assert-True ($appReadCount -eq $expectedAppRead) 'H2 APP_READ count formula self-test failed'
+    }
     Write-Output 'graph_map_exporter_self_test=PASS'
 }
