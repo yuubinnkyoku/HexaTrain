@@ -14,6 +14,7 @@
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <sys/resource.h>
 #include <tuple>
 
 namespace phonelm::qnn {
@@ -1337,8 +1338,12 @@ bool executeLanguageAdam(Runtime &runtime, const Params &current,
   return true;
 }
 std::string languageModelAdam(bool oneStepOnly, int candidate,
-                              bool inferenceOnly) {
-  tiny_lm::Config config;
+                              bool inferenceOnly,
+                              tiny_lm::Config config = {},
+                              int lastSeed = 5,
+                              bool scalingSmoke = false,
+                              int layers = 1,
+                              int attentionHeads = 1) {
   const auto selected = adamCandidate(candidate);
   const bool formalPostFix = candidate == 3;
   Runtime runtime;
@@ -1356,6 +1361,75 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           config.epsilon, true, error, config.vocabularySize) ||
       !runtime.prepareAdamOptimizer(optimizerElements, error))
     return failure("adam_prepare", error, runtime);
+  bool scalingAppWriteUnchanged = true;
+  size_t scalingPoisonResidualElements = 0;
+  bool scalingAuditFinite = true;
+  const bool scalingConfiguration =
+      config.tokens != 8 || config.dimension != 16 || layers != 1 ||
+      attentionHeads != 1;
+  if (scalingConfiguration) {
+    constexpr float poison = 1.1415926f;
+    const auto auditBatch = languageBatch(config, 0);
+    const auto auditParameters = shape;
+    const auto inputHash = canonicalFloatSha256(auditBatch.first);
+    const auto targetHash = canonicalFloatSha256(auditBatch.second);
+    const auto parameterHash =
+        canonicalFloatSha256(flattenLanguageParameters(auditParameters));
+    TinyTransformerTrainingOutputs auditOutput;
+    auditOutput.output.assign(size_t(config.tokens) * config.dimension,
+                              poison);
+    auditOutput.dOutput = auditOutput.output;
+    auditOutput.embeddedInput = auditOutput.output;
+    auditOutput.dEmbeddedInput = auditOutput.output;
+    auditOutput.logits.assign(
+        size_t(config.tokens) * config.vocabularySize, poison);
+    auditOutput.probabilities = auditOutput.logits;
+    auditOutput.dLogits = auditOutput.logits;
+    auditOutput.gradients = auditParameters;
+    auditOutput.next = auditParameters;
+    for (const auto &[name, member] : languageFields()) {
+      (void)name;
+      std::fill((auditOutput.gradients.*member).begin(),
+                (auditOutput.gradients.*member).end(), poison);
+      std::fill((auditOutput.next.*member).begin(),
+                (auditOutput.next.*member).end(), poison);
+    }
+    if (!runtime.executeTinyTransformerTraining(
+            auditBatch.first, auditBatch.second, auditParameters, 0.0f,
+            auditOutput, error))
+      return failure("scaling_binding_audit", error, runtime);
+    scalingAppWriteUnchanged =
+        inputHash == canonicalFloatSha256(auditBatch.first) &&
+        targetHash == canonicalFloatSha256(auditBatch.second) &&
+        parameterHash ==
+            canonicalFloatSha256(flattenLanguageParameters(auditParameters)) &&
+        runtime.tinyTransformerTrainingLastLearningRateBytesUnchanged();
+    const std::array<const std::vector<float> *, 7> auditVectors{
+        &auditOutput.output,        &auditOutput.dOutput,
+        &auditOutput.embeddedInput, &auditOutput.dEmbeddedInput,
+        &auditOutput.logits,        &auditOutput.probabilities,
+        &auditOutput.dLogits};
+    for (const auto *values : auditVectors) {
+      scalingPoisonResidualElements +=
+          std::count(values->begin(), values->end(), poison);
+      scalingAuditFinite = scalingAuditFinite && finite(*values);
+    }
+    const auto auditGradients =
+        flattenLanguageParameters(auditOutput.gradients);
+    const auto auditNext = flattenLanguageParameters(auditOutput.next);
+    scalingPoisonResidualElements +=
+        std::count(auditGradients.begin(), auditGradients.end(), poison);
+    scalingPoisonResidualElements +=
+        std::count(auditNext.begin(), auditNext.end(), poison);
+    scalingAuditFinite = scalingAuditFinite && finite(auditGradients) &&
+                         finite(auditNext);
+    if (!scalingAppWriteUnchanged || scalingPoisonResidualElements != 0 ||
+        !scalingAuditFinite)
+      return failure("scaling_binding_audit",
+                     "APP_WRITE mutation, APP_READ poison residual, or "
+                     "non-finite audit output detected.",
+                     runtime);
+  }
   if (oneStepOnly) {
     constexpr float diagnosticLearningRate = .003f;
     const std::array<int, 13> checkpoints{
@@ -1705,7 +1779,6 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   std::vector<Params> inferenceParameters;
   std::vector<Params> cpuInferenceParameters;
   std::vector<double> formalTrainingStepLatencyUs;
-  const int lastSeed = 5;
   for (int seed = 1; seed <= lastSeed; ++seed) {
     const auto seedExecuteStart = runtime.metrics().graphExecuteCount;
     bool seedAllStepsFinite = true;
@@ -1966,8 +2039,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         std::vector<uint32_t>{0, 1, 2, 3}, std::vector<uint32_t>{4, 5, 6, 7},
         std::vector<uint32_t>{8, 9}, std::vector<uint32_t>{10, 11, 12}};
     const auto parityBatch = languageBatch(config, 0, 0);
-    const std::vector<uint32_t> parityTokenIds{0, 1, 2, 3, 0, 1, 2, 3};
-    const std::vector<uint32_t> parityTargetIds{1, 2, 3, 0, 1, 2, 3, 0};
+    std::vector<uint32_t> parityTokenIds(config.tokens);
+    std::vector<uint32_t> parityTargetIds(config.tokens);
+    for (uint32_t index = 0; index < config.tokens; ++index) {
+      parityTokenIds[index] = index % 4;
+      parityTargetIds[index] = (index + 1) % 4;
+    }
     const auto generationInput =
         tiny_lm::oneHot(parityTokenIds, config.vocabularySize);
     const auto generationTarget =
@@ -2289,16 +2366,21 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                   << (seedIndex + 1) << "_cpu_htp_max_abs_error="
                   << seedCpuHtp.maximum << '\n';
     }
+    std::ostringstream samePrefixPositions;
+    for (uint32_t index = 0; index < config.tokens; ++index) {
+      if (index) samePrefixPositions << ',';
+      samePrefixPositions << index;
+    }
     trajectory
-        << "same_prefix_token_ids=0,1,2,3,0,1,2,3"
+        << "same_prefix_token_ids=" << formalTokenList(parityTokenIds)
         << "\nsame_prefix_host_inputs_identical="
         << ((parityBatch.first == generationInput &&
              parityBatch.second == generationTarget)
                 ? "true"
                 : "false")
-        << "\nsame_prefix_valid_token_count=8"
-        << "\nsame_prefix_position_indices=0,1,2,3,4,5,6,7"
-        << "\nsame_prefix_logit_read_position=7"
+        << "\nsame_prefix_valid_token_count=" << config.tokens
+        << "\nsame_prefix_position_indices=" << samePrefixPositions.str()
+        << "\nsame_prefix_logit_read_position=" << (config.tokens - 1)
         << "\nsame_prefix_representative_finite="
         << (representativeParityFinite ? "true" : "false")
         << "\nsame_prefix_cpu_eval_generation_max_abs_error="
@@ -2641,8 +2723,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       oracleQualifyingSeeds += seedOracleExactPatterns == 4;
     }
     const bool exactSuccess = !outputNonfinite &&
-                              qualifyingSeeds >= 4 && exactRollouts >= 16 &&
-                              oracleQualifyingSeeds >= 4;
+                              qualifyingSeeds >= std::min(4, lastSeed) &&
+                              exactRollouts >= std::min(16, lastSeed * 4) &&
+                              oracleQualifyingSeeds >= std::min(4, lastSeed);
     constexpr size_t kGenerationWarmupCalls = 16;
     constexpr size_t kTrainingWarmupSteps = 16;
     std::vector<double> measuredGenerationLatencyUs;
@@ -2669,21 +2752,50 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           size_t(quantile * double(values.size() - 1)));
       return values[index];
     };
+    const size_t expectedGenerationCases = size_t(lastSeed) * 4;
+    const size_t expectedPrefixComparisons =
+        expectedGenerationCases * 2 * 8;
+    const size_t expectedTrainingSteps =
+        size_t(lastSeed) * size_t(selected.steps);
+    const bool scalingGenerationComplete =
+        scalingSmoke
+            ? size_t(oracleExactRollouts) == expectedGenerationCases &&
+                  exactRollouts >= 1
+            : size_t(oracleExactRollouts) == expectedGenerationCases &&
+                  size_t(exactRollouts) == expectedGenerationCases;
     const bool formalComplete =
         !nan && !outputNonfinite && allLoss &&
         allFormalCpuFinite && formalPrefixComparisonsFinite &&
         formalContextSelfTest &&
-        inferenceParameters.size() == 5 && cpuInferenceParameters.size() == 5 &&
-        formalFreeCaseCount == 20 && formalOracleCaseCount == 20 &&
-        formalPrefixComparisonCount == 320 &&
-        formalGenerationLatencyUs.size() == 320 &&
-        formalTrainingStepLatencyUs.size() == 1600 &&
+        inferenceParameters.size() == size_t(lastSeed) &&
+        cpuInferenceParameters.size() == size_t(lastSeed) &&
+        formalFreeCaseCount == expectedGenerationCases &&
+        formalOracleCaseCount == expectedGenerationCases &&
+        formalPrefixComparisonCount == expectedPrefixComparisons &&
+        formalGenerationLatencyUs.size() == expectedPrefixComparisons &&
+        formalTrainingStepLatencyUs.size() == expectedTrainingSteps &&
+        scalingGenerationComplete &&
         !formalRepresentativeFinalLogitsHash.empty() &&
         runtime.apiTrace().graphExecuteFailureCount == 0;
     std::ostringstream formalSummary;
     if (formalPostFix) {
       formalSummary
           << "\nsource_protocol=POST_FIX_ADAM_LR0.003_STEPS320_V1"
+          << "\nscaling_evaluation=" << (lastSeed == 5 && !scalingSmoke
+                                                ? "FORMAL"
+                                                : "SMOKE")
+          << "\nsequence_length=" << config.tokens
+          << "\nembedding_dimension=" << config.dimension
+          << "\ntransformer_layers=" << layers
+          << "\nattention_heads=" << attentionHeads
+          << "\nfeed_forward_dimension=" << config.feedForwardDimension
+          << "\nshape_contract_valid=true"
+          << "\napp_write_hashes_unchanged="
+          << (scalingAppWriteUnchanged ? "true" : "false")
+          << "\napp_read_poison_residual_elements="
+          << scalingPoisonResidualElements
+          << "\nbinding_audit_all_outputs_finite="
+          << (scalingAuditFinite ? "true" : "false")
           << "\ntraining_phase=0"
           << "\nglobal_gradient_clipping=disabled"
           << "\nformal_oracle_case_count=" << formalOracleCaseCount
@@ -2751,10 +2863,20 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                   ? 1000000.0 * config.tokens /
                         latencyPercentileUs(measuredTrainingStepLatencyUs, 0.5)
                   : 0.0);
+      struct rusage usage {};
+      const bool peakRssAvailable = getrusage(RUSAGE_SELF, &usage) == 0;
+      formalSummary
+          << "\nprocess_peak_rss_available="
+          << (peakRssAvailable ? "true" : "false")
+          << "\nprocess_peak_rss_kib="
+          << (peakRssAvailable ? usage.ru_maxrss : 0);
     }
     std::ostringstream report;
     report << "TINY_LANGUAGE_MODEL\ntest="
-           << (formalPostFix ? "post_fix_end_to_end_generation"
+           << (formalPostFix
+                   ? (config.tokens == 8 && config.dimension == 16
+                          ? "post_fix_end_to_end_generation"
+                          : "scaled_tiny_lm_end_to_end_generation")
                              : "adam_inference_4_pattern")
            << "\nstatus="
            << (formalPostFix
@@ -2777,7 +2899,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\nsampling="
            << (formalPostFix ? "pattern_round_robin_phase0"
                              : "pattern_balanced_phase01_round_robin")
-           << "\nseed_count=5\nrepresentative_seed_exact_pattern_count="
+           << "\nseed_count=" << lastSeed
+           << "\nrepresentative_seed_exact_pattern_count="
            << exactPatterns << "\nqualifying_seed_count=" << qualifyingSeeds
            << "\nexact_rollout_count=" << exactRollouts
            << "\noracle_qualifying_seed_count=" << oracleQualifyingSeeds
@@ -3537,7 +3660,9 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
 }
 
 } // namespace
-std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
+std::string runTinyTransformerTrainingExperiment(
+    ExecutionMode mode, const TrainingConfig& trainingConfig) {
+  (void)trainingConfig;
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);
   if (mode ==
@@ -3609,6 +3734,53 @@ std::string runTinyTransformerTrainingExperiment(ExecutionMode mode) {
   if (mode ==
       ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END)
     return languageModelAdam(false, 3, true);
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_16_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 16;
+    return languageModelAdam(false, 3, true, config, 1, true);
+  }
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_32_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    return languageModelAdam(false, 3, true, config, 1, true);
+  }
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_DIMENSION_32_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true);
+  }
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE)
+    return "TINY_LANGUAGE_MODEL\n"
+           "test=scaled_tiny_lm_end_to_end_generation\n"
+           "status=FAILED\n"
+           "failure_stage=configuration_validation\n"
+           "failure_code=UNSUPPORTED_TRANSFORMER_LAYER_COUNT\n"
+           "sequence_length=32\nembedding_dimension=32\n"
+           "transformer_layers=2\nattention_heads=1\n"
+           "maximum_supported_transformer_layers=1\n"
+           "backend_requested=HTP\ncpu_fallback=false\n";
+  if (mode ==
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE)
+    return "TINY_LANGUAGE_MODEL\n"
+           "test=scaled_tiny_lm_end_to_end_generation\n"
+           "status=FAILED\n"
+           "failure_stage=configuration_validation\n"
+           "failure_code=UNSUPPORTED_ATTENTION_HEAD_COUNT\n"
+           "sequence_length=32\nembedding_dimension=32\n"
+           "transformer_layers=1\nattention_heads=2\n"
+           "maximum_supported_attention_heads=1\n"
+           "backend_requested=HTP\ncpu_fallback=false\n";
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    return languageModelAdam(false, 3, true, config, 5, false);
+  }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn

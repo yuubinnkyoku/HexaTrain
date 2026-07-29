@@ -147,6 +147,12 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC: return "QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END: return "QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_16_SMOKE: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_16_SMOKE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_32_SMOKE: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_32_SMOKE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_DIMENSION_32_SMOKE: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_DIMENSION_32_SMOKE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL: return "QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL";
         default: return "UNKNOWN";
     }
 }
@@ -255,7 +261,13 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END:
-            return qnn::runTinyTransformerTrainingExperiment(mode);
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_16_SMOKE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_32_SMOKE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_DIMENSION_32_SMOKE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL:
+            return qnn::runTinyTransformerTrainingExperiment(mode, config);
         default: {
             const std::string report =
                 "status=NOT_IMPLEMENTED\nerror=unknown execution mode";

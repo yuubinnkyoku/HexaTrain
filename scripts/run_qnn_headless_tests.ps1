@@ -17,7 +17,10 @@ param(
         "qnn-tap-backward-regions", "qnn-tap-layernorm1", "qnn-tap-dscores-only",
         "qnn-tap-dprob-dscores",
         "qnn-adam-diagnostic", "qnn-adam-late-baseline", "qnn-adam-late-diagnostic",
-        "post-fix-end-to-end"
+        "post-fix-end-to-end",
+        "scale-sequence-16-smoke", "scale-sequence-32-smoke",
+        "scale-dimension-32-smoke", "scale-layers-2-smoke",
+        "scale-heads-2-smoke", "scale-formal"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",

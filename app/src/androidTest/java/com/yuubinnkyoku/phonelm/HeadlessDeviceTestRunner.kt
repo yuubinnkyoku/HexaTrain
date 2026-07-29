@@ -166,6 +166,12 @@ class HeadlessDeviceTestRunner {
         "qnn-adam-late-baseline" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_BASELINE
         "qnn-adam-late-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_ADAM_LATE_NONFINITE_DIAGNOSTIC
         "post-fix-end-to-end" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_POST_FIX_END_TO_END
+        "scale-sequence-16-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_16_SMOKE
+        "scale-sequence-32-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_SEQUENCE_32_SMOKE
+        "scale-dimension-32-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_DIMENSION_32_SMOKE
+        "scale-layers-2-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE
+        "scale-heads-2-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE
+        "scale-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }
 }
