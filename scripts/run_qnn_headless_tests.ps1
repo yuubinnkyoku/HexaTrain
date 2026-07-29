@@ -24,7 +24,8 @@ param(
         "scale-l2h1-t16d16-smoke", "scale-l2h1-t32d32-smoke",
         "scale-l1h2-t16d16-smoke", "scale-l1h2-t32d32-smoke",
         "scale-l2h2-t16d16-smoke", "scale-l2h2-t32d32-smoke",
-        "scale-l2h1-formal", "scale-l1h2-formal"
+        "scale-l2h1-formal", "scale-l1h2-formal",
+        "scale-l2h2-t32d32-formal"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",

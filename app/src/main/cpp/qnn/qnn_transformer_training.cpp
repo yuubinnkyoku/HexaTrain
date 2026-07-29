@@ -3884,6 +3884,13 @@ std::string runTinyTransformerTrainingExperiment(
     config.feedForwardDimension = 32;
     return languageModelAdam(false, 3, true, config, 5, false, 1, 2);
   }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_FORMAL) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 5, false, 2, 2);
+  }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn
