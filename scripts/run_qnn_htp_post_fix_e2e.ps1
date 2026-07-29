@@ -254,8 +254,26 @@ try {
     if (($emulatorProperties -join "`n") -match '(?im)^(1|.*(goldfish|ranchu|emulator).*)$') {
         throw 'Emulator device rejected; a physical device is required.'
     }
-    & $qairtChecker -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
-    if ($LASTEXITCODE -ne 0) { throw 'QAIRT SDK check failed.' }
+    $qairtCheck = (& $qairtChecker -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId 2>&1) -join "`n"
+    $qairtCheckExit = $LASTEXITCODE
+    $qairtCheck | Write-Host
+    $qairtCheckStatus = Get-ReportValue $qairtCheck 'status'
+    if ($qairtCheckExit -eq 2 -or $qairtCheckStatus -eq 'BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED') {
+        throw 'QAIRT SDK was not found at the explicit root.'
+    }
+    if ($qairtCheckExit -eq 4 -or $qairtCheckStatus -eq 'QAIRT_BUILD_ID_MISMATCH') {
+        throw "QAIRT build ID did not match $ExpectedBuildId."
+    }
+    if ($qairtCheckExit -notin 0, 3) {
+        throw "QAIRT SDK check failed with exit code $qairtCheckExit."
+    }
+    if ((Get-ReportValue $qairtCheck 'expected_build_id_match') -ne 'true') {
+        throw 'QAIRT SDK check did not confirm expected_build_id_match=true.'
+    }
+    $resolvedQairtRoot = [IO.Path]::GetFullPath((Get-ReportValue $qairtCheck 'sdk_root'))
+    if ($resolvedQairtRoot -ne [IO.Path]::GetFullPath($QairtSdkRoot)) {
+        throw 'QAIRT SDK check did not honor the explicit root.'
+    }
 
     $runs = [Collections.Generic.List[object]]::new()
     for ($index = 1; $index -le $Repetitions; $index++) {
