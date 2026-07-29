@@ -43,6 +43,7 @@ class BenchmarkConfigTest {
             ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_FORMAL to 95,
             ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL to 96,
             ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_FORMAL to 97,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC to 98,
         )
         assertEquals(expected.values.toSet().size, expected.size)
         expected.forEach { (mode, nativeCode) -> assertEquals(nativeCode, mode.nativeCode) }

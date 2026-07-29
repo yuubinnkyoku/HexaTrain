@@ -181,6 +181,7 @@ class HeadlessDeviceTestRunner {
         "scale-l2h1-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_FORMAL
         "scale-l1h2-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL
         "scale-l2h2-t32d32-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_FORMAL
+        "scale-l2h2-t32d32-diagnostic" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }
 }

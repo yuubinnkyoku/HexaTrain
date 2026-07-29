@@ -18,7 +18,15 @@ uint32_t headDim(const Config&);
 std::vector<ParameterInfo> parameterRegistry(const qnn::TinyTransformerParameters&);
 size_t parameterElementCount(const qnn::TinyTransformerParameters&);
 bool parameterStorageHasNoAliases(const qnn::TinyTransformerParameters&);
-struct StepResult { float loss=0,accuracy=0; std::vector<float> embeddedInput,transformerOutput,logits,probabilities,dLogits,dEmbeddedInput; qnn::TinyTransformerParameters gradients,next; };
+struct StepResult {
+  float loss=0,accuracy=0;
+  std::vector<float> embeddedInput,transformerOutput,logits,probabilities,dLogits,dEmbeddedInput;
+  // Diagnostic ordering is layer-major; attention probabilities are
+  // [layer * numHeads + head], each with [T,T] elements.
+  std::vector<std::vector<float>> layerInputGradients;
+  std::vector<std::vector<float>> attentionHeadProbabilities;
+  qnn::TinyTransformerParameters gradients,next;
+};
 struct GradientCheckResult { bool passed=false; float maximumAbsoluteError=0,maximumRelativeError=0; std::string report; };
 struct MomentumResult { qnn::TinyTransformerParameters velocity,next; };
 struct AdamResult {

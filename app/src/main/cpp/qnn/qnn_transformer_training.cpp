@@ -294,19 +294,23 @@ bool finite(const std::vector<float> &v) {
                      [](float x) { return std::isfinite(x); });
 }
 double maxParamError(const Params &a, const Params &b) {
-  return std::max({maxAbs(a.gamma1, b.gamma1), maxAbs(a.beta1, b.beta1),
-                   maxAbs(a.wq, b.wq), maxAbs(a.wk, b.wk), maxAbs(a.wv, b.wv),
-                   maxAbs(a.wo, b.wo), maxAbs(a.gamma2, b.gamma2),
-                   maxAbs(a.beta2, b.beta2), maxAbs(a.w1, b.w1),
-                   maxAbs(a.w2, b.w2),
-                   maxAbs(a.tokenEmbedding, b.tokenEmbedding),
-                   maxAbs(a.outputProjection, b.outputProjection)});
+  const auto ar = tiny_lm::parameterRegistry(a);
+  const auto br = tiny_lm::parameterRegistry(b);
+  if (ar.size() != br.size()) return std::numeric_limits<double>::infinity();
+  double maximum = 0;
+  for (size_t i = 0; i < ar.size(); ++i) {
+    if (ar[i].name != br[i].name || ar[i].values->size() != br[i].values->size())
+      return std::numeric_limits<double>::infinity();
+    maximum = std::max(maximum, maxAbs(*ar[i].values, *br[i].values));
+  }
+  return maximum;
 }
 bool finiteParams(const Params &p) {
-  return finite(p.gamma1) && finite(p.beta1) && finite(p.wq) && finite(p.wk) &&
-         finite(p.wv) && finite(p.wo) && finite(p.gamma2) && finite(p.beta2) &&
-         finite(p.w1) && finite(p.w2) && finite(p.tokenEmbedding) &&
-         finite(p.outputProjection);
+  const auto registry = tiny_lm::parameterRegistry(p);
+  return std::all_of(registry.begin(), registry.end(),
+                     [](const tiny_lm::ParameterInfo &entry) {
+                       return finite(*entry.values);
+                     });
 }
 double paramNorm(const Params &p) {
   double s = 0;
@@ -314,18 +318,7 @@ double paramNorm(const Params &p) {
     for (float x : v)
       s += double(x) * x;
   };
-  add(p.gamma1);
-  add(p.beta1);
-  add(p.wq);
-  add(p.wk);
-  add(p.wv);
-  add(p.wo);
-  add(p.gamma2);
-  add(p.beta2);
-  add(p.w1);
-  add(p.w2);
-  add(p.tokenEmbedding);
-  add(p.outputProjection);
+  for (const auto &entry : tiny_lm::parameterRegistry(p)) add(*entry.values);
   return std::sqrt(s);
 }
 std::string failure(const char *test, const std::string &e, Runtime &r) {
@@ -1542,22 +1535,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     };
     auto appendParameterStats = [&](const std::string &prefix, const Params &cpu,
                                     const Params &htp) {
-      const std::array<const char *, 12> names{
-          "norm1_gamma", "norm1_beta", "wq", "wk", "wv", "wo",
-          "norm2_gamma", "norm2_beta", "ffn_w1", "ffn_w2",
-          "token_embedding", "output_projection"};
-      const std::array<const std::vector<float> *, 12> ca{
-          &cpu.gamma1, &cpu.beta1, &cpu.wq, &cpu.wk, &cpu.wv, &cpu.wo,
-          &cpu.gamma2, &cpu.beta2, &cpu.w1, &cpu.w2,
-          &cpu.tokenEmbedding, &cpu.outputProjection};
-      const std::array<const std::vector<float> *, 12> ha{
-          &htp.gamma1, &htp.beta1, &htp.wq, &htp.wk, &htp.wv, &htp.wo,
-          &htp.gamma2, &htp.beta2, &htp.w1, &htp.w2,
-          &htp.tokenEmbedding, &htp.outputProjection};
+      const auto ca = tiny_lm::parameterRegistry(cpu);
+      const auto ha = tiny_lm::parameterRegistry(htp);
+      if (ca.size() != ha.size()) return std::numeric_limits<double>::infinity();
       double worst = 0;
-      for (size_t i = 0; i < names.size(); ++i)
-        worst = std::max(
-            worst, appendStats(prefix + "_" + names[i], *ca[i], *ha[i]));
+      for (size_t i = 0; i < ca.size(); ++i) {
+        if (ca[i].name != ha[i].name)
+          return std::numeric_limits<double>::infinity();
+        std::string name = ca[i].name;
+        std::replace(name.begin(), name.end(), '.', '_');
+        worst = std::max(worst, appendStats(prefix + "_" + name,
+                                            *ca[i].values, *ha[i].values));
+      }
       return worst;
     };
     for (int completed = 0; completed <= 320; ++completed) {
@@ -1603,6 +1592,28 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                     htpGradient.probabilities);
         appendStats(prefix + "_dlogits", cpuGradient.dLogits,
                     htpGradient.dLogits);
+        if (cpuGradient.layerInputGradients.size() !=
+                htpGradient.layerInputGradients.size() ||
+            cpuGradient.attentionHeadProbabilities.size() !=
+                htpGradient.taps.size())
+          return failure("adam_sync_diagnostics",
+                         "CPU/HTP layer or head diagnostic count mismatch.",
+                         runtime);
+        for (size_t layer = 0; layer < cpuGradient.layerInputGradients.size();
+             ++layer)
+          appendStats(prefix + "_layer_" + std::to_string(layer) +
+                          "_input_gradient",
+                      cpuGradient.layerInputGradients[layer],
+                      htpGradient.layerInputGradients[layer]);
+        for (size_t index = 0;
+             index < cpuGradient.attentionHeadProbabilities.size(); ++index) {
+          const size_t layer = index / config.numHeads;
+          const size_t head = index % config.numHeads;
+          appendStats(prefix + "_layer_" + std::to_string(layer) + "_head_" +
+                          std::to_string(head) + "_attention_probabilities",
+                      cpuGradient.attentionHeadProbabilities[index],
+                      htpGradient.taps[index].values);
+        }
         const double gradientError = appendParameterStats(
             prefix + "_gradient", cpuGradient.gradients,
             htpGradient.gradients);
@@ -3890,6 +3901,13 @@ std::string runTinyTransformerTrainingExperiment(
     config.dimension = 32;
     config.feedForwardDimension = 32;
     return languageModelAdam(false, 3, true, config, 5, false, 2, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(true, 3, true, config, 1, false, 2, 2);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
