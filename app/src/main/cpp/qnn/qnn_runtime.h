@@ -161,6 +161,9 @@ struct TinyTransformerTrainingOutputs {
     std::vector<float> dOutput;
     std::vector<float> embeddedInput, logits, probabilities, dLogits;
     std::vector<float> dEmbeddedInput;
+    // Ordered layer inputs: element 0 is the gradient after positional input
+    // construction and is also exposed through dEmbeddedInput for compatibility.
+    std::vector<std::vector<float>> layerInputGradients;
     TinyTransformerParameters gradients;
     TinyTransformerParameters next;
     float tapPoison = 0.0f;
@@ -367,6 +370,10 @@ private:
         uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
         TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
         uint32_t numHeads);
+    bool executeTinyTransformerTrainingGeneralized(
+        const std::vector<float>& input, const std::vector<float>& target,
+        const TinyTransformerParameters& current, float learningRate,
+        TinyTransformerTrainingOutputs& outputs, std::string& error);
     BackendInfo info_;
     std::string diagnostics_;
     RuntimeMetrics metrics_;

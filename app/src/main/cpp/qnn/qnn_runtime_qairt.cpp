@@ -448,8 +448,11 @@ struct Runtime::Impl {
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
         std::uint32_t vocabularySize = 0, numLayers = 0, numHeads = 0;
         std::uint32_t tensorCreateSuccessCount = 0, graphAddNodeSuccessCount = 0;
+        std::uint32_t lastInputTensorCount = 0, lastOutputTensorCount = 0;
+        bool lastLearningRateBytesUnchanged = true;
         State state = State::INACTIVE;
         bool active = false, languageModel = false, diagnosticOutputs = false;
+        bool executeDiagnosticsEmitted = false;
     } generalizedTinyTransformerTraining;
 
     struct TinyTransformerGraph {
@@ -501,13 +504,25 @@ std::uint32_t Runtime::tinyTransformerTrainingSourceGraphAddNodeSuccessCount() c
     return impl_ ? impl_->tinyTransformerTraining.sourceGraphAddNodeSuccessCount : 0;
 }
 std::uint32_t Runtime::tinyTransformerTrainingLastInputTensorCount() const {
-    return impl_ ? impl_->tinyTransformerTraining.lastInputTensorCount : 0;
+    if (!impl_) return 0;
+    const auto &generalized = impl_->generalizedTinyTransformerTraining;
+    return generalized.state == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE
+        ? generalized.lastInputTensorCount
+        : impl_->tinyTransformerTraining.lastInputTensorCount;
 }
 std::uint32_t Runtime::tinyTransformerTrainingLastOutputTensorCount() const {
-    return impl_ ? impl_->tinyTransformerTraining.lastOutputTensorCount : 0;
+    if (!impl_) return 0;
+    const auto &generalized = impl_->generalizedTinyTransformerTraining;
+    return generalized.state == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE
+        ? generalized.lastOutputTensorCount
+        : impl_->tinyTransformerTraining.lastOutputTensorCount;
 }
 bool Runtime::tinyTransformerTrainingLastLearningRateBytesUnchanged() const {
-    return impl_ ? impl_->tinyTransformerTraining.lastLearningRateBytesUnchanged : false;
+    if (!impl_) return false;
+    const auto &generalized = impl_->generalizedTinyTransformerTraining;
+    return generalized.state == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE
+        ? generalized.lastLearningRateBytesUnchanged
+        : impl_->tinyTransformerTraining.lastLearningRateBytesUnchanged;
 }
 
 void Runtime::setOptions(const RuntimeOptions& options) { options_ = options; }
@@ -1089,4 +1104,5 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 #include "qnn_runtime_transformer.inc"
 #include "qnn_runtime_transformer_training.inc"
 #include "qnn_runtime_transformer_training_generalized.inc"
+#include "qnn_runtime_transformer_training_generalized_execute.inc"
 }

@@ -1416,6 +1416,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   const bool scalingConfiguration =
       config.tokens != 8 || config.dimension != 16 || layers != 1 ||
       attentionHeads != 1;
+  const bool generalizedNoSgdNext =
+      config.numLayers == 2 && config.numHeads == 1;
   if (scalingConfiguration) {
     constexpr float poison = 1.1415926f;
     const auto auditBatch = languageBatch(config, 0);
@@ -1434,15 +1436,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         size_t(config.tokens) * config.vocabularySize, poison);
     auditOutput.probabilities = auditOutput.logits;
     auditOutput.dLogits = auditOutput.logits;
-    auditOutput.gradients = auditParameters;
-    auditOutput.next = auditParameters;
-    for (const auto &[name, member] : languageFields()) {
-      (void)name;
-      std::fill((auditOutput.gradients.*member).begin(),
-                (auditOutput.gradients.*member).end(), poison);
-      std::fill((auditOutput.next.*member).begin(),
-                (auditOutput.next.*member).end(), poison);
-    }
+    auditOutput.gradients = unflattenLanguageParameters(
+        std::vector<float>(flattenLanguageParameters(auditParameters).size(), poison),
+        auditParameters);
+    auditOutput.next = auditOutput.gradients;
     if (!runtime.executeTinyTransformerTraining(
             auditBatch.first, auditBatch.second, auditParameters, 0.0f,
             auditOutput, error))
@@ -1453,11 +1450,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         parameterHash ==
             canonicalFloatSha256(flattenLanguageParameters(auditParameters)) &&
         runtime.tinyTransformerTrainingLastLearningRateBytesUnchanged();
-    const std::array<const std::vector<float> *, 7> auditVectors{
-        &auditOutput.output,        &auditOutput.dOutput,
-        &auditOutput.embeddedInput, &auditOutput.dEmbeddedInput,
-        &auditOutput.logits,        &auditOutput.probabilities,
-        &auditOutput.dLogits};
+    std::vector<const std::vector<float> *> auditVectors{
+        &auditOutput.output, &auditOutput.dOutput, &auditOutput.dEmbeddedInput,
+        &auditOutput.logits, &auditOutput.probabilities, &auditOutput.dLogits};
+    if (!generalizedNoSgdNext) auditVectors.push_back(&auditOutput.embeddedInput);
     for (const auto *values : auditVectors) {
       scalingPoisonResidualElements +=
           std::count(values->begin(), values->end(), poison);
@@ -1465,13 +1461,20 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     }
     const auto auditGradients =
         flattenLanguageParameters(auditOutput.gradients);
-    const auto auditNext = flattenLanguageParameters(auditOutput.next);
     scalingPoisonResidualElements +=
         std::count(auditGradients.begin(), auditGradients.end(), poison);
-    scalingPoisonResidualElements +=
-        std::count(auditNext.begin(), auditNext.end(), poison);
-    scalingAuditFinite = scalingAuditFinite && finite(auditGradients) &&
-                         finite(auditNext);
+    scalingAuditFinite = scalingAuditFinite && finite(auditGradients);
+    if (!generalizedNoSgdNext) {
+      const auto auditNext = flattenLanguageParameters(auditOutput.next);
+      scalingPoisonResidualElements +=
+          std::count(auditNext.begin(), auditNext.end(), poison);
+      scalingAuditFinite = scalingAuditFinite && finite(auditNext);
+    } else if (!auditOutput.next.tokenEmbedding.empty() ||
+               !auditOutput.next.layers.empty() ||
+               !auditOutput.next.outputProjection.empty()) {
+      return failure("scaling_binding_audit",
+                     "generalized graph reported SGD next parameters.", runtime);
+    }
     if (!scalingAppWriteUnchanged || scalingPoisonResidualElements != 0 ||
         !scalingAuditFinite)
       return failure("scaling_binding_audit",

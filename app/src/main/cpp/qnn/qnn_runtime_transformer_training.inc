@@ -937,19 +937,15 @@ bool Runtime::executeTinyTransformerTraining(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
-  // The L2/H1 builder currently finalizes the graph-native forward and LM
-  // gradient terminal. Binding its independent per-layer parameters is the
-  // next milestone; fail before assembling fixed-L1 bindings so this path can
-  // never silently execute a collapsed graph or fall back to CPU.
   const auto generalizedState = impl_->generalizedTinyTransformerTraining.state;
-  if (generalizedState !=
-      Impl::GeneralizedTinyTransformerTrainingGraph::State::INACTIVE) {
-    error = generalizedState ==
-                    Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE
-                ? "generalized L2/H1 execution bindings unavailable"
-                : "generalized L2/H1 preparation did not complete";
+  if (generalizedState == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE)
+    return executeTinyTransformerTrainingGeneralized(input, target, current,
+                                                     learningRate, outputs, error);
+  if (generalizedState != Impl::GeneralizedTinyTransformerTrainingGraph::State::INACTIVE) {
+    error = "generalized L2/H1 preparation did not complete";
     return false;
   }
+  outputs.layerInputGradients.clear();
   outputs.taps.clear();
   outputs.taps.reserve(g.tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL
                            ? 100

@@ -33,9 +33,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0.0f ||
       numHeads != 1 || numLayers != 2 || vocabularySize == 0 ||
+      !diagnosticOutputs ||
       variant != TinyTransformerTrainingVariant::FULL ||
       tapSet != TinyTransformerTrainingTapSet::NONE) {
-    return fail("generalized tiny training currently requires L2/H1 language-model FULL");
+    return fail("generalized tiny training requires diagnostic L2/H1 language-model FULL");
   }
   // First pass: register every tensor before graph creation. QNN keeps the
   // name, dimension and static-client-buffer pointers, so all three backing
@@ -208,7 +209,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                        activationName == "ln2_variance_eps" ||
                        activationName == "ln2_inv_s" ||
                        activationName == "ln2_inv";
-      const bool score = std::string(name).find("attention_") != std::string::npos;
+      // Only the score-space tensors are [T,T].  Context and projected are
+      // attention-prefixed too, but remain model-space [T,D].
+      const bool score = activationName == "attention_scores" ||
+                         activationName == "attention_scaled" ||
+                         activationName == "attention_masked" ||
+                         activationName == "attention_probabilities";
       const bool ff = std::string(name) == "ff1" || std::string(name) == "relu";
       const Qnn_TensorType_t activationType =
           diagnosticOutputs && layer + 1 == numLayers &&
@@ -274,7 +280,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
     }
   }
-  g.appWriteRegistry = {oneHot, embedding, target};
+  // Binding order is an execution ABI: inputs first, then canonical flattened
+  // parameters.  Keep target ahead of token_embedding so no name lookup or
+  // incidental tensor-creation order can change it.
+  g.appWriteRegistry = {oneHot, target, embedding};
   g.parameterRegistry.push_back(embedding);
   for (const auto &record : g.layers) {
     for (uint32_t parameter : {record.wq, record.wk, record.wv, record.wo,
@@ -671,6 +680,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                   std::string(g.diagnosticOutputs ? "true\n" : "false\n") +
                   "tiny_transformer_training_app_read_registry_count=" +
                   std::to_string(g.appReadRegistry.size()) + '\n' +
+                  "tiny_transformer_training_sgd_next=false\n"
+                  "tiny_transformer_training_learning_rate=REQUIRES_ZERO_QNN_ADAM_SEPARATE\n" +
                   "tiny_transformer_training_tensor_create_count=" +
                   std::to_string(g.tensorCreateSuccessCount) + '\n' +
                   "tiny_transformer_training_node_count=" +

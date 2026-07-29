@@ -46,7 +46,30 @@ $hasL2H1Builder = $generalizedText.Contains('prepareTinyTransformerTrainingGener
     $generalizedText.Contains('record.input = layer == 0 ? input : g.layers[layer - 1].output;') -and
     $generalizedText.Contains('g.layers.back().output, outputProjection') -and
     $generalizedText.Contains('"l2h1_lm_logits"')
-if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not ($NumLayers -eq 2 -and $NumHeads -eq 1 -and $hasL2H1Builder)) {
+$hasL2H1Backward = $hasL2H1Builder -and
+    $generalizedText.Contains('for (int layer = int(numLayers) - 1; layer >= 0; --layer)') -and
+    $generalizedText.Contains(': g.layers[size_t(layer + 1)].backward[DINPUT]') -and
+    $generalizedText.Contains('layerNorm.backward((prefix + "ln2").c_str()') -and
+    $generalizedText.Contains('layerNorm.backward((prefix + "ln1").c_str()') -and
+    $generalizedText.Contains('reduceParams[1].scalarParam.bool8Value = true') -and
+    $generalizedText.Contains('g.tensors[lastAxis]') -and
+    $generalizedText.Contains('backward(SOFTMAX_DOT)') -and
+    $generalizedText.Contains('QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0') -and
+    $generalizedText.Contains('backward(DQ_RAW),') -and
+    $generalizedText.Contains('backward(DK_RAW),') -and
+    $generalizedText.Contains('g.layers.front().backward[DINPUT], dEmbedding') -and
+    $generalizedText.Contains('g.parameterRegistry.size() != 22') -and
+    $generalizedText.Contains('g.gradientRegistry.size() != g.parameterRegistry.size()') -and
+    $generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')
+$hasL2H1AttentionLayout = $hasL2H1Backward -and
+    -not $generalizedText.Contains('find("attention_")') -and
+    $generalizedText.Contains('activationName == "attention_scores"') -and
+    $generalizedText.Contains('activationName == "attention_scaled"') -and
+    $generalizedText.Contains('activationName == "attention_masked"') -and
+    $generalizedText.Contains('activationName == "attention_probabilities"') -and
+    $generalizedText.Contains('cache(ATTENTION_PROBABILITIES), cache(V),') -and
+    $generalizedText.Contains('cache(ATTENTION_CONTEXT), record.wo,')
+if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not ($NumLayers -eq 2 -and $NumHeads -eq 1 -and $hasL2H1AttentionLayout)) {
     Fail 'runtime source does not provide the requested indexed multi-layer/multi-head builder'
 }
 foreach ($marker in @('auto make =', 'auto many =', 'auto tapType =', 'TransformerTrainingLayerNormBuilder', 'layerNorm.forward(', 'layerNorm.backward(')) {
@@ -296,8 +319,10 @@ $tensorRows | Export-Csv -LiteralPath $tensorPath -NoTypeInformation -Encoding u
 $topologyRows = [Collections.Generic.List[object]]::new()
 if ($NumLayers -eq 2 -and $NumHeads -eq 1) {
     $activationNames = @('ln1_mean','ln1_centered','ln1_centered_s','ln1_square','ln1_variance','ln1_variance_eps','ln1_inv_s','ln1_inv','ln1_xhat','ln1_xhat_gamma','ln1','q','k','v','attention_scores','attention_scaled','attention_masked','attention_probabilities','attention_context','attention_projected','residual1','ln2_mean','ln2_centered','ln2_centered_s','ln2_square','ln2_variance','ln2_variance_eps','ln2_inv_s','ln2_inv','ln2_xhat','ln2_xhat_gamma','ln2','ff1','relu','ff2','output')
+    $gradientNames = @('dwq','dwk','dwv','dwo','dg1','db1','dg2','db2','dw1','dw2')
+    $backwardNames = @('drelu','relu_mask','dff1','dln2','dxhat2','sum_dxhat2','dxhat_xhat2','dy_xhat2','sum_dxhat_xhat2','d_times_dxhat2','first_diff2','xhat_times_sum2','bracket2','inv_std_over_d2','dresidual1_ln','dresidual1','dcontext','dprobabilities','dv','softmax_product','softmax_dot','softmax_centered','dscores','dq_raw','dk_raw','dq','dk','dln1_q','dln1_k','dln1_v','dln1_qk','dln1','dxhat1','sum_dxhat1','dxhat_xhat1','dy_xhat1','sum_dxhat_xhat1','d_times_dxhat1','first_diff1','xhat_times_sum1','bracket1','inv_std_over_d1','dinput_norm','dinput')
     $rowNames = @('ln1_mean','ln1_variance','ln1_variance_eps','ln1_inv_s','ln1_inv','ln2_mean','ln2_variance','ln2_variance_eps','ln2_inv_s','ln2_inv')
-    $scoreNames = @('attention_scores','attention_scaled','attention_masked','attention_probabilities','attention_context','attention_projected')
+    $scoreNames = @('attention_scores','attention_scaled','attention_masked','attention_probabilities')
     foreach ($layer in 0..1) {
         $prefix = 'layer_{0:D2}' -f $layer
         $inputName = if ($layer -eq 0) { 'layer_00_input' } else { 'layer_00_output' }
@@ -311,9 +336,23 @@ if ($NumLayers -eq 2 -and $NumHeads -eq 1) {
             $activationShape = if ($name -in $rowNames) { "$Tokens`x1" } elseif ($name -in $scoreNames) { "$Tokens`x$Tokens" } elseif ($name -in @('ff1','relu')) { "$Tokens`x32" } else { "$Tokens`x$EmbeddingDim" }
             $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor="$prefix`_$name"; shape=$activationShape; role='layer forward tensor' })
         }
+        foreach ($name in $gradientNames) {
+            $gradientShape = if ($name -in @('dg1','db1','dg2','db2')) { "$EmbeddingDim" } elseif ($name -eq 'dw1') { "$EmbeddingDim`x32" } elseif ($name -eq 'dw2') { "32x$EmbeddingDim" } else { "$EmbeddingDim`x$EmbeddingDim" }
+            $parameter = switch ($name) { 'dg1' {'norm1_gamma'} 'db1' {'norm1_beta'} 'dg2' {'norm2_gamma'} 'db2' {'norm2_beta'} default { $name.Substring(1) } }
+            if ($parameter -eq 'w1') { $parameter = 'ffn_w1' }; if ($parameter -eq 'w2') { $parameter = 'ffn_w2' }
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor="$prefix`_$name"; shape=$gradientShape; role="APP_READ parameter gradient for $prefix`_$parameter" })
+        }
+        foreach ($name in $backwardNames) {
+            $backwardShape = if ($name -in $rowNames -or $name -in @('sum_dxhat2','sum_dxhat_xhat2','inv_std_over_d2','softmax_dot','sum_dxhat1','sum_dxhat_xhat1','inv_std_over_d1')) { "$Tokens`x1" } elseif ($name -in @('dprobabilities','softmax_product','softmax_centered','dscores')) { "$Tokens`x$Tokens" } elseif ($name -in @('drelu','relu_mask','dff1')) { "$Tokens`x32" } else { "$Tokens`x$EmbeddingDim" }
+            $role = if ($name -eq 'dinput') { if ($layer -eq 1) { 'APP_READ layer input gradient; upstream for layer_00 backward' } else { 'APP_READ layer_00 input gradient; feeds dEmbedding' } } elseif ($name -eq 'softmax_dot') { 'key-axis ReduceSum keep_dims=true' } elseif ($name -in @('dq','dk')) { 'scaled attention Q/K gradient' } elseif ($name -eq 'relu_mask') { 'BOOL8 backward mask with zero_ff' } else { 'layer backward tensor' }
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor="$prefix`_$name"; shape=$backwardShape; role=$role })
+        }
     }
     $topologyRows.Add([pscustomobject][ordered]@{ layer='LM'; head=''; tensor='logits'; shape="$Tokens`x32"; role='LM head input is layer_01_output' })
-    Assert-True ($topologyRows.Count -eq 95) 'L2/H1 topology row count assertion failed'
+    $topologyRows.Add([pscustomobject][ordered]@{ layer='LM'; head=''; tensor='doutput_projection'; shape="$EmbeddingDim`x32"; role='APP_READ output projection gradient' })
+    $topologyRows.Add([pscustomobject][ordered]@{ layer='LM'; head=''; tensor='dembedding'; shape="32x$EmbeddingDim"; role='APP_READ token embedding gradient from layer_00_dinput' })
+    $topologyRows.Add([pscustomobject][ordered]@{ layer='GLOBAL'; head=''; tensor='zero_ff'; shape="$Tokens`x32"; role='STATIC zero FFN backward select/mask input' })
+    Assert-True ($topologyRows.Count -eq 206) 'L2/H1 topology row count assertion failed'
 } else {
     # Keep the public legacy L1/H1 map stable while the generalized builder is
     # deliberately restricted to L2/H1 forward construction.
@@ -328,7 +367,9 @@ Write-Output "tensor_map_rows=$($tensorRows.Count)"
 Write-Output "topology_map_rows=$($topologyRows.Count)"
 Write-Output "shape=B1_T$Tokens`_V32_D$EmbeddingDim; layers=$NumLayers; heads=$NumHeads; head_dim=$HeadDim; diagnostic_outputs=true; creation_index=zero_based_source_order"
 if ($SelfTest) {
-    Assert-True $hasL2H1Builder 'L2/H1 generalized builder source contract self-test failed'
+    Assert-True $hasL2H1AttentionLayout 'L2/H1 generalized forward/backward attention layout source contract self-test failed'
+    Assert-True ($generalizedText.Contains('g.appReadRegistry.push_back(record.backward[DINPUT])')) 'layer DINPUT APP_READ contract self-test failed'
+    Assert-True ($generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')) 'gradient APP_READ contract self-test failed'
     Assert-True (-not ($generalizedText.Contains('numHeads != 1') -eq $false)) 'L2/H1 source must reject unsupported head counts'
     Write-Output 'graph_map_exporter_self_test=PASS'
 }

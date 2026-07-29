@@ -156,6 +156,26 @@ void testGraphShapeValidator() {
     };
     for (const auto& node : validNodes)
         require(validate(node).ok, "shape validator rejected valid op");
+    const auto attentionContext = makeShapeNode(
+            "layer_00_attention_context", Op::MatMul,
+            {{"probabilities", {8, 8}}, {"value", {8, 16}}},
+            {{"context", {8, 16}}});
+    require(validate(attentionContext).ok,
+            "shape validator rejected [T,T] probabilities times [T,D] values");
+    const auto attentionProjected = makeShapeNode(
+            "layer_00_attention_projected", Op::MatMul,
+            {{"context", {8, 16}}, {"wo", {16, 16}}},
+            {{"projected", {8, 16}}});
+    require(validate(attentionProjected).ok,
+            "shape validator rejected [T,D] context times [D,D] output projection");
+    auto badAttentionContext = attentionContext;
+    badAttentionContext.outputs[0].shape = {8, 8};
+    require(!validate(badAttentionContext).ok,
+            "shape validator accepted attention context declared as [T,T]");
+    auto badAttentionProjected = attentionProjected;
+    badAttentionProjected.outputs[0].shape = {8, 8};
+    require(!validate(badAttentionProjected).ok,
+            "shape validator accepted attention projected declared as [T,T]");
 
     const auto makeLayer = [](std::size_t layer, std::size_t tokens,
                               std::size_t dimension, std::size_t heads) {
