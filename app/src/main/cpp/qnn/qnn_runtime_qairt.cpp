@@ -423,6 +423,7 @@ struct Runtime::Impl {
             std::uint32_t gamma1 = 0, beta1 = 0, wq = 0, wk = 0, wv = 0,
                           wo = 0, gamma2 = 0, beta2 = 0, w1 = 0, w2 = 0;
             std::vector<std::uint32_t> activations;
+            std::vector<std::uint32_t> backward;
             std::vector<std::uint32_t> gradients;
             std::vector<std::uint32_t> scaledGradients;
             std::vector<std::uint32_t> nextParameters;
@@ -439,7 +440,7 @@ struct Runtime::Impl {
         std::vector<std::uint32_t> parameterRegistry;
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
-        std::vector<float> maskData, positionData;
+        std::vector<float> maskData, zeroFfData, positionData;
         float attentionScale = 1.0f, centeredScale = 8.0f,
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f;

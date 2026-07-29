@@ -41,10 +41,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // name, dimension and static-client-buffer pointers, so all three backing
   // collections are reserved for the complete L2/H1 forward topology before
   // tensor() writes those pointers.
-  constexpr size_t kGlobalTensorSlots = 22;
-  constexpr size_t kLayerForwardSlots = 46;
+  constexpr size_t kGlobalTensorSlots = 24;
+  constexpr size_t kLayerForwardBackwardSlots = 100;
   const size_t registryCapacity =
-      kGlobalTensorSlots + size_t(numLayers) * kLayerForwardSlots;
+      kGlobalTensorSlots + size_t(numLayers) * kLayerForwardBackwardSlots;
   g.tensors.reserve(registryCapacity);
   g.names.reserve(registryCapacity);
   g.dimensions.reserve(registryCapacity);
@@ -130,6 +130,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto difference = add("lm_difference", QNN_TENSOR_TYPE_NATIVE,
                               {tokens, vocabularySize});
   const auto gradientScale = add("gradient_scale", QNN_TENSOR_TYPE_STATIC, {1, 1});
+  const auto zeroFf = add("zero_ff", QNN_TENSOR_TYPE_STATIC,
+                          {tokens, feedForwardDimension});
   const auto dLogits = add("dlogits",
                            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
                            {tokens, vocabularySize});
@@ -137,8 +139,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                             diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
                            {tokens, dimension});
   const auto dOutputProjection = add("doutput_projection",
-                                     diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+                                     QNN_TENSOR_TYPE_APP_READ,
                                      {dimension, vocabularySize});
+  const auto dEmbedding = add("dembedding", QNN_TENSOR_TYPE_APP_READ,
+                              {vocabularySize, dimension});
   g.tokenOneHot = oneHot;
   g.tokenEmbedding = embedding;
   g.target = target;
@@ -152,6 +156,20 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     RESIDUAL1, LN2_MEAN, LN2_CENTERED, LN2_CENTERED_S, LN2_SQUARE,
     LN2_VARIANCE, LN2_VARIANCE_EPS, LN2_INV_S, LN2_INV, LN2_XHAT,
     LN2_XHAT_GAMMA, LN2, FF1, RELU, FF2, OUTPUT,
+  };
+  enum LayerGradient : size_t {
+    DWQ, DWK, DWV, DWO, DG1, DB1, DG2, DB2, DW1, DW2,
+  };
+  enum LayerBackward : size_t {
+    DRELU, RELU_MASK, DFF1, DLN2, DXHAT2, SUM_DXHAT2,
+    DXHAT_XHAT2, DY_XHAT2, SUM_DXHAT_XHAT2, D_TIMES_DXHAT2,
+    FIRST_DIFF2, XHAT_TIMES_SUM2, BRACKET2, INV_STD_OVER_D2,
+    DRESIDUAL1_LN, DRESIDUAL1, DCONTEXT, DPROBABILITIES, DV,
+    SOFTMAX_PRODUCT, SOFTMAX_DOT, SOFTMAX_CENTERED, DSCORES,
+    DQ_RAW, DK_RAW, DQ, DK, DLN1_Q, DLN1_K, DLN1_V, DLN1_QK,
+    DLN1, DXHAT1, SUM_DXHAT1, DXHAT_XHAT1, DY_XHAT1,
+    SUM_DXHAT_XHAT1, D_TIMES_DXHAT1, FIRST_DIFF1,
+    XHAT_TIMES_SUM1, BRACKET1, INV_STD_OVER_D1, DINPUT_NORM, DINPUT,
   };
   // Keep all layer-local parameter and forward-cache tensors separate. The
   // order is the deterministic parameter registry order used by future
@@ -204,6 +222,57 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                 std::initializer_list<uint32_t>{tokens, dimension}));
     }
     record.output = record.activations.back();
+    for (const char *name : {"dwq", "dwk", "dwv", "dwo", "dg1", "db1",
+         "dg2", "db2", "dw1", "dw2"}) {
+      const std::string gradientName(name);
+      const bool norm = gradientName == "dg1" || gradientName == "db1" ||
+                        gradientName == "dg2" || gradientName == "db2";
+      const bool ff1Gradient = gradientName == "dw1";
+      const bool ff2Gradient = gradientName == "dw2";
+      record.gradients.push_back(add(prefix + name, QNN_TENSOR_TYPE_APP_READ,
+          norm ? std::initializer_list<uint32_t>{dimension} :
+          ff1Gradient ? std::initializer_list<uint32_t>{dimension, feedForwardDimension} :
+          ff2Gradient ? std::initializer_list<uint32_t>{feedForwardDimension, dimension} :
+                        std::initializer_list<uint32_t>{dimension, dimension}));
+    }
+    for (const char *name : {"drelu", "relu_mask", "dff1", "dln2",
+         "dxhat2", "sum_dxhat2", "dxhat_xhat2", "dy_xhat2",
+         "sum_dxhat_xhat2", "d_times_dxhat2", "first_diff2",
+         "xhat_times_sum2", "bracket2", "inv_std_over_d2",
+         "dresidual1_ln", "dresidual1", "dcontext", "dprobabilities",
+         "dv", "softmax_product", "softmax_dot", "softmax_centered",
+         "dscores", "dq_raw", "dk_raw", "dq", "dk", "dln1_q",
+         "dln1_k", "dln1_v", "dln1_qk", "dln1", "dxhat1",
+         "sum_dxhat1", "dxhat_xhat1", "dy_xhat1",
+         "sum_dxhat_xhat1", "d_times_dxhat1", "first_diff1",
+         "xhat_times_sum1", "bracket1", "inv_std_over_d1",
+         "dinput_norm", "dinput"}) {
+      const std::string backwardName(name);
+      const bool score = backwardName == "dprobabilities" ||
+                         backwardName == "softmax_product" ||
+                         backwardName == "softmax_centered" ||
+                         backwardName == "dscores";
+      const bool row = backwardName == "sum_dxhat2" ||
+                       backwardName == "sum_dxhat_xhat2" ||
+                       backwardName == "inv_std_over_d2" ||
+                       backwardName == "softmax_dot" ||
+                       backwardName == "sum_dxhat1" ||
+                       backwardName == "sum_dxhat_xhat1" ||
+                       backwardName == "inv_std_over_d1";
+      const bool ff = backwardName == "drelu" || backwardName == "relu_mask" ||
+                      backwardName == "dff1";
+      const Qnn_TensorType_t backwardType =
+          diagnosticOutputs && backwardName == "dinput"
+              ? QNN_TENSOR_TYPE_APP_READ
+              : QNN_TENSOR_TYPE_NATIVE;
+      record.backward.push_back(add(
+          prefix + name, backwardType,
+          score ? std::initializer_list<uint32_t>{tokens, tokens} :
+          ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
+          row ? std::initializer_list<uint32_t>{tokens, 1} :
+                std::initializer_list<uint32_t>{tokens, dimension},
+          backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
+    }
   }
   g.appWriteRegistry = {oneHot, embedding, target};
   g.parameterRegistry.push_back(embedding);
@@ -217,17 +286,46 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   g.appWriteRegistry.push_back(outputProjection);
   g.parameterRegistry.push_back(outputProjection);
+  g.gradientRegistry.push_back(dEmbedding);
   g.appReadRegistry.push_back(logits);
   if (diagnosticOutputs) {
     g.appReadRegistry.insert(g.appReadRegistry.end(),
                              {g.layers.back().output, probabilities, dLogits,
-                              dOutput, dOutputProjection});
+                              dOutput});
   }
+  for (const auto &record : g.layers) {
+    for (uint32_t gradient : record.gradients)
+      g.gradientRegistry.push_back(gradient);
+  }
+  g.gradientRegistry.push_back(dOutputProjection);
   if (g.parameterRegistry.size() != 22 ||
       std::unordered_set<uint32_t>(g.parameterRegistry.begin(),
                                    g.parameterRegistry.end()).size() !=
           g.parameterRegistry.size()) {
     return fail("generalized tiny training parameter registry is not canonical");
+  }
+  if (g.gradientRegistry.size() != g.parameterRegistry.size() ||
+      std::unordered_set<uint32_t>(g.gradientRegistry.begin(),
+                                   g.gradientRegistry.end()).size() !=
+          g.gradientRegistry.size()) {
+    return fail("generalized tiny training gradient registry is not canonical");
+  }
+  for (size_t index = 0; index < g.parameterRegistry.size(); ++index) {
+    if (g.dimensions[g.parameterRegistry[index]] !=
+        g.dimensions[g.gradientRegistry[index]]) {
+      return fail("generalized tiny training gradient shape does not match parameter");
+    }
+  }
+  g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin(),
+                           g.gradientRegistry.end());
+  if (diagnosticOutputs) {
+    for (const auto &record : g.layers)
+      g.appReadRegistry.push_back(record.backward[DINPUT]);
+  }
+  if (std::unordered_set<uint32_t>(g.appReadRegistry.begin(),
+                                   g.appReadRegistry.end()).size() !=
+      g.appReadRegistry.size()) {
+    return fail("generalized tiny training APP_READ registry contains duplicates");
   }
   if (!registryShapeValid) {
     return fail("generalized tiny training tensor shape exceeds client-buffer limit");
@@ -246,6 +344,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   for (uint32_t r = 0; r < tokens; ++r)
     for (uint32_t c = r + 1; c < tokens; ++c) g.maskData[size_t(r) * tokens + c] = -10000.0f;
   g.positionData.assign(size_t(tokens) * dimension, 0.0f);
+  g.zeroFfData.assign(size_t(tokens) * feedForwardDimension, 0.0f);
   for (uint32_t t = 0; t < tokens; ++t)
     for (uint32_t d = 0; d < dimension; ++d) {
       const float frequency =
@@ -264,6 +363,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[centerScale].v1.clientBuf = {&g.centeredScale, sizeof(float)};
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
   g.tensors[gradientScale].v1.clientBuf = {&g.gradientScale, sizeof(float)};
+  g.tensors[zeroFf].v1.clientBuf = {
+      g.zeroFfData.data(), uint32_t(g.zeroFfData.size() * sizeof(float))};
   g.tensors[dim].v1.clientBuf = {&g.dimensionValue, sizeof(g.dimensionValue)};
   g.tensors[inverseDim].v1.clientBuf = {&g.inverseDimensionValue, sizeof(g.inverseDimensionValue)};
   auto started = Clock::now();
@@ -306,6 +407,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                    uint32_t out, const char *label) {
     return ok(addSimpleNode(impl_->api, g.graph, name.c_str(), type,
                             &g.tensors[a], 1, &g.tensors[out]), label);
+  };
+  auto select = [&](const std::string &name, uint32_t condition, uint32_t yes,
+                    uint32_t no, uint32_t out, const char *label) {
+    Qnn_Tensor_t inputs[3] = {g.tensors[condition], g.tensors[yes],
+                              g.tensors[no]};
+    return ok(addSimpleNode(impl_->api, g.graph, name.c_str(),
+                            QNN_OP_ELEMENT_WISE_SELECT, inputs, 3,
+                            &g.tensors[out]), label);
   };
   auto matmul = [&](const std::string &name, uint32_t a, uint32_t b,
                     uint32_t out, const char *label,
@@ -409,6 +518,135 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
               dOutputProjection, "lm doutput projection",
               QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
     return fail(error);
+  for (int layer = int(numLayers) - 1; layer >= 0; --layer) {
+    const auto &record = g.layers[size_t(layer)];
+    const auto cache = [&](LayerActivation value) {
+      return record.activations[size_t(value)];
+    };
+    const auto gradient = [&](LayerGradient value) {
+      return record.gradients[size_t(value)];
+    };
+    const auto backward = [&](LayerBackward value) {
+      return record.backward[size_t(value)];
+    };
+    const uint32_t upstream = layer + 1 == int(numLayers)
+                                  ? dOutput
+                                  : g.layers[size_t(layer + 1)].backward[DINPUT];
+    const std::string prefix =
+        "l2h1_layer_0" + std::to_string(layer) + "_backward_";
+    if (!matmul(prefix + "dw2", cache(RELU), upstream, gradient(DW2), "dw2",
+                 QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "drelu", upstream, record.w2, backward(DRELU),
+                 "drelu", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !binary(prefix + "relu_mask", QNN_OP_ELEMENT_WISE_GREATER, cache(FF1),
+                zeroFf, backward(RELU_MASK), "relu mask") ||
+        !select(prefix + "relu_select", backward(RELU_MASK), backward(DRELU),
+                zeroFf, backward(DFF1), "relu select") ||
+        !matmul(prefix + "dw1", cache(LN2), backward(DFF1), gradient(DW1),
+                 "dw1", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dln2", backward(DFF1), record.w1, backward(DLN2),
+                 "dln2", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
+      return fail(error);
+    if (!layerNorm.backward((prefix + "ln2").c_str(), int(backward(DLN2)),
+                            int(record.gamma2), int(cache(LN2_XHAT)),
+                            int(cache(LN2_INV)), int(backward(DXHAT2)),
+                            int(backward(SUM_DXHAT2)),
+                            int(backward(DXHAT_XHAT2)), int(backward(DY_XHAT2)),
+                            int(backward(SUM_DXHAT_XHAT2)),
+                            int(backward(D_TIMES_DXHAT2)),
+                            int(backward(FIRST_DIFF2)),
+                            int(backward(XHAT_TIMES_SUM2)), int(backward(BRACKET2)),
+                            int(backward(INV_STD_OVER_D2)),
+                            int(backward(DRESIDUAL1_LN)), int(gradient(DG2)),
+                            int(gradient(DB2))))
+      return fail(error);
+    if (!binary(prefix + "dresidual1", QNN_OP_ELEMENT_WISE_ADD, upstream,
+                backward(DRESIDUAL1_LN), backward(DRESIDUAL1), "dresidual1") ||
+        !matmul(prefix + "dwo", cache(ATTENTION_CONTEXT), backward(DRESIDUAL1),
+                 gradient(DWO), "dwo", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dcontext", backward(DRESIDUAL1), record.wo,
+                 backward(DCONTEXT), "dcontext", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !matmul(prefix + "dprobabilities", backward(DCONTEXT), cache(V),
+                 backward(DPROBABILITIES), "dprobabilities",
+                 QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !matmul(prefix + "dv", cache(ATTENTION_PROBABILITIES), backward(DCONTEXT),
+                 backward(DV), "dv", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !binary(prefix + "softmax_product", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                backward(DPROBABILITIES), cache(ATTENTION_PROBABILITIES),
+                backward(SOFTMAX_PRODUCT), "softmax product"))
+      return fail(error);
+    Qnn_Param_t reduceParams[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+    reduceParams[0].paramType = QNN_PARAMTYPE_TENSOR;
+    reduceParams[0].name = QNN_OP_REDUCE_SUM_PARAM_AXES;
+    reduceParams[0].tensorParam = g.tensors[lastAxis];
+    reduceParams[1].paramType = QNN_PARAMTYPE_SCALAR;
+    reduceParams[1].name = QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS;
+    reduceParams[1].scalarParam.dataType = QNN_DATATYPE_BOOL_8;
+    reduceParams[1].scalarParam.bool8Value = true;
+    Qnn_OpConfig_t reduce = QNN_OPCONFIG_INIT;
+    const std::string reduceName = prefix + "softmax_dot";
+    reduce.v1.name = reduceName.c_str();
+    reduce.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+    reduce.v1.typeName = QNN_OP_REDUCE_SUM;
+    reduce.v1.numOfParams = 2;
+    reduce.v1.params = reduceParams;
+    reduce.v1.numOfInputs = 1;
+    reduce.v1.inputTensors = &g.tensors[backward(SOFTMAX_PRODUCT)];
+    reduce.v1.numOfOutputs = 1;
+    reduce.v1.outputTensors = &g.tensors[backward(SOFTMAX_DOT)];
+    if (!ok(impl_->api.graphAddNode(g.graph, reduce), "softmax dot") ||
+        !binary(prefix + "softmax_centered", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                backward(DPROBABILITIES), backward(SOFTMAX_DOT),
+                backward(SOFTMAX_CENTERED), "softmax centered") ||
+        !binary(prefix + "dscores", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                cache(ATTENTION_PROBABILITIES), backward(SOFTMAX_CENTERED),
+                backward(DSCORES), "dscores") ||
+        !matmul(prefix + "dq_raw", backward(DSCORES), cache(K),
+                 backward(DQ_RAW), "dq raw") ||
+        !matmul(prefix + "dk_raw", backward(DSCORES), cache(Q),
+                 backward(DK_RAW), "dk raw", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !binary(prefix + "dq", QNN_OP_ELEMENT_WISE_MULTIPLY, backward(DQ_RAW),
+                scale, backward(DQ), "dq") ||
+        !binary(prefix + "dk", QNN_OP_ELEMENT_WISE_MULTIPLY, backward(DK_RAW),
+                scale, backward(DK), "dk") ||
+        !matmul(prefix + "dwq", cache(LN1), backward(DQ), gradient(DWQ),
+                 "dwq", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dwk", cache(LN1), backward(DK), gradient(DWK),
+                 "dwk", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dwv", cache(LN1), backward(DV), gradient(DWV),
+                 "dwv", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dln1_q", backward(DQ), record.wq, backward(DLN1_Q),
+                 "dln1 q", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !matmul(prefix + "dln1_k", backward(DK), record.wk, backward(DLN1_K),
+                 "dln1 k", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !matmul(prefix + "dln1_v", backward(DV), record.wv, backward(DLN1_V),
+                 "dln1 v", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !binary(prefix + "dln1_qk", QNN_OP_ELEMENT_WISE_ADD, backward(DLN1_Q),
+                backward(DLN1_K), backward(DLN1_QK), "dln1 qk") ||
+        !binary(prefix + "dln1", QNN_OP_ELEMENT_WISE_ADD, backward(DLN1_QK),
+                backward(DLN1_V), backward(DLN1), "dln1"))
+      return fail(error);
+    if (!layerNorm.backward((prefix + "ln1").c_str(), int(backward(DLN1)),
+                            int(record.gamma1), int(cache(LN1_XHAT)),
+                            int(cache(LN1_INV)), int(backward(DXHAT1)),
+                            int(backward(SUM_DXHAT1)),
+                            int(backward(DXHAT_XHAT1)), int(backward(DY_XHAT1)),
+                            int(backward(SUM_DXHAT_XHAT1)),
+                            int(backward(D_TIMES_DXHAT1)),
+                            int(backward(FIRST_DIFF1)),
+                            int(backward(XHAT_TIMES_SUM1)), int(backward(BRACKET1)),
+                            int(backward(INV_STD_OVER_D1)), int(backward(DINPUT_NORM)),
+                            int(gradient(DG1)), int(gradient(DB1))))
+      return fail(error);
+    if (!binary(prefix + "dinput", QNN_OP_ELEMENT_WISE_ADD,
+                backward(DRESIDUAL1), backward(DINPUT_NORM), backward(DINPUT),
+                "dinput"))
+      return fail(error);
+  }
+  if (!matmul("l2h1_lm_dembedding", oneHot,
+              g.layers.front().backward[DINPUT], dEmbedding, "dembedding",
+              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
+    return fail(error);
   started = Clock::now();
   status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
   apiTrace_.fullStepGraphFinalizeCalled = true;
@@ -421,12 +659,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   g.active = true;
   g.state = State::ACTIVE;
-  diagnostics_ += "tiny_transformer_training_graph=L2H1_EXPLICIT_FORWARD\n"
+  diagnostics_ += "tiny_transformer_training_graph=L2H1_EXPLICIT_FORWARD_BACKWARD\n"
                   "tiny_transformer_training_graph_count=1\n"
                   "tiny_transformer_training_forward_layers=2\n"
                   "tiny_transformer_training_forward_heads=1\n"
                   "tiny_transformer_training_parameter_registry_count=" +
                   std::to_string(g.parameterRegistry.size()) + '\n' +
+                  "tiny_transformer_training_gradient_registry_count=" +
+                  std::to_string(g.gradientRegistry.size()) + '\n' +
                   "tiny_transformer_training_diagnostic_outputs=" +
                   std::string(g.diagnosticOutputs ? "true\n" : "false\n") +
                   "tiny_transformer_training_app_read_registry_count=" +
