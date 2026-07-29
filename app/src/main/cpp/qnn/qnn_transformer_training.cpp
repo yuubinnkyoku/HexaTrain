@@ -1417,7 +1417,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       config.tokens != 8 || config.dimension != 16 || layers != 1 ||
       attentionHeads != 1;
   const bool generalizedNoSgdNext =
-      config.numLayers == 2 && config.numHeads == 1;
+      config.numLayers != 1 || config.numHeads != 1;
   if (scalingConfiguration) {
     constexpr float poison = 1.1415926f;
     const auto auditBatch = languageBatch(config, 0);

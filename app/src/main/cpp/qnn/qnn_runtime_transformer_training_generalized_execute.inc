@@ -1,4 +1,4 @@
-// Execution companion for the L2/H1 builder.  The registries established by
+// Execution companion for the generalized L1/L2 H1/H2 builder.  The registries established by
 // the builder are the binding ABI; do not substitute tensor-name lookup here.
 bool Runtime::executeTinyTransformerTrainingGeneralized(
     const std::vector<float> &input, const std::vector<float> &target,
@@ -6,10 +6,17 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using GG = Impl::GeneralizedTinyTransformerTrainingGraph;
   auto &g = impl_->generalizedTinyTransformerTraining;
+  const size_t expectedParameterCount = 2 + size_t(10) * g.numLayers;
+  const size_t expectedAppWriteCount = 4 + size_t(10) * g.numLayers;
+  const size_t expectedAppReadCount = 5 + expectedParameterCount + g.numLayers +
+      (g.numHeads > 1 ? size_t(g.numLayers) * g.numHeads : 0);
   if (g.state != GG::State::ACTIVE || !g.active || !g.graph ||
-      !g.languageModel || g.numLayers != 2 || g.numHeads != 1 ||
-      g.parameterRegistry.size() != 22 || g.gradientRegistry.size() != 22 ||
-      g.appWriteRegistry.size() != 24 || g.appReadRegistry.size() != 29) {
+      !g.languageModel || g.numLayers == 0 || g.numLayers > 2 ||
+      g.numHeads == 0 || g.numHeads > 2 || g.dimension % g.numHeads != 0 ||
+      g.parameterRegistry.size() != expectedParameterCount ||
+      g.gradientRegistry.size() != expectedParameterCount ||
+      g.appWriteRegistry.size() != expectedAppWriteCount ||
+      g.appReadRegistry.size() != expectedAppReadCount) {
     error = "generalized tiny training execution state is invalid";
     return false;
   }
@@ -37,11 +44,12 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
            finite(layer.w2);
   };
   if (input.size() != tokenVocabulary || target.size() != tokenVocabulary ||
-      current.layers.size() != 1 || current.tokenEmbedding.size() != embedding ||
+      current.layers.size() != g.numLayers - 1 || current.tokenEmbedding.size() != embedding ||
       current.outputProjection.size() != projection || !finite(input) ||
       !finite(target) || !finite(current.tokenEmbedding) ||
       !finite(current.outputProjection) || !validLayer(current) ||
-      !validLayer(current.layers.front()) || !std::isfinite(learningRate)) {
+      !std::isfinite(learningRate) ||
+      !std::all_of(current.layers.begin(), current.layers.end(), validLayer)) {
     error = "generalized tiny training buffer schema";
     return false;
   }
@@ -65,9 +73,11 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   std::vector<const std::vector<float> *> appWriteValues;
   appWriteValues.reserve(g.appWriteRegistry.size());
   appWriteValues.insert(appWriteValues.end(), {&input, &target, &current.tokenEmbedding});
-  for (const TinyTransformerLayerParameters *layer :
-       {static_cast<const TinyTransformerLayerParameters *>(&current),
-        &current.layers.front()}) {
+  std::vector<const TinyTransformerLayerParameters *> parameterLayers;
+  parameterLayers.reserve(g.numLayers);
+  parameterLayers.push_back(&current);
+  for (const auto &layer : current.layers) parameterLayers.push_back(&layer);
+  for (const TinyTransformerLayerParameters *layer : parameterLayers) {
     appWriteValues.insert(appWriteValues.end(),
                           {&layer->wq, &layer->wk, &layer->wv, &layer->wo,
                            &layer->gamma1, &layer->beta1, &layer->gamma2,
@@ -163,9 +173,10 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
             std::to_string(nonFiniteResidual);
     return false;
   }
-  // APP_READ registry: logits, final-layer diagnostic values, 22 canonical
-  // gradients, then the two layer-input gradients.  The graph has no SGD
-  // nodes; QNN Adam consumes these gradients separately, so next is empty.
+  // APP_READ registry: logits, final-layer diagnostic values, canonical
+  // gradients, layer-input gradients, then H>1 attention-probability taps.
+  // The graph has no SGD nodes; QNN Adam consumes gradients separately, so
+  // next is empty.
   outputs.taps.clear();
   outputs.next = {};
   outputs.logits = appReadBuffers[0];
@@ -176,9 +187,11 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   outputs.gradients = current;
   outputs.gradients.tokenEmbedding = appReadBuffers[5];
   size_t gradient = 6;
-  for (TinyTransformerLayerParameters *layer :
-       {static_cast<TinyTransformerLayerParameters *>(&outputs.gradients),
-        &outputs.gradients.layers.front()}) {
+  std::vector<TinyTransformerLayerParameters *> gradientLayers;
+  gradientLayers.reserve(g.numLayers);
+  gradientLayers.push_back(&outputs.gradients);
+  for (auto &layer : outputs.gradients.layers) gradientLayers.push_back(&layer);
+  for (TinyTransformerLayerParameters *layer : gradientLayers) {
     layer->wq = appReadBuffers[gradient++]; layer->wk = appReadBuffers[gradient++];
     layer->wv = appReadBuffers[gradient++]; layer->wo = appReadBuffers[gradient++];
     layer->gamma1 = appReadBuffers[gradient++]; layer->beta1 = appReadBuffers[gradient++];
@@ -186,9 +199,24 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     layer->w1 = appReadBuffers[gradient++]; layer->w2 = appReadBuffers[gradient++];
   }
   outputs.gradients.outputProjection = appReadBuffers[gradient++];
-  outputs.layerInputGradients = {appReadBuffers[gradient++], appReadBuffers[gradient++]};
+  outputs.layerInputGradients.clear();
+  outputs.layerInputGradients.reserve(g.numLayers);
+  for (uint32_t layer = 0; layer < g.numLayers; ++layer)
+    outputs.layerInputGradients.push_back(appReadBuffers[gradient++]);
+  if (g.numHeads > 1) {
+    for (uint32_t layer = 0; layer < g.numLayers; ++layer) {
+      for (uint32_t head = 0; head < g.numHeads; ++head) {
+        const uint32_t id = g.layers[layer].heads[head].probabilities;
+        outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
+      }
+    }
+  }
+  if (gradient != appReadBuffers.size()) {
+    error = "generalized tiny training APP_READ result mapping";
+    return false;
+  }
   outputs.dEmbeddedInput = outputs.layerInputGradients.front();
-  outputs.embeddedInput.clear();  // Not an APP_READ terminal in the 29-buffer ABI.
+  outputs.embeddedInput.clear();  // Not an APP_READ terminal in the L2/H1 ABI.
   double loss = 0.0;
   for (uint32_t row = 0; row < g.tokens; ++row) {
     const float *logits = outputs.logits.data() + size_t(row) * g.vocabularySize;

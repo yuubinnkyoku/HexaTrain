@@ -418,6 +418,21 @@ struct Runtime::Impl {
     // The builder lives in qnn_runtime_transformer_training_generalized.inc.
     struct GeneralizedTinyTransformerTrainingGraph {
         enum class State : std::uint8_t { INACTIVE, PREPARING, ACTIVE, FAILED };
+        struct HeadRegistry {
+            std::uint32_t selector = 0;
+            std::uint32_t query = 0, key = 0, value = 0;
+            std::uint32_t scores = 0, scaled = 0, masked = 0,
+                          probabilities = 0;
+            std::uint32_t context = 0, contextScatter = 0;
+            std::uint32_t dContext = 0, dProbabilities = 0, dValue = 0;
+            std::uint32_t softmaxProduct = 0, softmaxDot = 0,
+                          softmaxCentered = 0, dScores = 0;
+            std::uint32_t dQueryRaw = 0, dKeyRaw = 0, dQuery = 0,
+                          dKey = 0;
+            std::uint32_t dQueryScatter = 0, dKeyScatter = 0,
+                          dValueScatter = 0;
+            std::size_t selectorOffset = 0;
+        };
         struct LayerRegistry {
             std::uint32_t input = 0, output = 0;
             std::uint32_t gamma1 = 0, beta1 = 0, wq = 0, wk = 0, wv = 0,
@@ -425,6 +440,13 @@ struct Runtime::Impl {
             std::vector<std::uint32_t> activations;
             std::vector<std::uint32_t> backward;
             std::vector<std::uint32_t> gradients;
+            std::vector<HeadRegistry> heads;
+            // H>1 accumulates selector/scatter results here.  The final
+            // element of each chain is the established full-width tensor.
+            std::vector<std::uint32_t> headContextAccumulators;
+            std::vector<std::uint32_t> headDqAccumulators;
+            std::vector<std::uint32_t> headDkAccumulators;
+            std::vector<std::uint32_t> headDvAccumulators;
             std::vector<std::uint32_t> scaledGradients;
             std::vector<std::uint32_t> nextParameters;
         };
@@ -440,7 +462,7 @@ struct Runtime::Impl {
         std::vector<std::uint32_t> parameterRegistry;
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
-        std::vector<float> maskData, zeroFfData, positionData;
+        std::vector<float> maskData, zeroFfData, positionData, selectorData;
         float attentionScale = 1.0f, centeredScale = 8.0f,
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f;
