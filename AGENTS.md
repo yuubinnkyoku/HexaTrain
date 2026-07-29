@@ -19,7 +19,10 @@ JVM unit tests、C++ host tests、`assembleDebug`、`assembleDebugAndroidTest` �
 .\scripts\verify_local.ps1                               # 通常
 .\scripts\verify_local.ps1 -SkipAndroidBuild             # Android build を省略（速い）
 .\scripts\verify_local.ps1 -Clean                        # clean build（遅いので必要時のみ）
-.\scripts\verify_local.ps1 -WithQairt -QairtSdkRoot $env:QAIRT_SDK_ROOT
+.\scripts\verify_local.ps1 `
+  -WithQairt `
+  -QairtSdkRoot 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702' `
+  -ExpectedBuildId '2.48.40.260702151143'
 ```
 
 incremental build が既定。clean が必要な場合だけ `-Clean` を使う。
