@@ -134,7 +134,7 @@ Expected Build ID を必ず明示して渡す。
 ## 表現とドキュメント
 
 - 「学習 step の数値演算を HTP で実行した」と表現する。「NPU だけで学習した」「CPU を完全に使用していない」「QNN が自動微分した」とは表現しない
-- QAIRT 2.47 との混在は禁止
+- QAIRT 2.47 との混在は禁止。QNN有効操作では固定した2.48 rootとBuild IDを必ず明示する
 - QAIRT ライブラリ、Stub、Skel、MNN source tree を Git へ追加しない
 - 数値結果や実験手順を変更したら、対応する `docs/` も同じタスクで更新する
 
