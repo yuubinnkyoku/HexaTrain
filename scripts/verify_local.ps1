@@ -136,7 +136,10 @@ try {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
                 "-SelfTest")
-        "allow-list export and negative rejection ok (temp-only)"
+        Invoke-PwshScript "Tiny LM scaling public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_tiny_lm_scaling_results.ps1") @(
+                "-SelfTest")
+        "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 
     if ($Clean) {
