@@ -3828,6 +3828,62 @@ std::string runTinyTransformerTrainingExperiment(
     config.feedForwardDimension = 32;
     return languageModelAdam(false, 3, true, config, 5, false, 2, 2);
   }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T16D16_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 16;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 2, 1);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T32D32_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 2, 1);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T16D16_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 16;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 1, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T32D32_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 1, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T16D16_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 16;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 2, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 32;
+    config.dimension = 32;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 2, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_FORMAL) {
+    tiny_lm::Config config;
+    config.tokens = 8;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 5, false, 2, 1);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL) {
+    tiny_lm::Config config;
+    config.tokens = 8;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 5, false, 1, 2);
+  }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
 } // namespace phonelm::qnn

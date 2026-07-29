@@ -172,6 +172,14 @@ class HeadlessDeviceTestRunner {
         "scale-layers-2-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE
         "scale-heads-2-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE
         "scale-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL
+        "scale-l2h1-t16d16-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T16D16_SMOKE
+        "scale-l2h1-t32d32-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T32D32_SMOKE
+        "scale-l1h2-t16d16-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T16D16_SMOKE
+        "scale-l1h2-t32d32-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T32D32_SMOKE
+        "scale-l2h2-t16d16-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T16D16_SMOKE
+        "scale-l2h2-t32d32-smoke" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_SMOKE
+        "scale-l2h1-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_FORMAL
+        "scale-l1h2-formal" -> ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL
         else -> throw IllegalArgumentException("Unknown headless suite: $suite")
     }
 }

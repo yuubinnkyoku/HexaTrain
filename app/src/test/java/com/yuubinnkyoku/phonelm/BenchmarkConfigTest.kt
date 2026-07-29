@@ -30,5 +30,20 @@ class BenchmarkConfigTest {
         assertEquals(200, config.steps)
         assertEquals(20, config.warmupSteps)
     }
-}
 
+    @Test
+    fun scalingModesHaveStableNativeCodes() {
+        val expected = mapOf(
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T16D16_SMOKE to 89,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_T32D32_SMOKE to 90,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T16D16_SMOKE to 91,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_T32D32_SMOKE to 92,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T16D16_SMOKE to 93,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_SMOKE to 94,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H1_FORMAL to 95,
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL to 96,
+        )
+        assertEquals(expected.values.toSet().size, expected.size)
+        expected.forEach { (mode, nativeCode) -> assertEquals(nativeCode, mode.nativeCode) }
+    }
+}

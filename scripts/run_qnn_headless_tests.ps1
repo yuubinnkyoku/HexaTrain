@@ -20,7 +20,11 @@ param(
         "post-fix-end-to-end",
         "scale-sequence-16-smoke", "scale-sequence-32-smoke",
         "scale-dimension-32-smoke", "scale-layers-2-smoke",
-        "scale-heads-2-smoke", "scale-formal"
+        "scale-heads-2-smoke", "scale-formal",
+        "scale-l2h1-t16d16-smoke", "scale-l2h1-t32d32-smoke",
+        "scale-l1h2-t16d16-smoke", "scale-l1h2-t32d32-smoke",
+        "scale-l2h2-t16d16-smoke", "scale-l2h2-t32d32-smoke",
+        "scale-l2h1-formal", "scale-l1h2-formal"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",
