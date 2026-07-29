@@ -200,7 +200,7 @@ function Invoke-FormalRun([string]$Phase, [int]$Index, [string]$TestMode, [bool]
             $arguments.SkipInstall = $true
             $arguments.SkipAudit = $true
         }
-        & $headlessRunner @arguments
+        & $headlessRunner @arguments | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Headless runner failed for $childRunId." }
         $deviceReportPath = Assert-ChildPath (Join-Path $childReportRoot 'device-report.txt') $headlessReportsRoot 'Device report'
         if (-not (Test-Path -LiteralPath $deviceReportPath -PathType Leaf)) { throw "Device report was not produced for $childRunId." }
@@ -277,11 +277,11 @@ try {
 
     $runs = [Collections.Generic.List[object]]::new()
     for ($index = 1; $index -le $Repetitions; $index++) {
-        $runs.Add((Invoke-FormalRun 'correctness' $index 'BACKGROUND_CORRECTNESS' ($index -ne 1)))
+        $runs.Add((Invoke-FormalRun 'correctness' $index 'BACKGROUND_CORRECTNESS' ($index -ne 1))) | Out-Null
     }
     if ($RunPerformance) {
         for ($index = 1; $index -le $Repetitions; $index++) {
-            $runs.Add((Invoke-FormalRun 'performance' $index 'EXCLUSIVE_BENCHMARK' $true))
+            $runs.Add((Invoke-FormalRun 'performance' $index 'EXCLUSIVE_BENCHMARK' $true)) | Out-Null
         }
     }
     $summary.runs = @($runs)
