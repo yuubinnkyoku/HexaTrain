@@ -14,7 +14,7 @@ function F($m,[string]$k){if(!$m.ContainsKey($k)){Fail "missing $k"};[string]$m[
 function N($m,[string]$k){$v=F $m $k;[double]$n=0;if(![double]::TryParse($v,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$n)-or ![double]::IsFinite($n)){Fail "nonfinite $k"};$v}
 function B($m,[string]$k){$v=F $m $k;if($v -notin @('true','false')){Fail "bad boolean $k"};$v}
 function T($m,[string]$k){$v=F $m $k;if($v-notmatch'^\d+(?:,\d+)*$'){Fail "bad tokens $k"};$v}
-function Map($p){$m=@{};foreach($l in Get-Content -LiteralPath $p){if($l-match'^([A-Za-z][A-Za-z0-9_]*)=(.*)$'){if($m.ContainsKey($Matches[1])){Fail "duplicate key $($Matches[1])"};$m[$Matches[1]]=$Matches[2]}};$m}
+function Map($p){$m=@{};foreach($l in Get-Content -LiteralPath $p){if($l-match'^([A-Za-z][A-Za-z0-9_]*)=(.*)$'){$k=$Matches[1];$v=$Matches[2];if($m.ContainsKey($k)){if($m[$k]-ne$v){Fail "conflicting duplicate key $k"};continue};$m[$k]=$v}};$m}
 function Safe($v){if($null-eq$v-or$v-match'[\r\n]' -or $v-match'^[=+@]' -or($v-match'^-' -and $v-notmatch'^-?\d')){Fail 'unsafe CSV value'}}
 function PublicState($v){if($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v)){'NOT_AVAILABLE'}else{[string]$v}}
 function Csv($rows,$cols){$out=@((($cols|%{'"'+$_+'"'})-join','));foreach($r in $rows){$cells=@();foreach($c in $cols){$v=[string]$r[$c];Safe $v;$cells+='"'+$v.Replace('"','""')+'"'};$out+=($cells-join',')};($out-join"`n")+"`n"}
@@ -113,6 +113,15 @@ if($SelfTest){
  $out=Join-Path $tmp 'public'
  try {
   $sha=(git -C $repo rev-parse HEAD).Trim()
+  [IO.Directory]::CreateDirectory($tmp)|Out-Null
+  $same=Join-Path $tmp 'duplicate-same.txt'
+  "cpu_fallback=false`ncpu_fallback=false" | Set-Content -LiteralPath $same
+  if((F (Map $same) 'cpu_fallback') -ne 'false'){Fail 'identical duplicate key selftest'}
+  $conflict=Join-Path $tmp 'duplicate-conflict.txt'
+  "cpu_fallback=false`ncpu_fallback=true" | Set-Content -LiteralPath $conflict
+  $conflictRejected=$false
+  try { Map $conflict | Out-Null } catch { $conflictRejected=$true }
+  if(!$conflictRejected){Fail 'conflicting duplicate key selftest accepted'}
   $rs=@()
   foreach($p in 'correctness','performance'){
    foreach($i in 1..3){
