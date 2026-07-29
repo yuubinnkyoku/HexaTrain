@@ -13,6 +13,9 @@ data class BenchmarkUiState(
     val qnnStatus: String = "QNN status loading...",
 )
 
+internal const val MAX_UI_OUTPUT_CHARS = 32 * 1024
+private const val TRUNCATED_OUTPUT_MARKER = "[earlier output truncated]\n"
+
 fun interface UiDispatcher {
     fun dispatch(block: () -> Unit)
 }
@@ -87,13 +90,15 @@ class BenchmarkViewModel(
     private var closed = false
     private var lastResult: BenchmarkResult? = null
     private var qnnStatus = "QNN status loading..."
+    private var publishScheduled = false
+    private var publishDirty = false
 
     @Volatile
     private var listener: ((BenchmarkUiState) -> Unit)? = null
 
     fun setListener(listener: ((BenchmarkUiState) -> Unit)?) {
         this.listener = listener
-        publish(snapshot())
+        if (listener != null) requestPublish()
     }
 
     fun loadEnvironment() {
@@ -122,7 +127,7 @@ class BenchmarkViewModel(
             return false
         }
 
-        val state = synchronized(lock) {
+        synchronized(lock) {
             if (closed || running) return false
             running = true
             lastResult = null
@@ -130,9 +135,8 @@ class BenchmarkViewModel(
             output.appendLine("RUN")
             output.appendLine("execution_mode=${mode.name}")
             output.appendLine("backend_requested=${config.backend.name}")
-            currentStateLocked()
         }
-        publish(state)
+        requestPublish()
         runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
 
         worker.execute {
@@ -171,11 +175,10 @@ class BenchmarkViewModel(
                         "error=${error.message ?: error.javaClass.simpleName}",
                 )
             } finally {
-                val finalState = synchronized(lock) {
+                synchronized(lock) {
                     running = false
-                    currentStateLocked()
                 }
-                publish(finalState)
+                requestPublish()
             }
         }
         return true
@@ -192,12 +195,19 @@ class BenchmarkViewModel(
     fun snapshot(): BenchmarkUiState = synchronized(lock) { currentStateLocked() }
 
     private fun append(message: String) {
-        val state = synchronized(lock) {
+        synchronized(lock) {
             if (output.isNotEmpty() && output.last() != '\n') output.appendLine()
             output.appendLine(message)
-            currentStateLocked()
+            trimOutputLocked()
         }
-        publish(state)
+        requestPublish()
+    }
+
+    private fun trimOutputLocked() {
+        if (output.length <= MAX_UI_OUTPUT_CHARS) return
+        val retainedCharacters = MAX_UI_OUTPUT_CHARS - TRUNCATED_OUTPUT_MARKER.length
+        output.delete(0, output.length - retainedCharacters)
+        output.insert(0, TRUNCATED_OUTPUT_MARKER)
     }
 
     private fun currentStateLocked() = BenchmarkUiState(
@@ -207,10 +217,34 @@ class BenchmarkViewModel(
         qnnStatus = qnnStatus,
     )
 
-    private fun publish(state: BenchmarkUiState) {
-        uiDispatcher.dispatch {
-            listener?.invoke(state)
+    private fun requestPublish() {
+        val schedule = synchronized(lock) {
+            publishDirty = true
+            if (publishScheduled) {
+                false
+            } else {
+                publishScheduled = true
+                true
+            }
         }
+        if (schedule) uiDispatcher.dispatch(::drainPublish)
+    }
+
+    private fun drainPublish() {
+        val state = synchronized(lock) {
+            publishDirty = false
+            currentStateLocked()
+        }
+        listener?.invoke(state)
+        val reschedule = synchronized(lock) {
+            if (publishDirty) {
+                true
+            } else {
+                publishScheduled = false
+                false
+            }
+        }
+        if (reschedule) uiDispatcher.dispatch(::drainPublish)
     }
 
     override fun close() {

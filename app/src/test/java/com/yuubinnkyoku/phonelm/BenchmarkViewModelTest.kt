@@ -1,5 +1,6 @@
 package com.yuubinnkyoku.phonelm
 
+import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -76,5 +77,71 @@ class BenchmarkViewModelTest {
         assertTrue(stopped.get())
 
         viewModel.close()
+    }
+
+    @Test
+    fun coalescesAndBoundsDisplayedProgressWhileRetainingTheFinalReport() {
+        val engineFinished = CountDownLatch(1)
+        val report = "RESULT\nstatus=SUCCESS\nfinal_loss=0.125"
+        val engine = object : BenchmarkEngine {
+            override fun environmentReport() = "mnn_version=test"
+
+            override fun run(config: BenchmarkConfig, progress: (String) -> Unit): String {
+                repeat(4_000) { step ->
+                    progress("phase=train step=$step loss=0.125000 diagnostic=${"x".repeat(64)}")
+                }
+                engineFinished.countDown()
+                return report
+            }
+
+            override fun requestStop() = Unit
+        }
+        val dispatcher = QueuedUiDispatcher()
+        var finalState = BenchmarkUiState()
+        val viewModel = BenchmarkViewModel(engine = engine, uiDispatcher = dispatcher)
+        viewModel.setListener { state -> finalState = state }
+
+        assertTrue(viewModel.start(BenchmarkConfig.small()))
+        assertTrue(engineFinished.await(5, TimeUnit.SECONDS))
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (viewModel.snapshot().running && System.nanoTime() < deadline) {
+            Thread.yield()
+        }
+        assertFalse(viewModel.snapshot().running)
+        assertEquals(1, dispatcher.pendingCount())
+        assertEquals(1, dispatcher.maximumPendingCount)
+
+        dispatcher.drain()
+        assertFalse(finalState.running)
+        assertTrue(finalState.output.length <= MAX_UI_OUTPUT_CHARS)
+        assertTrue(finalState.output.startsWith("[earlier output truncated]\n"))
+        assertTrue(finalState.output.endsWith("$report\n"))
+        assertEquals("SUCCESS", finalState.lastResult?.status)
+
+        viewModel.close()
+    }
+
+    private class QueuedUiDispatcher : UiDispatcher {
+        private val blocks = ArrayDeque<() -> Unit>()
+        var maximumPendingCount = 0
+            private set
+
+        override fun dispatch(block: () -> Unit) {
+            synchronized(blocks) {
+                blocks.addLast(block)
+                maximumPendingCount = maxOf(maximumPendingCount, blocks.size)
+            }
+        }
+
+        fun pendingCount(): Int = synchronized(blocks) { blocks.size }
+
+        fun drain() {
+            while (true) {
+                val block = synchronized(blocks) {
+                    if (blocks.isEmpty()) null else blocks.removeFirst()
+                } ?: return
+                block()
+            }
+        }
     }
 }
