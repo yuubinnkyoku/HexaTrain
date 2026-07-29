@@ -5,6 +5,8 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <set>
 #include <tuple>
 
 namespace {
@@ -152,6 +154,17 @@ void testTinyLanguageModelGeneralizedCoverage() {
         const auto step = forwardBackward(c, x, y, p, 0.003f);
         assert(std::isfinite(step.loss));
         assert(step.gradients.layers.size() == layers - 1);
+        const auto expected = parameterRegistry(p);
+        const auto gradients = parameterRegistry(step.gradients);
+        const auto next = parameterRegistry(step.next);
+        assert(expected.size() == gradients.size() && expected.size() == next.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            assert(expected[i].name == gradients[i].name && expected[i].name == next[i].name);
+            assert(expected[i].values->size() == gradients[i].values->size());
+            assert(expected[i].values->size() == next[i].values->size());
+        }
+        assert(parameterStorageHasNoAliases(step.gradients));
+        assert(parameterStorageHasNoAliases(step.next));
         return std::make_tuple(c, p, x, y, step);
     };
     exercise(2, 1); // multi-layer forward/backward
@@ -168,14 +181,41 @@ void testTinyLanguageModelGeneralizedCoverage() {
     const auto adam = adamUpdate(p, step.gradients, zero, zero, 0.003f, .9f, .999f, 1e-8f, 10.0f, 1000.0f);
     assert(adam.next.layers.size() == 1);
     assert(parameterStorageHasNoAliases(adam.firstMoment));
+    assert(parameterStorageHasNoAliases(adam.secondMoment));
+    assert(parameterStorageHasNoAliases(adam.firstMomentHat));
+    assert(parameterStorageHasNoAliases(adam.secondMomentHat));
+    assert(parameterStorageHasNoAliases(adam.next));
     const size_t expected = size_t(2) * c.vocabularySize * c.dimension + c.numLayers *
         (size_t(4) * c.dimension * c.dimension + size_t(4) * c.dimension + size_t(2) * c.dimension * c.feedForwardDimension);
     assert(parameterElementCount(p) == expected);
+    const auto originalLayer0 = p.wq;
+    const auto originalLayer1 = p.layers[0].wq;
     auto changed0 = p; changed0.wq[0] += .1f;
     auto changed1 = p; changed1.layers[0].wq[0] += .1f;
     const auto s0 = forwardBackward(c, x, y, changed0, 0.0f);
     const auto s1 = forwardBackward(c, x, y, changed1, 0.0f);
     assert(s0.loss != step.loss && s1.loss != step.loss);
+    assert(p.wq == originalLayer0 && p.layers[0].wq == originalLayer1);
+    assert(s0.gradients.wq != step.gradients.wq);
+    assert(s1.gradients.layers[0].wq != step.gradients.layers[0].wq);
+    assert(adam.firstMoment.wq.data() != adam.firstMoment.layers[0].wq.data());
+    assert(adam.secondMoment.wq.data() != adam.secondMoment.layers[0].wq.data());
+}
+
+void testTinyLanguageModelSchemaFailClosedAndRegistry() {
+    using namespace phonelm::tiny_lm;
+    Config base{}; std::string error;
+    auto invalid = base; invalid.numLayers = 0; assert(!validateConfig(invalid, &error));
+    invalid = base; invalid.numHeads = 0; assert(!validateConfig(invalid, &error));
+    invalid = base; invalid.dimension = 17; invalid.numHeads = 2; assert(!validateConfig(invalid, &error));
+    invalid = base; invalid.dimension = std::numeric_limits<uint32_t>::max(); invalid.feedForwardDimension = std::numeric_limits<uint32_t>::max(); assert(!validateConfig(invalid, &error));
+    Config c{}; c.tokens = 4; c.dimension = 8; c.feedForwardDimension = 16; c.numLayers = 2; c.numHeads = 2;
+    const auto a = initialParameters(c, 77), b = initialParameters(c, 77);
+    const auto ar = parameterRegistry(a), br = parameterRegistry(b);
+    assert(ar.size() == br.size()); std::set<std::string> names;
+    for (size_t i = 0; i < ar.size(); ++i) { assert(names.insert(ar[i].name).second); assert(ar[i].name == br[i].name); assert(*ar[i].values == *br[i].values); }
+    assert(ar.front().name == "token_embedding" && ar.back().name == "output_projection");
+    assert(ar[1].name == "layer_00.wq" && ar[5].name == "layer_00.norm1_gamma" && ar[11].name == "layer_01.wq");
 }
 
 void testTinyLanguageModelLegacyGeneralizedRegression() {
@@ -213,6 +253,7 @@ int main() {
     testTinyLanguageModelMultiLayerMultiHead();
     testTinyLanguageModelGeneralizedCoverage();
     testTinyLanguageModelLegacyGeneralizedRegression();
+    testTinyLanguageModelSchemaFailClosedAndRegistry();
     std::cout << "cpu_reference_tests=PASS\n";
     return 0;
 }
