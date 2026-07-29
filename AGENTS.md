@@ -32,6 +32,36 @@ GitHub Actions は `.github/workflows/verify.yml` から同じ
 Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` へ取得する。
 QAIRT SDK、ADB端末、repository secrets、APK artifactを使用しない。
 
+## QAIRT SDK の固定
+
+PhoneLM の QNN 有効 build、APK 監査、実機試験では、次の SDK を明示的に使用する。
+
+- QAIRT SDK root: `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`
+- Expected Build ID: `2.48.40.260702151143`
+
+QNN 有効操作では、SDK root と Expected Build ID を省略した自動選択を使用しない。
+複数の QAIRT version がインストールされていても、最初に見つかった SDK を暗黙に採用しない。
+
+既存の QNN build、APK 監査、実機 runner にも、対応する SDK root と
+Expected Build ID を必ず明示して渡す。
+
+禁止事項:
+
+- QAIRT 2.47 を QNN build、APK 監査、実機試験に使用しない
+- 2.48 SDK が存在しない、不完全、または Build ID 不一致の場合に別 version へ fallback しない
+- 自動探索で見つかった SDK を、そのまま PhoneLM の build 対象として採用しない
+- SDK root と Build ID を確認せず、既存 APK や build cache だけを根拠に実機試験を開始しない
+
+明示した SDK を利用できない場合は、SDK のインストール、移動、version 変更を行わず、
+次のいずれかを報告して停止する。
+
+- `QAIRT_SDK_ROOT_UNAVAILABLE`
+- `QAIRT_BUILD_ID_MISMATCH`
+- `QAIRT_SDK_INCOMPLETE`
+
+引数なしの自動探索は、インストール済み SDK の読み取り専用 inventory 調査に限って使用できる。
+`check_qairt.ps1 -SelfTest` は偽 SDK を使う選択ルールの回帰試験であり、この制限の対象外とする。
+
 ## 実行Tier
 
 ### Tier 1: 自動実行可（実機不要）
@@ -51,7 +81,9 @@ QAIRT SDK、ADB端末、repository secrets、APK artifactを使用しない。
 条件（全て満たすこと）:
 
 - オンライン物理端末を明示的に選択し、`adb devices` で online が 1 台のみであることを確認する
-- QAIRT Stub/Skel の hash が一致している（`-ExpectedBuildId` を指定し、QNN 有効 build 後は `.\scripts\audit_qnn_apk.ps1` を通過する）
+- QAIRT SDK root を `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`、Expected Build ID を `2.48.40.260702151143` として明示している
+- `check_qairt.ps1` で明示 root と Build ID の一致を確認している
+- QNN 有効 build 後に `.\scripts\audit_qnn_apk.ps1` を実行し、runtime、V81 Stub、V81 Skel の hash が同じ 2.48 SDK と一致し、`forbidden_2_47_strings=false` である
 - Activity/focus takeover が 0（headless runner が 2 秒ごとの top-resumed 監視と `focus_takeover_count=0` 確認で自動検出する）
 - root 化、SELinux 変更、システム領域変更を伴わない
 
