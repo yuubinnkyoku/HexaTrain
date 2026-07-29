@@ -411,6 +411,46 @@ struct Runtime::Impl {
         std::vector<float> maskData, zeroFfData, positionData;
     } tinyTransformerTraining;
 
+    // Non-baseline Transformer training graphs deliberately do not reuse the
+    // fixed L1/H1 tensor enum above.  Each tensor owns its dimension storage
+    // and receives one registry entry, so a layer-local activation, gradient,
+    // or optimizer buffer cannot alias the same-named item in another layer.
+    // The builder lives in qnn_runtime_transformer_training_generalized.inc.
+    struct GeneralizedTinyTransformerTrainingGraph {
+        enum class State : std::uint8_t { INACTIVE, PREPARING, ACTIVE, FAILED };
+        struct LayerRegistry {
+            std::uint32_t input = 0, output = 0;
+            std::uint32_t gamma1 = 0, beta1 = 0, wq = 0, wk = 0, wv = 0,
+                          wo = 0, gamma2 = 0, beta2 = 0, w1 = 0, w2 = 0;
+            std::vector<std::uint32_t> activations;
+            std::vector<std::uint32_t> gradients;
+            std::vector<std::uint32_t> scaledGradients;
+            std::vector<std::uint32_t> nextParameters;
+        };
+        Qnn_GraphHandle_t graph = nullptr;
+        std::uint32_t tokenOneHot = 0, tokenEmbedding = 0, target = 0,
+                      outputProjection = 0;
+        std::vector<Qnn_Tensor_t> tensors;
+        std::vector<std::string> names;
+        std::vector<std::vector<uint32_t>> dimensions;
+        std::vector<LayerRegistry> layers;
+        std::vector<std::uint32_t> appWriteRegistry;
+        std::vector<std::uint32_t> appReadRegistry;
+        std::vector<std::uint32_t> parameterRegistry;
+        std::vector<std::uint32_t> gradientRegistry;
+        std::vector<std::uint32_t> nextParameterRegistry;
+        std::vector<float> maskData, positionData;
+        float attentionScale = 1.0f, centeredScale = 8.0f,
+              epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
+              dimensionValue = 1.0f, inverseDimensionValue = 1.0f;
+        std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
+        std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
+        std::uint32_t vocabularySize = 0, numLayers = 0, numHeads = 0;
+        std::uint32_t tensorCreateSuccessCount = 0, graphAddNodeSuccessCount = 0;
+        State state = State::INACTIVE;
+        bool active = false, languageModel = false, diagnosticOutputs = false;
+    } generalizedTinyTransformerTraining;
+
     struct TinyTransformerGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t input = QNN_TENSOR_INIT, output = QNN_TENSOR_INIT;
@@ -724,15 +764,86 @@ bool Runtime::recreateContext(std::string& error) {
         error = "context recreation requires initialized backend, device, and context";
         return false;
     }
+    // QNN graph/tensor handles belong to a context.  Do not invalidate them
+    // before contextFree returns: on a free failure we explicitly fail-close
+    // below, while on success no stale handle may survive into the new context.
+    auto invalidateContextGraphs = [&] {
+        impl_->graph = nullptr;
+        impl_->dWeightGraph = nullptr;
+        impl_->dWeightInputs[0] = QNN_TENSOR_INIT;
+        impl_->dWeightInputs[1] = QNN_TENSOR_INIT;
+        impl_->dWeightOutput = QNN_TENSOR_INIT;
+        std::fill(std::begin(impl_->dWeightADims), std::end(impl_->dWeightADims), 0);
+        std::fill(std::begin(impl_->dWeightBDims), std::end(impl_->dWeightBDims), 0);
+        std::fill(std::begin(impl_->dWeightODims), std::end(impl_->dWeightODims), 0);
+        impl_->dWeightInputElements = 0;
+        impl_->dPredictionElements = 0;
+        impl_->dWeightOutputElements = 0;
+        impl_->inputs[0] = QNN_TENSOR_INIT;
+        impl_->inputs[1] = QNN_TENSOR_INIT;
+        impl_->output = QNN_TENSOR_INIT;
+        std::fill(std::begin(impl_->adims), std::end(impl_->adims), 0);
+        std::fill(std::begin(impl_->bdims), std::end(impl_->bdims), 0);
+        std::fill(std::begin(impl_->odims), std::end(impl_->odims), 0);
+        impl_->inputElements = 0;
+        impl_->weightElements = 0;
+        impl_->outputElements = 0;
+        impl_->weight.clear();
+        impl_->matmulGraphNames.clear();
+        impl_->matmulGraphSerial = 0;
+        impl_->dx = {};
+        impl_->dw2 = {};
+        impl_->dh = {};
+        impl_->dw1 = {};
+        impl_->mlpForward = nullptr;
+        impl_->mlpInputs[0] = QNN_TENSOR_INIT;
+        impl_->mlpInputs[1] = QNN_TENSOR_INIT;
+        impl_->mlpInputs[2] = QNN_TENSOR_INIT;
+        impl_->mlpZ = QNN_TENSOR_INIT;
+        impl_->mlpH = QNN_TENSOR_INIT;
+        impl_->mlpP = QNN_TENSOR_INIT;
+        std::fill(std::begin(impl_->xDims), std::end(impl_->xDims), 0);
+        std::fill(std::begin(impl_->w1Dims), std::end(impl_->w1Dims), 0);
+        std::fill(std::begin(impl_->w2Dims), std::end(impl_->w2Dims), 0);
+        std::fill(std::begin(impl_->zDims), std::end(impl_->zDims), 0);
+        std::fill(std::begin(impl_->pDims), std::end(impl_->pDims), 0);
+        impl_->batch = impl_->inDim = impl_->hidDim = impl_->outDim = 0;
+        impl_->mlpW1.clear();
+        impl_->mlpW2.clear();
+        impl_->reluBackward = {};
+        impl_->fusedBackward = {};
+        impl_->trainingOpsMicro = {};
+        impl_->mlpFullStep = {};
+        impl_->layerNorm = {};
+        impl_->softmax = {};
+        impl_->layerNormBackward = {};
+        impl_->softmaxBackward = {};
+        impl_->attention = {};
+        impl_->attentionBackward = {};
+        impl_->momentumOptimizer = {};
+        impl_->adamOptimizer = {};
+        impl_->crossEntropyGradient = {};
+        impl_->tinyTransformerTraining = {};
+        impl_->generalizedTinyTransformerTraining = {};
+        impl_->tinyTransformer = {};
+        apiTrace_.fullStepGraphCreateCalled = false;
+        apiTrace_.fullStepGraphFinalizeCalled = false;
+        apiTrace_.fullStepGraphCreateResult = -1;
+        apiTrace_.fullStepGraphFinalizeResult = -1;
+        apiTrace_.fullStepGraphHandleNonnull = false;
+    };
     auto status = impl_->api.contextFree(impl_->context, nullptr);
-    impl_->context = nullptr;
-    impl_->graph = nullptr;
-    impl_->weight.clear();
-    impl_->matmulGraphNames.clear();
     if (status != QNN_SUCCESS) {
+        // The old context is not trustworthy after a failed destruction
+        // request.  Deliberately abandon its handles rather than permitting a
+        // later execute to use a possibly half-destroyed graph.
+        invalidateContextGraphs();
+        impl_->context = nullptr;
         error = "contextFree=" + std::to_string(QNN_GET_ERROR_CODE(status));
         return false;
     }
+    invalidateContextGraphs();
+    impl_->context = nullptr;
     status = impl_->api.contextCreate(
         impl_->backend, impl_->device, nullptr, &impl_->context);
     if (status != QNN_SUCCESS) {
@@ -976,4 +1087,5 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 #include "qnn_runtime_full_step.inc"
 #include "qnn_runtime_transformer.inc"
 #include "qnn_runtime_transformer_training.inc"
+#include "qnn_runtime_transformer_training_generalized.inc"
 }

@@ -4,7 +4,8 @@ param(
     [ValidateRange(1, 1024)][int]$NumLayers = 1,
     [ValidateRange(1, 1024)][int]$NumHeads = 1,
     [ValidateRange(1, 65536)][int]$Tokens = 8,
-    [ValidateRange(1, 65536)][int]$EmbeddingDim = 16
+    [ValidateRange(1, 65536)][int]$EmbeddingDim = 16,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,19 +28,26 @@ if ([IO.Path]::GetFullPath($OutputDirectory) -ne $approvedOutputDirectory) {
 }
 $enumSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_qairt.cpp'
 $graphSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_transformer_training.inc'
+$generalizedSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_transformer_training_generalized.inc'
 Assert-True (Test-Path -LiteralPath $enumSource) 'TensorIndex source is missing'
 Assert-True (Test-Path -LiteralPath $graphSource) 'training graph source is missing'
 $enumText = Get-Content -LiteralPath $enumSource -Raw
 $graphText = Get-Content -LiteralPath $graphSource -Raw
+$generalizedText = if (Test-Path -LiteralPath $generalizedSource) { Get-Content -LiteralPath $generalizedSource -Raw } else { '' }
 Assert-True $enumText.Contains('struct TinyTransformerTrainingGraph') 'TensorIndex owner is missing'
 Assert-True ($graphText -match 'g\.names\[i\]\s*=\s*"layer_00_tensor_"') `
     'runtime tensor naming must retain the layer_00 indexed contract'
 Assert-True ($graphText -match 'g\.names\[id\]\s*=\s*std::string\("layer_00_"\)') `
     'runtime parameter naming must retain the layer_00 indexed contract'
-$hasGeneralizedBuilder = $graphText.Contains('buildTransformerLayer(') -and
-    -not $graphText.Contains('tiny training multi-layer/multi-head graph builder unavailable')
-if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not $hasGeneralizedBuilder) {
-    Fail 'runtime source does not yet provide the requested indexed multi-layer/multi-head builder'
+$hasL2H1Builder = $generalizedText.Contains('prepareTinyTransformerTrainingGeneralized(') -and
+    $generalizedText.Contains('numHeads != 1 || numLayers != 2') -and
+    $generalizedText.Contains('for (uint32_t layer = 0; layer < numLayers; ++layer)') -and
+    $generalizedText.Contains('const std::string prefix = "layer_0" + std::to_string(layer) + "_";') -and
+    $generalizedText.Contains('record.input = layer == 0 ? input : g.layers[layer - 1].output;') -and
+    $generalizedText.Contains('g.layers.back().output, outputProjection') -and
+    $generalizedText.Contains('"l2h1_lm_logits"')
+if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not ($NumLayers -eq 2 -and $NumHeads -eq 1 -and $hasL2H1Builder)) {
+    Fail 'runtime source does not provide the requested indexed multi-layer/multi-head builder'
 }
 foreach ($marker in @('auto make =', 'auto many =', 'auto tapType =', 'TransformerTrainingLayerNormBuilder', 'layerNorm.forward(', 'layerNorm.backward(')) {
     Assert-True $graphText.Contains($marker) "source layout marker is missing: $marker"
@@ -283,31 +291,44 @@ $nodeRows | Export-Csv -LiteralPath $nodePath -NoTypeInformation -Encoding utf8
 $tensorRows | Export-Csv -LiteralPath $tensorPath -NoTypeInformation -Encoding utf8
 
 # This topology table is emitted only after the source consistency checks above.
-# For the legacy graph it records its actual layer_00 naming contract.  A
-# multi-layer/head request is rejected unless the runtime itself exposes the
-# indexed builder contract, preventing a synthetic map from being mistaken for
-# an executable graph.
+# The L2/H1 rows below are derived from the generalized builder's exact `add`
+# names and layer chaining expression, not a hypothetical head/layer layout.
 $topologyRows = [Collections.Generic.List[object]]::new()
-for ($layer = 0; $layer -lt $NumLayers; ++$layer) {
-    $prefix = 'layer_{0:D2}' -f $layer
-    $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=''; tensor="$prefix`_input"; shape="$Tokens`x$EmbeddingDim"; role='layer input / residual input' })
-    foreach ($name in @('norm1_output','q','k','v','attention_concat','attention_output','residual1','norm2_output','ffn_output','output','input_gradient')) {
-        $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=''; tensor="$prefix`_$name"; shape="$Tokens`x$EmbeddingDim"; role='layer-scoped transformer tensor' })
-    }
-    foreach ($head in 0..($NumHeads - 1)) {
-        $headPrefix = "$prefix`_head_{0:D2}" -f $head
-        foreach ($name in @('q','k','v','context')) {
-            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=$head; tensor="$headPrefix`_$name"; shape="$Tokens`x$HeadDim"; role='head-scoped projection/context tensor' })
+if ($NumLayers -eq 2 -and $NumHeads -eq 1) {
+    $activationNames = @('ln1_mean','ln1_centered','ln1_centered_s','ln1_square','ln1_variance','ln1_variance_eps','ln1_inv_s','ln1_inv','ln1_xhat','ln1_xhat_gamma','ln1','q','k','v','attention_scores','attention_scaled','attention_masked','attention_probabilities','attention_context','attention_projected','residual1','ln2_mean','ln2_centered','ln2_centered_s','ln2_square','ln2_variance','ln2_variance_eps','ln2_inv_s','ln2_inv','ln2_xhat','ln2_xhat_gamma','ln2','ff1','relu','ff2','output')
+    $rowNames = @('ln1_mean','ln1_variance','ln1_variance_eps','ln1_inv_s','ln1_inv','ln2_mean','ln2_variance','ln2_variance_eps','ln2_inv_s','ln2_inv')
+    $scoreNames = @('attention_scores','attention_scaled','attention_masked','attention_probabilities','attention_context','attention_projected')
+    foreach ($layer in 0..1) {
+        $prefix = 'layer_{0:D2}' -f $layer
+        $inputName = if ($layer -eq 0) { 'layer_00_input' } else { 'layer_00_output' }
+        $inputRole = if ($layer -eq 0) { 'layer input' } else { 'bound to previous layer output' }
+        $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor=$inputName; shape="$Tokens`x$EmbeddingDim"; role=$inputRole })
+        foreach ($parameter in @('norm1_gamma','norm1_beta','wq','wk','wv','wo','norm2_gamma','norm2_beta','ffn_w1','ffn_w2')) {
+            $parameterShape = if ($parameter -in @('norm1_gamma','norm1_beta','norm2_gamma','norm2_beta')) { "$EmbeddingDim" } elseif ($parameter -eq 'ffn_w1') { "$EmbeddingDim`x32" } elseif ($parameter -eq 'ffn_w2') { "32x$EmbeddingDim" } else { "$EmbeddingDim`x$EmbeddingDim" }
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor="$prefix`_$parameter"; shape=$parameterShape; role='layer parameter' })
         }
-        foreach ($name in @('scores','probabilities')) {
-            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=$head; tensor="$headPrefix`_$name"; shape="$Tokens`x$Tokens"; role='head-scoped attention tensor' })
+        foreach ($name in $activationNames) {
+            $activationShape = if ($name -in $rowNames) { "$Tokens`x1" } elseif ($name -in $scoreNames) { "$Tokens`x$Tokens" } elseif ($name -in @('ff1','relu')) { "$Tokens`x32" } else { "$Tokens`x$EmbeddingDim" }
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=0; tensor="$prefix`_$name"; shape=$activationShape; role='layer forward tensor' })
         }
     }
+    $topologyRows.Add([pscustomobject][ordered]@{ layer='LM'; head=''; tensor='logits'; shape="$Tokens`x32"; role='LM head input is layer_01_output' })
+    Assert-True ($topologyRows.Count -eq 95) 'L2/H1 topology row count assertion failed'
+} else {
+    # Keep the public legacy L1/H1 map stable while the generalized builder is
+    # deliberately restricted to L2/H1 forward construction.
+    $topologyRows.Add([pscustomobject][ordered]@{ layer=0; head=0; tensor='layer_00_input'; shape="$Tokens`x$EmbeddingDim"; role='legacy layer input' })
+    $topologyRows.Add([pscustomobject][ordered]@{ layer=0; head=0; tensor='layer_00_output'; shape="$Tokens`x$EmbeddingDim"; role='legacy layer output to LM head' })
+    Assert-True ($topologyRows.Count -eq 2) 'legacy topology row count assertion failed'
 }
 $topologyPath = Join-Path $resolvedOutput 'transformer-topology-map.csv'
 $topologyRows | Export-Csv -LiteralPath $topologyPath -NoTypeInformation -Encoding utf8
-Assert-True ($topologyRows.Count -eq ($NumLayers * (12 + 6 * $NumHeads))) 'topology row count assertion failed'
 Write-Output "node_map_rows=$($nodeRows.Count)"
 Write-Output "tensor_map_rows=$($tensorRows.Count)"
 Write-Output "topology_map_rows=$($topologyRows.Count)"
 Write-Output "shape=B1_T$Tokens`_V32_D$EmbeddingDim; layers=$NumLayers; heads=$NumHeads; head_dim=$HeadDim; diagnostic_outputs=true; creation_index=zero_based_source_order"
+if ($SelfTest) {
+    Assert-True $hasL2H1Builder 'L2/H1 generalized builder source contract self-test failed'
+    Assert-True (-not ($generalizedText.Contains('numHeads != 1') -eq $false)) 'L2/H1 source must reject unsupported head counts'
+    Write-Output 'graph_map_exporter_self_test=PASS'
+}

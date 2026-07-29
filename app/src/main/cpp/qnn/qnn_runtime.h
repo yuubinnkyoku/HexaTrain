@@ -361,6 +361,12 @@ public:
     const RuntimeMetrics& metrics() const;
 
 private:
+    bool prepareTinyTransformerTrainingGeneralized(
+        uint32_t tokens, uint32_t dimension, uint32_t feedForwardDimension,
+        float epsilon, bool diagnosticOutputs, std::string& error,
+        uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
+        TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
+        uint32_t numHeads);
     BackendInfo info_;
     std::string diagnostics_;
     RuntimeMetrics metrics_;

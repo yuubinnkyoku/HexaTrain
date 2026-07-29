@@ -150,6 +150,20 @@ bool Runtime::prepareTinyTransformerTraining(
   }
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
+  const auto generalizedState = impl_->generalizedTinyTransformerTraining.state;
+  if (generalizedState != Impl::GeneralizedTinyTransformerTrainingGraph::State::INACTIVE ||
+      g.graph != nullptr) {
+    error = "tiny training reprepare or L1/L2 mode transition is unavailable";
+    return false;
+  }
+  // Hand all non-baseline requests to the stateful builder before touching
+  // fixed-L1 state. A generalized prepare failure must therefore leave a
+  // FAILED state that executeTinyTransformerTraining cannot reinterpret as L1.
+  if (numLayers != 1 || numHeads != 1) {
+    return prepareTinyTransformerTrainingGeneralized(
+        tokens, dimension, feedForwardDimension, epsilon, diagnosticOutputs,
+        error, vocabularySize, variant, tapSet, numLayers, numHeads);
+  }
   if (!std::isfinite(options_.tinyTransformerCenteredScale) ||
       options_.tinyTransformerCenteredScale <= 0) {
     error = "tiny training invalid centered scale";
@@ -171,14 +185,6 @@ bool Runtime::prepareTinyTransformerTraining(
   g.numLayers = numLayers;
   g.numHeads = numHeads;
   g.headDimension = dimension / numHeads;
-  // Do not permit the historical fixed graph to masquerade as a larger
-  // Transformer.  The L/H-specific builder below is intentionally required
-  // before a non-baseline shape can be finalized; there is no CPU fallback or
-  // implicit head/layer collapse in this runtime.
-  if (g.numLayers != 1 || g.numHeads != 1) {
-    error = "tiny training multi-layer/multi-head graph builder unavailable";
-    return false;
-  }
   g.diagnosticOutputs = diagnosticOutputs;
   g.vocabularySize = vocabularySize;
   g.sourceTensorCreateSuccessCount = 0;
@@ -931,6 +937,19 @@ bool Runtime::executeTinyTransformerTraining(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
+  // The L2/H1 builder currently finalizes the graph-native forward and LM
+  // gradient terminal. Binding its independent per-layer parameters is the
+  // next milestone; fail before assembling fixed-L1 bindings so this path can
+  // never silently execute a collapsed graph or fall back to CPU.
+  const auto generalizedState = impl_->generalizedTinyTransformerTraining.state;
+  if (generalizedState !=
+      Impl::GeneralizedTinyTransformerTrainingGraph::State::INACTIVE) {
+    error = generalizedState ==
+                    Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE
+                ? "generalized L2/H1 execution bindings unavailable"
+                : "generalized L2/H1 preparation did not complete";
+    return false;
+  }
   outputs.taps.clear();
   outputs.taps.reserve(g.tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL
                            ? 100
