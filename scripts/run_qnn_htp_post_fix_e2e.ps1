@@ -247,8 +247,8 @@ try {
     if ($online.Count -ne 1) { throw "Expected exactly one online ADB device; found $($online.Count)." }
     $script:device = $online[0]
     $emulatorProperties = @(
-        Invoke-Adb @('shell', 'getprop', 'ro.kernel.qemu'),
-        Invoke-Adb @('shell', 'getprop', 'ro.boot.qemu'),
+        Invoke-Adb @('shell', 'getprop', 'ro.kernel.qemu')
+        Invoke-Adb @('shell', 'getprop', 'ro.boot.qemu')
         Invoke-Adb @('shell', 'getprop', 'ro.hardware')
     )
     if (($emulatorProperties -join "`n") -match '(?im)^(1|.*(goldfish|ranchu|emulator).*)$') {
