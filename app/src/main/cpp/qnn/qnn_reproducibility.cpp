@@ -97,6 +97,21 @@ std::pair<std::vector<float>,std::vector<float>> batch(const tiny_lm::Config& c,
   for(uint32_t i=0;i<c.tokens;++i){x[i]=p[index%p.size()][i%4];y[i]=p[index%p.size()][(i+1)%4];}
   return {tiny_lm::oneHot(x,c.vocabularySize),tiny_lm::oneHot(y,c.vocabularySize)};
 }
+// The optimizer/reproducibility registry is intentionally explicit.  A
+// pointer-to-member initializer list cannot mix TinyTransformerParameters'
+// global members with inherited TinyTransformerLayerParameters members, and
+// it would not enumerate additional layers in any event.
+void forEachParameter(TinyTransformerParameters& p,
+                      const std::function<void(std::vector<float>&)>& f) {
+  f(p.tokenEmbedding);
+  auto visitLayer = [&](TinyTransformerLayerParameters& layer) {
+    f(layer.wq); f(layer.wk); f(layer.wv); f(layer.wo); f(layer.gamma1);
+    f(layer.beta1); f(layer.gamma2); f(layer.beta2); f(layer.w1); f(layer.w2);
+  };
+  visitLayer(p);
+  for (auto& layer : p.layers) visitLayer(layer);
+  f(p.outputProjection);
+}
 struct Snapshot {
   const char* id;
   int completedStep;
@@ -106,7 +121,12 @@ struct Snapshot {
 };
 std::vector<Snapshot> snapshots() {
   tiny_lm::Config c; auto current=tiny_lm::initialParameters(c,1); auto m=current, v=current;
-  for (auto member : {&TinyTransformerParameters::gamma1,&TinyTransformerParameters::beta1,&TinyTransformerParameters::wq,&TinyTransformerParameters::wk,&TinyTransformerParameters::wv,&TinyTransformerParameters::wo,&TinyTransformerParameters::gamma2,&TinyTransformerParameters::beta2,&TinyTransformerParameters::w1,&TinyTransformerParameters::w2,&TinyTransformerParameters::tokenEmbedding,&TinyTransformerParameters::outputProjection}) { std::fill((m.*member).begin(),(m.*member).end(),0); std::fill((v.*member).begin(),(v.*member).end(),0); }
+  forEachParameter(m, [](std::vector<float>& values) {
+    std::fill(values.begin(), values.end(), 0.0f);
+  });
+  forEachParameter(v, [](std::vector<float>& values) {
+    std::fill(values.begin(), values.end(), 0.0f);
+  });
   std::vector<Snapshot> result; const std::array<int,3> wanted{{2,10,100}};
   for(int completed=0;completed<=100;++completed) {
     const auto b=batch(c,uint32_t(completed%4));
@@ -209,16 +229,6 @@ bool runSame(Runtime& rt,const Snapshot& s,int repeats,Aggregate& a,std::string&
   return true;
 }
 
-void forEachParameter(TinyTransformerParameters& p,
-                      const std::function<void(std::vector<float>&)>& f) {
-  for (auto member : {&TinyTransformerParameters::gamma1,&TinyTransformerParameters::beta1,
-       &TinyTransformerParameters::wq,&TinyTransformerParameters::wk,
-       &TinyTransformerParameters::wv,&TinyTransformerParameters::wo,
-       &TinyTransformerParameters::gamma2,&TinyTransformerParameters::beta2,
-       &TinyTransformerParameters::w1,&TinyTransformerParameters::w2,
-       &TinyTransformerParameters::tokenEmbedding,
-       &TinyTransformerParameters::outputProjection}) f(p.*member);
-}
 std::vector<float> flattenParameters(const TinyTransformerParameters& p) {
   std::vector<float> flat;
   auto copy=p;

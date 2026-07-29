@@ -21,6 +21,7 @@
 #include <mutex>
 #include <sstream>
 #include <utility>
+#include <unordered_set>
 
 namespace phonelm::qnn {
 namespace {
@@ -384,6 +385,10 @@ struct Runtime::Impl {
         uint32_t axisOneDims[1]{1}, axisTwoDims[1]{2};
         uint32_t lastAxisData[1]{1}, rowAxisData[1]{0}, allAxesData[2]{0, 1};
         uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
+        // Kept with the graph so execute-time buffer validation cannot silently
+        // bind a multi-layer parameter object to the established L1/H1 graph.
+        // The graph builder owns the eventual dynamic layer/head registry.
+        uint32_t numLayers = 1, numHeads = 1, headDimension = 0;
         uint32_t vocabularySize = 0;
         uint32_t sourceTensorCreateSuccessCount = 0;
         uint32_t sourceGraphAddNodeSuccessCount = 0;

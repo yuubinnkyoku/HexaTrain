@@ -1,10 +1,150 @@
+// The fixed L1/H1 graph and the dynamic graph use the same LayerNorm
+// subgraphs.  Keep this builder independent from the fixed tensor enum: a
+// generalized layer supplies its own tensor IDs, which prevents a later layer
+// from accidentally reusing layer zero temporaries.
+struct TransformerTrainingLayerNormBuilder {
+  QNN_INTERFACE_VER_TYPE &api;
+  Qnn_GraphHandle_t graph;
+  Qnn_Tensor_t *tensors;
+  int lastAxis;
+  int rowAxis;
+  int centeredScale;
+  int epsilonScaled;
+  int dimension;
+  int inverseDimension;
+  std::string &error;
+  uint32_t &nodeCount;
+
+  bool ok(Qnn_ErrorHandle_t status, const char *label) {
+    if (status == QNN_SUCCESS) {
+      ++nodeCount;
+      return true;
+    }
+    error = std::string("tiny training ") + label + '=' +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  bool binary(const std::string &name, const char *type, int a, int b, int out,
+              const char *label) {
+    Qnn_Tensor_t input[2] = {tensors[a], tensors[b]};
+    return ok(addSimpleNode(api, graph, name.c_str(), type, input, 2,
+                            &tensors[out]), label);
+  }
+  bool unary(const std::string &name, const char *type, int a, int out,
+             const char *label) {
+    return ok(addSimpleNode(api, graph, name.c_str(), type, &tensors[a], 1,
+                            &tensors[out]), label);
+  }
+  bool reduce(const std::string &name, const char *type, const char *axesName,
+              const char *keepName, int input, int axes, bool keep, int out,
+              const char *label) {
+    Qnn_Param_t parameters[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+    parameters[0].paramType = QNN_PARAMTYPE_TENSOR;
+    parameters[0].name = axesName;
+    parameters[0].tensorParam = tensors[axes];
+    parameters[1].paramType = QNN_PARAMTYPE_SCALAR;
+    parameters[1].name = keepName;
+    parameters[1].scalarParam.dataType = QNN_DATATYPE_BOOL_8;
+    parameters[1].scalarParam.bool8Value = keep;
+    Qnn_OpConfig_t operation = QNN_OPCONFIG_INIT;
+    operation.v1.name = name.c_str();
+    operation.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+    operation.v1.typeName = type;
+    operation.v1.numOfParams = 2;
+    operation.v1.params = parameters;
+    operation.v1.numOfInputs = 1;
+    operation.v1.inputTensors = &tensors[input];
+    operation.v1.numOfOutputs = 1;
+    operation.v1.outputTensors = &tensors[out];
+    return ok(api.graphAddNode(graph, operation), label);
+  }
+  bool forward(const char *prefix, int x, int gamma, int beta, int mean,
+               int centered, int centeredScaled, int square, int variance,
+               int varianceEpsilon, int inverseScaled, int inverse, int xhat,
+               int xhatGamma, int output) {
+    const std::string p(prefix);
+    return reduce(p + "_mean", QNN_OP_REDUCE_MEAN,
+                  QNN_OP_REDUCE_MEAN_PARAM_AXES,
+                  QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, x, lastAxis, true, mean,
+                  "ln mean") &&
+           binary(p + "_center", QNN_OP_ELEMENT_WISE_SUBTRACT, x, mean,
+                  centered, "ln center") &&
+           binary(p + "_center_scale", QNN_OP_ELEMENT_WISE_MULTIPLY, centered,
+                  centeredScale, centeredScaled, "ln center scale") &&
+           binary(p + "_square", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                  centeredScaled, centeredScaled, square, "ln square") &&
+           reduce(p + "_var", QNN_OP_REDUCE_MEAN,
+                  QNN_OP_REDUCE_MEAN_PARAM_AXES,
+                  QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, square, lastAxis, true,
+                  variance, "ln var") &&
+           binary(p + "_eps", QNN_OP_ELEMENT_WISE_ADD, variance,
+                  epsilonScaled, varianceEpsilon, "ln eps") &&
+           unary(p + "_rsqrt", QNN_OP_ELEMENT_WISE_RSQRT, varianceEpsilon,
+                 inverseScaled, "ln rsqrt") &&
+           binary(p + "_unscale", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                  inverseScaled, centeredScale, inverse, "ln unscale") &&
+           binary(p + "_xhat", QNN_OP_ELEMENT_WISE_MULTIPLY, centered,
+                  inverse, xhat, "ln xhat") &&
+           binary(p + "_gamma", QNN_OP_ELEMENT_WISE_MULTIPLY, xhat, gamma,
+                  xhatGamma, "ln gamma") &&
+           binary(p + "_beta", QNN_OP_ELEMENT_WISE_ADD, xhatGamma, beta,
+                  output, "ln beta");
+  }
+  bool backward(const char *prefix, int dOutput, int gamma, int xhat,
+                int inverseStd, int dXhat, int sumDXhat, int dXhatXhat,
+                int dYXhat, int sumDXhatXhat, int dimensionTimesDXhat,
+                int firstDifference, int xhatTimesSum, int bracket,
+                int inverseStdOverDimension, int dInput, int dGamma,
+                int dBeta) {
+    const std::string p(prefix);
+    return binary(p + "_dxhat", QNN_OP_ELEMENT_WISE_MULTIPLY, dOutput,
+                  gamma, dXhat, "lnb dxhat") &&
+           reduce(p + "_sum", QNN_OP_REDUCE_SUM,
+                  QNN_OP_REDUCE_SUM_PARAM_AXES,
+                  QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dXhat, lastAxis, true,
+                  sumDXhat, "lnb sum") &&
+           binary(p + "_prod", QNN_OP_ELEMENT_WISE_MULTIPLY, dXhat, xhat,
+                  dXhatXhat, "lnb prod") &&
+           reduce(p + "_sumprod", QNN_OP_REDUCE_SUM,
+                  QNN_OP_REDUCE_SUM_PARAM_AXES,
+                  QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dXhatXhat, lastAxis,
+                  true, sumDXhatXhat, "lnb sumprod") &&
+           binary(p + "_ddx", QNN_OP_ELEMENT_WISE_MULTIPLY, dXhat,
+                  dimension, dimensionTimesDXhat, "lnb ddx") &&
+           binary(p + "_first", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                  dimensionTimesDXhat, sumDXhat, firstDifference,
+                  "lnb first") &&
+           binary(p + "_xsum", QNN_OP_ELEMENT_WISE_MULTIPLY, xhat,
+                  sumDXhatXhat, xhatTimesSum, "lnb xsum") &&
+           binary(p + "_bracket", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                  firstDifference, xhatTimesSum, bracket, "lnb bracket") &&
+           binary(p + "_invd", QNN_OP_ELEMENT_WISE_MULTIPLY, inverseStd,
+                  inverseDimension, inverseStdOverDimension, "lnb invd") &&
+           binary(p + "_dx", QNN_OP_ELEMENT_WISE_MULTIPLY, bracket,
+                  inverseStdOverDimension, dInput, "lnb dx") &&
+           binary(p + "_dyx", QNN_OP_ELEMENT_WISE_MULTIPLY, dOutput, xhat,
+                  dYXhat, "lnb dyx") &&
+           reduce(p + "_dg", QNN_OP_REDUCE_SUM,
+                  QNN_OP_REDUCE_SUM_PARAM_AXES,
+                  QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dYXhat,
+                  /* row axis is always tensor slot supplied by caller */
+                  rowAxis, false, dGamma, "lnb dg") &&
+           reduce(p + "_db", QNN_OP_REDUCE_SUM,
+                  QNN_OP_REDUCE_SUM_PARAM_AXES,
+                  QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dOutput, rowAxis, false,
+                  dBeta, "lnb db");
+  }
+};
+
 bool Runtime::prepareTinyTransformerTraining(
     uint32_t tokens, uint32_t dimension, uint32_t feedForwardDimension,
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
-    TinyTransformerTrainingTapSet tapSet) {
+    TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
+    uint32_t numHeads) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
-      !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0) {
+      !feedForwardDimension || !numLayers || !numHeads ||
+      dimension % numHeads != 0 || !std::isfinite(epsilon) || epsilon <= 0) {
     error = "tiny training invalid runtime or shape";
     return false;
   }
@@ -28,6 +168,17 @@ bool Runtime::prepareTinyTransformerTraining(
   g.tokens = tokens;
   g.dimension = dimension;
   g.feedForwardDimension = feedForwardDimension;
+  g.numLayers = numLayers;
+  g.numHeads = numHeads;
+  g.headDimension = dimension / numHeads;
+  // Do not permit the historical fixed graph to masquerade as a larger
+  // Transformer.  The L/H-specific builder below is intentionally required
+  // before a non-baseline shape can be finalized; there is no CPU fallback or
+  // implicit head/layer collapse in this runtime.
+  if (g.numLayers != 1 || g.numHeads != 1) {
+    error = "tiny training multi-layer/multi-head graph builder unavailable";
+    return false;
+  }
   g.diagnosticOutputs = diagnosticOutputs;
   g.vocabularySize = vocabularySize;
   g.sourceTensorCreateSuccessCount = 0;
@@ -115,7 +266,33 @@ bool Runtime::prepareTinyTransformerTraining(
   for (int i = 0; i < G::TENSOR_COUNT; ++i) {
     Qnn_Tensor_t initialized = QNN_TENSOR_INIT;
     g.tensors[i] = initialized;
-    g.names[i] = "tiny_train_" + std::to_string(i);
+    // The baseline is logical layer zero.  Give every layer-local tensor a
+    // stable qualified name now so the dynamic registry uses the same naming
+    // convention when it adds layer_01 and head-specific tensors.
+    g.names[i] = "layer_00_tensor_" + std::to_string(i);
+  }
+  auto nameLayerParameter = [&](int id, const char *name) {
+    g.names[id] = std::string("layer_00_") + name;
+  };
+  nameLayerParameter(G::G1, "norm1_gamma");
+  nameLayerParameter(G::B1, "norm1_beta");
+  nameLayerParameter(G::WQ, "wq");
+  nameLayerParameter(G::WK, "wk");
+  nameLayerParameter(G::WV, "wv");
+  nameLayerParameter(G::WO, "wo");
+  nameLayerParameter(G::G2, "norm2_gamma");
+  nameLayerParameter(G::B2, "norm2_beta");
+  nameLayerParameter(G::W1, "ffn_w1");
+  nameLayerParameter(G::W2, "ffn_w2");
+  g.names[G::ONE_HOT] = "token_one_hot";
+  g.names[G::EMBEDDING] = "token_embedding";
+  g.names[G::OUTPUT_PROJECTION] = "output_projection";
+  std::unordered_set<std::string> declaredTensorNames;
+  for (const auto &name : g.names) {
+    if (!declaredTensorNames.insert(name).second) {
+      error = "tiny training duplicate tensor name: " + name;
+      return false;
+    }
   }
   auto tapType = [&](int id, Qnn_TensorType_t type) {
     const bool allInternal =
@@ -302,7 +479,7 @@ bool Runtime::prepareTinyTransformerTraining(
         {{"SOFTMAX_PRODUCT", {tokens, tokens}}},
         {{"SOFTMAX_DOT", {g.tensors[G::SOFTMAX_DOT].v1.dimensions[0],
                             g.tensors[G::SOFTMAX_DOT].v1.dimensions[1]}}},
-        {1}, true};
+        {1}, true, false, false, {}, {}, 0, {}, 0};
     const auto validation = shape::validate(softmaxDot);
     if (!validation.ok) {
       error = validation.error;
@@ -464,55 +641,17 @@ bool Runtime::prepareTinyTransformerTraining(
             std::to_string(QNN_GET_ERROR_CODE(v));
     return false;
   };
-  auto lnf = [&](const char *p, int x, int ga, int be, int mean, int center,
-                 int centerS, int square, int var, int varEps, int invS,
-                 int inv, int xhat, int xhatG, int out) {
-    std::string s = p;
-    return ok(reduce((s + "_mean").c_str(), QNN_OP_REDUCE_MEAN,
-                     QNN_OP_REDUCE_MEAN_PARAM_AXES,
-                     QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, x, G::LAST_AXIS, true,
-                     mean),
-              "ln mean") &&
-           ok(bin((s + "_center").c_str(), QNN_OP_ELEMENT_WISE_SUBTRACT, x,
-                  mean, center),
-              "ln center") &&
-           ok(bin((s + "_center_scale").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY,
-                  center, G::CENTER_SCALE, centerS),
-              "ln center scale") &&
-           ok(bin((s + "_square").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY,
-                  centerS, centerS, square),
-              "ln square") &&
-           ok(reduce((s + "_var").c_str(), QNN_OP_REDUCE_MEAN,
-                     QNN_OP_REDUCE_MEAN_PARAM_AXES,
-                     QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, square, G::LAST_AXIS,
-                     true, var),
-              "ln var") &&
-           ok(bin((s + "_eps").c_str(), QNN_OP_ELEMENT_WISE_ADD, var,
-                  G::EPS_SCALED, varEps),
-              "ln eps") &&
-           ok(unary((s + "_rsqrt").c_str(), QNN_OP_ELEMENT_WISE_RSQRT, varEps,
-                    invS),
-              "ln rsqrt") &&
-           ok(bin((s + "_unscale").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, invS,
-                  G::CENTER_SCALE, inv),
-              "ln unscale") &&
-           ok(bin((s + "_xhat").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, center,
-                  inv, xhat),
-              "ln xhat") &&
-           ok(bin((s + "_gamma").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, xhat,
-                  ga, xhatG),
-              "ln gamma") &&
-           ok(bin((s + "_beta").c_str(), QNN_OP_ELEMENT_WISE_ADD, xhatG, be,
-                  out),
-              "ln beta");
-  };
+  TransformerTrainingLayerNormBuilder layerNorm{
+      impl_->api, g.graph, g.tensors.data(), G::LAST_AXIS, G::ROW_AXIS,
+      G::CENTER_SCALE, G::EPS_SCALED, G::DIMENSION, G::INV_DIMENSION, error,
+      g.sourceGraphAddNodeSuccessCount};
   if (g.languageModel &&
       (!ok(mm("lm_embedding", G::ONE_HOT, G::EMBEDDING,
               G::EMBEDDED_TOKEN), "embedding") ||
        !ok(bin("lm_position", QNN_OP_ELEMENT_WISE_ADD, G::EMBEDDED_TOKEN,
                G::POSITION, G::X), "position")))
     return false;
-  if (!lnf("tt_ln1", G::X, G::G1, G::B1, G::MEAN1, G::CENTERED1, G::CENTERED_S1,
+  if (!layerNorm.forward("tt_ln1", G::X, G::G1, G::B1, G::MEAN1, G::CENTERED1, G::CENTERED_S1,
            G::SQUARE1, G::VAR1, G::VAR_EPS1, G::INV_STD_S1, G::INV_STD1,
            G::XHAT1, G::XHAT_G1, G::LN1))
     return false;
@@ -555,7 +694,7 @@ bool Runtime::prepareTinyTransformerTraining(
               G::RESIDUAL1),
           "res1"))
     return false;
-  if (!lnf("tt_ln2", G::RESIDUAL1, G::G2, G::B2, G::MEAN2, G::CENTERED2,
+  if (!layerNorm.forward("tt_ln2", G::RESIDUAL1, G::G2, G::B2, G::MEAN2, G::CENTERED2,
            G::CENTERED_S2, G::SQUARE2, G::VAR2, G::VAR_EPS2, G::INV_STD_S2,
            G::INV_STD2, G::XHAT2, G::XHAT_G2, G::LN2))
     return false;
@@ -636,59 +775,7 @@ bool Runtime::prepareTinyTransformerTraining(
              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1),
           "dln2"))
     return false;
-  auto lnb = [&](const char *p, int dy, int ga, int xhat, int inv, int dxhat,
-                  int sum, int prod, int dyx, int sumprod, int ddx, int first,
-                  int xsum, int bracket, int invd, int dx, int dg, int db) {
-    std::string s = p;
-    return ok(bin((s + "_dxhat").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dy, ga,
-                  dxhat),
-              "lnb dxhat") &&
-           ok(reduce((s + "_sum").c_str(), QNN_OP_REDUCE_SUM,
-                     QNN_OP_REDUCE_SUM_PARAM_AXES,
-                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dxhat, G::LAST_AXIS,
-                     true, sum),
-              "lnb sum") &&
-           ok(bin((s + "_prod").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dxhat,
-                  xhat, prod),
-              "lnb prod") &&
-           ok(reduce((s + "_sumprod").c_str(), QNN_OP_REDUCE_SUM,
-                     QNN_OP_REDUCE_SUM_PARAM_AXES,
-                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, prod, G::LAST_AXIS,
-                     true, sumprod),
-              "lnb sumprod") &&
-           ok(bin((s + "_ddx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dxhat,
-                  G::DIMENSION, ddx),
-              "lnb ddx") &&
-           ok(bin((s + "_first").c_str(), QNN_OP_ELEMENT_WISE_SUBTRACT, ddx,
-                  sum, first),
-              "lnb first") &&
-           ok(bin((s + "_xsum").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, xhat,
-                  sumprod, xsum),
-              "lnb xsum") &&
-           ok(bin((s + "_bracket").c_str(), QNN_OP_ELEMENT_WISE_SUBTRACT, first,
-                  xsum, bracket),
-              "lnb bracket") &&
-           ok(bin((s + "_invd").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, inv,
-                  G::INV_DIMENSION, invd),
-              "lnb invd") &&
-           ok(bin((s + "_dx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, bracket,
-                  invd, dx),
-              "lnb dx") &&
-            ok(bin((s + "_dyx").c_str(), QNN_OP_ELEMENT_WISE_MULTIPLY, dy, xhat,
-                   dyx),
-               "lnb dyx") &&
-           ok(reduce((s + "_dg").c_str(), QNN_OP_REDUCE_SUM,
-                     QNN_OP_REDUCE_SUM_PARAM_AXES,
-                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dyx, G::ROW_AXIS,
-                     false, dg),
-              "lnb dg") &&
-           ok(reduce((s + "_db").c_str(), QNN_OP_REDUCE_SUM,
-                     QNN_OP_REDUCE_SUM_PARAM_AXES,
-                     QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS, dy, G::ROW_AXIS, false,
-                     db),
-              "lnb db");
-  };
-  if (!lnb("tt_lnb2", G::DLN2, G::G2, G::XHAT2, G::INV_STD2, G::DXHAT2,
+  if (!layerNorm.backward("tt_lnb2", G::DLN2, G::G2, G::XHAT2, G::INV_STD2, G::DXHAT2,
            G::SUM_DXHAT2, G::DXHAT_XHAT2, G::DY_XHAT2,
            G::SUM_DXHAT_XHAT2, G::D_TIMES_DXHAT2, G::FIRST_DIFF2,
            G::XHAT_TIMES_SUM2, G::BRACKET2, G::INV_STD_OVER_D2,
@@ -758,7 +845,7 @@ bool Runtime::prepareTinyTransformerTraining(
               G::DLN1),
           "dln1"))
     return false;
-  if (!lnb("tt_lnb1", G::DLN1, G::G1, G::XHAT1, G::INV_STD1, G::DXHAT1,
+  if (!layerNorm.backward("tt_lnb1", G::DLN1, G::G1, G::XHAT1, G::INV_STD1, G::DXHAT1,
            G::SUM_DXHAT1, G::DXHAT_XHAT1, G::DY_XHAT1,
            G::SUM_DXHAT_XHAT1, G::D_TIMES_DXHAT1, G::FIRST_DIFF1,
            G::XHAT_TIMES_SUM1, G::BRACKET1, G::INV_STD_OVER_D1,
@@ -857,13 +944,22 @@ bool Runtime::executeTinyTransformerTraining(
   const size_t vd = size_t(g.vocabularySize) * g.dimension;
   const size_t dv = size_t(g.dimension) * g.vocabularySize;
   const size_t expectedInput = g.languageModel ? tv : a;
+  auto layerBuffersValid = [&](const TinyTransformerLayerParameters &p) {
+    return p.gamma1.size() == n && p.beta1.size() == n &&
+           p.wq.size() == dd && p.wk.size() == dd && p.wv.size() == dd &&
+           p.wo.size() == dd && p.gamma2.size() == n && p.beta2.size() == n &&
+           p.w1.size() == df && p.w2.size() == fd;
+  };
+  const bool additionalLayersValid =
+      current.layers.size() == size_t(g.numLayers - 1) &&
+      std::all_of(current.layers.begin(), current.layers.end(), layerBuffersValid);
   if (!g.graph || input.size() != expectedInput || target.size() != expectedInput ||
       !std::isfinite(learningRate) || current.gamma1.size() != n ||
       current.beta1.size() != n || current.wq.size() != dd ||
       current.wk.size() != dd || current.wv.size() != dd ||
       current.wo.size() != dd || current.gamma2.size() != n ||
       current.beta2.size() != n || current.w1.size() != df ||
-      current.w2.size() != fd ||
+      current.w2.size() != fd || !additionalLayersValid ||
       (g.languageModel && (current.tokenEmbedding.size() != vd ||
                            current.outputProjection.size() != dv))) {
     error = "tiny training buffer size";

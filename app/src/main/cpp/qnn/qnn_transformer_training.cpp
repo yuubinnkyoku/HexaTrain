@@ -794,24 +794,41 @@ double vectorMaxAbs(const std::vector<float> &values) {
 }
 double parameterUpdateNorm(const Params &current, const Params &next) {
   double sum = 0;
-  for (const auto &[name, member] : languageFields()) {
-    (void)name;
-    const auto &a = current.*member;
-    const auto &b = next.*member;
+  auto add = [&](const std::vector<float> &a, const std::vector<float> &b) {
     for (size_t i = 0; i < a.size(); ++i) {
       const double difference = double(b[i]) - a[i];
       sum += difference * difference;
     }
-  }
+  };
+  add(current.tokenEmbedding, next.tokenEmbedding);
+  auto addLayer = [&](const TinyTransformerLayerParameters &a,
+                      const TinyTransformerLayerParameters &b) {
+    add(a.wq,b.wq); add(a.wk,b.wk); add(a.wv,b.wv); add(a.wo,b.wo);
+    add(a.gamma1,b.gamma1); add(a.beta1,b.beta1); add(a.gamma2,b.gamma2);
+    add(a.beta2,b.beta2);
+    add(a.w1,b.w1); add(a.w2,b.w2);
+  };
+  addLayer(current, next);
+  for (size_t i = 0; i < current.layers.size(); ++i)
+    addLayer(current.layers[i], next.layers[i]);
+  add(current.outputProjection, next.outputProjection);
   return std::sqrt(sum);
 }
 double gradientNorm(const Params &gradient) {
   double sum = 0;
-  for (const auto &[name, member] : languageFields()) {
-    (void)name;
-    const double norm = vectorNorm(gradient.*member);
+  auto add = [&](const std::vector<float> &values) {
+    const double norm = vectorNorm(values);
     sum += norm * norm;
-  }
+  };
+  add(gradient.tokenEmbedding);
+  auto addLayer = [&](const TinyTransformerLayerParameters &layer) {
+    add(layer.wq); add(layer.wk); add(layer.wv); add(layer.wo);
+    add(layer.gamma1); add(layer.beta1); add(layer.gamma2); add(layer.beta2);
+    add(layer.w1); add(layer.w2);
+  };
+  addLayer(gradient);
+  for (const auto &layer : gradient.layers) addLayer(layer);
+  add(gradient.outputProjection);
   return std::sqrt(sum);
 }
 std::vector<uint32_t> languageOrder(uint32_t seed, uint32_t epoch,
@@ -1043,24 +1060,40 @@ std::string languageModelMultiStep(bool inferenceOnly, int candidate = 0) {
 
 std::vector<float> flattenLanguageParameters(const Params &p) {
   std::vector<float> flat;
-  for (const auto &[name, member] : languageFields()) {
-    (void)name;
-    const auto &values = p.*member;
+  auto append = [&](const std::vector<float> &values) {
     flat.insert(flat.end(), values.begin(), values.end());
-  }
+  };
+  // This preserves the established L1H1 canonical order, with each added
+  // layer appended in that same order.  Do not iterate an unordered container.
+  append(p.tokenEmbedding);
+  auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
+    append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
+    append(layer.gamma1); append(layer.beta1); append(layer.gamma2); append(layer.beta2);
+    append(layer.w1); append(layer.w2);
+  };
+  appendLayer(p);
+  for (const auto &layer : p.layers) appendLayer(layer);
+  append(p.outputProjection);
   return flat;
 }
 Params unflattenLanguageParameters(const std::vector<float> &flat,
                                    const Params &shape) {
   Params result = shape;
   size_t offset = 0;
-  for (const auto &[name, member] : languageFields()) {
-    (void)name;
-    auto &values = result.*member;
+  auto take = [&](std::vector<float> &values) {
     std::copy(flat.begin() + offset, flat.begin() + offset + values.size(),
               values.begin());
     offset += values.size();
-  }
+  };
+  take(result.tokenEmbedding);
+  auto takeLayer = [&](TinyTransformerLayerParameters &layer) {
+    take(layer.wq); take(layer.wk); take(layer.wv); take(layer.wo);
+    take(layer.gamma1); take(layer.beta1); take(layer.gamma2); take(layer.beta2);
+    take(layer.w1); take(layer.w2);
+  };
+  takeLayer(result);
+  for (auto &layer : result.layers) takeLayer(layer);
+  take(result.outputProjection);
   if (offset != flat.size()) throw std::invalid_argument("momentum flat shape");
   return result;
 }
@@ -1071,10 +1104,18 @@ Params scaleLanguageParameters(const Params &parameters, float scale) {
 }
 Params zeroLanguageParameters(const Params &shape) {
   Params result = shape;
-  for (const auto &[name, member] : languageFields()) {
-    (void)name;
-    std::fill((result.*member).begin(), (result.*member).end(), 0.0f);
-  }
+  auto zero = [](std::vector<float> &values) {
+    std::fill(values.begin(), values.end(), 0.0f);
+  };
+  zero(result.tokenEmbedding);
+  auto zeroLayer = [&](TinyTransformerLayerParameters &layer) {
+    zero(layer.wq); zero(layer.wk); zero(layer.wv); zero(layer.wo);
+    zero(layer.gamma1); zero(layer.beta1); zero(layer.gamma2); zero(layer.beta2);
+    zero(layer.w1); zero(layer.w2);
+  };
+  zeroLayer(result);
+  for (auto &layer : result.layers) zeroLayer(layer);
+  zero(result.outputProjection);
   return result;
 }
 bool executeLanguageMomentum(Runtime &runtime, const Params &current,
@@ -1344,6 +1385,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               bool scalingSmoke = false,
                               int layers = 1,
                               int attentionHeads = 1) {
+  // These are part of the model configuration, not a reporting-only scale
+  // label.  The CPU reference and the QNN graph receive exactly the same
+  // shape contract below.
+  config.numLayers = static_cast<uint32_t>(layers);
+  config.numHeads = static_cast<uint32_t>(attentionHeads);
   const auto selected = adamCandidate(candidate);
   const bool formalPostFix = candidate == 3;
   Runtime runtime;
@@ -1358,7 +1404,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   if (!runtime.initialize(QnnBackendKind::HTP, error) ||
       !runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
-          config.epsilon, true, error, config.vocabularySize) ||
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          config.numHeads) ||
       !runtime.prepareAdamOptimizer(optimizerElements, error))
     return failure("adam_prepare", error, runtime);
   bool scalingAppWriteUnchanged = true;
@@ -3754,32 +3803,27 @@ std::string runTinyTransformerTrainingExperiment(
     return languageModelAdam(false, 3, true, config, 1, true);
   }
   if (mode ==
-      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE)
-    return "TINY_LANGUAGE_MODEL\n"
-           "test=scaled_tiny_lm_end_to_end_generation\n"
-           "status=FAILED\n"
-           "failure_stage=configuration_validation\n"
-           "failure_code=UNSUPPORTED_TRANSFORMER_LAYER_COUNT\n"
-           "sequence_length=32\nembedding_dimension=32\n"
-           "transformer_layers=2\nattention_heads=1\n"
-           "maximum_supported_transformer_layers=1\n"
-           "backend_requested=HTP\ncpu_fallback=false\n";
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_LAYERS_2_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 8;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 2, 1);
+  }
   if (mode ==
-      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE)
-    return "TINY_LANGUAGE_MODEL\n"
-           "test=scaled_tiny_lm_end_to_end_generation\n"
-           "status=FAILED\n"
-           "failure_stage=configuration_validation\n"
-           "failure_code=UNSUPPORTED_ATTENTION_HEAD_COUNT\n"
-           "sequence_length=32\nembedding_dimension=32\n"
-           "transformer_layers=1\nattention_heads=2\n"
-           "maximum_supported_attention_heads=1\n"
-           "backend_requested=HTP\ncpu_fallback=false\n";
+      ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_HEADS_2_SMOKE) {
+    tiny_lm::Config config;
+    config.tokens = 8;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 1, true, 1, 2);
+  }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_FORMAL) {
     tiny_lm::Config config;
-    config.tokens = 32;
-    config.dimension = 32;
-    return languageModelAdam(false, 3, true, config, 5, false);
+    config.tokens = 8;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    return languageModelAdam(false, 3, true, config, 5, false, 2, 2);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }

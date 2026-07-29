@@ -135,10 +135,19 @@ struct AttentionBackwardOutputs {
     std::vector<float> dValue;
 };
 
-struct TinyTransformerParameters {
+// A layer owns every trainable tensor that is local to one Transformer block.
+// The first layer remains flattened in TinyTransformerParameters for source and
+// ABI compatibility with the established single-layer QNN graph.
+struct TinyTransformerLayerParameters {
     std::vector<float> gamma1, beta1, wq, wk, wv, wo;
     std::vector<float> gamma2, beta2, w1, w2;
+};
+
+struct TinyTransformerParameters : TinyTransformerLayerParameters {
+    // Compatibility storage for layer 0.  Additional layers are independent
+    // allocations in layers (where layers[0] is logical layer 1).
     std::vector<float> tokenEmbedding, outputProjection;
+    std::vector<TinyTransformerLayerParameters> layers;
 };
 
 struct TinyTransformerTrainingTapOutput {
@@ -333,7 +342,9 @@ public:
                                         TinyTransformerTrainingVariant variant =
                                             TinyTransformerTrainingVariant::FULL,
                                         TinyTransformerTrainingTapSet tapSet =
-                                            TinyTransformerTrainingTapSet::NONE);
+                                            TinyTransformerTrainingTapSet::NONE,
+                                        uint32_t numLayers = 1,
+                                        uint32_t numHeads = 1);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <tuple>
 
 namespace {
 
@@ -110,6 +111,96 @@ void testTinyLanguageModelLearning() {
         assert(final.accuracy > initial.accuracy);
     }
 }
+
+void testTinyLanguageModelMultiLayerMultiHead() {
+    using namespace phonelm::tiny_lm;
+    Config config{};
+    config.tokens = 4;
+    config.dimension = 8;
+    config.feedForwardDimension = 16;
+    config.numLayers = 2;
+    config.numHeads = 2;
+    std::string error;
+    assert(validateConfig(config, &error));
+    auto parameters = initialParameters(config, 7);
+    assert(parameters.layers.size() == 1);
+    assert(parameterStorageHasNoAliases(parameters));
+    const auto registry = parameterRegistry(parameters);
+    assert(registry.front().name == "token_embedding");
+    assert(registry[1].name == "layer_00.wq");
+    assert(registry[11].name == "layer_01.wq");
+    const auto input = oneHot({0, 1, 2, 3}, config.vocabularySize);
+    const auto target = oneHot({1, 2, 3, 4}, config.vocabularySize);
+    const auto step = forwardBackward(config, input, target, parameters, 0.003f);
+    assert(std::isfinite(step.loss));
+    assert(step.gradients.layers.size() == 1);
+    assert(step.gradients.layers[0].wq.size() == parameters.layers[0].wq.size());
+    auto invalid = config;
+    invalid.numHeads = 3;
+    assert(!validateConfig(invalid, &error));
+}
+
+void testTinyLanguageModelGeneralizedCoverage() {
+    using namespace phonelm::tiny_lm;
+    auto exercise = [](uint32_t layers, uint32_t heads) {
+        Config c{};
+        c.tokens = 4; c.dimension = 8; c.feedForwardDimension = 16;
+        c.numLayers = layers; c.numHeads = heads;
+        const auto p = initialParameters(c, 13);
+        const auto x = oneHot({0, 1, 2, 3}, c.vocabularySize);
+        const auto y = oneHot({1, 2, 3, 4}, c.vocabularySize);
+        const auto step = forwardBackward(c, x, y, p, 0.003f);
+        assert(std::isfinite(step.loss));
+        assert(step.gradients.layers.size() == layers - 1);
+        return std::make_tuple(c, p, x, y, step);
+    };
+    exercise(2, 1); // multi-layer forward/backward
+    exercise(1, 2); // multi-head forward/backward
+    auto [c, p, x, y, step] = exercise(2, 2);
+    auto zero = p;
+    auto clear = [](phonelm::qnn::TinyTransformerLayerParameters& l) {
+        for (auto* v : {&l.gamma1,&l.beta1,&l.wq,&l.wk,&l.wv,&l.wo,&l.gamma2,&l.beta2,&l.w1,&l.w2})
+            std::fill(v->begin(), v->end(), 0.0f);
+    };
+    clear(zero); for (auto& l : zero.layers) clear(l);
+    std::fill(zero.tokenEmbedding.begin(), zero.tokenEmbedding.end(), 0.0f);
+    std::fill(zero.outputProjection.begin(), zero.outputProjection.end(), 0.0f);
+    const auto adam = adamUpdate(p, step.gradients, zero, zero, 0.003f, .9f, .999f, 1e-8f, 10.0f, 1000.0f);
+    assert(adam.next.layers.size() == 1);
+    assert(parameterStorageHasNoAliases(adam.firstMoment));
+    const size_t expected = size_t(2) * c.vocabularySize * c.dimension + c.numLayers *
+        (size_t(4) * c.dimension * c.dimension + size_t(4) * c.dimension + size_t(2) * c.dimension * c.feedForwardDimension);
+    assert(parameterElementCount(p) == expected);
+    auto changed0 = p; changed0.wq[0] += .1f;
+    auto changed1 = p; changed1.layers[0].wq[0] += .1f;
+    const auto s0 = forwardBackward(c, x, y, changed0, 0.0f);
+    const auto s1 = forwardBackward(c, x, y, changed1, 0.0f);
+    assert(s0.loss != step.loss && s1.loss != step.loss);
+}
+
+void testTinyLanguageModelLegacyGeneralizedRegression() {
+    using namespace phonelm::tiny_lm;
+    Config c{}; c.tokens = 4; c.dimension = 8; c.feedForwardDimension = 16;
+    const auto p = initialParameters(c, 19);
+    const auto x = oneHot({0, 1, 2, 3}, c.vocabularySize);
+    const auto y = oneHot({1, 2, 3, 4}, c.vocabularySize);
+    const auto legacy = forwardBackward(c, x, y, p, .003f);
+    const auto generic = forwardBackwardGeneralized(c, x, y, p, .003f);
+    assert(legacy.loss == generic.loss && legacy.accuracy == generic.accuracy);
+    for (size_t i = 0; i < legacy.logits.size(); ++i) if (legacy.logits[i] != generic.logits[i]) {
+        std::cerr << "tiny_lm_generalized_first_logit_divergence index=" << i << " legacy=" << legacy.logits[i] << " generalized=" << generic.logits[i] << '\n';
+        assert(false);
+    }
+    assert(legacy.dLogits == generic.dLogits);
+    const auto a = parameterRegistry(legacy.gradients), b = parameterRegistry(generic.gradients);
+    assert(a.size() == b.size());
+    for (size_t i = 0; i < a.size(); ++i) for (size_t j = 0; j < a[i].values->size(); ++j) if ((*a[i].values)[j] != (*b[i].values)[j]) {
+        std::cerr << "tiny_lm_generalized_first_gradient_divergence parameter=" << a[i].name << " index=" << j << " legacy=" << (*a[i].values)[j] << " generalized=" << (*b[i].values)[j] << '\n';
+        assert(false);
+    }
+    const auto na = parameterRegistry(legacy.next), nb = parameterRegistry(generic.next);
+    for (size_t i = 0; i < na.size(); ++i) assert(*na[i].values == *nb[i].values);
+}
 }  // namespace
 
 int main() {
@@ -119,6 +210,9 @@ int main() {
     testLossDecrease();
     testTinyLanguageModelGradientCheck();
     testTinyLanguageModelLearning();
+    testTinyLanguageModelMultiLayerMultiHead();
+    testTinyLanguageModelGeneralizedCoverage();
+    testTinyLanguageModelLegacyGeneralizedRegression();
     std::cout << "cpu_reference_tests=PASS\n";
     return 0;
 }

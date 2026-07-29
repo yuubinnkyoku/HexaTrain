@@ -6,7 +6,18 @@
 #include <string>
 #include <vector>
 namespace phonelm::tiny_lm {
-struct Config { uint32_t vocabularySize=32,tokens=8,dimension=16,feedForwardDimension=32; float epsilon=1e-5f; };
+struct Config {
+  uint32_t vocabularySize=32,tokens=8,dimension=16,feedForwardDimension=32;
+  float epsilon=1e-5f;
+  uint32_t numLayers=1,numHeads=1;
+};
+struct ParameterInfo { std::string name; const std::vector<float>* values=nullptr; };
+// Checks all derived element and byte counts before graph or CPU work starts.
+bool validateConfig(const Config&, std::string* error=nullptr);
+uint32_t headDim(const Config&);
+std::vector<ParameterInfo> parameterRegistry(const qnn::TinyTransformerParameters&);
+size_t parameterElementCount(const qnn::TinyTransformerParameters&);
+bool parameterStorageHasNoAliases(const qnn::TinyTransformerParameters&);
 struct StepResult { float loss=0,accuracy=0; std::vector<float> embeddedInput,transformerOutput,logits,probabilities,dLogits,dEmbeddedInput; qnn::TinyTransformerParameters gradients,next; };
 struct GradientCheckResult { bool passed=false; float maximumAbsoluteError=0,maximumRelativeError=0; std::string report; };
 struct MomentumResult { qnn::TinyTransformerParameters velocity,next; };
@@ -18,6 +29,8 @@ qnn::TinyTransformerParameters initialParameters(const Config&,uint32_t);
 std::vector<float> oneHot(const std::vector<uint32_t>&,uint32_t);
 std::vector<float> fixedPosition(const Config&);
 StepResult forwardBackward(const Config&,const std::vector<float>&,const std::vector<float>&,const qnn::TinyTransformerParameters&,float);
+// Test/diagnostic entry point: always uses the generalized layer/head path.
+StepResult forwardBackwardGeneralized(const Config&,const std::vector<float>&,const std::vector<float>&,const qnn::TinyTransformerParameters&,float);
 MomentumResult momentumUpdate(const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,float,float);
 AdamResult adamUpdate(const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,
                       const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,

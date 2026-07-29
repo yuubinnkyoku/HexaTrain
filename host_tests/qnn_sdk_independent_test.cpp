@@ -156,6 +156,105 @@ void testGraphShapeValidator() {
     };
     for (const auto& node : validNodes)
         require(validate(node).ok, "shape validator rejected valid op");
+
+    const auto makeLayer = [](std::size_t layer, std::size_t tokens,
+                              std::size_t dimension, std::size_t heads) {
+        const std::size_t headDim = dimension / heads;
+        TransformerLayerTopology topology{};
+        topology.layerIndex = layer;
+        topology.parameterLayerIndex = layer;
+        topology.gradientLayerIndex = layer;
+        topology.input = {tokens, dimension};
+        topology.output = {tokens, dimension};
+        topology.query = topology.key = topology.value = {tokens, dimension};
+        topology.queryHeads = topology.keyHeads = topology.valueHeads = {heads, tokens, headDim};
+        topology.scores = topology.probabilities = {heads, tokens, tokens};
+        topology.context = {heads, tokens, headDim};
+        topology.concat = {tokens, dimension};
+        topology.inputGradient = {tokens, dimension};
+        topology.residualAfterAttention = topology.residualAfterFfn = {tokens, dimension};
+        topology.norm1Mean = topology.norm1Variance = topology.norm2Mean = topology.norm2Variance = {tokens, 1};
+        topology.norm1Gamma = topology.norm1Beta = topology.norm2Gamma = topology.norm2Beta = {dimension};
+        topology.wq = topology.wk = topology.wv = topology.wo = {dimension, dimension};
+        topology.ffnW1 = {dimension, 32};
+        topology.ffnW2 = {32, dimension};
+        topology.dNorm1Gamma = topology.dNorm1Beta = topology.dNorm2Gamma = topology.dNorm2Beta = {dimension};
+        topology.dWq = topology.dWk = topology.dWv = topology.dWo = {dimension, dimension};
+        topology.dFfnW1 = {dimension, 32};
+        topology.dFfnW2 = {32, dimension};
+        topology.parameterElements = 4 * dimension * dimension + 4 * dimension + 2 * dimension * 32;
+        topology.optimizerElements = 2 * topology.parameterElements;
+        return topology;
+    };
+    const auto requireTopology = [&](std::size_t layers, std::size_t heads) {
+        TransformerTopologyConfig config{8, 16, 32, layers, heads, 32};
+        config.parameterElements = layers * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 32 * 16;
+        config.optimizerElements = 2 * config.parameterElements;
+        std::vector<TransformerLayerTopology> topology;
+        for (std::size_t i = 0; i < layers; ++i) topology.push_back(makeLayer(i, 8, 16, heads));
+        require(validateTransformerTopology(config, topology).ok,
+                "shape validator rejected valid Transformer topology");
+        return topology;
+    };
+    requireTopology(1, 1);
+    requireTopology(2, 1);
+    requireTopology(1, 2);
+    auto twoByTwo = requireTopology(2, 2);
+    TransformerTopologyConfig twoByTwoConfig{8, 16, 32, 2, 2, 32};
+    twoByTwoConfig.parameterElements = 2 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 32 * 16;
+    twoByTwoConfig.optimizerElements = 2 * twoByTwoConfig.parameterElements;
+    twoByTwo[0].queryHeads = {2, 8, 7};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong head dimension");
+    twoByTwo[0].queryHeads = {2, 8, 8};
+    twoByTwo[1].scores = {2, 8, 7};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong scores shape");
+    twoByTwo[1].scores = {2, 8, 8};
+    twoByTwo[1].concat = {8, 15};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong concat shape");
+    twoByTwo[1].concat = {8, 16};
+    twoByTwo[1].input = {7, 16};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted broken layer chaining");
+    twoByTwo[1].input = {8, 16};
+    twoByTwo[1].gradientLayerIndex = 0;
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted another layer's gradient binding");
+    twoByTwo[1].gradientLayerIndex = 1;
+    twoByTwo[0].probabilities = {2, 8, 7};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong attention probability shape");
+    twoByTwo[0].probabilities = {2, 8, 8};
+    twoByTwo[0].context = {2, 8, 7};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong attention context shape");
+    twoByTwo[0].context = {2, 8, 8};
+    twoByTwo[0].norm1Mean = {8};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong LayerNorm reduction shape");
+    twoByTwo[0].norm1Mean = {8, 1};
+    twoByTwo[0].residualAfterFfn = {8, 15};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong residual add shape");
+    twoByTwo[0].residualAfterFfn = {8, 16};
+    twoByTwo[0].dWq = {15, 16};
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong backward parameter gradient shape");
+    twoByTwo[0].dWq = {16, 16};
+    twoByTwo[0].parameterElements -= 1;
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong parameter element count");
+    twoByTwo[0].parameterElements += 1;
+    twoByTwo[0].optimizerElements -= 1;
+    require(!validateTransformerTopology(twoByTwoConfig, twoByTwo).ok,
+            "topology accepted wrong optimizer element count");
+    TransformerTopologyConfig invalidHeads{8, 16, 32, 2, 3, 32};
+    invalidHeads.parameterElements = twoByTwoConfig.parameterElements;
+    invalidHeads.optimizerElements = twoByTwoConfig.optimizerElements;
+    require(!validateTransformerTopology(invalidHeads, requireTopology(2, 2)).ok,
+            "topology accepted non-divisible embedding/head configuration");
 }
 
 void testMockGraphReuseAndRuntimeWeight() {

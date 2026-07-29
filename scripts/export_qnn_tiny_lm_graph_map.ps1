@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\docs\results\qnn-htp-root-cause-2026-07')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\docs\results\qnn-htp-root-cause-2026-07'),
+    [ValidateRange(1, 1024)][int]$NumLayers = 1,
+    [ValidateRange(1, 1024)][int]$NumHeads = 1,
+    [ValidateRange(1, 65536)][int]$Tokens = 8,
+    [ValidateRange(1, 65536)][int]$EmbeddingDim = 16
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,11 +13,13 @@ Set-StrictMode -Version Latest
 function Fail([string]$Message) { throw "qnn tiny LM graph map: $Message" }
 function Assert-True([bool]$Condition, [string]$Message) { if (-not $Condition) { Fail $Message } }
 function Join-Names([string[]]$Names) { return ($Names -join ';') }
+if (($EmbeddingDim % $NumHeads) -ne 0) { Fail 'EmbeddingDim must be divisible by NumHeads' }
+$HeadDim = $EmbeddingDim / $NumHeads
 
 # This is intentionally a source-layout exporter, rather than a QNN runtime
-# inspector: QNN only exposes the finalized graph through opaque handles.  The
-# tables below mirror the make/many and helper call sites in
-# qnn_runtime_transformer_training.inc and are checked against TensorIndex.
+# inspector: QNN only exposes the finalized graph through opaque handles.  It
+# must consequently reject a requested topology until the runtime source has a
+# matching indexed builder/name contract; it never invents a larger graph map.
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $approvedOutputDirectory = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'docs\results\qnn-htp-root-cause-2026-07'))
 if ([IO.Path]::GetFullPath($OutputDirectory) -ne $approvedOutputDirectory) {
@@ -26,7 +32,16 @@ Assert-True (Test-Path -LiteralPath $graphSource) 'training graph source is miss
 $enumText = Get-Content -LiteralPath $enumSource -Raw
 $graphText = Get-Content -LiteralPath $graphSource -Raw
 Assert-True $enumText.Contains('struct TinyTransformerTrainingGraph') 'TensorIndex owner is missing'
-foreach ($marker in @('auto make =', 'auto many =', 'auto tapType =', 'auto lnf =', 'auto lnb =')) {
+Assert-True ($graphText -match 'g\.names\[i\]\s*=\s*"layer_00_tensor_"') `
+    'runtime tensor naming must retain the layer_00 indexed contract'
+Assert-True ($graphText -match 'g\.names\[id\]\s*=\s*std::string\("layer_00_"\)') `
+    'runtime parameter naming must retain the layer_00 indexed contract'
+$hasGeneralizedBuilder = $graphText.Contains('buildTransformerLayer(') -and
+    -not $graphText.Contains('tiny training multi-layer/multi-head graph builder unavailable')
+if (($NumLayers -ne 1 -or $NumHeads -ne 1) -and -not $hasGeneralizedBuilder) {
+    Fail 'runtime source does not yet provide the requested indexed multi-layer/multi-head builder'
+}
+foreach ($marker in @('auto make =', 'auto many =', 'auto tapType =', 'TransformerTrainingLayerNormBuilder', 'layerNorm.forward(', 'layerNorm.backward(')) {
     Assert-True $graphText.Contains($marker) "source layout marker is missing: $marker"
 }
 Assert-True ($graphText -match '(?s)G::SOFTMAX_DOT\},\s*QNN_TENSOR_TYPE_NATIVE,\s*g\.rowDims') `
@@ -212,7 +227,7 @@ Assert-True (($nodes.name | Select-Object -Unique).Count -eq $nodes.Count) 'node
 foreach ($node in $nodes) {
     foreach ($id in @($node.inputs + $node.output)) { Assert-True ($tensorIds -contains $id) "node $($node.name) references unrecognized tensor $id" }
 }
-foreach ($marker in @('lnf("tt_ln1"', 'lnf("tt_ln2"', 'lnb("tt_lnb1"', 'lnb("tt_lnb2"', 'lm_dembedding', 'auto upd =')) { Assert-True $graphText.Contains($marker) "node-builder marker is missing: $marker" }
+foreach ($marker in @('layerNorm.forward("tt_ln1"', 'layerNorm.forward("tt_ln2"', 'layerNorm.backward("tt_lnb1"', 'layerNorm.backward("tt_lnb2"', 'lm_dembedding', 'auto upd =')) { Assert-True $graphText.Contains($marker) "node-builder marker is missing: $marker" }
 
 $producer = @{}
 $consumers = @{}
@@ -266,6 +281,33 @@ $nodePath = Join-Path $resolvedOutput 'node-map.csv'
 $tensorPath = Join-Path $resolvedOutput 'tensor-map.csv'
 $nodeRows | Export-Csv -LiteralPath $nodePath -NoTypeInformation -Encoding utf8
 $tensorRows | Export-Csv -LiteralPath $tensorPath -NoTypeInformation -Encoding utf8
+
+# This topology table is emitted only after the source consistency checks above.
+# For the legacy graph it records its actual layer_00 naming contract.  A
+# multi-layer/head request is rejected unless the runtime itself exposes the
+# indexed builder contract, preventing a synthetic map from being mistaken for
+# an executable graph.
+$topologyRows = [Collections.Generic.List[object]]::new()
+for ($layer = 0; $layer -lt $NumLayers; ++$layer) {
+    $prefix = 'layer_{0:D2}' -f $layer
+    $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=''; tensor="$prefix`_input"; shape="$Tokens`x$EmbeddingDim"; role='layer input / residual input' })
+    foreach ($name in @('norm1_output','q','k','v','attention_concat','attention_output','residual1','norm2_output','ffn_output','output','input_gradient')) {
+        $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=''; tensor="$prefix`_$name"; shape="$Tokens`x$EmbeddingDim"; role='layer-scoped transformer tensor' })
+    }
+    foreach ($head in 0..($NumHeads - 1)) {
+        $headPrefix = "$prefix`_head_{0:D2}" -f $head
+        foreach ($name in @('q','k','v','context')) {
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=$head; tensor="$headPrefix`_$name"; shape="$Tokens`x$HeadDim"; role='head-scoped projection/context tensor' })
+        }
+        foreach ($name in @('scores','probabilities')) {
+            $topologyRows.Add([pscustomobject][ordered]@{ layer=$layer; head=$head; tensor="$headPrefix`_$name"; shape="$Tokens`x$Tokens"; role='head-scoped attention tensor' })
+        }
+    }
+}
+$topologyPath = Join-Path $resolvedOutput 'transformer-topology-map.csv'
+$topologyRows | Export-Csv -LiteralPath $topologyPath -NoTypeInformation -Encoding utf8
+Assert-True ($topologyRows.Count -eq ($NumLayers * (12 + 6 * $NumHeads))) 'topology row count assertion failed'
 Write-Output "node_map_rows=$($nodeRows.Count)"
 Write-Output "tensor_map_rows=$($tensorRows.Count)"
-Write-Output 'shape=B1_T8_V32_D16; diagnostic_outputs=true; creation_index=zero_based_source_order'
+Write-Output "topology_map_rows=$($topologyRows.Count)"
+Write-Output "shape=B1_T$Tokens`_V32_D$EmbeddingDim; layers=$NumLayers; heads=$NumHeads; head_dim=$HeadDim; diagnostic_outputs=true; creation_index=zero_based_source_order"

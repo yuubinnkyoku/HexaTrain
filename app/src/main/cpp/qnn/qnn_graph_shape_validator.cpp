@@ -17,6 +17,16 @@ bool count(const std::vector<std::size_t>& shape, std::size_t* out) {
   *out = value;
   return true;
 }
+bool addChecked(std::size_t a, std::size_t b, std::size_t* out) {
+  if (a > std::numeric_limits<std::size_t>::max() - b) return false;
+  *out = a + b;
+  return true;
+}
+bool multiplyChecked(std::size_t a, std::size_t b, std::size_t* out) {
+  if (a != 0 && b > std::numeric_limits<std::size_t>::max() / a) return false;
+  *out = a * b;
+  return true;
+}
 bool sameDtype(const Node& node) {
   return std::all_of(node.inputs.begin(), node.inputs.end(), [&](const Tensor& t) {
     return t.dtype == node.outputs.front().dtype;
@@ -111,5 +121,94 @@ Result validate(const Node& node) {
   if (expected.size() != node.outputs.size()) return fail(node, "output count mismatch", expected);
   for (std::size_t i=0;i<expected.size();++i) if (expected[i] != node.outputs[i].shape) return fail(node, "declared output shape mismatch", expected);
   return {true, {}, expected};
+}
+
+Result validateTransformerTopology(const TransformerTopologyConfig& config,
+                                   const std::vector<TransformerLayerTopology>& layers) {
+  Node contract;
+  contract.name = "transformer_topology";
+  contract.op = Op::Reshape;
+  const auto topologyFail = [&](const std::string& detail) {
+    return fail(contract, detail);
+  };
+  if (config.tokens == 0 || config.embeddingDim == 0 || config.feedForwardDim == 0 ||
+      config.numLayers == 0 || config.numHeads == 0 || config.vocabularySize == 0) {
+    return topologyFail("tokens, embeddingDim, feedForwardDim, numLayers, numHeads, and vocabularySize must be >= 1");
+  }
+  if (config.embeddingDim % config.numHeads != 0) {
+    return topologyFail("embeddingDim must be divisible by numHeads");
+  }
+  std::size_t ignored = 0;
+  if (!count({config.tokens, config.embeddingDim}, &ignored) ||
+      !count({config.tokens, config.feedForwardDim}, &ignored) ||
+      !count({config.numHeads, config.tokens, config.tokens}, &ignored)) {
+    return topologyFail("derived element count overflows size_t");
+  }
+  std::size_t d2 = 0, dff = 0, fourD = 0, optimizerElements = 0, layerElements = 0, allLayerElements = 0;
+  std::size_t globals = 0, expectedTotalParameters = 0;
+  if (!multiplyChecked(config.embeddingDim, config.embeddingDim, &d2) ||
+      !multiplyChecked(config.embeddingDim, config.feedForwardDim, &dff) ||
+      !multiplyChecked(4, d2, &layerElements) || !multiplyChecked(4, config.embeddingDim, &fourD) ||
+      !addChecked(layerElements, fourD, &layerElements) ||
+      !multiplyChecked(2, dff, &dff) || !addChecked(layerElements, dff, &layerElements) ||
+      !multiplyChecked(layerElements, 2, &optimizerElements) ||
+      !multiplyChecked(layerElements, config.numLayers, &allLayerElements)) {
+    return topologyFail("layer parameter element count overflows size_t");
+  }
+  if (!multiplyChecked(2, config.vocabularySize, &globals) ||
+      !multiplyChecked(globals, config.embeddingDim, &globals) ||
+      !addChecked(allLayerElements, globals, &expectedTotalParameters)) {
+    return topologyFail("global parameter element count overflows size_t");
+  }
+  std::size_t expectedTotalOptimizer = 0;
+  if (!multiplyChecked(expectedTotalParameters, 2, &expectedTotalOptimizer)) {
+    return topologyFail("global optimizer element count overflows size_t");
+  }
+  if (config.parameterElements != expectedTotalParameters) {
+    return topologyFail("total parameter element count does not match layer/global schema");
+  }
+  if (config.optimizerElements != expectedTotalOptimizer) {
+    return topologyFail("total optimizer m/v element count does not match parameter schema");
+  }
+  if (layers.size() != config.numLayers) return topologyFail("layer count does not match numLayers");
+  const std::size_t headDim = config.embeddingDim / config.numHeads;
+  const std::vector<std::size_t> tokenDim{config.tokens, config.embeddingDim};
+  const std::vector<std::size_t> rowDim{config.tokens, 1};
+  const std::vector<std::size_t> dim{config.embeddingDim};
+  const std::vector<std::size_t> square{config.embeddingDim, config.embeddingDim};
+  const std::vector<std::size_t> w1{config.embeddingDim, config.feedForwardDim};
+  const std::vector<std::size_t> w2{config.feedForwardDim, config.embeddingDim};
+  const std::vector<std::size_t> headTensor{config.numHeads, config.tokens, headDim};
+  const std::vector<std::size_t> attention{config.numHeads, config.tokens, config.tokens};
+  for (std::size_t i = 0; i < layers.size(); ++i) {
+    const auto& layer = layers[i];
+    const auto failLayer = [&](const std::string& detail) {
+      return topologyFail("layer=" + std::to_string(i) + " " + detail);
+    };
+    if (layer.layerIndex != i) return failLayer("layer index is not deterministic/contiguous");
+    if (layer.parameterLayerIndex != i) return failLayer("parameter binding targets another layer");
+    if (layer.gradientLayerIndex != i) return failLayer("gradient binding targets another layer");
+    if (layer.input != tokenDim) return failLayer("input shape must be [T,D]");
+    if (i > 0 && layer.input != layers[i - 1].output) return failLayer("input does not chain from previous layer output");
+    if (layer.output != tokenDim || layer.inputGradient != tokenDim) return failLayer("output/input gradient shape must be [T,D]");
+    if (layer.query != tokenDim || layer.key != tokenDim || layer.value != tokenDim) return failLayer("Q/K/V shape must be [T,D]");
+    if (layer.queryHeads != headTensor || layer.keyHeads != headTensor || layer.valueHeads != headTensor) return failLayer("Q/K/V head reshape shape must be [H,T,Dh]");
+    if (layer.scores != attention || layer.probabilities != attention) return failLayer("scores/probabilities shape must be [H,T,T]");
+    if (layer.context != headTensor) return failLayer("context shape must be [H,T,Dh]");
+    if (layer.concat != tokenDim) return failLayer("head concat shape must be [T,D]");
+    if (layer.residualAfterAttention != tokenDim || layer.residualAfterFfn != tokenDim) return failLayer("residual add shape must be [T,D]");
+    if (layer.norm1Mean != rowDim || layer.norm1Variance != rowDim ||
+        layer.norm2Mean != rowDim || layer.norm2Variance != rowDim) return failLayer("LayerNorm reductions must be [T,1]");
+    if (layer.norm1Gamma != dim || layer.norm1Beta != dim || layer.norm2Gamma != dim || layer.norm2Beta != dim ||
+        layer.wq != square || layer.wk != square || layer.wv != square || layer.wo != square ||
+        layer.ffnW1 != w1 || layer.ffnW2 != w2) return failLayer("parameter shapes do not match Transformer layer schema");
+    if (layer.dNorm1Gamma != dim || layer.dNorm1Beta != dim || layer.dNorm2Gamma != dim || layer.dNorm2Beta != dim ||
+        layer.dWq != square || layer.dWk != square || layer.dWv != square || layer.dWo != square ||
+        layer.dFfnW1 != w1 || layer.dFfnW2 != w2) return failLayer("backward parameter gradient shapes do not match parameter schema");
+    if (layer.parameterElements != layerElements) return failLayer("parameter element count does not match layer schema");
+    if (layer.optimizerElements != optimizerElements) return failLayer("optimizer m/v element count does not match parameter schema");
+  }
+  std::vector<std::size_t> totals{layerElements, expectedTotalParameters};
+  return {true, {}, {tokenDim, totals}};
 }
 }  // namespace phonelm::qnn::shape
