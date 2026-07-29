@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "baseline_head": "3ca6b08e6d62f49369b54cc4e197970089489f52",
+  "implementation_head": "10fccac1335765ad04efe703d9543b2104fe1ce7",
+  "baseline_classification": "END_TO_END_TRAINING_AND_GENERATION_REPRODUCIBLE",
+  "seed_reproducibility": "BITWISE_REPRODUCIBLE",
+  "all_five_seeds_bitwise_reproducible": true,
+  "max_stable_configuration": "tokens=32,dimension=32,layers=1,heads=1",
+  "failed_stage": "layers=2",
+  "result_classification": "END_TO_END_TRAINING_AND_GENERATION_REPRODUCIBLE_SCALED_SINGLE_LAYER",
+  "stop_reason": "LAYERS_2_UNSUPPORTED",
+  "formal": {
+    "htp_finite_seeds": "5/5",
+    "loss_decreased_seeds": "5/5",
+    "oracle_exact": "20/20",
+    "free_exact": "20/20",
+    "qnn_nonzero_return_count": 0,
+    "teacher_forcing_assertion": "PASS",
+    "app_write_hashes_unchanged": true,
+    "app_read_poison_residual_elements": 0,
+    "cpu_htp_max_abs_difference": 0.04186820984
+  },
+  "performance": {
+    "run_count": 3,
+    "initialization_ms": 92.093,
+    "graph_creation_ms": 146.134,
+    "finalize_ms": 221.989,
+    "steady_training_step_median_ms": 19.8302,
+    "updates_per_second": 50.4281,
+    "tokens_per_second": 1613.7,
+    "generation_token_latency_median_ms": 1.42745,
+    "process_peak_rss_kib": 229460.0
+  },
+  "regressions": {
+    "qnn_reproducibility": "PASS",
+    "full_graph_isolation": "PASS",
+    "focused_backward_tap": "PASS"
+  },
+  "constraints": [
+    "The CPU supplies orchestration and the HTP executes training-step numerical graphs.",
+    "The model remains single-layer and single-head.",
+    "Process peak RSS is a process-level high-water mark, not HTP-only memory.",
+    "The baseline suite did not emit APP_WRITE and poison counters per seed; the separate reproducibility regression passed and the scaled formal run reported APP_WRITE unchanged with zero poison residual.",
+    "Heads=2 was not run because layers=2 failed first."
+  ]
+}

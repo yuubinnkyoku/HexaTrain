@@ -1,0 +1,6 @@
+"stage","suite","sequence_length","embedding_dimension","layers","heads","status","stop_detail","initial_loss","final_loss","final_accuracy","oracle_exact","free_exact","cpu_htp_max_abs_difference","qnn_nonzero_return_count","focus_takeover_count"
+"sequence_8_to_16","scale-sequence-16-smoke","16","16","1","1","PASS","NONE","3.444514871","0.003892069042","1","4/4","4/4","0.0244198","0","0"
+"sequence_16_to_32","scale-sequence-32-smoke","32","16","1","1","PASS","NONE","3.44453299","0.004275354557","1","4/4","4/4","0.0173225","0","0"
+"dimension_16_to_32","scale-dimension-32-smoke","32","32","1","1","PASS","NONE","3.480286956","0.1905737069","0.984375","4/4","4/4","0.0269604","0","0"
+"layers_1_to_2","scale-layers-2-smoke","32","32","2","1","FAIL","UNSUPPORTED_TRANSFORMER_LAYER_COUNT","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","0"
+"heads_1_to_2","scale-heads-2-smoke","32","32","2","2","NOT_RUN","PREVIOUS_STAGE_FAILED","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE","NOT_AVAILABLE"

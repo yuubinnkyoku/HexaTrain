@@ -1,0 +1,4 @@
+"suite","status","focus_takeover_count","qnn_execute_failure_count"
+"qnn-reproducibility","PASS","0","NOT_REPORTED"
+"qnn-graph-full-isolated","PASS","0","NOT_REPORTED"
+"qnn-tap-backward-regions","PASS","0","NOT_REPORTED"
