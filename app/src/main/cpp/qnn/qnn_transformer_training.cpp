@@ -1379,7 +1379,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               int lastSeed = 5,
                               bool scalingSmoke = false,
                               int layers = 1,
-                              int attentionHeads = 1) {
+                              int attentionHeads = 1,
+                              const LogSink& progress = {}) {
   // These are part of the model configuration, not a reporting-only scale
   // label.  The CPU reference and the QNN graph receive exactly the same
   // shape contract below.
@@ -1924,6 +1925,14 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     trajectory << "seed_" << seed << "_initial_loss=" << initial.loss
                << "\nseed_" << seed << "_initial_accuracy=" << initial.accuracy
                << '\n';
+    if (progress) {
+      std::ostringstream update;
+      update << std::setprecision(10)
+             << "phase=training\nseed=" << seed << "\nseeds=" << lastSeed
+             << "\nstep=0\nsteps=" << selected.steps
+             << "\nloss=" << initial.loss;
+      progress(update.str());
+    }
     for (int step = 1; step <= selected.steps; ++step) {
       const uint32_t pattern = uint32_t((step - 1) % 4);
       const uint32_t phase =
@@ -1977,6 +1986,14 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            step == 50 || step == 100 || step == 200 || step == 320 ||
            step == 640 || step == 1000 ||
            (seed == 1 && step >= 101 && step <= 199)) {
+        if (progress) {
+          std::ostringstream update;
+          update << std::setprecision(10)
+                 << "phase=training\nseed=" << seed << "\nseeds="
+                 << lastSeed << "\nstep=" << step << "\nsteps="
+                 << selected.steps << "\nloss=" << htpGradient.loss;
+          progress(update.str());
+        }
         const double update = parameterUpdateNorm(htp, htpNext);
         const double norm = paramNorm(htp);
         trajectory << "seed_" << seed << "_step_" << step
@@ -3787,7 +3804,8 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
 
 } // namespace
 std::string runTinyTransformerTrainingExperiment(
-    ExecutionMode mode, const TrainingConfig& trainingConfig) {
+    ExecutionMode mode, const TrainingConfig& trainingConfig,
+    const LogSink& progress) {
   (void)trainingConfig;
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);
@@ -3963,7 +3981,8 @@ std::string runTinyTransformerTrainingExperiment(
     config.tokens = 32;
     config.dimension = 32;
     config.feedForwardDimension = 32;
-    return languageModelAdam(false, 3, true, config, 5, false, 2, 2);
+    return languageModelAdam(false, 3, true, config, 5, false, 2, 2,
+                             progress);
   }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC) {
     tiny_lm::Config config;

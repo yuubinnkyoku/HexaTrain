@@ -287,7 +287,7 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_FORMAL:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC:
-            return qnn::runTinyTransformerTrainingExperiment(mode, config);
+            return qnn::runTinyTransformerTrainingExperiment(mode, config, log);
         default: {
             const std::string report =
                 "status=NOT_IMPLEMENTED\nerror=unknown execution mode";

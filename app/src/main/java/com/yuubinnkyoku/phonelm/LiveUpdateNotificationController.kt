@@ -112,14 +112,22 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
     private fun isDismissed(id: Int) = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("$id", false)
 
     private data class ActiveRun(
-        val id: Int, val kind: String, val total: Long?, val startedAtMs: Long,
+        val id: Int, val kind: String, var total: Long?, val startedAtMs: Long,
         val throttle: ProgressUpdateThrottle = ProgressUpdateThrottle(), var phase: String = "初期化中",
-        var completed: Long = 0, var loss: Double? = null, var terminalTitle: String = "完了", var promotable: Boolean = false,
+        var completed: Long = 0, var loss: Double? = null, var seed: Long? = null,
+        var seeds: Long? = null, var terminalTitle: String = "完了", var promotable: Boolean = false,
     ) {
         fun apply(event: RunProgress): ActiveRun = apply {
             when (event) {
                 is RunProgress.PhaseChanged -> phase = event.phase
-                is RunProgress.Step -> { completed = event.completed; loss = event.loss ?: loss }
+                is RunProgress.Step -> {
+                    completed = event.completed
+                    total = event.total ?: total
+                    loss = event.loss ?: loss
+                    phase = event.phase ?: phase
+                    seed = event.seed ?: seed
+                    seeds = event.seeds ?: seeds
+                }
                 is RunProgress.Completed -> { terminalTitle = "完了"; phase = "完了"; loss = event.metric?.removePrefix("loss ")?.toDoubleOrNull() ?: loss }
                 is RunProgress.Failed -> { terminalTitle = "失敗"; phase = "失敗" }
                 RunProgress.Cancelled -> { terminalTitle = "キャンセル済み"; phase = "キャンセル済み" }
@@ -127,7 +135,13 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
             }
         }
         val percent: Int? get() = total?.takeIf { it > 0 }?.let { (completed * 100 / it).toInt().coerceIn(0, 100) }
-        fun contentText() = "$phase — " + (total?.let { "step $completed / $it" } ?: "進捗を確認中")
+        fun contentText(): String {
+            val seedText = seed?.let { current ->
+                seeds?.let { totalSeeds -> " seed $current / $totalSeeds" } ?: " seed $current"
+            }.orEmpty()
+            return "$phase$seedText — " +
+                (total?.let { "step $completed / $it" } ?: "進捗を確認中")
+        }
         fun detailText(): String {
             val elapsed = ((System.currentTimeMillis() - startedAtMs) / 1_000).coerceAtLeast(0)
             return listOfNotNull(loss?.let { "loss %.4f".format(java.util.Locale.ROOT, it) }, "経過 ${elapsed / 60}分${elapsed % 60}秒").joinToString("・")

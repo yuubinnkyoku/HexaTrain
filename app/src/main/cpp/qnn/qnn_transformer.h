@@ -7,5 +7,6 @@
 namespace phonelm::qnn {
 std::string runTransformerExperiment(ExecutionMode mode);
 std::string runTinyTransformerTrainingExperiment(
-    ExecutionMode mode, const TrainingConfig& trainingConfig);
+    ExecutionMode mode, const TrainingConfig& trainingConfig,
+    const LogSink& progress);
 }

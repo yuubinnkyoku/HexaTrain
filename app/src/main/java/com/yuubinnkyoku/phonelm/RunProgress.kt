@@ -9,6 +9,9 @@ sealed interface RunProgress {
         val completed: Long,
         val total: Long?,
         val loss: Double? = null,
+        val phase: String? = null,
+        val seed: Long? = null,
+        val seeds: Long? = null,
     ) : RunProgress
     data class Completed(val metric: String?) : RunProgress
     data class Failed(val reason: String) : RunProgress
@@ -27,8 +30,12 @@ internal object NativeProgressParser {
                 completed = step ?: warmup!!,
                 total = values["steps"]?.toLongOrNull(),
                 loss = values["loss"]?.toDoubleOrNull(),
+                phase = values["phase"],
+                seed = values["seed"]?.toLongOrNull(),
+                seeds = values["seeds"]?.toLongOrNull(),
             )
         }
+        values["phase"]?.let { return RunProgress.PhaseChanged(it) }
         if (message.startsWith("RESULT") || (message.contains('\n') && "status" in values)) {
             return when (values["status"]) {
                 "SUCCESS" -> RunProgress.Completed(values["final_loss"]?.let { "loss $it" })
