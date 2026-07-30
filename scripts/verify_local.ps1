@@ -139,6 +139,9 @@ try {
         Invoke-PwshScript "Tiny LM scaling public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_tiny_lm_scaling_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "multilayer/multihead public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_multilayer_multihead_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 
