@@ -1,0 +1,4 @@
+"configuration","result","criterion","detail"
+"T8 D16 L2 H1","finite_5_of_5","generation exactness","seed 5 phase 3 Oracle=19/20 and Free=19/20; APP/QNN failure absent"
+"T32 D32 L2 H2","validated","finite and generation","5/5 finite; Oracle/Free=20/20"
+"none","no_runtime_failure_boundary_found","evaluated scope","not a hardware-limit claim"

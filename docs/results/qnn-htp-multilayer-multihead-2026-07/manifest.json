@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "qairt_build_id": "2.48.40.260702151143",
+  "result_classification": "MULTILAYER_MULTIHEAD_END_TO_END_REPRODUCIBLE",
+  "maximum_validated_configuration": {
+    "batch": 1,
+    "sequence": 32,
+    "vocabulary": 32,
+    "embedding": 32,
+    "feed_forward": 32,
+    "layers": 2,
+    "heads": 2,
+    "head_dimension": 16,
+    "optimizer": "Adam",
+    "learning_rate": 0.003,
+    "steps_per_seed": 320,
+    "clipping": "disabled"
+  },
+  "finite_seeds": "5/5",
+  "oracle_exact": "20/20",
+  "free_exact": "20/20",
+  "seed_reproducibility": "BITWISE_REPRODUCIBLE",
+  "publication": "allow-list summary; raw tensors/logits/device identifiers excluded"
+}

@@ -1,0 +1,4 @@
+"run","configuration","classification","seed_1_parameter_hash","seed_1_logits_hash","oracle_exact","free_exact"
+"1","T32 D32 L2 H2","BITWISE_REPRODUCIBLE","c61d3f2b796773d2dba9eea219d9b3f12403ca00824f9f7b80c626b1bfcbd5cc","35da152a62fcb535ecf2d47e7860409c6f5fefbb29f1d30388685dd8b0c7599b","20","20"
+"2","T32 D32 L2 H2","BITWISE_REPRODUCIBLE","c61d3f2b796773d2dba9eea219d9b3f12403ca00824f9f7b80c626b1bfcbd5cc","35da152a62fcb535ecf2d47e7860409c6f5fefbb29f1d30388685dd8b0c7599b","20","20"
+"3","T32 D32 L2 H2","BITWISE_REPRODUCIBLE","c61d3f2b796773d2dba9eea219d9b3f12403ca00824f9f7b80c626b1bfcbd5cc","35da152a62fcb535ecf2d47e7860409c6f5fefbb29f1d30388685dd8b0c7599b","20","20"
