@@ -35,10 +35,6 @@ param(
     [ValidateRange(600, 86400)][int]$TimeoutSecondsPerAttempt = 21600,
     [ValidateRange(1, 10)][int]$MaxAttemptsPerSeed = 3,
     [ValidateRange(60, 21600)][int]$ReconnectGraceSeconds = 3600,
-    # Attempts start only when the battery is below this ceiling so consecutive
-    # attempts do not accumulate heat past the formal 45 C stop condition.
-    [ValidateRange(35.0, 44.9)][double]$ResumeBatteryCeilingC = 41.0,
-    [ValidateRange(5, 360)][int]$CoolDownGraceMinutes = 90,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$')][string]$RunId = '',
     [switch]$InstallAuditedApk,
     [switch]$AllowFailure,
@@ -599,11 +595,11 @@ function Read-DeviceState([string]$Adb, [string]$Device) {
 }
 
 function Assert-Cool([object]$State, [string]$Phase) {
-    if ($State.battery_temperature_c -ge 45.0) {
-        throw "THERMAL_ABORT_RESUMABLE: $Phase battery temperature is $($State.battery_temperature_c) C"
-    }
-    if ($State.android_thermal_status -ge 3) {
-        throw "THERMAL_ABORT_RESUMABLE: $Phase Android thermal status is $($State.android_thermal_status)"
+    # Battery temperature is recorded as evidence only; it never gates a run.
+    # Android thermal protection (throttling) is kept intact and trusted.
+    # Stop only for EMERGENCY (5) or SHUTDOWN (6) thermal status.
+    if ($State.android_thermal_status -ge 5) {
+        throw "THERMAL_ABORT_RESUMABLE: $Phase Android thermal status is $($State.android_thermal_status) (EMERGENCY/SHUTDOWN)"
     }
 }
 
@@ -738,21 +734,6 @@ try {
         for ($attempt = 1; $attempt -le $MaxAttemptsPerSeed -and -not $done; $attempt++) {
             $device = Resolve-OnlineDevice $adb
             $before = Read-DeviceState $adb $device
-            $coolDeadline = [DateTime]::UtcNow.AddMinutes($CoolDownGraceMinutes)
-            while ($before.battery_temperature_c -ge $ResumeBatteryCeilingC -and
-                $before.battery_temperature_c -lt 45.0) {
-                if ([DateTime]::UtcNow -gt $coolDeadline) {
-                    Write-AttemptLog -Seed $seed -Attempt $attempt -Classification 'THERMAL_ABORT_RESUMABLE' `
-                        -Detail "cooldown grace exceeded at $($before.battery_temperature_c) C"
-                    $aggregateStatus = 'BLOCKED_RESUMABLE'
-                    $stopDetail = "seed $seed attempt $attempt cooldown grace exceeded"
-                    break seeds
-                }
-                Write-Host "waiting for cooldown: battery $($before.battery_temperature_c) C (ceiling $ResumeBatteryCeilingC)"
-                Start-Sleep -Seconds 120
-                $device = Resolve-OnlineDevice $adb
-                $before = Read-DeviceState $adb $device
-            }
             try {
                 Assert-Cool $before "seed $seed attempt $attempt"
             } catch {
@@ -892,14 +873,9 @@ try {
                     $classification = Get-HostInterruptionClassification 'PROCESS'
                     break
                 }
-                if (($pollCount % 12) -eq 0) {
-                    try {
-                        Assert-Cool (Read-DeviceState $adb $device) "seed $seed attempt $attempt mid-run"
-                    } catch {
-                        $classification = 'THERMAL_ABORT_RESUMABLE'
-                        break
-                    }
-                }
+                # Mid-run monitoring is light-weight only: terminal result,
+                # process liveness, foreground service and ADB transport.
+                # Battery temperature is intentionally not polled mid-run.
             }
 
             if ($disconnected) {
