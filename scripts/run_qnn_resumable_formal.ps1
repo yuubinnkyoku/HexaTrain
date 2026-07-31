@@ -857,12 +857,17 @@ try {
                     }
                     $services = (& $adb -s $device shell dumpsys activity services $package 2>$null) -join "`n"
                     if ($services -match '(?m)^\s*isForeground=true') { $isForeground = $true }
-                    if ($services -match 'foregroundServiceType=0x0*1(?!0)') { $dataSync = $true }
+                    # Old dumpsys format: foregroundServiceType=0x00000001
+                    # Android 15/16 format:     types=0x00000001
+                    if ($services -match 'foregroundServiceType=0x0*1(?!0)' -or
+                        $services -match '\btypes=0x00000001\b') { $dataSync = $true }
                     $processes = (& $adb -s $device shell dumpsys activity processes $package 2>$null) -join "`n"
+                    # The ProcessRecord dump continues on following lines after
+                    # its header closes on the same line; slice a window.
                     $processSection = [regex]::Match($processes,
-                        "(?s)ProcessRecord\{[0-9a-f]+ +\d+:$([regex]::Escape($package))/[^}]*?}").Value
+                        "(?s)ProcessRecord\{[0-9a-f]+ +\d+:$([regex]::Escape($package))/[u0-9a-z]+\}.{0,4000}").Value
                     if ($processSection -match 'mHasForegroundServices=true') { $fgFlag = $true }
-                    if ($processSection -match 'cached.*empty' -or $services -match 'cached.*empty') {
+                    if ($processSection -match '(?m)^\s*(cached=true|empty=true)') {
                         $cachedEmpty = $true
                     }
                 }
