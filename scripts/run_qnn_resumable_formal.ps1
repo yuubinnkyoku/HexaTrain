@@ -35,6 +35,10 @@ param(
     [ValidateRange(600, 86400)][int]$TimeoutSecondsPerAttempt = 21600,
     [ValidateRange(1, 10)][int]$MaxAttemptsPerSeed = 3,
     [ValidateRange(60, 21600)][int]$ReconnectGraceSeconds = 3600,
+    # Attempts start only when the battery is below this ceiling so consecutive
+    # attempts do not accumulate heat past the formal 45 C stop condition.
+    [ValidateRange(35.0, 44.9)][double]$ResumeBatteryCeilingC = 41.0,
+    [ValidateRange(5, 360)][int]$CoolDownGraceMinutes = 90,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$')][string]$RunId = '',
     [switch]$InstallAuditedApk,
     [switch]$AllowFailure,
@@ -734,6 +738,21 @@ try {
         for ($attempt = 1; $attempt -le $MaxAttemptsPerSeed -and -not $done; $attempt++) {
             $device = Resolve-OnlineDevice $adb
             $before = Read-DeviceState $adb $device
+            $coolDeadline = [DateTime]::UtcNow.AddMinutes($CoolDownGraceMinutes)
+            while ($before.battery_temperature_c -ge $ResumeBatteryCeilingC -and
+                $before.battery_temperature_c -lt 45.0) {
+                if ([DateTime]::UtcNow -gt $coolDeadline) {
+                    Write-AttemptLog -Seed $seed -Attempt $attempt -Classification 'THERMAL_ABORT_RESUMABLE' `
+                        -Detail "cooldown grace exceeded at $($before.battery_temperature_c) C"
+                    $aggregateStatus = 'BLOCKED_RESUMABLE'
+                    $stopDetail = "seed $seed attempt $attempt cooldown grace exceeded"
+                    break seeds
+                }
+                Write-Host "waiting for cooldown: battery $($before.battery_temperature_c) C (ceiling $ResumeBatteryCeilingC)"
+                Start-Sleep -Seconds 120
+                $device = Resolve-OnlineDevice $adb
+                $before = Read-DeviceState $adb $device
+            }
             try {
                 Assert-Cool $before "seed $seed attempt $attempt"
             } catch {
@@ -813,7 +832,7 @@ try {
             $disconnected = $false
             $classification = $null
             while ([DateTime]::UtcNow -lt $deadline) {
-                Start-Sleep -Seconds 5
+                Start-Sleep -Seconds 10
                 $pollCount++
                 try {
                     $resolved = Resolve-OnlineDevice $adb
@@ -840,7 +859,12 @@ try {
                     $report = $candidate
                     break
                 }
-                if ($TestMode -eq 'UI_VALIDATION') {
+                # Heavy dumpsys/notification queries are sampled: densely at
+                # startup (foreground-service acceptance evidence) and then at
+                # a low rate, so monitoring does not itself add thermal load.
+                $uiSamplePoll = $TestMode -eq 'UI_VALIDATION' -and (
+                    $pollCount -le 8 -or ($pollCount % 18) -eq 0)
+                if ($uiSamplePoll) {
                     $notification = (& $adb -s $device shell cmd notification list 2>$null) -join "`n"
                     if ($notification -match 'com\.yuubinnkyoku\.phonelm') {
                         $ongoingDuring = $true
@@ -850,10 +874,10 @@ try {
                         if ($detail -and $detail -ne $previousNotification) { $progressSeen = $true }
                         $previousNotification = $detail
                     }
-                    $services = (& $adb -s $device shell dumpsys activity services $package) -join "`n"
+                    $services = (& $adb -s $device shell dumpsys activity services $package 2>$null) -join "`n"
                     if ($services -match '(?m)^\s*isForeground=true') { $isForeground = $true }
                     if ($services -match 'foregroundServiceType=0x0*1(?!0)') { $dataSync = $true }
-                    $processes = (& $adb -s $device shell dumpsys activity processes) -join "`n"
+                    $processes = (& $adb -s $device shell dumpsys activity processes $package 2>$null) -join "`n"
                     $processSection = [regex]::Match($processes,
                         "(?s)ProcessRecord\{[0-9a-f]+ +\d+:$([regex]::Escape($package))/[^}]*?}").Value
                     if ($processSection -match 'mHasForegroundServices=true') { $fgFlag = $true }
