@@ -757,6 +757,10 @@ try {
             }
 
             # Prepare device-side run context and clean stale results.
+            # Note: the Windows adb client strips inner quoting, so `sh -c`
+            # compositions cannot reach the device intact. Use plain argument
+            # lists and a stdin pipe through toybox tee instead.
+            & $adb -s $device shell run-as $package mkdir files 2>$null | Out-Null
             $contextDevice = @(
                 'schema=1'
                 "run_id=$runIdEffective"
@@ -766,9 +770,9 @@ try {
                 "seed=$seed"
                 "attempt=$attempt"
                 "steps=$Steps"
-            ) -join '","'
-            & $adb -s $device shell run-as $package sh -c (
-                "mkdir -p files && printf '%s\n' `"$contextDevice`" > files/phonelm-formal-run-context.txt") | Out-Null
+            ) -join "`n"
+            $contextDevice | & $adb -s $device shell run-as $package tee `
+                files/phonelm-formal-run-context.txt | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'could not write device run context' }
             & $adb -s $device shell am force-stop $package | Out-Null
             & $adb -s $device shell run-as $package rm -f files/device-test-result.txt | Out-Null
