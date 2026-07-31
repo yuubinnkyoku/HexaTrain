@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "qairt_build_id": "2.48.40.260702151143",
+  "result_classification": "GENERIC_GRAPH_IMPLEMENTED_NUMERIC_BOUNDARY_FOUND",
+  "maximum_formal_combined_configuration": {
+    "batch": 1,
+    "sequence": 16,
+    "vocabulary": 32,
+    "embedding": 32,
+    "feed_forward": 64,
+    "layers": 6,
+    "heads": 8,
+    "head_dimension": 4,
+    "optimizer": "Adam",
+    "learning_rate": 0.003,
+    "steps_per_seed": 320,
+    "clipping": "disabled"
+  },
+  "one_step_envelope": "L256/H2, L2/H256, T512/D32/FFN64/L3/H4, D256/FFN512/L3/H4",
+  "formal_configurations": 5,
+  "formal_finite_seeds": "25/25",
+  "combined_oracle_exact": "20/20",
+  "combined_free_exact": "20/20",
+  "seed_reproducibility": "BITWISE_REPRODUCIBLE",
+  "publication": "allow-list aggregates; raw tensors, identifiers, paths, and binaries excluded"
+}

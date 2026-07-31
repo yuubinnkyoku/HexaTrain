@@ -1,0 +1,5 @@
+"axis","last_success","first_failure","stage","first_bad_tensor","classification","detail"
+"depth-formal","T8 D16 FFN32 L18 H2; 5/5 training seeds finite","T8 D16 FFN32 L19 H2","final_evaluation","layer_018_output","HTP_NUMERIC_OVERFLOW","QNN execute returned success; application-visible tensor was nonfinite"
+"depth-diagnostic","T8 D16 FFN32 L18 H2","T8 D16 FFN32 L64 H2 seed1 step301","training_backward","dembedding","HTP_NUMERIC_OVERFLOW","reproduced at seed1 step301"
+"width-ffn-interaction","T16 D256 FFN371 L3 H4 seed1 320 steps","T16 D256 FFN372 L3 H4 seed1 step32","training_forward","logits","HTP_NUMERIC_OVERFLOW","D256/FFN256 and D128/FFN512 separately succeeded"
+"one-step-envelope","L256/H2, L2/H256, T512/D32/FFN64/L3/H4, D256/FFN512/L3/H4","none evaluated","not applicable","none","NONE","saturation stop; not a hardware-limit claim"

@@ -1,0 +1,2 @@
+"status","config_visible","progress_visible","foreground_update","background_update","ongoing_during_run","ongoing_after_completion","notification_tap_returned_activity","auto_cancel"
+"PASS","true","true","true","true","true","false","true","true"

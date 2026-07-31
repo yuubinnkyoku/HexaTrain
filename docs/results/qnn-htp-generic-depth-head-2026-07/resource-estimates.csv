@@ -1,0 +1,6 @@
+"configuration","parameter_elements","parameter_bytes","gradient_bytes","adam_m_v_bytes","forward_activation_bytes","backward_activation_bytes","attention_bytes","adam_application_visible_bytes","persistent_application_tensor_bytes","estimated_peak_application_tensor_bytes","node_count","tensor_count","scope"
+"baseline","14592","58368","58368","116736","346624","542976","32768","642048","174080","1822464","279","363","application-visible estimate; excludes QNN/DSP internal memory"
+"depth","39040","156160","156160","312320","365184","585792","18432","1441792","337920","3043008","2279","2795","application-visible estimate; excludes QNN/DSP internal memory"
+"heads","156672","626688","626688","1253376","2685568","6889920","131072","1441792","1341440","13612096","7083","7419","application-visible estimate; excludes QNN/DSP internal memory"
+"combined","51968","207872","207872","415744","777984","1369728","98304","1441792","493568","4498816","1751","1979","application-visible estimate; excludes QNN/DSP internal memory"
+"width","402944","1611776","1611776","3223552","1120128","1759296","24576","1441792","3289088","10833856","566","683","application-visible estimate; excludes QNN/DSP internal memory"

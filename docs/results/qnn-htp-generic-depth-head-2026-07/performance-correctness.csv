@@ -1,0 +1,6 @@
+"configuration","initialization_ms","graph_creation_ms","finalize_ms","steady_training_step_median_ms","updates_per_second","tokens_per_second","generation_token_latency_median_ms","process_peak_rss_kib","mode"
+"baseline","73.2411","80.5755","226.228","20.1179","49.7069","1590.62","2.84547","286720","correctness"
+"depth","70.4886","123.591","2871.01","87.1804","11.4705","91.7637","7.95995","345804","correctness"
+"heads","78.1459","124.74","13665.6","283.88","3.52262","28.181","21.2896","543148","correctness"
+"combined","70.2454","88.6001","2554.32","93.2459","10.7243","171.589","9.11542","324592","correctness"
+"width","72.4176","97.269","2065.76","735.985","1.35872","21.7396","48.6361","373244","correctness"

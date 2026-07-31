@@ -1,0 +1,6 @@
+"category","sequence","embedding","feed_forward","layers","heads","steps","seeds","clipping","finite_seeds","oracle_exact","free_exact","result"
+"baseline","32","32","32","2","2","320","5","disabled","5/5","20/20","20/20","formal_success"
+"depth","8","16","32","18","2","320","5","disabled","5/5","13/20","13/20","finite_generation_quality_boundary"
+"heads","8","128","32","2","128","320","5","disabled","5/5","20/20","20/20","formal_success"
+"combined","16","32","64","6","8","320","5","disabled","5/5","20/20","20/20","formal_success"
+"width","16","128","256","3","4","320","5","disabled","5/5","20/20","20/20","formal_success"

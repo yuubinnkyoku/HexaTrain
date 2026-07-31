@@ -362,6 +362,7 @@ scripts/
 ## 詳細文書
 
 - [Experimental results](docs/results/README.md)
+- [QNN HTP generic Transformer depth/head resource envelope](docs/qnn-htp-generic-depth-head-resource-envelope.md)
 - [QNN Transformer op feasibility](docs/qnn-transformer-op-feasibility.md)
 - [QNN HTP LayerNorm](docs/qnn-htp-layernorm.md)
 - [QNN HTP Softmax](docs/qnn-htp-softmax.md)
@@ -383,7 +384,8 @@ scripts/
 - Debug APKとscalar CPU参照による性能値です。
 - HTP/CPU/GPU周波数は固定していません。
 - thermal throttlingは無効化していません。
-- bias、異なるoptimizer、任意shapeの動的graphは今回の対象外です。
+- 各構成はgraph生成時にshapeを固定します。実行中の動的shape変更は対象外です。
+- biasとAdam以外のgeneric Transformer optimizerは今回の対象外です。
 - `B=32, I=512, H=512, O=256`の任意拡大性能測定は未実施です。
 
 ## README履歴

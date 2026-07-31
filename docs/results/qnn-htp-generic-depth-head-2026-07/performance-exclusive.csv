@@ -1,0 +1,6 @@
+"run","configuration","initialization_ms","graph_creation_ms","finalize_ms","steady_training_step_median_ms","updates_per_second","tokens_per_second","generation_token_latency_median_ms","process_peak_rss_kib","mode"
+"1","T16 D32 FFN64 L6 H8","79.0588","88.0434","2543.56","89.5744","11.1639","178.622","9.37792","325508","exclusive_benchmark"
+"2","T16 D32 FFN64 L6 H8","76.8613","76.5259","2519.34","88.3895","11.3136","181.017","9.46667","328076","exclusive_benchmark"
+"3","T16 D32 FFN64 L6 H8","70.6561","96.1498","2505.49","88.9739","11.2393","179.828","9.07458","327636","exclusive_benchmark"
+"4","T16 D32 FFN64 L6 H8","74.5039","83.7153","2575.74","92.2583","10.8391","173.426","9.29719","325676","exclusive_benchmark"
+"5","T16 D32 FFN64 L6 H8","75.0984","83.5459","2653.62","88.8815","11.2509","180.015","8.75464","327592","exclusive_benchmark"
