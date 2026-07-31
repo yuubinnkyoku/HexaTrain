@@ -151,6 +151,13 @@ try {
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 
+    Invoke-Step "resumable-formal-runner-self-test" {
+        Invoke-PwshScript "resumable formal runner self-test" `
+            (Join-Path $Root "scripts\run_qnn_resumable_formal.ps1") @(
+                "-SelfTest")
+        "resume/atomic/identity-rejection/reattach cases ok (temp-only; no device required)"
+    }
+
     if ($Clean) {
         Invoke-Step "gradle-clean" {
             Invoke-Gradle "clean" @(":app:clean")

@@ -11,8 +11,9 @@
 既定の `verify_local.ps1` は実機不要・QAIRT不要・tracked ファイルを変更しない。
 `git-diff-check`、`tracked-binary-audit`、`secret-path-audit`、
 `qairt-selection-self-test`（temp内の5ケース）、公開結果exporter self-test、
+`resumable-formal-runner-self-test`（temp内のsynthetic fixture、実機不要）、
 JVM unit tests、C++ host tests、`assembleDebug`、`assembleDebugAndroidTest` の
-9工程が唯一のローカル検証ゲートである。
+10工程が唯一のローカル検証ゲートである。
 全工程が PASS になるまで完了を報告しない。失敗を隠して完了しない。
 
 ```powershell
@@ -89,7 +90,10 @@ Expected Build ID を必ず明示して渡す。
 
 ### Tier 3: 明示指示が必要
 
-- UI を前面化する試験。`EXCLUSIVE_BENCHMARK` を含む
+- UI を前面化する試験。`EXCLUSIVE_BENCHMARK` を含む。
+  `.\scripts\run_qnn_resumable_formal.ps1` も既定 TestMode=UI_VALIDATION で
+  Activity を意図的に前面化するためこの Tier。seed 単位で atomic に保存・再開し、
+  ADB transport 中断は数値失敗に分類しない。
 - 通知・permission の操作
 - app data の削除
 - firmware や QAIRT SDK のバージョン変更
