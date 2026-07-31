@@ -1058,12 +1058,31 @@ std::vector<float> flattenLanguageParameters(const Params &p) {
   auto append = [&](const std::vector<float> &values) {
     flat.insert(flat.end(), values.begin(), values.end());
   };
-  // This preserves the established L1H1 canonical order, with each added
-  // layer appended in that same order.  Do not iterate an unordered container.
+  // Canonical generic registry order. Do not iterate an unordered container.
+  append(p.tokenEmbedding);
+  auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
+    append(layer.gamma1); append(layer.beta1);
+    append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
+    append(layer.gamma2); append(layer.beta2);
+    append(layer.w1); append(layer.w2);
+  };
+  appendLayer(p);
+  for (const auto &layer : p.layers) appendLayer(layer);
+  append(p.outputProjection);
+  return flat;
+}
+std::vector<float> flattenLanguageParametersLegacyV1(const Params &p) {
+  std::vector<float> flat;
+  auto append = [&](const std::vector<float> &values) {
+    flat.insert(flat.end(), values.begin(), values.end());
+  };
+  // Read-only compatibility hash order used by the published L2/H2
+  // baseline. Optimizer binding continues to use the generic registry above.
   append(p.tokenEmbedding);
   auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
     append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
-    append(layer.gamma1); append(layer.beta1); append(layer.gamma2); append(layer.beta2);
+    append(layer.gamma1); append(layer.beta1);
+    append(layer.gamma2); append(layer.beta2);
     append(layer.w1); append(layer.w2);
   };
   appendLayer(p);
@@ -1082,8 +1101,9 @@ Params unflattenLanguageParameters(const std::vector<float> &flat,
   };
   take(result.tokenEmbedding);
   auto takeLayer = [&](TinyTransformerLayerParameters &layer) {
+    take(layer.gamma1); take(layer.beta1);
     take(layer.wq); take(layer.wk); take(layer.wv); take(layer.wo);
-    take(layer.gamma1); take(layer.beta1); take(layer.gamma2); take(layer.beta2);
+    take(layer.gamma2); take(layer.beta2);
     take(layer.w1); take(layer.w2);
   };
   takeLayer(result);
@@ -1353,18 +1373,64 @@ bool executeLanguageAdam(Runtime &runtime, const Params &current,
                          const Params &secondMoment, float learningRate, int step,
                          float gradientScale, Params &next, Params &firstMomentNext,
                          Params &secondMomentNext, AdamOptimizerOutputs *raw,
-                         std::string &error) {
-  AdamOptimizerOutputs output;
+                         std::string &error,
+                         uint32_t optimizerChunkElements = 0) {
+  const auto currentFlat = flattenLanguageParameters(current);
+  const auto gradientFlat = flattenLanguageParameters(gradient);
+  const auto firstFlat = flattenLanguageParameters(firstMoment);
+  const auto secondFlat = flattenLanguageParameters(secondMoment);
+  if (currentFlat.size() != gradientFlat.size() ||
+      currentFlat.size() != firstFlat.size() ||
+      currentFlat.size() != secondFlat.size() || currentFlat.empty()) {
+    error = "APP_PARAMETER_SCHEMA: Adam flattened registry mismatch";
+    return false;
+  }
+  const size_t chunkElements =
+      optimizerChunkElements ? optimizerChunkElements : currentFlat.size();
+  if (chunkElements == 0 ||
+      chunkElements > std::numeric_limits<uint32_t>::max()) {
+    error = "APP_RESOURCE_ESTIMATOR: Adam chunk size is invalid";
+    return false;
+  }
   const float firstCorrection =
       float(1.0 / (1.0 - std::pow(0.9, double(step))));
   const float secondCorrection =
       float(1.0 / (1.0 - std::pow(0.999, double(step))));
-  if (!runtime.executeAdamOptimizer(
-          flattenLanguageParameters(current), flattenLanguageParameters(gradient),
-          flattenLanguageParameters(firstMoment),
-          flattenLanguageParameters(secondMoment), learningRate, gradientScale,
-          firstCorrection, secondCorrection, output, error))
-    return false;
+  AdamOptimizerOutputs output;
+  const auto append = [](std::vector<float> &destination,
+                         const std::vector<float> &source, size_t count) {
+    destination.insert(destination.end(), source.begin(),
+                       source.begin() + count);
+  };
+  for (size_t offset = 0; offset < currentFlat.size();
+       offset += chunkElements) {
+    const size_t count =
+        std::min(chunkElements, currentFlat.size() - offset);
+    std::vector<float> currentChunk(chunkElements, 0.0f);
+    std::vector<float> gradientChunk(chunkElements, 0.0f);
+    std::vector<float> firstChunk(chunkElements, 0.0f);
+    std::vector<float> secondChunk(chunkElements, 0.0f);
+    std::copy_n(currentFlat.begin() + offset, count, currentChunk.begin());
+    std::copy_n(gradientFlat.begin() + offset, count, gradientChunk.begin());
+    std::copy_n(firstFlat.begin() + offset, count, firstChunk.begin());
+    std::copy_n(secondFlat.begin() + offset, count, secondChunk.begin());
+    AdamOptimizerOutputs chunkOutput;
+    if (!runtime.executeAdamOptimizer(
+            currentChunk, gradientChunk, firstChunk, secondChunk, learningRate,
+            gradientScale, firstCorrection, secondCorrection, chunkOutput,
+            error))
+      return false;
+    append(output.firstMomentNext, chunkOutput.firstMomentNext, count);
+    append(output.secondMomentNext, chunkOutput.secondMomentNext, count);
+    append(output.firstMomentHat, chunkOutput.firstMomentHat, count);
+    append(output.secondMomentHat, chunkOutput.secondMomentHat, count);
+    append(output.secondRoot, chunkOutput.secondRoot, count);
+    append(output.denominator, chunkOutput.denominator, count);
+    append(output.dividedUpdate, chunkOutput.dividedUpdate, count);
+    append(output.normalizedUpdate, chunkOutput.normalizedUpdate, count);
+    append(output.scaledUpdate, chunkOutput.scaledUpdate, count);
+    append(output.weightNext, chunkOutput.weightNext, count);
+  }
   next = unflattenLanguageParameters(output.weightNext, current);
   firstMomentNext =
       unflattenLanguageParameters(output.firstMomentNext, current);
@@ -1380,14 +1446,31 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               bool scalingSmoke = false,
                               int layers = 1,
                               int attentionHeads = 1,
-                              const LogSink& progress = {}) {
+                              const LogSink& progress = {},
+                              int requestedSteps = 0,
+                              bool numericalProbe = false,
+                              float requestedLearningRate = 0.0f) {
   // These are part of the model configuration, not a reporting-only scale
   // label.  The CPU reference and the QNN graph receive exactly the same
   // shape contract below.
+  if (layers <= 0 || attentionHeads <= 0) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=layers and attention heads must both be positive\n";
+  }
   config.numLayers = static_cast<uint32_t>(layers);
   config.numHeads = static_cast<uint32_t>(attentionHeads);
-  const auto selected = adamCandidate(candidate);
+  auto selected = adamCandidate(candidate);
+  if (requestedSteps > 0) selected.steps = requestedSteps;
+  if (requestedLearningRate > 0.0f)
+    selected.lr = requestedLearningRate;
   const bool formalPostFix = candidate == 3;
+  const auto resources = tiny_lm::resourceEstimate(config);
+  if (!resources.ok) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\nfailure_classification=" +
+           resources.failureClassification + "\nerror=" + resources.detail +
+           "\n";
+  }
   Runtime runtime;
   RuntimeOptions options;
   options.captureQnnCallback = false;
@@ -1395,8 +1478,29 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   runtime.setOptions(options);
   std::string error;
   const auto shape = tiny_lm::initialParameters(config, 1);
+  const auto flattenedShape = flattenLanguageParameters(shape);
+  if (flattenedShape.empty() ||
+      flattenedShape.size() > std::numeric_limits<uint32_t>::max()) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_RESOURCE_ESTIMATOR\n"
+           "error=Adam parameter registry exceeds uint32 element range\n";
+  }
   const uint32_t optimizerElements =
-      uint32_t(flattenLanguageParameters(shape).size());
+      static_cast<uint32_t>(flattenedShape.size());
+  const uint32_t optimizerGraphElements =
+      static_cast<uint32_t>(std::min<std::uint64_t>(
+          optimizerElements,
+          phonelm::transformer::kMaximumAdamChunkElements));
+  const uint32_t optimizerChunkCount =
+      static_cast<uint32_t>(
+          (std::uint64_t{optimizerElements} + optimizerGraphElements - 1) /
+          optimizerGraphElements);
+  if (optimizerGraphElements != resources.adamGraphElements ||
+      optimizerChunkCount != resources.adamChunkCount) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_RESOURCE_ESTIMATOR\n"
+           "error=Adam execution and resource-estimator chunk contracts differ\n";
+  }
   if (!runtime.initialize(QnnBackendKind::HTP, error) ||
       !runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
@@ -1404,7 +1508,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads) ||
-      !runtime.prepareAdamOptimizer(optimizerElements, error))
+      !runtime.prepareAdamOptimizer(optimizerGraphElements, error))
     return failure("adam_prepare", error, runtime);
   bool scalingAppWriteUnchanged = true;
   size_t scalingPoisonResidualElements = 0;
@@ -1591,10 +1695,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         AdamOptimizerOutputs rawC, rawD;
         if (!executeLanguageAdam(runtime, current, cpuGradient.gradients, first,
                                  second, diagnosticLearningRate, adamStep, 1.0f, pathC,
-                                 pathCFirst, pathCSecond, &rawC, error) ||
+                                 pathCFirst, pathCSecond, &rawC, error,
+                                 optimizerGraphElements) ||
             !executeLanguageAdam(runtime, current, htpGradient.gradients, first,
                                  second, diagnosticLearningRate, adamStep, 1.0f, pathD,
-                                 pathDFirst, pathDSecond, &rawD, error))
+                                 pathDFirst, pathDSecond, &rawD, error,
+                                 optimizerGraphElements))
           return failure("adam_sync_optimizer", error, runtime);
         const std::string prefix = "checkpoint_" + std::to_string(completed);
         detail << prefix << "_step_index=" << adamStep << '\n'
@@ -1773,7 +1879,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       AdamOptimizerOutputs raw;
       if (!executeLanguageAdam(runtime, freeCurrent, gradient.gradients,
                                freeFirst, freeSecond, diagnosticLearningRate, step, 1.0f,
-                               next, firstNext, secondNext, &raw, error))
+                               next, firstNext, secondNext, &raw, error,
+                               optimizerGraphElements))
         return failure("adam_free_optimizer", error, runtime);
       const std::array<std::pair<const char *, const std::vector<float> *>, 9>
           optimizerStages{{
@@ -1864,7 +1971,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\nmajor_weight_changed=" << (changed ? "true" : "false")
            << "\ngraph_count=2\ngraph_execute_count="
            << runtime.metrics().graphExecuteCount
-           << "\nexecute_count_per_training_step=2"
+           << "\nexecute_count_per_training_step="
+           << (1 + optimizerChunkCount)
+           << "\noptimizer_execute_count_per_step=" << optimizerChunkCount
+           << "\noptimizer_chunking="
+           << (optimizerChunkCount == 1 ? "SINGLE_VECTOR"
+                                        : "QNN_FIXED_CHUNKS")
            << "\nbias_correction_scalar_responsibility=CPU"
            << "\noptimizer_math_responsibility=HTP"
            << "\nbinding_training_inputs=one_hot,target,"
@@ -1883,9 +1995,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                                     : "APP_WRITE_FP32")
            << "\nbinding_adam_inputs=current,gradient,gradient_scale,m,v,lr,beta_scalars,bias_corrections,zero"
            << "\nbinding_adam_input_type=APP_WRITE_FP32"
-           << "\nbinding_adam_outputs=m_next,v_next,m_hat,v_hat,sqrt_v_hat,denominator,normalized_update,scaled_update,weight_next"
+           << "\nbinding_adam_outputs=m_next,v_next,m_hat,v_hat,sqrt_v_hat,denominator,divided_update,normalized_update,scaled_update,weight_next"
            << "\nbinding_adam_output_type=APP_READ_FP32"
-           << "\nbinding_flat_parameter_shape=" << optimizerElements << "x1"
+           << "\nbinding_flat_parameter_elements=" << optimizerElements
+           << "\nbinding_adam_graph_shape=" << optimizerGraphElements << "x1"
            << "\nbinding_scalar_shape=1x1"
            << "\ncurrent_next_in_place_alias=false\ncpu_fallback=false"
            << "\nnan_detected=" << (firstNanCount ? "true" : "false")
@@ -1911,6 +2024,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     bool seedAllStepsFinite = true;
     bool cpuAllStepsFinite = true;
     int seedCompletedSteps = 0;
+    std::vector<float> seedStepLosses;
+    std::vector<float> seedStepAccuracies;
+    seedStepLosses.reserve(selected.steps);
+    seedStepAccuracies.reserve(selected.steps);
     double finalGradientNorm = 0.0;
     double finalCpuGradientNorm = 0.0;
     auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
@@ -1957,8 +2074,15 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       const auto formalTrainingStepStarted =
           std::chrono::steady_clock::now();
       if (!runtime.executeTinyTransformerTraining(
-              batch.first, batch.second, htp, 0.0f, htpGradient, error))
+              batch.first, batch.second, htp, 0.0f, htpGradient, error)) {
+        error = "seed=" + std::to_string(seed) +
+                ", step=" + std::to_string(step) + ", " + error;
         return failure("adam_gradient_step", error, runtime);
+      }
+      seedStepLosses.push_back(htpGradient.loss);
+      seedStepAccuracies.push_back(
+          tokenAccuracy(htpGradient.logits, batch.second, config.tokens,
+                        config.vocabularySize));
       Params htpNext, firstNext, secondNext;
       AdamOptimizerOutputs rawHtpUpdate;
       const double preclipGradientNorm = gradientNorm(htpGradient.gradients);
@@ -1975,8 +2099,115 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           std::max(maximumPreclipGradientNorm, preclipGradientNorm);
       if (!executeLanguageAdam(runtime, htp, htpGradient.gradients, htpFirst,
                                htpSecond, selected.lr, step, clipScale, htpNext,
-                               firstNext, secondNext, &rawHtpUpdate, error))
+                               firstNext, secondNext, &rawHtpUpdate, error,
+                               optimizerGraphElements))
         return failure("adam_update_step", error, runtime);
+      const std::array<
+          std::pair<const char *, const std::vector<float> *>, 10>
+          adamFiniteStages{{
+              {"adam_m_next", &rawHtpUpdate.firstMomentNext},
+              {"adam_v_next", &rawHtpUpdate.secondMomentNext},
+              {"adam_m_hat", &rawHtpUpdate.firstMomentHat},
+              {"adam_v_hat", &rawHtpUpdate.secondMomentHat},
+              {"adam_sqrt_v_hat", &rawHtpUpdate.secondRoot},
+              {"adam_denominator", &rawHtpUpdate.denominator},
+              {"adam_divide", &rawHtpUpdate.dividedUpdate},
+              {"adam_normalized_update", &rawHtpUpdate.normalizedUpdate},
+              {"adam_scaled_update", &rawHtpUpdate.scaledUpdate},
+              {"next_parameter", &rawHtpUpdate.weightNext},
+          }};
+      for (const auto &stage : adamFiniteStages) {
+        const auto bad = std::find_if(
+            stage.second->begin(), stage.second->end(),
+            [](float value) { return !std::isfinite(value); });
+        if (bad == stage.second->end()) continue;
+        const size_t flatIndex = size_t(bad - stage.second->begin());
+        size_t remaining = flatIndex;
+        std::string badParameter = "OUT_OF_RANGE";
+        size_t badParameterElement = 0;
+        for (const auto &entry : tiny_lm::parameterRegistry(htp)) {
+          if (remaining < entry.values->size()) {
+            badParameter = entry.name;
+            badParameterElement = remaining;
+            break;
+          }
+          remaining -= entry.values->size();
+        }
+        size_t nanCount = 0, infCount = 0;
+        double maximumFiniteAbsolute = 0.0;
+        for (float value : *stage.second) {
+          nanCount += std::isnan(value);
+          infCount += std::isinf(value);
+          if (std::isfinite(value))
+            maximumFiniteAbsolute =
+                std::max(maximumFiniteAbsolute, std::abs(double(value)));
+        }
+        const bool cpuStepFinite =
+            std::isfinite(cpuGradient.loss) &&
+            finiteParams(cpuGradient.gradients) &&
+            finiteParams(cpuUpdate.next) &&
+            finiteParams(cpuUpdate.firstMoment) &&
+            finiteParams(cpuUpdate.secondMoment);
+        const auto flatHtpGradient =
+            flattenLanguageParameters(htpGradient.gradients);
+        const auto valueAt = [&](const std::vector<float> &values) {
+          return flatIndex < values.size()
+                     ? values[flatIndex]
+                     : std::numeric_limits<float>::quiet_NaN();
+        };
+        std::ostringstream report;
+        report << std::setprecision(10)
+               << "TINY_LANGUAGE_MODEL\n"
+               << "test=generic_adam_first_nonfinite\n"
+               << "status=FAILED\n"
+               << "failure_classification=QNN_EXECUTE_FINITE_OUTPUT\n"
+               << "first_failed_stage=QNN_ADAM_FINITE_OUTPUT\n"
+               << "first_bad_tensor=" << stage.first << '\n'
+               << "first_bad_node=" << stage.first << '\n'
+               << "first_bad_flat_index=" << flatIndex << '\n'
+               << "first_bad_parameter=" << badParameter << '\n'
+               << "first_bad_parameter_element=" << badParameterElement << '\n'
+               << "first_bad_nan_count=" << nanCount << '\n'
+               << "first_bad_inf_count=" << infCount << '\n'
+               << "first_bad_maximum_finite_absolute="
+               << maximumFiniteAbsolute << '\n'
+               << "first_bad_gradient_value="
+               << valueAt(flatHtpGradient) << '\n'
+               << "first_bad_m_next_value="
+               << valueAt(rawHtpUpdate.firstMomentNext) << '\n'
+               << "first_bad_v_next_value="
+               << valueAt(rawHtpUpdate.secondMomentNext) << '\n'
+               << "first_bad_m_hat_value="
+               << valueAt(rawHtpUpdate.firstMomentHat) << '\n'
+               << "first_bad_v_hat_value="
+               << valueAt(rawHtpUpdate.secondMomentHat) << '\n'
+               << "first_bad_sqrt_v_hat_value="
+               << valueAt(rawHtpUpdate.secondRoot) << '\n'
+               << "first_bad_denominator_value="
+               << valueAt(rawHtpUpdate.denominator) << '\n'
+               << "first_bad_divide_value="
+               << valueAt(rawHtpUpdate.dividedUpdate) << '\n'
+               << "first_bad_normalized_update_value="
+               << valueAt(rawHtpUpdate.normalizedUpdate) << '\n'
+               << "first_bad_seed=" << seed << '\n'
+               << "first_bad_step=" << step << '\n'
+               << "cpu_same_step_finite="
+               << (cpuStepFinite ? "true" : "false") << '\n'
+               << "qnn_execute_result=0\n"
+               << "qnn_execute_outputs_finite=false\n"
+               << "sequence_length=" << config.tokens << '\n'
+               << "vocabulary_size=" << config.vocabularySize << '\n'
+               << "embedding_dimension=" << config.dimension << '\n'
+               << "feed_forward_dimension="
+               << config.feedForwardDimension << '\n'
+               << "transformer_layers=" << layers << '\n'
+               << "attention_heads=" << attentionHeads << '\n'
+               << "steps=" << selected.steps << '\n'
+               << "seed_count=" << lastSeed << '\n'
+               << "cpu_fallback=false\n"
+               << runtime.apiTraceSummary() << runtime.diagnostics();
+        return report.str();
+      }
       if (formalPostFix)
         formalTrainingStepLatencyUs.push_back(
             std::chrono::duration<double, std::micro>(
@@ -2066,8 +2297,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       seedCompletedSteps = step;
     }
     LanguageQuality final;
-    if (!htpLanguageQuality(runtime, config, htp, 1, final, error))
+    if (!htpLanguageQuality(runtime, config, htp, 1, final, error)) {
+      error = "seed=" + std::to_string(seed) + ", final_evaluation, " + error;
       return failure("adam_final_eval", error, runtime);
+    }
     const auto cpuFinal = cpuLanguageQuality(config, cpu, 1);
     const bool finalEvaluationFinite =
         std::isfinite(final.loss) && std::isfinite(final.accuracy) &&
@@ -2137,7 +2370,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                << finalGradientNorm << "\nseed_" << seed
                << "_final_parameter_l2_norm=" << paramNorm(htp)
                << "\nseed_" << seed << "_final_parameter_canonical_hash="
-               << canonicalFloatSha256(finalParameters) << "\nseed_" << seed
+               << canonicalFloatSha256(finalParameters)
+               << "\nseed_" << seed
+               << "_all_step_loss_canonical_hash="
+               << canonicalFloatSha256(seedStepLosses)
+               << "\nseed_" << seed
+               << "_all_step_accuracy_canonical_hash="
+               << canonicalFloatSha256(seedStepAccuracies)
+               << "\nseed_" << seed
+               << "_final_parameter_legacy_v1_canonical_hash="
+               << canonicalFloatSha256(
+                      flattenLanguageParametersLegacyV1(htp))
+               << "\nseed_" << seed
                << "_nonfinite_count=" << seedNonfiniteCount << "\nseed_"
                << seed << "_qnn_execute_count="
                << (runtime.metrics().graphExecuteCount - seedExecuteStart)
@@ -2901,13 +3145,16 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     const size_t expectedTrainingSteps =
         size_t(lastSeed) * size_t(selected.steps);
     const bool scalingGenerationComplete =
-        scalingSmoke
+        numericalProbe
+            ? size_t(formalOracleCaseCount) == expectedGenerationCases &&
+                  size_t(formalFreeCaseCount) == expectedGenerationCases
+            : scalingSmoke
             ? size_t(oracleExactRollouts) == expectedGenerationCases &&
                   exactRollouts >= 1
             : size_t(oracleExactRollouts) == expectedGenerationCases &&
                   size_t(exactRollouts) == expectedGenerationCases;
     const bool formalComplete =
-        !nan && !outputNonfinite && allLoss &&
+        !nan && !outputNonfinite && (numericalProbe || allLoss) &&
         allFormalCpuFinite && formalPrefixComparisonsFinite &&
         formalContextSelfTest &&
         inferenceParameters.size() == size_t(lastSeed) &&
@@ -2924,9 +3171,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     if (formalPostFix) {
       formalSummary
           << "\nsource_protocol=POST_FIX_ADAM_LR0.003_STEPS320_V1"
-          << "\nscaling_evaluation=" << (lastSeed == 5 && !scalingSmoke
-                                                ? "FORMAL"
-                                                : "SMOKE")
+          << "\nscaling_evaluation="
+          << (numericalProbe ? "NUMERICAL_PROBE"
+                             : (lastSeed == 5 && !scalingSmoke ? "FORMAL"
+                                                               : "SMOKE"))
           << "\nsequence_length=" << config.tokens
           << "\nembedding_dimension=" << config.dimension
           << "\ntransformer_layers=" << layers
@@ -3012,7 +3260,13 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           << "\nprocess_peak_rss_available="
           << (peakRssAvailable ? "true" : "false")
           << "\nprocess_peak_rss_kib="
-          << (peakRssAvailable ? usage.ru_maxrss : 0);
+          << (peakRssAvailable ? usage.ru_maxrss : 0)
+          << "\noptimizer_parameter_elements=" << optimizerElements
+          << "\noptimizer_graph_elements=" << optimizerGraphElements
+          << "\noptimizer_chunk_count=" << optimizerChunkCount
+          << "\noptimizer_chunking="
+          << (optimizerChunkCount == 1 ? "SINGLE_VECTOR"
+                                       : "QNN_FIXED_CHUNKS");
     }
     std::ostringstream report;
     report << "TINY_LANGUAGE_MODEL\ntest="
@@ -3102,7 +3356,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
          << "\ncpu_htp_first_moment_max_abs_difference=" << worstFirst
          << "\ncpu_htp_second_moment_max_abs_difference=" << worstSecond
          << "\ngraph_count=2\ngraph_create_count=2\ngraph_finalize_count=2"
-         << "\nexecute_count_per_training_step=2"
+         << "\nexecute_count_per_training_step="
+         << (1 + optimizerChunkCount)
+         << "\noptimizer_execute_count_per_step=" << optimizerChunkCount
+         << "\noptimizer_chunking="
+         << (optimizerChunkCount == 1 ? "SINGLE_VECTOR"
+                                      : "QNN_FIXED_CHUNKS")
          << "\ngraph_initialization_us="
          << runtime.metrics().backendCreateUs + runtime.metrics().deviceCreateUs +
                 runtime.metrics().contextCreateUs
@@ -3366,11 +3625,19 @@ bool reportTwoByTwo(Runtime &runtime, const tiny_lm::Config &config,
       checkpoint.firstMoment, checkpoint.secondMoment, lr, .9f, .999f, 1e-8f, c1, c2);
   Params pathC, cM, cV, pathD, dM, dV;
   AdamOptimizerOutputs rawC, rawD;
-  const bool optimizerOk = executeLanguageAdam(runtime, checkpoint.parameters,
+  std::vector<float> bad;
+  const auto firstBad =
+      firstBadLateStage(htpGradient, nullptr, &bad);
+  const bool optimizerCOk = executeLanguageAdam(runtime, checkpoint.parameters,
       cpuGradient.gradients, checkpoint.firstMoment, checkpoint.secondMoment, lr, step,
-      cpuClipScale, pathC, cM, cV, &rawC, error) && executeLanguageAdam(runtime,
-      checkpoint.parameters, htpGradient.gradients, checkpoint.firstMoment,
-      checkpoint.secondMoment, lr, step, htpClipScale, pathD, dM, dV, &rawD, error);
+      cpuClipScale, pathC, cM, cV, &rawC, error);
+  const bool optimizerDRejected = firstBad != "NONE";
+  const bool optimizerDOk =
+      !optimizerDRejected &&
+      executeLanguageAdam(runtime, checkpoint.parameters,
+          htpGradient.gradients, checkpoint.firstMoment,
+          checkpoint.secondMoment, lr, step, htpClipScale, pathD, dM, dV,
+          &rawD, error);
   auditLateVector("two_by_two_cpu_gradient",
                   flattenLanguageParameters(cpuGradient.gradients), report);
   auditLateVector("two_by_two_htp_gradient",
@@ -3394,12 +3661,20 @@ bool reportTwoByTwo(Runtime &runtime, const tiny_lm::Config &config,
          << "two_by_two_bias_correction_second=" << c2 << '\n'
          << "two_by_two_step_index=" << step << '\n'
          << "two_by_two_clip_order=global_norm_then_gradient_scale_then_adam\n"
-         << "two_by_two_optimizer_execute_success=" << (optimizerOk ? "true" : "false") << '\n';
-  const std::array<std::tuple<const char *, const Params *, const Params *>, 4> paths{{
+         << "two_by_two_optimizer_execute_success="
+         << (optimizerCOk && optimizerDOk ? "true" : "false") << '\n'
+         << "two_by_two_C_optimizer_execute_success="
+         << (optimizerCOk ? "true" : "false") << '\n'
+         << "two_by_two_D_optimizer_execute_success="
+         << (optimizerDOk ? "true" : "false") << '\n'
+         << "two_by_two_D_optimizer_input_rejected="
+         << (optimizerDRejected ? "true" : "false") << '\n'
+         << "two_by_two_D_optimizer_rejection_reason="
+         << (optimizerDRejected ? "NONFINITE_GRADIENT" : "NONE") << '\n';
+  const std::array<std::tuple<const char *, const Params *, const Params *>, 3> paths{{
       {"A_cpu_gradient_cpu_adam", &pathA.next, nullptr},
       {"B_htp_gradient_cpu_adam", &pathB.next, nullptr},
       {"C_cpu_gradient_htp_adam", &pathC, &pathA.next},
-      {"D_htp_gradient_htp_adam", &pathD, &pathB.next},
   }};
   std::array<bool, 4> pathFinite{};
   size_t pathIndex = 0;
@@ -3411,20 +3686,25 @@ bool reportTwoByTwo(Runtime &runtime, const tiny_lm::Config &config,
            << "two_by_two_" << name << "_parameter_max_abs_error="
            << (cpuReference ? maxParamError(*actual, *cpuReference) : 0) << '\n';
   }
-  if (optimizerOk) {
+  pathFinite[3] = optimizerDOk && finiteParams(pathD);
+  report << "two_by_two_D_htp_gradient_htp_adam_finite="
+         << (pathFinite[3] ? "true" : "false") << '\n'
+         << "two_by_two_D_htp_gradient_htp_adam_parameter_max_abs_error="
+         << (optimizerDOk ? maxParamError(pathD, pathB.next) : 0) << '\n';
+  if (optimizerCOk) {
     report << "two_by_two_C_m_next_max_abs_error=" << maxParamError(cM, pathA.firstMoment) << '\n'
-           << "two_by_two_C_v_next_max_abs_error=" << maxParamError(cV, pathA.secondMoment) << '\n'
-           << "two_by_two_D_m_next_max_abs_error=" << maxParamError(dM, pathB.firstMoment) << '\n'
-           << "two_by_two_D_v_next_max_abs_error=" << maxParamError(dV, pathB.secondMoment) << '\n';
+           << "two_by_two_C_v_next_max_abs_error=" << maxParamError(cV, pathA.secondMoment) << '\n';
     auditLateVector("two_by_two_C_adam_sqrt_v", rawC.secondRoot, report);
     auditLateVector("two_by_two_C_adam_denominator", rawC.denominator, report);
     auditLateVector("two_by_two_C_adam_update", rawC.scaledUpdate, report);
+  }
+  if (optimizerDOk) {
+    report << "two_by_two_D_m_next_max_abs_error=" << maxParamError(dM, pathB.firstMoment) << '\n'
+           << "two_by_two_D_v_next_max_abs_error=" << maxParamError(dV, pathB.secondMoment) << '\n';
     auditLateVector("two_by_two_D_adam_sqrt_v", rawD.secondRoot, report);
     auditLateVector("two_by_two_D_adam_denominator", rawD.denominator, report);
     auditLateVector("two_by_two_D_adam_update", rawD.scaledUpdate, report);
   }
-  std::vector<float> bad;
-  const auto firstBad = firstBadLateStage(htpGradient, optimizerOk ? &rawD : nullptr, &bad);
   report << "two_by_two_first_bad_stage=" << firstBad << '\n'
          << "two_by_two_first_bad_producer_node=" << lateProducerNode(firstBad) << '\n';
   if (firstBad != "NONE") {
@@ -3433,8 +3713,8 @@ bool reportTwoByTwo(Runtime &runtime, const tiny_lm::Config &config,
     reportLateTapBoundary("two_by_two_first_bad", htpGradient, firstBad,
                           badAudit, report);
   }
-  return optimizerOk && pathFinite[0] && !pathFinite[1] &&
-         pathFinite[2] && !pathFinite[3] &&
+  return optimizerCOk && optimizerDRejected &&
+         pathFinite[0] && !pathFinite[1] && pathFinite[2] && !pathFinite[3] &&
          firstBad == "tap_SQUARE2";
 }
 
@@ -3660,6 +3940,26 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
       lastLoss = gradient.loss;
       lastAccuracy = tokenAccuracy(gradient.logits, batch.second, config.tokens, config.vocabularySize);
       lastGradientNorm = gradientNorm(gradient.gradients);
+      std::vector<float> preAdamBadValues;
+      const auto preAdamBad =
+          firstBadLateStage(gradient, nullptr, &preAdamBadValues);
+      if (preAdamBad != "NONE" || !std::isfinite(gradient.loss)) {
+        firstNonfinite = step;
+        firstTensor =
+            preAdamBad == "NONE" ? "loss" : preAdamBad;
+        checkpoint = std::move(before);
+        report << "seed_" << seed << "_first_bad_producer_node="
+               << lateProducerNode(firstTensor) << '\n';
+        if (!preAdamBadValues.empty()) {
+          const std::string prefix =
+              "seed_" + std::to_string(seed) + "_first_bad";
+          const auto badAudit =
+              auditLateVector(prefix, preAdamBadValues, report);
+          reportLateTapBoundary(prefix, gradient, firstTensor, badAudit,
+                                report);
+        }
+        break;
+      }
       const float clipScale = clipThreshold > 0 && std::isfinite(lastGradientNorm) && lastGradientNorm > 0
           ? float(std::min(1.0, double(clipThreshold) / (lastGradientNorm + 1.0e-6))) : 1.0f;
       Params next, nextM, nextV;
@@ -3731,16 +4031,9 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
         TinyTransformerTrainingOutputs replayGradient;
         if (!runtime.executeTinyTransformerTraining(checkpoint.input, checkpoint.target,
               checkpoint.parameters, 0.0f, replayGradient, error)) { stable = false; break; }
-        const double replayNorm = gradientNorm(replayGradient.gradients);
-        const float replayScale = std::isfinite(replayNorm) && replayNorm > 0
-            ? float(std::min(1.0, 5.0 / (replayNorm + 1.0e-6))) : 1.0f;
-        Params replayNext, replayM, replayV;
-        AdamOptimizerOutputs replayAdam;
-        if (!executeLanguageAdam(runtime, checkpoint.parameters, replayGradient.gradients,
-              checkpoint.firstMoment, checkpoint.secondMoment, lr, checkpoint.completedStep + 1,
-              replayScale, replayNext, replayM, replayV, &replayAdam, error)) { stable = false; break; }
         std::vector<float> replayBad;
-        const auto replayStage = firstBadLateStage(replayGradient, &replayAdam, &replayBad);
+        const auto replayStage =
+            firstBadLateStage(replayGradient, nullptr, &replayBad);
         size_t replayBadIndex = std::numeric_limits<size_t>::max();
         for (size_t index = 0; index < replayBad.size(); ++index)
           if (!std::isfinite(replayBad[index])) { replayBadIndex = index; break; }
@@ -3783,9 +4076,9 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
        !fixedReplayChecks || !twoByTwoChecks || !postFixReplayChecks)) {
     return failure(
         "late_nonfinite_diagnostic_assertions",
-        "Expected five deterministic legacy failures, A/C finite and B/D "
-        "non-finite path isolation, and five finite deterministic post-fix "
-        "same-checkpoint replays.",
+        "Expected five deterministic legacy failures, A/C finite, B "
+        "non-finite, D rejected before Adam execution, and five finite "
+        "deterministic post-fix same-checkpoint replays.",
         runtime);
   }
   if (!diagnostic && finiteSeeds != kSeedCount) {
@@ -3806,7 +4099,6 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
     const LogSink& progress) {
-  (void)trainingConfig;
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);
   if (mode ==
@@ -3990,6 +4282,34 @@ std::string runTinyTransformerTrainingExperiment(
     config.dimension = 32;
     config.feedForwardDimension = 32;
     return languageModelAdam(true, 3, true, config, 1, false, 2, 2);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC) {
+    if (trainingConfig.batchSize != 1 || trainingConfig.sampleCount <= 0 ||
+        trainingConfig.outputDimension < 13 || trainingConfig.dimension <= 0 ||
+        trainingConfig.hiddenDimension <= 0 || trainingConfig.epochs <= 0 ||
+        trainingConfig.measuredSteps <= 0 || trainingConfig.steps <= 0 ||
+        trainingConfig.correctnessInterval <= 0 ||
+        !std::isfinite(trainingConfig.learningRate) ||
+        trainingConfig.learningRate <= 0.0f) {
+      return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=generic mode requires B=1,T>0,V>=13,D>0,FFN>0,"
+             "L>0,H>0,steps>0,seeds>0,and finite lr>0\n";
+    }
+    tiny_lm::Config config;
+    config.tokens = static_cast<uint32_t>(trainingConfig.sampleCount);
+    config.vocabularySize =
+        static_cast<uint32_t>(trainingConfig.outputDimension);
+    config.dimension = static_cast<uint32_t>(trainingConfig.dimension);
+    config.feedForwardDimension =
+        static_cast<uint32_t>(trainingConfig.hiddenDimension);
+    const bool numericalProbe = trainingConfig.steps < 320;
+    const bool scalingSmoke = trainingConfig.correctnessInterval < 5;
+    return languageModelAdam(
+        false, 3, true, config, trainingConfig.correctnessInterval,
+        scalingSmoke, trainingConfig.epochs, trainingConfig.measuredSteps,
+        progress, trainingConfig.steps, numericalProbe,
+        trainingConfig.learningRate);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }

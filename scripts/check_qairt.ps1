@@ -266,7 +266,12 @@ if (-not $selected -or -not (Test-Path -LiteralPath $selected.Path -PathType Con
     Write-Result "sdk_root_exists" "false"
     Write-Result "qnn_interface_header_exists" "false"
     Write-Result "qnn_types_header_exists" "false"
-    Write-Result "qnn_implementation_ready" "false"
+    Write-Result "qnn_core_headers_present" "false"
+    Write-Result "qnn_required_phone_libraries_present" "false"
+    Write-Result "optional_cli_tools_present" "false"
+    Write-Result "optional_samples_present" "false"
+    Write-Result "inventory_complete" "false"
+    Write-Result "phone_build_candidate_ready" "false"
     Write-Result "status" "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED"
     exit 2
 }
@@ -392,8 +397,31 @@ Write-Result "official_sample_candidates" (Join-Paths $sampleEvidence)
 Write-Result "official_sample_directories" (Join-Paths ($sampleEvidence | ForEach-Object { $_.Directory }))
 Write-Result "cpu_sample_candidates" (Join-Paths $cpuSampleEvidence)
 Write-Result "htp_sample_candidates" (Join-Paths $htpSampleEvidence)
-Write-Result "classification_note" "Candidate roles are inferred from installed paths/names and must be confirmed against that SDK's official build files; no library basename is hard-coded."
-Write-Result "qnn_implementation_ready" "false"
+Write-Result "classification_note" "Inventory candidate roles are inferred from installed paths/names; PhoneLM candidate readiness separately checks the exact files packaged by audit_qnn_apk.ps1."
+
+$coreHeadersPresent = $interfaceHeaders.Count -gt 0 -and $typesHeaders.Count -gt 0 -and
+    (Test-Path -LiteralPath (Join-Path $resolvedRoot "include\QNN\QnnSdkBuildId.h") -PathType Leaf)
+$requiredPhoneLibraryPaths = @(
+    "lib\aarch64-android\libQnnSystem.so",
+    "lib\aarch64-android\libQnnCpu.so",
+    "lib\aarch64-android\libQnnHtp.so",
+    "lib\aarch64-android\libQnnHtpPrepare.so",
+    "lib\aarch64-android\libQnnHtpV81Stub.so",
+    "lib\hexagon-v81\unsigned\libQnnHtpV81Skel.so"
+)
+$requiredPhoneLibrariesPresent = @($requiredPhoneLibraryPaths | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $resolvedRoot $_) -PathType Leaf)
+}).Count -eq 0
+$optionalCliToolsPresent = $netRunTools.Count -gt 0 -and $validatorTools.Count -gt 0
+$optionalSamplesPresent = $sampleEvidence.Count -gt 0 -and
+    $cpuSampleEvidence.Count -gt 0 -and $htpSampleEvidence.Count -gt 0
+$phoneBuildCandidateReady = $coreHeadersPresent -and $requiredPhoneLibrariesPresent
+Write-Result "qnn_core_headers_present" $coreHeadersPresent.ToString().ToLowerInvariant()
+Write-Result "qnn_required_phone_libraries_present" $requiredPhoneLibrariesPresent.ToString().ToLowerInvariant()
+Write-Result "optional_cli_tools_present" $optionalCliToolsPresent.ToString().ToLowerInvariant()
+Write-Result "optional_samples_present" $optionalSamplesPresent.ToString().ToLowerInvariant()
+Write-Result "phone_build_candidate_ready" $phoneBuildCandidateReady.ToString().ToLowerInvariant()
+Write-Result "phone_build_candidate_note" "Candidate readiness is advisory; strict readiness requires QNN Android build plus APK Build ID/ABI/hash/path audit."
 
 $inventoryComplete = $interfaceHeaders.Count -gt 0 -and $typesHeaders.Count -gt 0 -and
     $sdkVersions.Count -gt 0 -and $apiVersions.Count -gt 0 -and
@@ -404,6 +432,7 @@ $inventoryComplete = $interfaceHeaders.Count -gt 0 -and $typesHeaders.Count -gt 
     $netRunTools.Count -gt 0 -and $validatorTools.Count -gt 0 -and
     $sampleEvidence.Count -gt 0 -and $cpuSampleEvidence.Count -gt 0 -and
     $htpSampleEvidence.Count -gt 0
+Write-Result "inventory_complete" $inventoryComplete.ToString().ToLowerInvariant()
 if ($inventoryComplete) {
     Write-Result "status" "QAIRT_SDK_INVENTORY_COMPLETE_ADAPTER_NOT_IMPLEMENTED"
     exit 0

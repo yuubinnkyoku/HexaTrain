@@ -109,6 +109,10 @@ enum class ExecutionMode : int {
     QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L1H2_FORMAL = 96,
     QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_FORMAL = 97,
     QNN_HTP_TINY_LANGUAGE_MODEL_SCALE_L2H2_T32D32_DIAGNOSTIC = 98,
+    // Generic mapping: sampleCount=T, outputDimension=V, dimension=D,
+    // hiddenDimension=FFN, epochs=L, measuredSteps=H,
+    // correctnessInterval=seed count, steps=Adam updates.
+    QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC = 99,
 };
 
 const char* executionModeName(ExecutionMode mode);

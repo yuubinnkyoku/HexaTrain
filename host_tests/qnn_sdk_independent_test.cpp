@@ -253,6 +253,12 @@ void testGraphShapeValidator() {
     requireTopology(1, 1);
     requireTopology(2, 1);
     requireTopology(1, 2);
+    requireTopology(3, 2);
+    requireTopology(4, 2);
+    requireTopology(2, 4);
+    requireTopology(3, 4);
+    requireTopology(4, 4);
+    requireTopology(3, 8);
     auto twoByTwo = requireTopology(2, 2);
     TransformerTopologyConfig twoByTwoConfig{8, 16, 32, 2, 2, 32};
     twoByTwoConfig.parameterElements = 2 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 32 * 16;

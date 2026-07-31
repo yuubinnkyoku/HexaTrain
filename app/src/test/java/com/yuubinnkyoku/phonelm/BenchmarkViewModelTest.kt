@@ -42,9 +42,21 @@ class BenchmarkViewModelTest {
             uiDispatcher = UiDispatcher { it() },
         )
 
-        assertTrue(viewModel.startMode(ExecutionMode.QNN_HTP_FORWARD_DW, BenchmarkConfig.small()))
+        val config = BenchmarkConfig.small()
+        assertTrue(
+            viewModel.startMode(
+                ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC,
+                config,
+            ),
+        )
         assertTrue(completed.await(2, TimeUnit.SECONDS))
         assertEquals(1, events.count { it is RunProgress.Completed })
+        assertEquals(
+            "generic_configuration=B${config.batchSize} T${config.sampleCount} " +
+                "V${config.outputDimension} D${config.dimension} " +
+                "FFN${config.hiddenDimension} L${config.epochs} H${config.measuredSteps}",
+            viewModel.snapshot().configurationSummary,
+        )
 
         viewModel.close()
     }
@@ -117,6 +129,7 @@ class BenchmarkViewModelTest {
         assertTrue(finalState.output.startsWith("[earlier output truncated]\n"))
         assertTrue(finalState.output.endsWith("$report\n"))
         assertEquals("SUCCESS", finalState.lastResult?.status)
+        assertEquals(report, finalState.lastReport)
 
         viewModel.close()
     }

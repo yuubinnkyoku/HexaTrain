@@ -10,6 +10,8 @@ data class BenchmarkUiState(
     val running: Boolean = false,
     val output: String = "",
     val lastResult: BenchmarkResult? = null,
+    val lastReport: String? = null,
+    val configurationSummary: String = "",
     val qnnStatus: String = "QNN status loading...",
 )
 
@@ -89,6 +91,8 @@ class BenchmarkViewModel(
     private var running = false
     private var closed = false
     private var lastResult: BenchmarkResult? = null
+    private var lastReport: String? = null
+    private var configurationSummary = ""
     private var qnnStatus = "QNN status loading..."
     private var publishScheduled = false
     private var publishDirty = false
@@ -131,10 +135,21 @@ class BenchmarkViewModel(
             if (closed || running) return false
             running = true
             lastResult = null
+            lastReport = null
+            configurationSummary =
+                if (mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC) {
+                    "generic_configuration=B${config.batchSize} " +
+                        "T${config.sampleCount} V${config.outputDimension} " +
+                        "D${config.dimension} FFN${config.hiddenDimension} " +
+                        "L${config.epochs} H${config.measuredSteps}"
+                } else {
+                    ""
+                }
             output.appendLine()
             output.appendLine("RUN")
             output.appendLine("execution_mode=${mode.name}")
             output.appendLine("backend_requested=${config.backend.name}")
+            if (configurationSummary.isNotEmpty()) output.appendLine(configurationSummary)
         }
         requestPublish()
         runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
@@ -164,6 +179,7 @@ class BenchmarkViewModel(
                 }
                 synchronized(lock) {
                     lastResult = BenchmarkResult.parse(report)
+                    lastReport = report
                 }
                 forwardProgress(report)
             } catch (error: Throwable) {
@@ -214,6 +230,8 @@ class BenchmarkViewModel(
         running = running,
         output = output.toString(),
         lastResult = lastResult,
+        lastReport = lastReport,
+        configurationSummary = configurationSummary,
         qnnStatus = qnnStatus,
     )
 

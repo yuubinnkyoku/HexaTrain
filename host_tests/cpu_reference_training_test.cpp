@@ -129,8 +129,9 @@ void testTinyLanguageModelMultiLayerMultiHead() {
     assert(parameterStorageHasNoAliases(parameters));
     const auto registry = parameterRegistry(parameters);
     assert(registry.front().name == "token_embedding");
-    assert(registry[1].name == "layer_00.wq");
-    assert(registry[11].name == "layer_01.wq");
+    assert(registry[1].name == "layer_000.norm1_gamma");
+    assert(registry[3].name == "layer_000.wq");
+    assert(registry[11].name == "layer_001.norm1_gamma");
     const auto input = oneHot({0, 1, 2, 3}, config.vocabularySize);
     const auto target = oneHot({1, 2, 3, 4}, config.vocabularySize);
     const auto step = forwardBackward(config, input, target, parameters, 0.003f);
@@ -167,8 +168,14 @@ void testTinyLanguageModelGeneralizedCoverage() {
         assert(parameterStorageHasNoAliases(step.next));
         return std::make_tuple(c, p, x, y, step);
     };
-    exercise(2, 1); // multi-layer forward/backward
-    exercise(1, 2); // multi-head forward/backward
+    exercise(1, 1);
+    exercise(2, 2);
+    exercise(3, 2);
+    exercise(4, 2);
+    exercise(2, 4);
+    exercise(3, 4);
+    exercise(4, 4);
+    exercise(3, 8);
     auto [c, p, x, y, step] = exercise(2, 2);
     auto zero = p;
     auto clear = [](phonelm::qnn::TinyTransformerLayerParameters& l) {
@@ -200,6 +207,24 @@ void testTinyLanguageModelGeneralizedCoverage() {
     assert(s1.gradients.layers[0].wq != step.gradients.layers[0].wq);
     assert(adam.firstMoment.wq.data() != adam.firstMoment.layers[0].wq.data());
     assert(adam.secondMoment.wq.data() != adam.secondMoment.layers[0].wq.data());
+    const auto estimate = resourceEstimate(c);
+    assert(estimate.ok);
+    assert(estimate.parameterElements == expected);
+    assert(estimate.gradientElements == expected);
+    assert(estimate.adamMomentElements == 2 * expected);
+    assert(estimate.forwardActivationBytes > 0);
+    assert(estimate.backwardActivationBytes > 0);
+    assert(estimate.attentionBytes ==
+           size_t(2) * c.numLayers * c.numHeads * c.tokens * c.tokens *
+               sizeof(float));
+    assert(estimate.adamGraphElements ==
+           std::min<std::uint64_t>(
+               estimate.parameterElements,
+               phonelm::transformer::kMaximumAdamChunkElements));
+    assert(estimate.adamChunkCount >= 1);
+    assert(estimate.adamApplicationVisibleBytes ==
+           size_t(11) * estimate.adamGraphElements * sizeof(float));
+    assert(estimate.nodeCount > 0 && estimate.tensorCount > 0);
 }
 
 void testTinyLanguageModelSchemaFailClosedAndRegistry() {
@@ -215,7 +240,65 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
     assert(ar.size() == br.size()); std::set<std::string> names;
     for (size_t i = 0; i < ar.size(); ++i) { assert(names.insert(ar[i].name).second); assert(ar[i].name == br[i].name); assert(*ar[i].values == *br[i].values); }
     assert(ar.front().name == "token_embedding" && ar.back().name == "output_projection");
-    assert(ar[1].name == "layer_00.wq" && ar[5].name == "layer_00.norm1_gamma" && ar[11].name == "layer_01.wq");
+    assert(ar[1].name == "layer_000.norm1_gamma");
+    assert(ar[3].name == "layer_000.wq");
+    assert(ar[11].name == "layer_001.norm1_gamma");
+    assert(ar[13].name == "layer_001.wq");
+    const std::vector<ParameterInfo> duplicateRanges{
+        {"first", ar[0].values}, {"duplicate", ar[0].values}};
+    assert(!storageRangesHaveNoAliases(duplicateRanges));
+    Config policy = base;
+    policy.tokens = std::numeric_limits<uint32_t>::max();
+    assert(!validateConfig(policy, &error));
+    assert(error.find("APP_POLICY_LIMIT") != std::string::npos ||
+           error.find("APP_RESOURCE_ESTIMATOR") != std::string::npos);
+}
+
+void testTinyLanguageModelGenericFiniteDifference() {
+    using namespace phonelm::tiny_lm;
+    Config c{};
+    c.vocabularySize = 8;
+    c.tokens = 3;
+    c.dimension = 8;
+    c.feedForwardDimension = 8;
+    c.numLayers = 3;
+    c.numHeads = 4;
+    auto parameters = initialParameters(c, 20260731);
+    const auto input = oneHot({0, 1, 2}, c.vocabularySize);
+    const auto target = oneHot({1, 2, 3}, c.vocabularySize);
+    auto analytic =
+        forwardBackwardGeneralized(c, input, target, parameters, 0.0f);
+    auto logicalLayer = [](phonelm::qnn::TinyTransformerParameters& p,
+                           uint32_t index)
+        -> phonelm::qnn::TinyTransformerLayerParameters& {
+        return index == 0
+            ? static_cast<phonelm::qnn::TinyTransformerLayerParameters&>(p)
+            : p.layers.at(index - 1);
+    };
+    constexpr float epsilon = 1.0e-3f;
+    const auto check = [&](std::vector<float>& values, float gradient,
+                           size_t index) {
+        const float saved = values[index];
+        values[index] = saved + epsilon;
+        const float plus =
+            forwardBackwardGeneralized(c, input, target, parameters, 0.0f).loss;
+        values[index] = saved - epsilon;
+        const float minus =
+            forwardBackwardGeneralized(c, input, target, parameters, 0.0f).loss;
+        values[index] = saved;
+        const float numeric = (plus - minus) / (2.0f * epsilon);
+        assert(std::abs(gradient - numeric) <= 3.0e-3f);
+    };
+    check(parameters.tokenEmbedding, analytic.gradients.tokenEmbedding[0], 0);
+    check(parameters.outputProjection, analytic.gradients.outputProjection[0], 0);
+    for (const uint32_t layerIndex : {0u, 1u, 2u}) {
+        auto& layer = logicalLayer(parameters, layerIndex);
+        auto& gradient = logicalLayer(analytic.gradients, layerIndex);
+        // Wq columns 0 and D-1 exercise the first and last head without
+        // introducing per-head parameter tensors.
+        check(layer.wq, gradient.wq[0], 0);
+        check(layer.wq, gradient.wq[c.dimension - 1], c.dimension - 1);
+    }
 }
 
 void testTinyLanguageModelLegacyGeneralizedRegression() {
@@ -254,6 +337,7 @@ int main() {
     testTinyLanguageModelGeneralizedCoverage();
     testTinyLanguageModelLegacyGeneralizedRegression();
     testTinyLanguageModelSchemaFailClosedAndRegistry();
+    testTinyLanguageModelGenericFiniteDifference();
     std::cout << "cpu_reference_tests=PASS\n";
     return 0;
 }

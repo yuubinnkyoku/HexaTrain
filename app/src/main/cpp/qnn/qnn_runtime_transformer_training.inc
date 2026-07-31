@@ -14,7 +14,13 @@ struct TransformerTrainingLayerNormBuilder {
   int inverseDimension;
   std::string &error;
   uint32_t &nodeCount;
+  std::unordered_set<std::string> *nodeNames = nullptr;
 
+  bool unique(const std::string &name) {
+    if (!nodeNames || nodeNames->insert(name).second) return true;
+    error = "APP_GRAPH_CONSTRUCTION: duplicate node name: " + name;
+    return false;
+  }
   bool ok(Qnn_ErrorHandle_t status, const char *label) {
     if (status == QNN_SUCCESS) {
       ++nodeCount;
@@ -26,18 +32,21 @@ struct TransformerTrainingLayerNormBuilder {
   }
   bool binary(const std::string &name, const char *type, int a, int b, int out,
               const char *label) {
+    if (!unique(name)) return false;
     Qnn_Tensor_t input[2] = {tensors[a], tensors[b]};
     return ok(addSimpleNode(api, graph, name.c_str(), type, input, 2,
                             &tensors[out]), label);
   }
   bool unary(const std::string &name, const char *type, int a, int out,
              const char *label) {
+    if (!unique(name)) return false;
     return ok(addSimpleNode(api, graph, name.c_str(), type, &tensors[a], 1,
                             &tensors[out]), label);
   }
   bool reduce(const std::string &name, const char *type, const char *axesName,
               const char *keepName, int input, int axes, bool keep, int out,
               const char *label) {
+    if (!unique(name)) return false;
     Qnn_Param_t parameters[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
     parameters[0].paramType = QNN_PARAMTYPE_TENSOR;
     parameters[0].name = axesName;

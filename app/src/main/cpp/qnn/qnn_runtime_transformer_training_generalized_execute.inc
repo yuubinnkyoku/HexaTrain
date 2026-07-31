@@ -1,4 +1,4 @@
-// Execution companion for the generalized L1/L2 H1/H2 builder.  The registries established by
+// Execution companion for the generic N-layer/H-head builder. The registries established by
 // the builder are the binding ABI; do not substitute tensor-name lookup here.
 bool Runtime::executeTinyTransformerTrainingGeneralized(
     const std::vector<float> &input, const std::vector<float> &target,
@@ -6,13 +6,33 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using GG = Impl::GeneralizedTinyTransformerTrainingGraph;
   auto &g = impl_->generalizedTinyTransformerTraining;
-  const size_t expectedParameterCount = 2 + size_t(10) * g.numLayers;
-  const size_t expectedAppWriteCount = 4 + size_t(10) * g.numLayers;
-  const size_t expectedAppReadCount = 5 + expectedParameterCount + g.numLayers +
-      (g.numHeads > 1 ? size_t(g.numLayers) * g.numHeads : 0);
+  const auto checkedMultiply = [](size_t a, size_t b, size_t *out) {
+    if (a && b > std::numeric_limits<size_t>::max() / a) return false;
+    *out = a * b;
+    return true;
+  };
+  const auto checkedAdd = [](size_t a, size_t b, size_t *out) {
+    if (b > std::numeric_limits<size_t>::max() - a) return false;
+    *out = a + b;
+    return true;
+  };
+  size_t layerParameters = 0, expectedParameterCount = 0;
+  size_t expectedAppWriteCount = 0, expectedAppReadCount = 0;
+  size_t headTapCount = 0;
+  if (!checkedMultiply(10, g.numLayers, &layerParameters) ||
+      !checkedAdd(2, layerParameters, &expectedParameterCount) ||
+      !checkedAdd(4, layerParameters, &expectedAppWriteCount) ||
+      (g.numHeads > 1 &&
+       !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
+      !checkedAdd(5, expectedParameterCount, &expectedAppReadCount) ||
+      !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount) ||
+      !checkedAdd(expectedAppReadCount, headTapCount, &expectedAppReadCount)) {
+    error = "APP_RESOURCE_ESTIMATOR: execution registry count overflow";
+    return false;
+  }
   if (g.state != GG::State::ACTIVE || !g.active || !g.graph ||
-      !g.languageModel || g.numLayers == 0 || g.numLayers > 2 ||
-      g.numHeads == 0 || g.numHeads > 2 || g.dimension % g.numHeads != 0 ||
+      !g.languageModel || g.numLayers == 0 || g.numHeads == 0 ||
+      g.dimension % g.numHeads != 0 || !g.resourceEstimate.ok ||
       g.parameterRegistry.size() != expectedParameterCount ||
       g.gradientRegistry.size() != expectedParameterCount ||
       g.appWriteRegistry.size() != expectedAppWriteCount ||
@@ -79,8 +99,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   for (const auto &layer : current.layers) parameterLayers.push_back(&layer);
   for (const TinyTransformerLayerParameters *layer : parameterLayers) {
     appWriteValues.insert(appWriteValues.end(),
-                          {&layer->wq, &layer->wk, &layer->wv, &layer->wo,
-                           &layer->gamma1, &layer->beta1, &layer->gamma2,
+                          {&layer->gamma1, &layer->beta1,
+                           &layer->wq, &layer->wk, &layer->wv, &layer->wo,
+                           &layer->gamma2,
                            &layer->beta2, &layer->w1, &layer->w2});
   }
   appWriteValues.push_back(&current.outputProjection);
@@ -162,15 +183,44 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     return false;
   }
   size_t poisonResidual = 0, nonFiniteResidual = 0;
-  for (const auto &values : appReadBuffers) {
+  size_t firstBadRegistryIndex = appReadBuffers.size();
+  size_t firstBadElement = 0;
+  size_t firstBadNanCount = 0, firstBadInfCount = 0;
+  for (size_t registryIndex = 0; registryIndex < appReadBuffers.size();
+       ++registryIndex) {
+    const auto &values = appReadBuffers[registryIndex];
     poisonResidual += std::count(values.begin(), values.end(), poison);
-    nonFiniteResidual += std::count_if(values.begin(), values.end(),
-                                       [](float value) { return !std::isfinite(value); });
+    const auto firstBad = std::find_if(
+        values.begin(), values.end(),
+        [](float value) { return !std::isfinite(value); });
+    const size_t badCount =
+        std::count_if(values.begin(), values.end(),
+                      [](float value) { return !std::isfinite(value); });
+    nonFiniteResidual += badCount;
+    if (badCount && firstBadRegistryIndex == appReadBuffers.size()) {
+      firstBadRegistryIndex = registryIndex;
+      firstBadElement = size_t(firstBad - values.begin());
+      firstBadNanCount =
+          std::count_if(values.begin(), values.end(),
+                        [](float value) { return std::isnan(value); });
+      firstBadInfCount = badCount - firstBadNanCount;
+    }
   }
   if (poisonResidual != 0 || nonFiniteResidual != 0) {
     error = "generalized tiny training APP_READ residual poison=" +
             std::to_string(poisonResidual) + ", nonfinite=" +
             std::to_string(nonFiniteResidual);
+    if (firstBadRegistryIndex < appReadBuffers.size()) {
+      const uint32_t id = g.appReadRegistry[firstBadRegistryIndex];
+      error += ", first_bad_tensor=" + g.names[id] +
+               ", first_bad_registry_index=" +
+               std::to_string(firstBadRegistryIndex) +
+               ", first_bad_element=" + std::to_string(firstBadElement) +
+               ", first_bad_nan_count=" +
+               std::to_string(firstBadNanCount) +
+               ", first_bad_inf_count=" +
+               std::to_string(firstBadInfCount);
+    }
     return false;
   }
   // APP_READ registry: logits, final-layer diagnostic values, canonical
@@ -192,9 +242,10 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   gradientLayers.push_back(&outputs.gradients);
   for (auto &layer : outputs.gradients.layers) gradientLayers.push_back(&layer);
   for (TinyTransformerLayerParameters *layer : gradientLayers) {
+    layer->gamma1 = appReadBuffers[gradient++];
+    layer->beta1 = appReadBuffers[gradient++];
     layer->wq = appReadBuffers[gradient++]; layer->wk = appReadBuffers[gradient++];
     layer->wv = appReadBuffers[gradient++]; layer->wo = appReadBuffers[gradient++];
-    layer->gamma1 = appReadBuffers[gradient++]; layer->beta1 = appReadBuffers[gradient++];
     layer->gamma2 = appReadBuffers[gradient++]; layer->beta2 = appReadBuffers[gradient++];
     layer->w1 = appReadBuffers[gradient++]; layer->w2 = appReadBuffers[gradient++];
   }

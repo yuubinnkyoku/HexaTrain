@@ -51,24 +51,19 @@ void upd(std::vector<float>&n,const std::vector<float>&w,const std::vector<float
 using M=std::vector<float>P::*;std::vector<std::pair<const char*,M>> fields(){return{{"token_embedding",&P::tokenEmbedding},{"output_projection",&P::outputProjection},{"wq",&P::wq},{"wk",&P::wk},{"wv",&P::wv},{"wo",&P::wo},{"norm1_gamma",&P::gamma1},{"norm1_beta",&P::beta1},{"norm2_gamma",&P::gamma2},{"norm2_beta",&P::beta2},{"ffn_w1",&P::w1},{"ffn_w2",&P::w2}};}
 }
 bool validateConfig(const Config& c,std::string* error){
-  auto fail=[&](const char* message){if(error)*error=message;return false;};
-  if(c.vocabularySize==0||c.tokens==0||c.dimension==0||c.feedForwardDimension==0) return fail("INVALID_TINY_LM_DIMENSION");
-  if(c.numLayers==0) return fail("INVALID_TRANSFORMER_LAYER_COUNT");
-  if(c.numHeads==0) return fail("INVALID_TRANSFORMER_HEAD_COUNT");
-  if(c.dimension%c.numHeads) return fail("INVALID_TRANSFORMER_HEAD_DIMENSION");
-  constexpr size_t max=std::numeric_limits<size_t>::max();
-  auto mul=[&](size_t a,size_t b,size_t& out){if(a&&b>max/a)return false;out=a*b;return true;};
-  auto addChecked=[&](size_t a,size_t b,size_t& out){if(b>max-a)return false;out=a+b;return true;};
-  const size_t d=c.dimension,f=c.feedForwardDimension,v=c.vocabularySize,l=c.numLayers;
-  size_t dd,df,vd,layerQuadratic,layerAffine,layerFfn,layerElements,allLayerElements,globalElements,elements;
-  if(!mul(d,d,dd)||!mul(d,f,df)||!mul(v,d,vd)||!mul(size_t(4),dd,layerQuadratic)||!mul(size_t(4),d,layerAffine)||!mul(size_t(2),df,layerFfn)||!addChecked(layerQuadratic,layerAffine,layerElements)||!addChecked(layerElements,layerFfn,layerElements)||!mul(l,layerElements,allLayerElements)||!mul(size_t(2),vd,globalElements)||!addChecked(globalElements,allLayerElements,elements)) return fail("TINY_LM_ELEMENT_COUNT_OVERFLOW");
-  if(elements>max/sizeof(float)) return fail("TINY_LM_BYTE_COUNT_OVERFLOW");
+  const auto estimate=resourceEstimate(c);
+  if(!estimate.ok){if(error)*error=estimate.failureClassification+": "+estimate.detail;return false;}
   return true;
 }
+transformer::ResourceEstimate resourceEstimate(const Config& c){
+  return transformer::estimateTrainingResources(c.tokens,c.vocabularySize,c.dimension,
+      c.feedForwardDimension,c.numLayers,c.numHeads);
+}
 uint32_t headDim(const Config& c){std::string e;if(!validateConfig(c,&e))throw std::invalid_argument(e);return c.dimension/c.numHeads;}
-std::vector<ParameterInfo> parameterRegistry(const P&p){std::vector<ParameterInfo>r;auto addLayer=[&](uint32_t i,const LP&l){const std::string pre=std::string("layer_")+(i<10?"0":"")+std::to_string(i)+".";for(auto e:{std::pair<const char*,const std::vector<float>*>{"wq",&l.wq},{"wk",&l.wk},{"wv",&l.wv},{"wo",&l.wo},{"norm1_gamma",&l.gamma1},{"norm1_beta",&l.beta1},{"norm2_gamma",&l.gamma2},{"norm2_beta",&l.beta2},{"ffn_w1",&l.w1},{"ffn_w2",&l.w2}})r.push_back({pre+e.first,e.second});};r.push_back({"token_embedding",&p.tokenEmbedding});addLayer(0,layer(p,0));for(uint32_t i=1;i<=p.layers.size();++i)addLayer(i,p.layers[i-1]);r.push_back({"output_projection",&p.outputProjection});return r;}
+std::vector<ParameterInfo> parameterRegistry(const P&p){std::vector<ParameterInfo>r;auto addLayer=[&](uint32_t i,const LP&l){std::ostringstream index;index<<std::setw(3)<<std::setfill('0')<<i;const std::string pre="layer_"+index.str()+".";for(auto e:{std::pair<const char*,const std::vector<float>*>{"norm1_gamma",&l.gamma1},{"norm1_beta",&l.beta1},{"wq",&l.wq},{"wk",&l.wk},{"wv",&l.wv},{"wo",&l.wo},{"norm2_gamma",&l.gamma2},{"norm2_beta",&l.beta2},{"ffn_w1",&l.w1},{"ffn_w2",&l.w2}})r.push_back({pre+e.first,e.second});};r.push_back({"token_embedding",&p.tokenEmbedding});addLayer(0,layer(p,0));for(uint32_t i=1;i<=p.layers.size();++i)addLayer(i,p.layers[i-1]);r.push_back({"output_projection",&p.outputProjection});return r;}
 size_t parameterElementCount(const P&p){size_t n=0;for(const auto&e:parameterRegistry(p))n+=e.values->size();return n;}
-bool parameterStorageHasNoAliases(const P&p){auto r=parameterRegistry(p);for(size_t i=0;i<r.size();++i)for(size_t j=0;j<i;++j)if(!r[i].values->empty()&&!r[j].values->empty()&&r[i].values->data()==r[j].values->data())return false;return true;}
+bool storageRangesHaveNoAliases(const std::vector<ParameterInfo>&r){for(size_t i=0;i<r.size();++i)for(size_t j=0;j<i;++j){if(!r[i].values||!r[j].values)return false;if(r[i].values->empty()||r[j].values->empty())continue;const auto ai=reinterpret_cast<std::uintptr_t>(r[i].values->data());const auto ae=ai+r[i].values->size()*sizeof(float);const auto bi=reinterpret_cast<std::uintptr_t>(r[j].values->data());const auto be=bi+r[j].values->size()*sizeof(float);if(ai<be&&bi<ae)return false;}return true;}
+bool parameterStorageHasNoAliases(const P&p){return storageRangesHaveNoAliases(parameterRegistry(p));}
 std::vector<float> oneHot(const std::vector<uint32_t>&t,uint32_t v){std::vector<float>o(size_t(t.size())*v);for(size_t i=0;i<t.size();++i){if(t[i]>=v)throw std::invalid_argument("token");o[i*v+t[i]]=1;}return o;}
 std::vector<float> fixedPosition(const Config&c){std::vector<float>p(size_t(c.tokens)*c.dimension);for(uint32_t t=0;t<c.tokens;++t)for(uint32_t d=0;d<c.dimension;++d){float f=std::pow(10000.f,-float(d&~1u)/float(c.dimension));p[size_t(t)*c.dimension+d]=((d&1u)?std::cos(float(t)*f):std::sin(float(t)*f))*.05f;}return p;}
 P initialParameters(const Config&c,uint32_t seed){std::string error;if(!validateConfig(c,&error))throw std::invalid_argument(error);P p;p.gamma1.assign(c.dimension,1);p.beta1.assign(c.dimension,0);p.gamma2.assign(c.dimension,1);p.beta2.assign(c.dimension,0);auto fill=[&](std::vector<float>&v,size_t n,uint32_t phase,float scale){v.resize(n);uint32_t s=seed*747796405u+phase*2891336453u;for(float&x:v){s=s*1664525u+1013904223u;x=(float(int((s>>8)&65535u))/32767.5f-1)*scale;}};fill(p.tokenEmbedding,size_t(c.vocabularySize)*c.dimension,1,.18f);fill(p.wq,size_t(c.dimension)*c.dimension,2,.12f);fill(p.wk,size_t(c.dimension)*c.dimension,3,.12f);fill(p.wv,size_t(c.dimension)*c.dimension,4,.12f);fill(p.wo,size_t(c.dimension)*c.dimension,5,.12f);fill(p.w1,size_t(c.dimension)*c.feedForwardDimension,6,.1f);fill(p.w2,size_t(c.feedForwardDimension)*c.dimension,7,.1f);fill(p.outputProjection,size_t(c.dimension)*c.vocabularySize,8,.16f);

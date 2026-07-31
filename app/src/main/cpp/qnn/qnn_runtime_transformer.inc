@@ -795,8 +795,10 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
   tensor(g.beta2, "adam_beta2", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
   tensor(g.oneMinusBeta1, "adam_one_minus_beta1", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
   tensor(g.oneMinusBeta2, "adam_one_minus_beta2", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
-  tensor(g.inverseEpsilon, "adam_inverse_epsilon", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
-  tensor(g.one, "adam_one", QNN_TENSOR_TYPE_APP_WRITE, g.scalarDims);
+  tensor(g.inverseEpsilon, "adam_algebraic_scale", QNN_TENSOR_TYPE_APP_WRITE,
+         g.scalarDims);
+  tensor(g.one, "adam_scaled_epsilon", QNN_TENSOR_TYPE_APP_WRITE,
+         g.scalarDims);
   tensor(g.zero, "adam_zero", QNN_TENSOR_TYPE_APP_WRITE, g.dims);
   tensor(g.nonzeroMask, "adam_nonzero_mask", QNN_TENSOR_TYPE_NATIVE, g.dims,
          QNN_DATATYPE_BOOL_8);
@@ -812,10 +814,14 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
   tensor(g.firstMomentHat, "adam_first_moment_hat", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.secondMomentHat, "adam_second_moment_hat", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.secondRoot, "adam_second_root", QNN_TENSOR_TYPE_APP_READ, g.dims);
-  tensor(g.firstOverEpsilon, "adam_first_over_epsilon", QNN_TENSOR_TYPE_NATIVE, g.dims);
-  tensor(g.rootOverEpsilon, "adam_root_over_epsilon", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.firstOverEpsilon, "adam_first_scaled_for_divide",
+         QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.rootOverEpsilon, "adam_root_scaled_for_divide",
+         QNN_TENSOR_TYPE_NATIVE, g.dims);
   tensor(g.denominator, "adam_denominator", QNN_TENSOR_TYPE_APP_READ, g.dims);
-  tensor(g.divided, "adam_divided", QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.safeDenominator, "adam_safe_denominator",
+         QNN_TENSOR_TYPE_NATIVE, g.dims);
+  tensor(g.divided, "adam_divided", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.normalized, "adam_normalized", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.scaledUpdate, "adam_scaled_update", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.weightNext, "adam_weight_next", QNN_TENSOR_TYPE_APP_READ, g.dims);
@@ -836,8 +842,9 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
       &g.gradientFirstScaled, &g.firstMomentNext, &g.gradientSquared,
       &g.secondScaled, &g.gradientSecondScaled, &g.secondMomentNext,
       &g.firstMomentHat, &g.secondMomentHat, &g.secondRoot,
-      &g.firstOverEpsilon, &g.rootOverEpsilon, &g.denominator, &g.divided,
-      &g.normalized, &g.scaledUpdate, &g.weightNext};
+      &g.firstOverEpsilon, &g.rootOverEpsilon, &g.denominator,
+      &g.safeDenominator, &g.divided, &g.normalized, &g.scaledUpdate,
+      &g.weightNext};
   for (auto *value : all)
     if ((status = impl_->api.tensorCreateGraphTensor(g.graph, value)) != QNN_SUCCESS) {
       error = "Adam tensor=" + std::to_string(QNN_GET_ERROR_CODE(status));
@@ -874,16 +881,14 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
       (status = addSimpleNode(impl_->api, g.graph, "adam_sqrt_second",
                               QNN_OP_ELEMENT_WISE_SQUARE_ROOT, &g.secondMomentHat,
                               1, &g.secondRoot)) != QNN_SUCCESS ||
-      (status = binary("adam_scale_first_by_inverse_epsilon",
+      (status = binary("adam_scale_first_for_divide",
                        QNN_OP_ELEMENT_WISE_MULTIPLY, g.firstMomentHat,
                        g.inverseEpsilon, &g.firstOverEpsilon)) != QNN_SUCCESS ||
-      (status = binary("adam_scale_root_by_inverse_epsilon",
+      (status = binary("adam_scale_root_for_divide",
                        QNN_OP_ELEMENT_WISE_MULTIPLY, g.secondRoot,
                        g.inverseEpsilon, &g.rootOverEpsilon)) != QNN_SUCCESS ||
       (status = binary("adam_add_scaled_epsilon", QNN_OP_ELEMENT_WISE_ADD,
-                       g.rootOverEpsilon, g.one, &g.denominator)) != QNN_SUCCESS ||
-      (status = binary("adam_divide", QNN_OP_ELEMENT_WISE_DIVIDE,
-                       g.firstOverEpsilon, g.denominator, &g.divided)) != QNN_SUCCESS) {
+                       g.rootOverEpsilon, g.one, &g.denominator)) != QNN_SUCCESS) {
     error = "Adam graphAddNode=" + std::to_string(QNN_GET_ERROR_CODE(status));
     return false;
   }
@@ -892,6 +897,23 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
                               QNN_OP_ELEMENT_WISE_GREATER, greaterInputs, 2,
                               &g.nonzeroMask)) != QNN_SUCCESS) {
     error = "Adam nonzero graphAddNode=" +
+            std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  // The output mask is semantically zero where v_hat is zero. Select a
+  // finite, nonzero denominator before Divide as well, so the ignored branch
+  // cannot manufacture Inf/NaN that survives as an application-visible tap.
+  Qnn_Tensor_t safeDenominatorInputs[3]{
+      g.nonzeroMask, g.denominator, g.inverseEpsilon};
+  if ((status = addSimpleNode(impl_->api, g.graph,
+                              "adam_select_safe_denominator",
+                              QNN_OP_ELEMENT_WISE_SELECT,
+                              safeDenominatorInputs, 3,
+                              &g.safeDenominator)) != QNN_SUCCESS ||
+      (status = binary("adam_divide", QNN_OP_ELEMENT_WISE_DIVIDE,
+                       g.firstOverEpsilon, g.safeDenominator,
+                       &g.divided)) != QNN_SUCCESS) {
+    error = "Adam safe divide graphAddNode=" +
             std::to_string(QNN_GET_ERROR_CODE(status));
     return false;
   }
@@ -920,7 +942,9 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
     return false;
   }
   diagnostics_ += "adam_optimizer_graph=EXPLICIT_M_V_BIAS_CORRECTION_AND_WEIGHT_UPDATE\n"
-                  "adam_optimizer_execute_count_per_step=1\n"
+                  "adam_optimizer_execute_count_per_chunk=1\n"
+                  "adam_divide_zero_branch=PREMASKED_SAFE_DENOMINATOR\n"
+                  "adam_algebraic_scale=DYNAMIC_COMMON_NUMERATOR_DENOMINATOR\n"
                   "adam_bias_correction_scalar_responsibility=CPU\n"
                   "adam_optimizer_in_place_alias=false\n";
   return true;
@@ -943,9 +967,48 @@ bool Runtime::executeAdamOptimizer(
     return false;
   }
   float beta1 = .9f, beta2 = .999f, oneMinusBeta1 = .1f;
-  // Multiplying numerator and denominator by 1e4 is mathematically
-  // equivalent and keeps epsilon visible without overflowing HTP intermediates.
-  float oneMinusBeta2 = .001f, inverseEpsilon = 1e4f, one = 1e-4f;
+  float oneMinusBeta2 = .001f;
+  // Apply the same finite scalar to numerator and denominator, preserving
+  // m_hat / (sqrt(v_hat) + epsilon) in real arithmetic. A fixed scale of
+  // 1e4 made otherwise-finite inputs reach ~3.29e4 at the first observed
+  // QNN Divide nonfinite boundary. The bounded dynamic scale retains the
+  // requested 1e-8 epsilon while bounding both Divide inputs.
+  double maximumAdamMagnitude = 0.0;
+  for (size_t i = 0; i < gradient.size(); ++i) {
+    const double scaledGradient = double(gradient[i]) * gradientScale;
+    const double firstNext =
+        0.9 * double(firstMoment[i]) + 0.1 * scaledGradient;
+    const double secondNext =
+        0.999 * double(secondMoment[i]) +
+        0.001 * scaledGradient * scaledGradient;
+    const double firstHat = firstNext * firstCorrection;
+    const double secondHat = secondNext * secondCorrection;
+    if (!std::isfinite(firstHat) || !std::isfinite(secondHat) ||
+        secondHat < 0.0) {
+      error = "Adam optimizer nonfinite scalar preflight";
+      return false;
+    }
+    maximumAdamMagnitude =
+        std::max(maximumAdamMagnitude, std::abs(firstHat));
+    maximumAdamMagnitude =
+        std::max(maximumAdamMagnitude, std::sqrt(secondHat));
+  }
+  constexpr double kPreferredAlgebraicScale = 1.0e4;
+  // 32,896 was the first reproduced nonfinite Divide input; keep a measured
+  // margin below it. Configurations whose original 1e4 scale stays within
+  // this envelope retain the established arithmetic path bit-for-bit.
+  constexpr double kMaximumScaledDivideInput = 32000.0;
+  const double selectedScale =
+      maximumAdamMagnitude > 0.0
+          ? std::min(kPreferredAlgebraicScale,
+                     kMaximumScaledDivideInput / maximumAdamMagnitude)
+          : kPreferredAlgebraicScale;
+  if (!std::isfinite(selectedScale) || selectedScale <= 0.0) {
+    error = "Adam optimizer algebraic scale preflight";
+    return false;
+  }
+  float inverseEpsilon = static_cast<float>(selectedScale);
+  float one = static_cast<float>(1.0e-8 * selectedScale);
   std::vector<float> zero(g.elements, 0.0f);
   Qnn_Tensor_t inputs[15]{g.current, g.gradient, g.gradientScale, g.firstMoment,
                           g.secondMoment, g.learningRate, g.beta1, g.beta2, g.oneMinusBeta1,
@@ -966,23 +1029,25 @@ bool Runtime::executeAdamOptimizer(
   outputs.secondMomentHat.resize(g.elements);
   outputs.secondRoot.resize(g.elements);
   outputs.denominator.resize(g.elements);
+  outputs.dividedUpdate.resize(g.elements);
   outputs.normalizedUpdate.resize(g.elements);
   outputs.scaledUpdate.resize(g.elements);
   outputs.weightNext.resize(g.elements);
-  Qnn_Tensor_t out[9]{
+  Qnn_Tensor_t out[10]{
       g.firstMomentNext, g.secondMomentNext, g.firstMomentHat,
-      g.secondMomentHat, g.secondRoot, g.denominator, g.normalized,
+      g.secondMomentHat, g.secondRoot, g.denominator, g.divided, g.normalized,
       g.scaledUpdate, g.weightNext};
-  float *outData[9]{
+  float *outData[10]{
       outputs.firstMomentNext.data(), outputs.secondMomentNext.data(),
       outputs.firstMomentHat.data(), outputs.secondMomentHat.data(),
       outputs.secondRoot.data(), outputs.denominator.data(),
-      outputs.normalizedUpdate.data(), outputs.scaledUpdate.data(),
+      outputs.dividedUpdate.data(), outputs.normalizedUpdate.data(),
+      outputs.scaledUpdate.data(),
       outputs.weightNext.data()};
-  for (size_t i = 0; i < 9; ++i)
+  for (size_t i = 0; i < 10; ++i)
     out[i].v1.clientBuf = {outData[i], uint32_t(g.elements * sizeof(float))};
   auto started = Clock::now();
-  auto status = impl_->api.graphExecute(g.graph, inputs, 15, out, 9, nullptr, nullptr);
+  auto status = impl_->api.graphExecute(g.graph, inputs, 15, out, 10, nullptr, nullptr);
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),

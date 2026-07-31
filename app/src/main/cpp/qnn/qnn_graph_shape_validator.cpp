@@ -211,4 +211,65 @@ Result validateTransformerTopology(const TransformerTopologyConfig& config,
   std::vector<std::size_t> totals{layerElements, expectedTotalParameters};
   return {true, {}, {tokenDim, totals}};
 }
+
+std::vector<TransformerLayerTopology> makeExpectedTransformerTopology(
+    const TransformerTopologyConfig& config) {
+  std::vector<TransformerLayerTopology> layers;
+  if (!config.numLayers || !config.numHeads ||
+      !config.embeddingDim || config.embeddingDim % config.numHeads != 0)
+    return layers;
+  layers.reserve(config.numLayers);
+  const std::size_t headDim = config.embeddingDim / config.numHeads;
+  const std::vector<std::size_t> tokenDim{config.tokens, config.embeddingDim};
+  const std::vector<std::size_t> rowDim{config.tokens, 1};
+  const std::vector<std::size_t> dim{config.embeddingDim};
+  const std::vector<std::size_t> square{config.embeddingDim,
+                                        config.embeddingDim};
+  const std::vector<std::size_t> w1{config.embeddingDim,
+                                     config.feedForwardDim};
+  const std::vector<std::size_t> w2{config.feedForwardDim,
+                                     config.embeddingDim};
+  const std::vector<std::size_t> heads{config.numHeads, config.tokens, headDim};
+  const std::vector<std::size_t> attention{config.numHeads, config.tokens,
+                                           config.tokens};
+  std::size_t d2 = 0, dff = 0, layerElements = 0, term = 0;
+  if (!multiplyChecked(config.embeddingDim, config.embeddingDim, &d2) ||
+      !multiplyChecked(config.embeddingDim, config.feedForwardDim, &dff) ||
+      !multiplyChecked(4, d2, &layerElements) ||
+      !multiplyChecked(4, config.embeddingDim, &term) ||
+      !addChecked(layerElements, term, &layerElements) ||
+      !multiplyChecked(2, dff, &term) ||
+      !addChecked(layerElements, term, &layerElements))
+    return {};
+  std::size_t optimizerElements = 0;
+  if (!multiplyChecked(2, layerElements, &optimizerElements)) return {};
+  for (std::size_t index = 0; index < config.numLayers; ++index) {
+    TransformerLayerTopology layer;
+    layer.layerIndex = layer.parameterLayerIndex = layer.gradientLayerIndex =
+        index;
+    layer.input = layer.output = layer.inputGradient = tokenDim;
+    layer.query = layer.key = layer.value = tokenDim;
+    layer.queryHeads = layer.keyHeads = layer.valueHeads = heads;
+    layer.scores = layer.probabilities = attention;
+    layer.context = heads;
+    layer.concat = tokenDim;
+    layer.norm1Gamma = layer.norm1Beta = layer.norm2Gamma = layer.norm2Beta =
+        dim;
+    layer.wq = layer.wk = layer.wv = layer.wo = square;
+    layer.ffnW1 = w1;
+    layer.ffnW2 = w2;
+    layer.dNorm1Gamma = layer.dNorm1Beta = layer.dNorm2Gamma =
+        layer.dNorm2Beta = dim;
+    layer.dWq = layer.dWk = layer.dWv = layer.dWo = square;
+    layer.dFfnW1 = w1;
+    layer.dFfnW2 = w2;
+    layer.norm1Mean = layer.norm1Variance = layer.norm2Mean =
+        layer.norm2Variance = rowDim;
+    layer.residualAfterAttention = layer.residualAfterFfn = tokenDim;
+    layer.parameterElements = layerElements;
+    layer.optimizerElements = optimizerElements;
+    layers.push_back(std::move(layer));
+  }
+  return layers;
+}
 }  // namespace phonelm::qnn::shape

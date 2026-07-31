@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var resultText: TextView
     private lateinit var resultScrollView: ScrollView
     private lateinit var qnnStatusText: TextView
+    private lateinit var configurationSummaryText: TextView
     private lateinit var executionModeSpinner: Spinner
     private lateinit var runSelectedModeButton: Button
     private lateinit var qnnForwardButton: Button
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
         resultText = findViewById(R.id.resultText)
         resultScrollView = findViewById(R.id.resultScrollView)
         qnnStatusText = findViewById(R.id.qnnStatusText)
+        configurationSummaryText = findViewById(R.id.configurationSummaryText)
         executionModeSpinner = findViewById(R.id.executionModeSpinner)
         runSelectedModeButton = findViewById(R.id.runSelectedModeButton)
         qnnForwardButton = findViewById(R.id.qnnForwardButton)
@@ -126,6 +128,13 @@ class MainActivity : Activity() {
         val validationError = config.validationError()
         if (validationError != null) {
             Log.e("PhoneLMDeviceTest", "DEVICE_TEST_REJECTED error=$validationError")
+            return
+        }
+        if (intent.getBooleanExtra("phonelm.live_update", false)) {
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_LIVE_UPDATE mode=$requested")
+            if (!viewModel.startMode(mode, config)) {
+                Log.e("PhoneLMDeviceTest", "DEVICE_TEST_REJECTED error=run already active")
+            }
             return
         }
         Thread({
@@ -227,15 +236,16 @@ class MainActivity : Activity() {
         qnnForwardButton.isEnabled = !state.running
         qnnForwardDwButton.isEnabled = !state.running
         qnnStatusText.text = state.qnnStatus
+        configurationSummaryText.text = state.configurationSummary
         resultText.text = state.output
         resultScrollView.post { resultScrollView.fullScroll(ScrollView.FOCUS_DOWN) }
         if (!state.running && state.lastResult != null &&
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         ) {
             openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
-                it.write(state.output)
+                it.write(state.lastReport ?: state.output)
             }
-            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_DONE\n${state.output}")
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_DONE\n${state.lastReport ?: state.output}")
         }
     }
 

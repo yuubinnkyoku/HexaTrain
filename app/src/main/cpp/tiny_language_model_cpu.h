@@ -2,6 +2,7 @@
 // Copyright 2026 yuubinnkyoku
 #pragma once
 #include "qnn/qnn_runtime.h"
+#include "transformer_resource_estimator.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -14,9 +15,11 @@ struct Config {
 struct ParameterInfo { std::string name; const std::vector<float>* values=nullptr; };
 // Checks all derived element and byte counts before graph or CPU work starts.
 bool validateConfig(const Config&, std::string* error=nullptr);
+transformer::ResourceEstimate resourceEstimate(const Config&);
 uint32_t headDim(const Config&);
 std::vector<ParameterInfo> parameterRegistry(const qnn::TinyTransformerParameters&);
 size_t parameterElementCount(const qnn::TinyTransformerParameters&);
+bool storageRangesHaveNoAliases(const std::vector<ParameterInfo>&);
 bool parameterStorageHasNoAliases(const qnn::TinyTransformerParameters&);
 struct StepResult {
   float loss=0,accuracy=0;

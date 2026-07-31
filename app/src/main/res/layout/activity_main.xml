@@ -20,6 +20,13 @@
         android:text="@string/qnn_status_loading"
         android:textSize="11sp" />
 
+    <TextView
+        android:id="@+id/configurationSummaryText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:textSize="11sp" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

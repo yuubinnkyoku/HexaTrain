@@ -142,6 +142,9 @@ try {
         Invoke-PwshScript "multilayer/multihead public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_multilayer_multihead_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "generic depth/head public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_generic_depth_head_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 

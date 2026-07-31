@@ -82,6 +82,8 @@ Result validate(const Node& node);
 Result validateTransformerTopology(
     const TransformerTopologyConfig& config,
     const std::vector<TransformerLayerTopology>& layers);
+std::vector<TransformerLayerTopology> makeExpectedTransformerTopology(
+    const TransformerTopologyConfig& config);
 std::string formatShape(const std::vector<std::size_t>& shape);
 
 }  // namespace phonelm::qnn::shape

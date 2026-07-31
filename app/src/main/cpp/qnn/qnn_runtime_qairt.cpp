@@ -1,5 +1,6 @@
 #include "qnn_runtime.h"
 #include "qnn_graph_shape_validator.h"
+#include "../transformer_resource_estimator.h"
 
 #include <QnnInterface.h>
 #include <QnnOpDef.h>
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <iomanip>
 #include <list>
 #include <limits>
 #include <mutex>
@@ -327,6 +329,7 @@ struct Runtime::Impl {
         Qnn_Tensor_t firstOverEpsilon = QNN_TENSOR_INIT;
         Qnn_Tensor_t rootOverEpsilon = QNN_TENSOR_INIT;
         Qnn_Tensor_t denominator = QNN_TENSOR_INIT;
+        Qnn_Tensor_t safeDenominator = QNN_TENSOR_INIT;
         Qnn_Tensor_t divided = QNN_TENSOR_INIT, normalized = QNN_TENSOR_INIT;
         Qnn_Tensor_t scaledUpdate = QNN_TENSOR_INIT;
         Qnn_Tensor_t weightNext = QNN_TENSOR_INIT;
@@ -462,6 +465,7 @@ struct Runtime::Impl {
         std::vector<std::uint32_t> parameterRegistry;
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
+        phonelm::transformer::ResourceEstimate resourceEstimate;
         std::vector<float> maskData, zeroFfData, positionData, selectorData;
         float attentionScale = 1.0f, centeredScale = 8.0f,
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
