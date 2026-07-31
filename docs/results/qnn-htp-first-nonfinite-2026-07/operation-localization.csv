@@ -1,0 +1,2 @@
+layer,subblock,operation,tensor,input_max_abs,cpu_output,htp_output,qnn_return,observer_effect,alias
+2,LayerNorm2,ElementWiseMultiply(square),layer_002_ln2_square,279.75,78260.0625,+Inf,SUCCESS,NO_OBSERVER_EFFECT,false

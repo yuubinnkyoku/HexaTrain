@@ -1,0 +1,2 @@
+operation,shape,node_count,tensor_count,cpu_finite,htp_nonfinite,qnn_success,reproduced,input_immutable,poison_remaining,alias
+ElementWiseMultiply(square),[1],1,2,true,true,true,3/3,true,0,false

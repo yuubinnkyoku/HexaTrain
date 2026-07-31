@@ -145,6 +145,9 @@ try {
         Invoke-PwshScript "generic depth/head public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_generic_depth_head_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "first-nonfinite public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_first_nonfinite_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 

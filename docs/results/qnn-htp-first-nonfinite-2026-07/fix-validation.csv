@@ -1,0 +1,2 @@
+fix,semantics,checkpoint_replays,forward,backward,adam,square_max
+layernorm_center_scale_8_to_1,REAL_NUMBER_EQUIVALENT,3/3,FINITE,FINITE,FINITE,1223

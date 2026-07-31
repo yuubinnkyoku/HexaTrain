@@ -1,0 +1,2 @@
+checkpoint,completed_step,next_step,roundtrip,cpu_forward,cpu_backward,cpu_adam,htp_reproduced,repeats
+ffn372_step31,31,32,PASS,FINITE,FINITE,FINITE,true,3
