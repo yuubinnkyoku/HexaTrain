@@ -2,6 +2,8 @@
 #include "qnn/qnn_hybrid_training.h"
 #include "qnn/qnn_runtime.h"
 #include "qnn/qnn_graph_shape_validator.h"
+#include "qnn/qnn_first_nonfinite_diagnostics.h"
+#include "tiny_language_model_cpu.h"
 
 #include <cassert>
 #include <cmath>
@@ -131,6 +133,8 @@ void testGraphShapeValidator() {
                 [](Node& node) { node.permutation = {1, 0}; }),
         makeShapeNode("broadcast", Op::ElementWiseBinary,
                 {{"a", {8, 8}}, {"b", {8, 1}}}, {{"out", {8, 8}}}),
+        makeShapeNode("diagnostic_elementwise_square", Op::ElementWiseBinary,
+                {{"input", {1}}, {"input", {1}}}, {{"output", {1}}}),
         makeShapeNode("softmax", Op::Softmax,
                 {{"a", {8, 8}}}, {{"out", {8, 8}}},
                 [](Node& node) { node.softmaxAxis = 1; }),
@@ -156,6 +160,24 @@ void testGraphShapeValidator() {
     };
     for (const auto& node : validNodes)
         require(validate(node).ok, "shape validator rejected valid op");
+    const float minimalSquareInput = 279.75f;
+    const float minimalSquareCpu =
+            minimalSquareInput * minimalSquareInput;
+    require(std::isfinite(minimalSquareCpu) &&
+                    minimalSquareCpu == 78260.0625f,
+            "minimal square CPU fixture changed");
+    const std::vector<double> centered{-34.96875, -1.25, 0.5, 35.71875};
+    const auto transformedInverse = [&](double scale) {
+        double varianceScaled = 0.0;
+        for (double value : centered)
+            varianceScaled += (scale * value) * (scale * value);
+        varianceScaled /= centered.size();
+        return std::sqrt(1.0 / (varianceScaled + 1.0e-5 * scale * scale)) *
+                scale;
+    };
+    require(std::fabs(transformedInverse(1.0) -
+                      transformedInverse(8.0)) < 1.0e-12,
+            "LayerNorm centered-scale transform is not equivalent");
     const auto attentionContext = makeShapeNode(
             "layer_00_attention_context", Op::MatMul,
             {{"probabilities", {8, 8}}, {"value", {8, 16}}},
@@ -425,6 +447,85 @@ void testQnnDisabledRuntimeIsExplicitlyBlocked() {
     assert(error.find("HTP") != std::string::npos);
 }
 
+void testFirstNonfiniteDiagnosticCodecAndSummaries() {
+    namespace fnd = phonelm::qnn::first_nonfinite;
+    fnd::Checkpoint checkpoint;
+    checkpoint.config = {2, 3, 2, 4, 1, 1, 1.0e-5f, 0.003f,
+                         0.9f, 0.999f, 1.0e-8f, 0.0f};
+    checkpoint.seed = 2;
+    checkpoint.completedStep = 31;
+    checkpoint.nextOptimizerStep = 32;
+    checkpoint.deterministicState = "fixed_batch=3";
+    checkpoint.registry = {{"layer_000.norm1_gamma", {2}},
+                           {"layer_000.ffn_w1", {2, 4}}};
+    checkpoint.input = {1, 0, 0, 0, 1, 0};
+    checkpoint.target = {0, 1, 0, 1, 0, 0};
+    checkpoint.parameters.resize(10);
+    checkpoint.adamM.resize(10);
+    checkpoint.adamV.resize(10);
+    for (std::size_t i = 0; i < checkpoint.parameters.size(); ++i) {
+        checkpoint.parameters[i] = float(i + 1);
+        checkpoint.adamM[i] = float(i) * 0.1f;
+        checkpoint.adamV[i] = float(i) * 0.01f;
+    }
+    fnd::finalizeCheckpoint(&checkpoint);
+    std::string error;
+    assert(fnd::validateCheckpoint(checkpoint, &error));
+    std::vector<std::uint8_t> encoded;
+    assert(fnd::encodeCheckpoint(checkpoint, &encoded, &error));
+    fnd::Checkpoint decoded;
+    assert(fnd::decodeCheckpoint(encoded, &decoded, &error,
+                                 &checkpoint.config, &checkpoint.registry));
+    assert(decoded.stateHash == checkpoint.stateHash);
+    encoded[12] ^= 1;
+    assert(!fnd::decodeCheckpoint(encoded, &decoded, &error));
+    assert(error == "checkpoint checksum");
+    encoded[12] ^= 1;
+    auto mismatched = checkpoint.config;
+    ++mismatched.dimension;
+    assert(!fnd::decodeCheckpoint(encoded, &decoded, &error, &mismatched));
+    assert(error == "checkpoint configuration mismatch");
+
+    const std::vector<float> values{1.0f, std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity(), -2.0f};
+    const auto summary = fnd::summarize(values, {5});
+    assert(summary.count == 5 && summary.finite == 2 && summary.nan == 1);
+    assert(summary.positiveInfinity == 1 && summary.negativeInfinity == 1);
+    assert(summary.minimum == -2.0 && summary.maximum == 1.0);
+    const auto first = fnd::firstBad({{"finite", {1}, &checkpoint.input},
+                                      {"bad", {5}, &values}});
+    assert(first.name == "bad" && first.flatIndex == 1);
+    const auto comparison = fnd::compare({1.0f, 2.0f, 3.0f}, {1.0f, 9.0f, 1.0f});
+    assert(comparison.argmax == 1 && comparison.firstDifferent == 1);
+    assert(comparison.top3.size() == 3 && comparison.top3[0] == 1);
+    const fnd::TapPlan valid{fnd::TapScope::COARSE_LAYER_BOUNDARIES,
+                             {{"layer_002_output", {2, 2}}}, 10, 1};
+    assert(fnd::validateTapPlan(valid, &error));
+    const fnd::TapPlan invalid{fnd::TapScope::COARSE_LAYER_BOUNDARIES,
+                               {{"duplicate", {2}}, {"duplicate", {2}}}, 0, 2};
+    assert(!fnd::validateTapPlan(invalid, &error));
+    const auto observer = fnd::classifyObserverEffect({1.0f}, {2.0f}, true);
+    assert(observer.originalMatch && observer.observerEffect);
+}
+
+void testFirstNonfiniteCpuReplayDeterminism() {
+    phonelm::tiny_lm::Config config;
+    config.tokens = 2;
+    config.vocabularySize = 4;
+    config.dimension = 4;
+    config.feedForwardDimension = 6;
+    const auto parameters = phonelm::tiny_lm::initialParameters(config, 7);
+    const auto input = phonelm::tiny_lm::oneHot({0, 1}, config.vocabularySize);
+    const auto target = phonelm::tiny_lm::oneHot({1, 2}, config.vocabularySize);
+    const auto first = phonelm::tiny_lm::forwardBackward(
+        config, input, target, parameters, 0.0f);
+    const auto replay = phonelm::tiny_lm::forwardBackward(
+        config, input, target, parameters, 0.0f);
+    assert(first.logits == replay.logits);
+    assert(first.dLogits == replay.dLogits);
+}
+
 }  // namespace
 
 int main() {
@@ -436,6 +537,8 @@ int main() {
     testMockGraphReuseAndRuntimeWeight();
     testMockDWeightAndHybridLossDecrease();
     testQnnDisabledRuntimeIsExplicitlyBlocked();
+    testFirstNonfiniteDiagnosticCodecAndSummaries();
+    testFirstNonfiniteCpuReplayDeterminism();
     std::cout << "qnn_sdk_independent_tests=PASS\n";
     return 0;
 }

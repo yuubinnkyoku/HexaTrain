@@ -1,12 +1,15 @@
 #include "benchmark_runner.h"
 #include "training_engine.h"
+#include "qnn/qnn_transformer.h"
 
 #include <android/log.h>
 #include <jni.h>
 
 #include <atomic>
+#include <cstdint>
 #include <exception>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -242,6 +245,66 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
         const auto report = failedReport("unknown native mode exception");
         sink(report);
         return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeReplayFirstNonfiniteCheckpoint(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jbyteArray payload,
+    jint repeatCount,
+    jint tapSet) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    if (payload == nullptr) {
+        return toJavaString(
+            env,
+            "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+            "failure_classification=CHECKPOINT_UNAVAILABLE\n"
+            "error=null_checkpoint_payload\n");
+    }
+    const jsize length = env->GetArrayLength(payload);
+    std::vector<std::uint8_t> bytes(static_cast<size_t>(length));
+    if (length > 0) {
+        env->GetByteArrayRegion(
+            payload, 0, length, reinterpret_cast<jbyte*>(bytes.data()));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return toJavaString(
+                env,
+                "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+                "failure_classification=CHECKPOINT_DECODE\n"
+                "error=jni_payload_copy_failed\n");
+        }
+    }
+    if (tapSet < static_cast<jint>(
+                     phonelm::qnn::TinyTransformerTrainingTapSet::NONE) ||
+        tapSet > static_cast<jint>(
+                     phonelm::qnn::TinyTransformerTrainingTapSet::ALL_INTERNAL)) {
+        return toJavaString(
+            env,
+            "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=invalid_tap_set\n");
+    }
+    try {
+        return toJavaString(
+            env,
+            phonelm::qnn::replayFirstNonfiniteCheckpoint(
+                bytes, static_cast<std::uint32_t>(repeatCount),
+                static_cast<phonelm::qnn::TinyTransformerTrainingTapSet>(tapSet)));
+    } catch (const std::exception& exception) {
+        return toJavaString(
+            env,
+            failedReport(std::string("checkpoint replay exception: ") +
+                         exception.what()));
+    } catch (...) {
+        return toJavaString(
+            env, failedReport("unknown checkpoint replay exception"));
     }
 }
 

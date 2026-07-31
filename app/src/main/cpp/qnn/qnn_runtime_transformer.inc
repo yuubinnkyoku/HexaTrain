@@ -110,6 +110,114 @@ bool Runtime::executeLayerNorm(const std::vector<float> &input,
   return true;
 }
 
+bool Runtime::prepareElementwiseSquare(uint32_t elements, std::string &error) {
+  if (!impl_ || !impl_->context || elements == 0) {
+    error = "elementwise square invalid runtime or shape";
+    return false;
+  }
+  auto &g = impl_->elementwiseSquare;
+  if (g.graph != nullptr) {
+    error = "elementwise square reprepare unavailable";
+    return false;
+  }
+  g.elements = elements;
+  g.dims[0] = elements;
+  tensor(g.input, "diagnostic_square_input", QNN_TENSOR_TYPE_APP_WRITE,
+         g.dims, QNN_DATATYPE_FLOAT_32, 1);
+  tensor(g.output, "diagnostic_square_output", QNN_TENSOR_TYPE_APP_READ,
+         g.dims, QNN_DATATYPE_FLOAT_32, 1);
+  auto status = impl_->api.graphCreate(
+      impl_->context, "phonelm_diagnostic_elementwise_square", nullptr,
+      &g.graph);
+  ++metrics_.graphCreateCount;
+  if (status != QNN_SUCCESS) {
+    error = "elementwise square graphCreate=" +
+        std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  for (auto *value : {&g.input, &g.output}) {
+    status = impl_->api.tensorCreateGraphTensor(g.graph, value);
+    if (status != QNN_SUCCESS) {
+      error = "elementwise square tensor=" +
+          std::to_string(QNN_GET_ERROR_CODE(status));
+      return false;
+    }
+  }
+  Qnn_Tensor_t inputs[2] = {g.input, g.input};
+  Qnn_OpConfig_t operation = QNN_OPCONFIG_INIT;
+  operation.v1.name = "diagnostic_elementwise_square";
+  operation.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+  operation.v1.typeName = QNN_OP_ELEMENT_WISE_MULTIPLY;
+  operation.v1.numOfInputs = 2;
+  operation.v1.inputTensors = inputs;
+  operation.v1.numOfOutputs = 1;
+  operation.v1.outputTensors = &g.output;
+  status = impl_->api.graphAddNode(g.graph, operation);
+  if (status != QNN_SUCCESS) {
+    error = "elementwise square graphAddNode=" +
+        std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  status = impl_->api.graphFinalize(g.graph, nullptr, nullptr);
+  ++metrics_.graphFinalizeCount;
+  if (status != QNN_SUCCESS) {
+    error = "elementwise square graphFinalize=" +
+        std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  diagnostics_ +=
+      "diagnostic_elementwise_square_node_count=1\n"
+      "diagnostic_elementwise_square_tensor_count=2\n"
+      "diagnostic_elementwise_square_input_role=APP_WRITE\n"
+      "diagnostic_elementwise_square_output_role=APP_READ\n"
+      "diagnostic_elementwise_square_storage_alias=false\n";
+  return true;
+}
+
+bool Runtime::executeElementwiseSquare(const std::vector<float> &input,
+                                       std::vector<float> &output,
+                                       std::string &error) {
+  auto &g = impl_->elementwiseSquare;
+  if (!g.graph || input.size() != g.elements) {
+    error = "elementwise square input size";
+    return false;
+  }
+  const auto inputBefore = input;
+  constexpr uint32_t kPoisonBits = 0x7fc0a55au;
+  float poison = 0.0f;
+  std::memcpy(&poison, &kPoisonBits, sizeof(poison));
+  output.assign(g.elements, poison);
+  Qnn_Tensor_t in = g.input, out = g.output;
+  in.v1.clientBuf = {const_cast<float *>(input.data()),
+                     uint32_t(input.size() * sizeof(float))};
+  out.v1.clientBuf = {output.data(), uint32_t(output.size() * sizeof(float))};
+  const auto status =
+      impl_->api.graphExecute(g.graph, &in, 1, &out, 1, nullptr, nullptr);
+  ++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status),
+                           QNN_GET_ERROR_CODE(status), status == QNN_SUCCESS);
+  size_t poisonRemaining = 0;
+  for (float value : output) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    poisonRemaining += bits == kPoisonBits;
+  }
+  diagnostics_ += "diagnostic_elementwise_square_input_immutable=" +
+      std::string(input == inputBefore ? "true\n" : "false\n") +
+      "diagnostic_elementwise_square_poison_remaining=" +
+      std::to_string(poisonRemaining) + "\n";
+  if (status != QNN_SUCCESS) {
+    error = "elementwise square graphExecute=" +
+        std::to_string(QNN_GET_ERROR_CODE(status));
+    return false;
+  }
+  if (input != inputBefore || poisonRemaining != 0) {
+    error = "elementwise square binding validation failed";
+    return false;
+  }
+  return true;
+}
+
 bool Runtime::prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
                                        float epsilon, std::string &error) {
   if (!impl_ || !impl_->context || rows == 0 || dimension == 0 ||

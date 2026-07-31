@@ -211,6 +211,13 @@ struct Runtime::Impl {
         std::vector<float> gammaData;
         std::vector<float> betaData;
     } layerNorm, softmax;
+    struct ElementwiseSquareGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t input = QNN_TENSOR_INIT;
+        Qnn_Tensor_t output = QNN_TENSOR_INIT;
+        uint32_t dims[1]{};
+        uint32_t elements = 0;
+    } elementwiseSquare;
     struct LayerNormBackwardGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t input = QNN_TENSOR_INIT, upstream = QNN_TENSOR_INIT;
@@ -462,6 +469,8 @@ struct Runtime::Impl {
         std::vector<LayerRegistry> layers;
         std::vector<std::uint32_t> appWriteRegistry;
         std::vector<std::uint32_t> appReadRegistry;
+        // Appended after the established output ABI for scoped diagnostics.
+        std::vector<std::uint32_t> tapRegistry;
         std::vector<std::uint32_t> parameterRegistry;
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
@@ -478,6 +487,8 @@ struct Runtime::Impl {
         bool lastLearningRateBytesUnchanged = true;
         State state = State::INACTIVE;
         bool active = false, languageModel = false, diagnosticOutputs = false;
+        TinyTransformerTrainingTapSet tapSet =
+            TinyTransformerTrainingTapSet::NONE;
         bool executeDiagnosticsEmitted = false;
     } generalizedTinyTransformerTraining;
 

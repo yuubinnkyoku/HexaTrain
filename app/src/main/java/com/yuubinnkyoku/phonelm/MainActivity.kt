@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.content.pm.ApplicationInfo
 import android.util.Log
+import java.io.File
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ArrayAdapter
@@ -104,6 +105,30 @@ class MainActivity : Activity() {
     private fun runDebugIntentIfRequested() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         val requested = intent.getStringExtra("phonelm.mode") ?: return
+        if (requested == "QNN_HTP_FIRST_NONFINITE_REPLAY") {
+            val repeatCount = intent.getIntExtra("phonelm.replay_count", 3)
+            val tapSet = intent.getIntExtra("phonelm.tap_set", 0)
+            val checkpoint = File(filesDir, "first-nonfinite-checkpoint.bin")
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
+            Thread({
+                val report = if (checkpoint.isFile) {
+                    NativeBridge.nativeReplayFirstNonfiniteCheckpoint(
+                        payload = checkpoint.readBytes(),
+                        repeatCount = repeatCount,
+                        tapSet = tapSet,
+                    )
+                } else {
+                    "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n" +
+                        "failure_classification=CHECKPOINT_UNAVAILABLE\n" +
+                        "error=app_private_checkpoint_file_missing\n"
+                }
+                openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
+                    it.write(report)
+                }
+                Log.i("PhoneLMDeviceTest", "DEVICE_TEST_COMPLETE mode=$requested")
+            }, "PhoneLM-first-nonfinite-replay").start()
+            return
+        }
         val mode = runCatching { ExecutionMode.valueOf(requested) }.getOrNull() ?: return
         val batchSize = intent.getIntExtra("phonelm.batch_size", 2)
         val dimension = intent.getIntExtra("phonelm.dimension", 4)

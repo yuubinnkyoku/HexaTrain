@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #include "qnn_runtime.h"
+#include "qnn_first_nonfinite_diagnostics.h"
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
 #include "../tiny_language_model_cpu.h"
@@ -34,6 +35,18 @@ struct CpuStep {
   std::vector<float> dOutput, output;
   Params gradients, next;
 };
+// The payload stays private to device diagnostics.  It is captured before a
+// potentially failing QNN step, so it is both the last finite state and the
+// exact input state for the failing step.
+struct LateNonfiniteCheckpoint {
+  int seed = 0, completedStep = 0;
+  Params parameters, firstMoment, secondMoment;
+  std::vector<float> input, target;
+};
+void reportLateCheckpoint(const std::string &prefix,
+                          const LateNonfiniteCheckpoint &checkpoint,
+                          const tiny_lm::Config &config, float lr,
+                          float clipThreshold, std::ostringstream &report);
 std::vector<float> mm(const std::vector<float> &a, const std::vector<float> &b,
                       uint32_t rows, uint32_t inner, uint32_t cols) {
   std::vector<float> o(size_t(rows) * cols);
@@ -2055,6 +2068,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       const uint32_t phase =
           inferenceOnly && !formalPostFix ? uint32_t((step - 1) / 4) % 2 : 0;
       const auto batch = languageBatch(config, pattern, phase);
+      const LateNonfiniteCheckpoint before{
+          seed, step - 1, htp, htpFirst, htpSecond, batch.first, batch.second};
       const auto cpuGradient = tiny_lm::forwardBackward(
           config, batch.first, batch.second, cpu, 0.0f);
       finalCpuGradientNorm = gradientNorm(cpuGradient.gradients);
@@ -2075,9 +2090,18 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           std::chrono::steady_clock::now();
       if (!runtime.executeTinyTransformerTraining(
               batch.first, batch.second, htp, 0.0f, htpGradient, error)) {
-        error = "seed=" + std::to_string(seed) +
-                ", step=" + std::to_string(step) + ", " + error;
-        return failure("adam_gradient_step", error, runtime);
+        std::ostringstream report;
+        report << "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               << "failure_classification=QNN_EXECUTE\n"
+               << "first_failed_stage=QNN_FORWARD_BACKWARD\n"
+               << "first_bad_seed=" << seed << '\n'
+               << "first_bad_step=" << step << '\n'
+               << "qnn_execute_result=FAILED\n"
+               << "qnn_execute_error=" << error << '\n';
+        reportLateCheckpoint("first_bad", before, config, selected.lr,
+                             selected.clipThreshold, report);
+        report << runtime.apiTraceSummary() << runtime.diagnostics();
+        return report.str();
       }
       seedStepLosses.push_back(htpGradient.loss);
       seedStepAccuracies.push_back(
@@ -2100,8 +2124,20 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       if (!executeLanguageAdam(runtime, htp, htpGradient.gradients, htpFirst,
                                htpSecond, selected.lr, step, clipScale, htpNext,
                                firstNext, secondNext, &rawHtpUpdate, error,
-                               optimizerGraphElements))
-        return failure("adam_update_step", error, runtime);
+                               optimizerGraphElements)) {
+        std::ostringstream report;
+        report << "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               << "failure_classification=QNN_EXECUTE\n"
+               << "first_failed_stage=QNN_ADAM\n"
+               << "first_bad_seed=" << seed << '\n'
+               << "first_bad_step=" << step << '\n'
+               << "qnn_execute_result=FAILED\n"
+               << "qnn_execute_error=" << error << '\n';
+        reportLateCheckpoint("first_bad", before, config, selected.lr,
+                             selected.clipThreshold, report);
+        report << runtime.apiTraceSummary() << runtime.diagnostics();
+        return report.str();
+      }
       const std::array<
           std::pair<const char *, const std::vector<float> *>, 10>
           adamFiniteStages{{
@@ -2204,8 +2240,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                << "attention_heads=" << attentionHeads << '\n'
                << "steps=" << selected.steps << '\n'
                << "seed_count=" << lastSeed << '\n'
-               << "cpu_fallback=false\n"
-               << runtime.apiTraceSummary() << runtime.diagnostics();
+               << "cpu_fallback=false\n";
+        reportLateCheckpoint("first_bad", before, config, selected.lr,
+                             selected.clipThreshold, report);
+        report << runtime.apiTraceSummary() << runtime.diagnostics();
         return report.str();
       }
       if (formalPostFix)
@@ -2296,11 +2334,36 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       }
       seedCompletedSteps = step;
     }
-    LanguageQuality final;
-    if (!htpLanguageQuality(runtime, config, htp, 1, final, error)) {
-      error = "seed=" + std::to_string(seed) + ", final_evaluation, " + error;
-      return failure("adam_final_eval", error, runtime);
+    LanguageQuality finalAggregate;
+    for (uint32_t pattern = 0; pattern < 4; ++pattern) {
+      const auto evaluationBatch = languageBatch(config, pattern, 1);
+      const LateNonfiniteCheckpoint beforeFinalEvaluation{
+          seed, seedCompletedSteps, htp, htpFirst, htpSecond,
+          evaluationBatch.first, evaluationBatch.second};
+      TinyTransformerTrainingOutputs evaluationOutput;
+      if (!runtime.executeTinyTransformerTraining(
+              evaluationBatch.first, evaluationBatch.second, htp, 0.0f,
+              evaluationOutput, error)) {
+        std::ostringstream report;
+        report << "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               << "failure_classification=QNN_EXECUTE\n"
+               << "first_failed_stage=FINAL_EVALUATION_FORWARD_BACKWARD\n"
+               << "first_bad_seed=" << seed << '\n'
+               << "first_bad_step=" << seedCompletedSteps << '\n'
+               << "final_evaluation_pattern=" << pattern << '\n'
+               << "qnn_execute_result=FAILED\n"
+               << "qnn_execute_error=" << error << '\n';
+        reportLateCheckpoint("first_bad", beforeFinalEvaluation, config,
+                             selected.lr, selected.clipThreshold, report);
+        report << runtime.apiTraceSummary() << runtime.diagnostics();
+        return report.str();
+      }
+      addLanguageObservation(finalAggregate, evaluationOutput.logits,
+                             evaluationOutput.probabilities,
+                             evaluationBatch.second, evaluationOutput.loss,
+                             config.tokens, config.vocabularySize);
     }
+    const LanguageQuality final = finishLanguageQuality(std::move(finalAggregate));
     const auto cpuFinal = cpuLanguageQuality(config, cpu, 1);
     const bool finalEvaluationFinite =
         std::isfinite(final.loss) && std::isfinite(final.accuracy) &&
@@ -3391,13 +3454,94 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   return report.str();
 }
 
-// This is deliberately an in-memory checkpoint.  The data is diagnostic input
-// and can be large enough to make a checked-in raw checkpoint inappropriate.
-struct LateNonfiniteCheckpoint {
-  int seed = 0, completedStep = 0;
-  Params parameters, firstMoment, secondMoment;
-  std::vector<float> input, target;
-};
+namespace first_nonfinite = phonelm::qnn::first_nonfinite;
+
+first_nonfinite::Config lateDiagnosticConfig(const tiny_lm::Config &config,
+                                              float lr, float clipThreshold) {
+  return {config.tokens, config.vocabularySize, config.dimension,
+          config.feedForwardDimension, config.numLayers, config.numHeads,
+          config.epsilon, lr, .9f, .999f, 1.0e-8f, clipThreshold};
+}
+
+std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
+    const tiny_lm::Config &config, const Params &parameters) {
+  std::vector<first_nonfinite::RegistryEntry> registry;
+  for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
+    std::vector<uint32_t> shape;
+    if (entry.name == "token_embedding") {
+      shape = {config.vocabularySize, config.dimension};
+    } else if (entry.name == "output_projection") {
+      shape = {config.dimension, config.vocabularySize};
+    } else if (entry.name.find("norm") != std::string::npos) {
+      shape = {config.dimension};
+    } else if (entry.name.find("ffn_w1") != std::string::npos) {
+      shape = {config.dimension, config.feedForwardDimension};
+    } else if (entry.name.find("ffn_w2") != std::string::npos) {
+      shape = {config.feedForwardDimension, config.dimension};
+    } else {
+      shape = {config.dimension, config.dimension};
+    }
+    registry.push_back({entry.name, std::move(shape)});
+  }
+  return registry;
+}
+
+first_nonfinite::Checkpoint privateLateCheckpoint(
+    const tiny_lm::Config &config, const LateNonfiniteCheckpoint &checkpoint,
+    float lr, float clipThreshold) {
+  first_nonfinite::Checkpoint result;
+  result.config = lateDiagnosticConfig(config, lr, clipThreshold);
+  result.seed = uint32_t(checkpoint.seed);
+  result.completedStep = uint32_t(checkpoint.completedStep);
+  result.nextOptimizerStep = uint32_t(checkpoint.completedStep + 1);
+  // The batch index is deterministic from completedStep for the fixed corpus.
+  result.deterministicState = "fixed_language_batch=" +
+      std::to_string(checkpoint.completedStep % 4);
+  result.registry = lateParameterRegistry(config, checkpoint.parameters);
+  result.input = checkpoint.input;
+  result.target = checkpoint.target;
+  result.parameters = flattenLanguageParameters(checkpoint.parameters);
+  result.adamM = flattenLanguageParameters(checkpoint.firstMoment);
+  result.adamV = flattenLanguageParameters(checkpoint.secondMoment);
+  first_nonfinite::finalizeCheckpoint(&result);
+  return result;
+}
+
+std::string privateBytesHex(const std::vector<uint8_t> &bytes) {
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (uint8_t byte : bytes) out << std::setw(2) << unsigned(byte);
+  return out.str();
+}
+
+bool appendPrivateCheckpointCodec(
+    const std::string &prefix, const tiny_lm::Config &config,
+    const LateNonfiniteCheckpoint &checkpoint, float lr, float clipThreshold,
+    std::ostringstream &report) {
+  const auto privateCheckpoint =
+      privateLateCheckpoint(config, checkpoint, lr, clipThreshold);
+  std::vector<uint8_t> encoded;
+  std::string error;
+  const bool encodedOk = first_nonfinite::encodeCheckpoint(
+      privateCheckpoint, &encoded, &error);
+  report << prefix << "_checkpoint_codec_format=phonelm.qnn.first_nonfinite.v1\n"
+         << prefix << "_checkpoint_codec_private_device_only=true\n"
+         << prefix << "_checkpoint_codec_valid="
+         << (encodedOk ? "true" : "false") << '\n'
+         << prefix << "_checkpoint_codec_bytes=" << encoded.size() << '\n'
+         << prefix << "_checkpoint_registry_hash="
+         << privateCheckpoint.registryHash << '\n'
+         << prefix << "_checkpoint_state_hash="
+         << privateCheckpoint.stateHash << '\n'
+         << prefix << "_checkpoint_codec_error="
+         << (encodedOk ? "NONE" : error) << '\n';
+  // This report is private diagnostic input, not a public result. Hex keeps
+  // the text transport lossless without relying on a filesystem path.
+  if (encodedOk)
+    report << prefix << "_checkpoint_codec_private_binary_hex="
+           << privateBytesHex(encoded) << '\n';
+  return encodedOk;
+}
 
 struct LateVectorAudit {
   bool allFinite = true;
@@ -3561,13 +3705,18 @@ void reportLateTapBoundary(const std::string &prefix,
 
 void reportLateCheckpoint(const std::string &prefix,
                           const LateNonfiniteCheckpoint &checkpoint,
-                          float lr, float clipThreshold,
+                          const tiny_lm::Config &config, float lr,
+                          float clipThreshold,
                           std::ostringstream &report) {
   report << prefix << "_checkpoint_format=phonelm.qnn.late_nonfinite.v1\n"
          << prefix << "_checkpoint_private_raw=true\n"
+         << prefix << "_checkpoint_capture_kind=LAST_FINITE_AND_FAILING_STEP_INPUT\n"
+         << prefix << "_checkpoint_failing_step=" << checkpoint.completedStep + 1 << '\n'
          << prefix << "_checkpoint_seed=" << checkpoint.seed << '\n'
          << prefix << "_checkpoint_completed_step=" << checkpoint.completedStep << '\n'
          << prefix << "_checkpoint_optimizer_next_step=" << checkpoint.completedStep + 1 << '\n';
+  appendPrivateCheckpointCodec(prefix, config, checkpoint, lr, clipThreshold,
+                               report);
   const auto parameters = flattenLanguageParameters(checkpoint.parameters);
   const auto first = flattenLanguageParameters(checkpoint.firstMoment);
   const auto second = flattenLanguageParameters(checkpoint.secondMoment);
@@ -4023,7 +4172,7 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
     if (diagnostic && firstNonfinite > 0) {
       ++failingCheckpoints;
       const std::string checkpointPrefix = "seed_" + std::to_string(seed) + "_checkpoint";
-      reportLateCheckpoint(checkpointPrefix, checkpoint, lr, clipThreshold, report);
+      reportLateCheckpoint(checkpointPrefix, checkpoint, config, lr, clipThreshold, report);
       std::string firstSignature;
       bool stable = true;
       int completedReplays = 0;
@@ -4312,5 +4461,324 @@ std::string runTinyTransformerTrainingExperiment(
         trainingConfig.learningRate);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
+}
+
+std::string replayFirstNonfiniteCheckpoint(
+    const std::vector<std::uint8_t> &payload, std::uint32_t repeatCount,
+    TinyTransformerTrainingTapSet tapSet) {
+  if (repeatCount == 0 || repeatCount > 1000) {
+    return "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=repeat_count_must_be_1_to_1000\n";
+  }
+  first_nonfinite::Checkpoint checkpoint;
+  std::string error;
+  if (!first_nonfinite::decodeCheckpoint(payload, &checkpoint, &error)) {
+    return "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_DECODE\nerror=" + error + '\n';
+  }
+  tiny_lm::Config config;
+  config.tokens = checkpoint.config.tokens;
+  config.vocabularySize = checkpoint.config.vocabularySize;
+  config.dimension = checkpoint.config.dimension;
+  config.feedForwardDimension = checkpoint.config.feedForwardDimension;
+  config.epsilon = checkpoint.config.epsilon;
+  config.numLayers = checkpoint.config.numLayers;
+  config.numHeads = checkpoint.config.numHeads;
+  Params shape;
+  Params parameters, firstMoment, secondMoment;
+  try {
+    shape = tiny_lm::initialParameters(config, checkpoint.seed);
+    const auto registry = lateParameterRegistry(config, shape);
+    if (!first_nonfinite::decodeCheckpoint(payload, &checkpoint, &error,
+                                           &checkpoint.config, &registry)) {
+      return "FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+             "failure_classification=CHECKPOINT_SCHEMA\nerror=" + error + '\n';
+    }
+    parameters = unflattenLanguageParameters(checkpoint.parameters, shape);
+    firstMoment = unflattenLanguageParameters(checkpoint.adamM, shape);
+    secondMoment = unflattenLanguageParameters(checkpoint.adamV, shape);
+  } catch (const std::exception &exception) {
+    return std::string("FIRST_NONFINITE_REPLAY\nstatus=FAILED\n"
+                       "failure_classification=CHECKPOINT_SCHEMA\nerror=") +
+           exception.what() + '\n';
+  }
+  const auto emitSummary = [](const std::string &prefix,
+                              const std::vector<float> &values,
+                              std::ostringstream &report) {
+    const auto summary = first_nonfinite::summarize(values);
+    report << prefix << "_count=" << summary.count << '\n'
+           << prefix << "_finite=" << summary.finite << '\n'
+           << prefix << "_nan=" << summary.nan << '\n'
+           << prefix << "_positive_inf=" << summary.positiveInfinity << '\n'
+           << prefix << "_negative_inf=" << summary.negativeInfinity << '\n'
+           << prefix << "_min=" << summary.minimum << '\n'
+           << prefix << "_max=" << summary.maximum << '\n'
+           << prefix << "_max_abs=" << summary.maximumAbsolute << '\n'
+           << prefix << "_mean=" << summary.mean << '\n'
+           << prefix << "_mean_abs=" << summary.meanAbsolute << '\n'
+           << prefix << "_rms=" << summary.rms << '\n'
+           << prefix << "_min_nonzero=" << summary.minimumNonzero << '\n'
+           << prefix << "_hash=" << summary.hash << '\n';
+  };
+  const auto emitComparison = [](const std::string &prefix,
+                                 const std::vector<float> &cpu,
+                                 const std::vector<float> &htp,
+                                 std::ostringstream &report) {
+    const auto comparison = first_nonfinite::compare(cpu, htp);
+    report << prefix << "_max_abs=" << comparison.maximumAbsolute << '\n'
+           << prefix << "_mean_abs=" << comparison.meanAbsolute << '\n'
+           << prefix << "_relative_l2=" << comparison.relativeL2 << '\n'
+           << prefix << "_argmax=" << comparison.argmax << '\n'
+           << prefix << "_first_diff="
+           << (comparison.firstDifferent == std::numeric_limits<size_t>::max()
+                   ? -1 : static_cast<long long>(comparison.firstDifferent))
+           << '\n' << prefix << "_top3=";
+    for (size_t index = 0; index < comparison.top3.size(); ++index)
+      report << (index ? "," : "") << comparison.top3[index];
+    report << '\n';
+  };
+  const auto cpuGradient = tiny_lm::forwardBackward(
+      config, checkpoint.input, checkpoint.target, parameters, 0.0f);
+  const double cpuNorm = gradientNorm(cpuGradient.gradients);
+  const float cpuScale = checkpoint.config.clipThreshold > 0.0f &&
+          std::isfinite(cpuNorm) && cpuNorm > 0.0
+      ? float(std::min(1.0, double(checkpoint.config.clipThreshold) /
+                             (cpuNorm + 1.0e-6))) : 1.0f;
+  const float c1 = float(1.0 / (1.0 - std::pow(checkpoint.config.beta1,
+                                                double(checkpoint.nextOptimizerStep))));
+  const float c2 = float(1.0 / (1.0 - std::pow(checkpoint.config.beta2,
+                                                double(checkpoint.nextOptimizerStep))));
+  const auto cpuUpdate = tiny_lm::adamUpdate(
+      parameters, scaleLanguageParameters(cpuGradient.gradients, cpuScale),
+      firstMoment, secondMoment, checkpoint.config.learningRate,
+      checkpoint.config.beta1, checkpoint.config.beta2,
+      checkpoint.config.adamEpsilon, c1, c2);
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  const auto elementCount = checkpoint.parameters.size();
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "FIRST_NONFINITE_REPLAY\nstatus=DIAGNOSTIC_COMPLETE\n"
+         << "checkpoint_private_device_only=true\n"
+         << "checkpoint_original_match=unknown\n"
+         << "checkpoint_state_hash=" << checkpoint.stateHash << '\n'
+         << "checkpoint_seed=" << checkpoint.seed << '\n'
+         << "checkpoint_completed_step=" << checkpoint.completedStep << '\n'
+         << "checkpoint_optimizer_next_step=" << checkpoint.nextOptimizerStep << '\n'
+         << "replay_count=" << repeatCount << '\n'
+         << "cpu_forward_success="
+         << (std::isfinite(cpuGradient.loss) ? "true" : "false") << '\n'
+         << "cpu_backward_success="
+         << (finiteParams(cpuGradient.gradients) ? "true" : "false") << '\n'
+         << "cpu_adam_success="
+         << (finiteParams(cpuUpdate.next) ? "true" : "false") << '\n';
+  emitSummary("cpu_forward_logits", cpuGradient.logits, report);
+  emitSummary("cpu_backward_gradients",
+              flattenLanguageParameters(cpuGradient.gradients), report);
+  emitSummary("cpu_adam_parameters", flattenLanguageParameters(cpuUpdate.next), report);
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL, tapSet, config.numLayers,
+          config.numHeads) ||
+      elementCount > std::numeric_limits<uint32_t>::max() ||
+      !runtime.prepareAdamOptimizer(static_cast<uint32_t>(elementCount), error)) {
+    report << "htp_prepare_success=false\nhtp_prepare_error=" << error << '\n'
+           << runtime.apiTraceSummary() << runtime.diagnostics();
+    return report.str();
+  }
+  std::vector<std::string> htpHashes;
+  bool htpForwardBackwardSuccess = true, htpAdamSuccess = true;
+  bool htpAdamAttempted = false;
+  for (uint32_t repeat = 0; repeat < repeatCount; ++repeat) {
+    TinyTransformerTrainingOutputs htpGradient;
+    std::string executionError;
+    const bool executeOk = runtime.executeTinyTransformerTraining(
+        checkpoint.input, checkpoint.target, parameters, 0.0f, htpGradient,
+        executionError);
+    report << "repeat_" << repeat << "_htp_forward_backward_success="
+           << (executeOk ? "true" : "false") << '\n'
+           << "repeat_" << repeat << "_htp_qnn_return="
+           << runtime.apiTrace().lastQnnResult << '\n';
+    emitSummary("repeat_" + std::to_string(repeat) + "_htp_forward_logits",
+                htpGradient.logits, report);
+    emitSummary("repeat_" + std::to_string(repeat) +
+                    "_htp_forward_transformer_output",
+                htpGradient.output, report);
+    emitSummary("repeat_" + std::to_string(repeat) +
+                    "_htp_forward_probabilities",
+                htpGradient.probabilities, report);
+    emitSummary("repeat_" + std::to_string(repeat) + "_htp_backward_dlogits",
+                htpGradient.dLogits, report);
+    emitSummary("repeat_" + std::to_string(repeat) + "_htp_backward_doutput",
+                htpGradient.dOutput, report);
+    if (cpuGradient.transformerOutput.size() == htpGradient.output.size()) {
+      emitComparison("repeat_" + std::to_string(repeat) +
+                         "_cpu_htp_transformer_output",
+                     cpuGradient.transformerOutput, htpGradient.output, report);
+    }
+    for (size_t layer = 0;
+         layer < htpGradient.layerInputGradients.size(); ++layer) {
+      emitSummary("repeat_" + std::to_string(repeat) +
+                      "_htp_backward_layer_input_" + std::to_string(layer),
+                  htpGradient.layerInputGradients[layer], report);
+    }
+    bool firstNonfiniteTapReported = false;
+    for (size_t tapIndex = 0; tapIndex < htpGradient.taps.size(); ++tapIndex) {
+      const auto &tap = htpGradient.taps[tapIndex];
+      const std::string tapPrefix = "repeat_" + std::to_string(repeat) +
+          "_tap_" + std::to_string(tapIndex);
+      report << tapPrefix << "_name=" << tap.name << '\n';
+      emitSummary(tapPrefix, tap.values, report);
+      const bool tapFinite = std::all_of(
+          tap.values.begin(), tap.values.end(),
+          [](float value) { return std::isfinite(value); });
+      if (!tapFinite && !firstNonfiniteTapReported) {
+        const auto bad = std::find_if(
+            tap.values.begin(), tap.values.end(),
+            [](float value) { return !std::isfinite(value); });
+        const size_t badFlatIndex =
+            static_cast<size_t>(std::distance(tap.values.begin(), bad));
+        report << "repeat_" << repeat
+               << "_first_nonfinite_tap_index=" << tapIndex << '\n'
+               << "repeat_" << repeat
+               << "_first_nonfinite_tap_name=" << tap.name << '\n'
+               << "repeat_" << repeat
+               << "_first_nonfinite_tap_flat_index=" << badFlatIndex << '\n';
+        // The private report retains only the single predecessor value needed
+        // to prove the operation boundary. It never enters a public exporter.
+        const auto hasSuffix = [](const std::string &value,
+                                  const std::string &suffix) {
+          return value.size() >= suffix.size() &&
+              value.compare(value.size() - suffix.size(), suffix.size(),
+                            suffix) == 0;
+        };
+        if (hasSuffix(tap.name, "_square") && tapIndex > 0) {
+          const auto &inputTap = htpGradient.taps[tapIndex - 1];
+          if (hasSuffix(inputTap.name, "_centered_s") &&
+              inputTap.values.size() == tap.values.size()) {
+            const float inputValue = inputTap.values[badFlatIndex];
+            const float cpuEquivalent = inputValue * inputValue;
+            report << "repeat_" << repeat
+                   << "_first_nonfinite_operation=ElementWiseMultiply(square)\n"
+                   << "repeat_" << repeat
+                   << "_first_nonfinite_input_value=" << inputValue << '\n'
+                   << "repeat_" << repeat
+                   << "_first_nonfinite_cpu_equivalent=" << cpuEquivalent << '\n'
+                   << "repeat_" << repeat
+                   << "_first_nonfinite_cpu_equivalent_finite="
+                   << (std::isfinite(cpuEquivalent) ? "true" : "false") << '\n';
+          }
+        }
+        firstNonfiniteTapReported = true;
+      }
+    }
+    std::string repeatSignature =
+        canonicalFloatSha256(htpGradient.logits) + ":" +
+        canonicalFloatSha256(htpGradient.output);
+    if (!htpGradient.taps.empty()) {
+      repeatSignature += ":" +
+          canonicalFloatSha256(htpGradient.taps.back().values);
+    }
+    htpHashes.push_back(std::move(repeatSignature));
+    if (!executeOk) {
+      htpForwardBackwardSuccess = false;
+      report << "repeat_" << repeat << "_htp_forward_backward_error="
+             << executionError << '\n';
+      continue;
+    }
+    const auto gradientFlat = flattenLanguageParameters(htpGradient.gradients);
+    htpHashes.back() += ":" + canonicalFloatSha256(gradientFlat);
+    emitSummary("repeat_" + std::to_string(repeat) + "_htp_backward_gradients",
+                gradientFlat, report);
+    emitComparison("repeat_" + std::to_string(repeat) + "_cpu_htp_logits",
+                   cpuGradient.logits, htpGradient.logits, report);
+    emitComparison("repeat_" + std::to_string(repeat) + "_cpu_htp_gradients",
+                   flattenLanguageParameters(cpuGradient.gradients), gradientFlat,
+                   report);
+    const double htpNorm = gradientNorm(htpGradient.gradients);
+    const float htpScale = checkpoint.config.clipThreshold > 0.0f &&
+            std::isfinite(htpNorm) && htpNorm > 0.0
+        ? float(std::min(1.0, double(checkpoint.config.clipThreshold) /
+                               (htpNorm + 1.0e-6))) : 1.0f;
+    Params htpNext, htpM, htpV;
+    AdamOptimizerOutputs htpAdam;
+    htpAdamAttempted = true;
+    const bool adamOk = executeLanguageAdam(
+        runtime, parameters, htpGradient.gradients, firstMoment, secondMoment,
+        checkpoint.config.learningRate, int(checkpoint.nextOptimizerStep),
+        htpScale, htpNext, htpM, htpV, &htpAdam, executionError);
+    report << "repeat_" << repeat << "_htp_adam_success="
+           << (adamOk ? "true" : "false") << '\n';
+    if (!adamOk) {
+      htpAdamSuccess = false;
+      report << "repeat_" << repeat << "_htp_adam_error=" << executionError << '\n';
+      continue;
+    }
+    emitSummary("repeat_" + std::to_string(repeat) + "_htp_adam_parameters",
+                flattenLanguageParameters(htpNext), report);
+  }
+  if (tapSet == TinyTransformerTrainingTapSet::LN2_SQUARE) {
+    const std::vector<float> minimalInput{279.75f};
+    const std::vector<float> minimalCpu{
+        minimalInput.front() * minimalInput.front()};
+    report << "minimal_reproducer_generator=single_value_279.75\n"
+           << "minimal_reproducer_shape=1\n"
+           << "minimal_reproducer_operation=ElementWiseMultiply(input,input)\n"
+           << "minimal_reproducer_checkpoint_independent=true\n";
+    emitSummary("minimal_reproducer_cpu_output", minimalCpu, report);
+    std::string minimalError;
+    bool minimalSuccess =
+        runtime.prepareElementwiseSquare(1, minimalError);
+    if (!minimalSuccess) {
+      report << "minimal_reproducer_prepare_error=" << minimalError << '\n';
+    } else {
+      for (uint32_t repeat = 0; repeat < 3; ++repeat) {
+        std::vector<float> minimalHtp;
+        const bool executeOk = runtime.executeElementwiseSquare(
+            minimalInput, minimalHtp, minimalError);
+        const auto summary = first_nonfinite::summarize(minimalHtp);
+        report << "minimal_reproducer_repeat_" << repeat
+               << "_qnn_return=" << runtime.apiTrace().lastQnnResult << '\n'
+               << "minimal_reproducer_repeat_" << repeat
+               << "_execute_success=" << (executeOk ? "true" : "false")
+               << '\n';
+        emitSummary("minimal_reproducer_repeat_" + std::to_string(repeat) +
+                        "_htp_output",
+                    minimalHtp, report);
+        if (!executeOk || summary.positiveInfinity != 1 ||
+            summary.nan != 0 || summary.negativeInfinity != 0) {
+          minimalSuccess = false;
+          report << "minimal_reproducer_repeat_" << repeat
+                 << "_error=" << minimalError << '\n';
+        }
+      }
+    }
+    report << "minimal_reproducer_success="
+           << (minimalSuccess ? "true" : "false") << '\n';
+  }
+  const bool deterministic = !htpHashes.empty() &&
+      std::all_of(htpHashes.begin() + 1, htpHashes.end(),
+                  [&](const std::string &hash) { return hash == htpHashes.front(); });
+  report << "htp_forward_backward_success="
+         << (htpForwardBackwardSuccess ? "true" : "false") << '\n'
+         << "htp_adam_attempted=" << (htpAdamAttempted ? "true" : "false")
+         << '\n'
+         << "htp_adam_success="
+         << (htpAdamAttempted ? (htpAdamSuccess ? "true" : "false")
+                              : "not_run")
+         << '\n'
+         << "htp_repeat_hashes=";
+  for (size_t index = 0; index < htpHashes.size(); ++index)
+    report << (index ? "," : "") << htpHashes[index];
+  report << "\nhtp_repeat_deterministic="
+         << (deterministic ? "true" : "false") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
 }
 } // namespace phonelm::qnn

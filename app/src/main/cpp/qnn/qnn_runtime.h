@@ -29,6 +29,20 @@ enum class TinyTransformerTrainingTapSet {
     DPROB_DSCORES,
     BACKWARD_REGIONS,
     LAYERNORM1,
+    // Generalized graph scopes add selected APP_READ observability outputs;
+    // NONE retains the established graph and output ABI exactly.
+    COARSE_LAYER_BOUNDARIES,
+    LAYER_SUBBLOCKS,
+    LAYER_OPS,
+    // Final-layer LayerNorm2 scopes intentionally expose at most two adjacent
+    // values.  Keeping these graphs small avoids changing graph finalization
+    // merely by making every LayerNorm intermediate an APP_READ tensor.
+    LN2_CENTER_SCALE,
+    LN2_SQUARE,
+    LN2_REDUCTION,
+    LN2_INVERSE,
+    LN2_NORMALIZED,
+    LN2_AFFINE,
     // Exposes forward/backward intermediates in producer order. Existing
     // regular APP_READ outputs are not rebound as taps.
     ALL_INTERNAL,
@@ -116,7 +130,10 @@ struct RuntimeOptions {
     int qnnLogLevel = 4;
     std::int64_t failGraphExecuteAt = -1;
     bool failGraphFinalize = false;
-    float tinyTransformerCenteredScale = 8.0f;
+    // s=1 avoids application-created range amplification in
+    // square(s*(x-mean)). The LayerNorm transform remains
+    // rsqrt(s^2*(variance+epsilon))*s = rsqrt(variance+epsilon).
+    float tinyTransformerCenteredScale = 1.0f;
 };
 
 struct LayerNormBackwardOutputs {
@@ -276,6 +293,12 @@ public:
                           float epsilon, std::string& error);
     bool executeLayerNorm(const std::vector<float>& input,
                           std::vector<float>& output, std::string& error);
+    // Diagnostic single-node graph used to minimize a proven operation-path
+    // boundary without retaining checkpoint data.
+    bool prepareElementwiseSquare(uint32_t elements, std::string& error);
+    bool executeElementwiseSquare(const std::vector<float>& input,
+                                  std::vector<float>& output,
+                                  std::string& error);
     bool prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
                                   float epsilon, std::string& error);
     bool executeLayerNormBackward(const std::vector<float>& input,

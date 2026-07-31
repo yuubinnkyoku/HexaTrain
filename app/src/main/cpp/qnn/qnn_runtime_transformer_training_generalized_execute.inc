@@ -26,7 +26,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
        !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
       !checkedAdd(5, expectedParameterCount, &expectedAppReadCount) ||
       !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount) ||
-      !checkedAdd(expectedAppReadCount, headTapCount, &expectedAppReadCount)) {
+      !checkedAdd(expectedAppReadCount, headTapCount, &expectedAppReadCount) ||
+      !checkedAdd(expectedAppReadCount, g.tapRegistry.size(),
+                  &expectedAppReadCount)) {
     error = "APP_RESOURCE_ESTIMATOR: execution registry count overflow";
     return false;
   }
@@ -174,14 +176,68 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
         return before == *after;
       });
   if (!inputsUnchanged) {
+    diagnostics_ += "generalized_tiny_training_input_immutable=false\n";
     error = "generalized tiny training APP_WRITE mutation";
     return false;
   }
+  diagnostics_ += "generalized_tiny_training_input_immutable=true\n";
   if (status != QNN_SUCCESS) {
+    diagnostics_ += "generalized_tiny_training_qnn_return=" +
+                    std::to_string(QNN_GET_ERROR_CODE(status)) + '\n';
     error = "generalized tiny training graphExecute=" +
             std::to_string(QNN_GET_ERROR_CODE(status));
     return false;
   }
+  // Materialize every application-visible result before finite validation.
+  // Diagnostic replay must retain the values produced by a successful QNN
+  // call even when one of those values is non-finite.
+  outputs.taps.clear();
+  outputs.next = {};
+  outputs.logits = appReadBuffers[0];
+  outputs.output = appReadBuffers[1];
+  outputs.probabilities = appReadBuffers[2];
+  outputs.dLogits = appReadBuffers[3];
+  outputs.dOutput = appReadBuffers[4];
+  outputs.gradients = current;
+  outputs.gradients.tokenEmbedding = appReadBuffers[5];
+  size_t gradient = 6;
+  std::vector<TinyTransformerLayerParameters *> gradientLayers;
+  gradientLayers.reserve(g.numLayers);
+  gradientLayers.push_back(&outputs.gradients);
+  for (auto &layer : outputs.gradients.layers) gradientLayers.push_back(&layer);
+  for (TinyTransformerLayerParameters *layer : gradientLayers) {
+    layer->gamma1 = appReadBuffers[gradient++];
+    layer->beta1 = appReadBuffers[gradient++];
+    layer->wq = appReadBuffers[gradient++];
+    layer->wk = appReadBuffers[gradient++];
+    layer->wv = appReadBuffers[gradient++];
+    layer->wo = appReadBuffers[gradient++];
+    layer->gamma2 = appReadBuffers[gradient++];
+    layer->beta2 = appReadBuffers[gradient++];
+    layer->w1 = appReadBuffers[gradient++];
+    layer->w2 = appReadBuffers[gradient++];
+  }
+  outputs.gradients.outputProjection = appReadBuffers[gradient++];
+  outputs.layerInputGradients.clear();
+  outputs.layerInputGradients.reserve(g.numLayers);
+  for (uint32_t layer = 0; layer < g.numLayers; ++layer)
+    outputs.layerInputGradients.push_back(appReadBuffers[gradient++]);
+  if (g.numHeads > 1) {
+    for (uint32_t layer = 0; layer < g.numLayers; ++layer) {
+      for (uint32_t head = 0; head < g.numHeads; ++head) {
+        const uint32_t id = g.layers[layer].heads[head].probabilities;
+        outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
+      }
+    }
+  }
+  for (uint32_t id : g.tapRegistry)
+    outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
+  if (gradient != appReadBuffers.size()) {
+    error = "generalized tiny training APP_READ result mapping";
+    return false;
+  }
+  outputs.dEmbeddedInput = outputs.layerInputGradients.front();
+  outputs.embeddedInput.clear();  // Not an APP_READ terminal in the L2/H1 ABI.
   size_t poisonResidual = 0, nonFiniteResidual = 0;
   size_t firstBadRegistryIndex = appReadBuffers.size();
   size_t firstBadElement = 0;
@@ -207,6 +263,13 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     }
   }
   if (poisonResidual != 0 || nonFiniteResidual != 0) {
+    diagnostics_ += std::string("generalized_tiny_training_qnn_return=0\n") +
+                    "generalized_tiny_training_output_poison_count=" +
+                    std::to_string(poisonResidual) + '\n' +
+                    "generalized_tiny_training_output_nonfinite_count=" +
+                    std::to_string(nonFiniteResidual) + '\n' +
+                    "generalized_tiny_training_outputs_all_written=" +
+                    (poisonResidual == 0 ? "true\n" : "false\n");
     error = "generalized tiny training APP_READ residual poison=" +
             std::to_string(poisonResidual) + ", nonfinite=" +
             std::to_string(nonFiniteResidual);
@@ -223,51 +286,10 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     }
     return false;
   }
-  // APP_READ registry: logits, final-layer diagnostic values, canonical
-  // gradients, layer-input gradients, then H>1 attention-probability taps.
-  // The graph has no SGD nodes; QNN Adam consumes gradients separately, so
-  // next is empty.
-  outputs.taps.clear();
-  outputs.next = {};
-  outputs.logits = appReadBuffers[0];
-  outputs.output = appReadBuffers[1];
-  outputs.probabilities = appReadBuffers[2];
-  outputs.dLogits = appReadBuffers[3];
-  outputs.dOutput = appReadBuffers[4];
-  outputs.gradients = current;
-  outputs.gradients.tokenEmbedding = appReadBuffers[5];
-  size_t gradient = 6;
-  std::vector<TinyTransformerLayerParameters *> gradientLayers;
-  gradientLayers.reserve(g.numLayers);
-  gradientLayers.push_back(&outputs.gradients);
-  for (auto &layer : outputs.gradients.layers) gradientLayers.push_back(&layer);
-  for (TinyTransformerLayerParameters *layer : gradientLayers) {
-    layer->gamma1 = appReadBuffers[gradient++];
-    layer->beta1 = appReadBuffers[gradient++];
-    layer->wq = appReadBuffers[gradient++]; layer->wk = appReadBuffers[gradient++];
-    layer->wv = appReadBuffers[gradient++]; layer->wo = appReadBuffers[gradient++];
-    layer->gamma2 = appReadBuffers[gradient++]; layer->beta2 = appReadBuffers[gradient++];
-    layer->w1 = appReadBuffers[gradient++]; layer->w2 = appReadBuffers[gradient++];
-  }
-  outputs.gradients.outputProjection = appReadBuffers[gradient++];
-  outputs.layerInputGradients.clear();
-  outputs.layerInputGradients.reserve(g.numLayers);
-  for (uint32_t layer = 0; layer < g.numLayers; ++layer)
-    outputs.layerInputGradients.push_back(appReadBuffers[gradient++]);
-  if (g.numHeads > 1) {
-    for (uint32_t layer = 0; layer < g.numLayers; ++layer) {
-      for (uint32_t head = 0; head < g.numHeads; ++head) {
-        const uint32_t id = g.layers[layer].heads[head].probabilities;
-        outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
-      }
-    }
-  }
-  if (gradient != appReadBuffers.size()) {
-    error = "generalized tiny training APP_READ result mapping";
-    return false;
-  }
-  outputs.dEmbeddedInput = outputs.layerInputGradients.front();
-  outputs.embeddedInput.clear();  // Not an APP_READ terminal in the L2/H1 ABI.
+  diagnostics_ += "generalized_tiny_training_qnn_return=0\n"
+                  "generalized_tiny_training_output_poison_count=0\n"
+                  "generalized_tiny_training_output_nonfinite_count=0\n"
+                  "generalized_tiny_training_outputs_all_written=true\n";
   double loss = 0.0;
   for (uint32_t row = 0; row < g.tokens; ++row) {
     const float *logits = outputs.logits.data() + size_t(row) * g.vocabularySize;

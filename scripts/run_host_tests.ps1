@@ -29,6 +29,7 @@ if ($LASTEXITCODE -ne 0) {
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_host_quantization.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_hybrid_training.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_graph_shape_validator.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_runtime_stub.cpp") `
     (Join-Path $Root "host_tests\qnn_sdk_independent_test.cpp") `
     -o $QnnSdkIndependentExecutable

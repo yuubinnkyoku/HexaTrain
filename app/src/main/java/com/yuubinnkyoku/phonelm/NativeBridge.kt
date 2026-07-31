@@ -46,4 +46,10 @@ object NativeBridge {
         benchmarkMode: Boolean,
         progressCallback: ProgressCallback,
     ): String
+
+    external fun nativeReplayFirstNonfiniteCheckpoint(
+        payload: ByteArray,
+        repeatCount: Int,
+        tapSet: Int,
+    ): String
 }

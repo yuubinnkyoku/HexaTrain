@@ -87,6 +87,8 @@ bool Runtime::prepareTrainingOpsMicro(uint32_t,uint32_t,uint32_t,uint32_t,std::s
 bool Runtime::executeTrainingOpsMicro(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,float&,std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: training ops micro unavailable";return false;}
 bool Runtime::prepareLayerNorm(uint32_t,uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: LayerNorm unavailable";return false;}
 bool Runtime::executeLayerNorm(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: LayerNorm unavailable";return false;}
+bool Runtime::prepareElementwiseSquare(uint32_t,std::string&e){e="QNN_DISABLED: elementwise square unavailable";return false;}
+bool Runtime::executeElementwiseSquare(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: elementwise square unavailable";return false;}
 bool Runtime::prepareLayerNormBackward(uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: LayerNorm backward unavailable";return false;}
 bool Runtime::executeLayerNormBackward(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,LayerNormBackwardOutputs&,std::string&e){e="QNN_DISABLED: LayerNorm backward unavailable";return false;}
 bool Runtime::prepareSoftmax(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}

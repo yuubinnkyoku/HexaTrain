@@ -36,7 +36,17 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       dimension % numHeads != 0 || vocabularySize == 0 ||
       !diagnosticOutputs ||
       variant != TinyTransformerTrainingVariant::FULL ||
-      tapSet != TinyTransformerTrainingTapSet::NONE) {
+      (tapSet != TinyTransformerTrainingTapSet::NONE &&
+       tapSet != TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES &&
+       tapSet != TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS &&
+       tapSet != TinyTransformerTrainingTapSet::LAYER_OPS &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_SQUARE &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_REDUCTION &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_INVERSE &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_NORMALIZED &&
+       tapSet != TinyTransformerTrainingTapSet::LN2_AFFINE &&
+       tapSet != TinyTransformerTrainingTapSet::ALL_INTERNAL)) {
     return fail("APP_CONFIGURATION_VALIDATION: generalized tiny training "
                 "requires valid diagnostic language-model FULL configuration");
   }
@@ -72,6 +82,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.numHeads = numHeads;
   g.languageModel = true;
   g.diagnosticOutputs = diagnosticOutputs;
+  g.tapSet = tapSet;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
   g.centeredScale = options_.tinyTransformerCenteredScale;
   if (!std::isfinite(g.centeredScale) || g.centeredScale <= 0.0f) {
@@ -197,6 +208,45 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     SUM_DXHAT_XHAT1, D_TIMES_DXHAT1, FIRST_DIFF1,
     XHAT_TIMES_SUM1, BRACKET1, INV_STD_OVER_D1, DINPUT_NORM, DINPUT,
   };
+  const auto tapActivation = [&](const std::string &name) {
+    if (tapSet == TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES)
+      return name == "output";
+    if (tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS)
+      return name == "residual1" || name == "ln1" || name == "ln2" ||
+             name == "ff1" || name == "relu" || name == "ff2" ||
+             name == "output";
+    if (tapSet == TinyTransformerTrainingTapSet::LAYER_OPS)
+      return name == "ln1_centered_s" || name == "ln1_square" ||
+             name == "ln1_variance_eps" || name == "ln1_inv" ||
+             name == "attention_scaled" || name == "attention_masked" ||
+             name == "attention_probabilities" || name == "residual1" ||
+             name == "ln2_centered_s" || name == "ln2_square" ||
+             name == "ln2_variance_eps" || name == "ln2_inv" ||
+             name == "ff1" || name == "relu" || name == "ff2" ||
+             name == "output";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_CENTER_SCALE)
+      return name == "ln2_centered" || name == "ln2_centered_s";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_SQUARE)
+      return name == "ln2_centered_s" || name == "ln2_square";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_REDUCTION)
+      return name == "ln2_variance" || name == "ln2_variance_eps";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_INVERSE)
+      return name == "ln2_inv_s" || name == "ln2_inv";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_NORMALIZED)
+      return name == "ln2_xhat";
+    if (tapSet == TinyTransformerTrainingTapSet::LN2_AFFINE)
+      return name == "ln2_xhat_gamma" || name == "ln2";
+    return tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL;
+  };
+  const auto tapBackward = [&](const std::string &name) {
+    (void)name;
+    if (tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
+        tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
+        (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
+         tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE))
+      return false;
+    return tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL;
+  };
   // Keep all layer-local parameter and forward-cache tensors separate. The
   // order is the deterministic parameter registry order used by future
   // binding/execution work; activation indices above never cross a layer.
@@ -241,16 +291,24 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                          activationName == "attention_masked" ||
                          activationName == "attention_probabilities";
       const bool ff = std::string(name) == "ff1" || std::string(name) == "relu";
-      const Qnn_TensorType_t activationType =
-          diagnosticOutputs && layer + 1 == numLayers &&
-                  activationName == "output"
-              ? QNN_TENSOR_TYPE_APP_READ
-              : QNN_TENSOR_TYPE_NATIVE;
+      const bool establishedOutput = diagnosticOutputs &&
+          layer + 1 == numLayers && activationName == "output";
+      const bool narrowedForwardScope =
+          tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
+          tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
+          (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
+           tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE);
+      const bool selectedTap = tapActivation(activationName) &&
+          (!narrowedForwardScope || layer + 1 == numLayers) &&
+          !establishedOutput;
+      const Qnn_TensorType_t activationType = establishedOutput || selectedTap
+          ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
       record.activations.push_back(add(prefix + name, activationType,
           score ? std::initializer_list<uint32_t>{tokens, tokens} :
           ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
           row ? std::initializer_list<uint32_t>{tokens, 1} :
                 std::initializer_list<uint32_t>{tokens, dimension}));
+      if (selectedTap) g.tapRegistry.push_back(record.activations.back());
     }
     record.output = record.activations.back();
     for (const char *name : {"dwq", "dwk", "dwv", "dwo", "dg1", "db1",
@@ -292,10 +350,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                        backwardName == "inv_std_over_d1";
       const bool ff = backwardName == "drelu" || backwardName == "relu_mask" ||
                       backwardName == "dff1";
-      const Qnn_TensorType_t backwardType =
-          diagnosticOutputs && backwardName == "dinput"
-              ? QNN_TENSOR_TYPE_APP_READ
-              : QNN_TENSOR_TYPE_NATIVE;
+      const bool establishedBackward = diagnosticOutputs &&
+          backwardName == "dinput";
+      const bool selectedTap = tapBackward(backwardName) &&
+          !establishedBackward;
+      const Qnn_TensorType_t backwardType = establishedBackward || selectedTap
+          ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
       record.backward.push_back(add(
           prefix + name, backwardType,
           score ? std::initializer_list<uint32_t>{tokens, tokens} :
@@ -303,6 +363,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           row ? std::initializer_list<uint32_t>{tokens, 1} :
                 std::initializer_list<uint32_t>{tokens, dimension},
           backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
+      if (selectedTap) g.tapRegistry.push_back(record.backward.back());
     }
     if (numHeads > 1) {
       const uint32_t headDimension = dimension / numHeads;
@@ -443,10 +504,20 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       for (const auto &head : record.heads)
         g.appReadRegistry.push_back(head.probabilities);
   }
+  // Scoped APP_READ taps are appended only after the established outputs,
+  // gradients, layer inputs and H>1 probability taps.  This makes NONE
+  // byte-for-byte identical and gives replay code a deterministic suffix.
+  g.appReadRegistry.insert(g.appReadRegistry.end(), g.tapRegistry.begin(),
+                           g.tapRegistry.end());
   if (std::unordered_set<uint32_t>(g.appReadRegistry.begin(),
                                    g.appReadRegistry.end()).size() !=
       g.appReadRegistry.size()) {
     return fail("generalized tiny training APP_READ registry contains duplicates");
+  }
+  if (std::unordered_set<uint32_t>(g.tapRegistry.begin(),
+                                   g.tapRegistry.end()).size() !=
+          g.tapRegistry.size()) {
+    return fail("generalized tiny training tap registry contains duplicates");
   }
   if (!registryShapeValid) {
     return fail("generalized tiny training tensor shape exceeds client-buffer limit");
@@ -1051,6 +1122,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                   std::string(g.diagnosticOutputs ? "true\n" : "false\n") +
                   "tiny_transformer_training_app_read_registry_count=" +
                   std::to_string(g.appReadRegistry.size()) + '\n' +
+                  "tiny_transformer_training_tap_scope=" +
+                  std::to_string(static_cast<uint32_t>(g.tapSet)) + '\n' +
+                  "tiny_transformer_training_tap_registry_count=" +
+                  std::to_string(g.tapRegistry.size()) + '\n' +
+                  "tiny_transformer_training_observer_effect_classification=REQUIRES_UNTAPPED_REPLAY_HASH\n" +
                   "tiny_transformer_training_sgd_next=false\n"
                   "tiny_transformer_training_learning_rate=REQUIRES_ZERO_QNN_ADAM_SEPARATE\n" +
                   "tiny_transformer_training_tensor_create_count=" +

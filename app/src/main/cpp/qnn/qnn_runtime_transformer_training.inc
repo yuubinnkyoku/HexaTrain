@@ -1141,6 +1141,17 @@ bool Runtime::executeTinyTransformerTraining(
     tap(G::SUM_DXHAT_XHAT1, "SUM_DXHAT_XHAT1", g.tokens);
     tap(G::DINPUT_NORM, "DINPUT_NORM", a);
     break;
+  case TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES:
+  case TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS:
+  case TinyTransformerTrainingTapSet::LAYER_OPS:
+  case TinyTransformerTrainingTapSet::LN2_CENTER_SCALE:
+  case TinyTransformerTrainingTapSet::LN2_SQUARE:
+  case TinyTransformerTrainingTapSet::LN2_REDUCTION:
+  case TinyTransformerTrainingTapSet::LN2_INVERSE:
+  case TinyTransformerTrainingTapSet::LN2_NORMALIZED:
+  case TinyTransformerTrainingTapSet::LN2_AFFINE:
+    // These scopes are defined only for the generalized layer/head builder.
+    break;
   case TinyTransformerTrainingTapSet::ALL_INTERNAL:
     // Order is the graph's producer order. LOGITS is intentionally omitted
     // here because it is always the regular APP_READ output.
