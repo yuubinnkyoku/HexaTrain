@@ -768,7 +768,7 @@ try {
                 "steps=$Steps"
             ) -join '","'
             & $adb -s $device shell run-as $package sh -c (
-                "printf '%s\n' `"$contextDevice`" > files/phonelm-formal-run-context.txt") | Out-Null
+                "mkdir -p files && printf '%s\n' `"$contextDevice`" > files/phonelm-formal-run-context.txt") | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'could not write device run context' }
             & $adb -s $device shell am force-stop $package | Out-Null
             & $adb -s $device shell run-as $package rm -f files/device-test-result.txt | Out-Null
