@@ -200,22 +200,32 @@ try {
         Fail 'TIMEOUT: device result did not reach a terminal status'
     }
     if ($TestMode -eq 'UI_VALIDATION') {
-        Start-Sleep -Seconds 2
-        $completedNotification = Read-PhoneNotification
+        $completedNotification = ''
+        foreach ($attempt in 1..20) {
+            Start-Sleep -Milliseconds 500
+            $completedNotification = Read-PhoneNotification
+            if ($completedNotification -match '(完了|失敗|キャンセル)') { break }
+        }
         $uiOngoingAfterCompletion =
             $completedNotification -match '(?i)(ongoing|FLAG_ONGOING_EVENT|flags=0x[0-9a-f]*2)'
         $completedAutoCancel =
             $completedNotification -match '(?i)(auto.?cancel|FLAG_AUTO_CANCEL|flags=0x[0-9a-f]*1[0-9a-f]*)'
         Invoke-Adb @('shell', 'cmd', 'statusbar', 'expand-notifications') | Out-Null
         Start-Sleep -Seconds 2
-        $shade = Read-UiHierarchy
-        $phoneNode = [regex]::Match(
-            $shade,
-            '<node[^>]*(?:text|content-desc)="[^"]*PhoneLM[^"]*(?:完了|失敗|キャンセル)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
-        if (-not $phoneNode.Success) {
+        $phoneNode = [System.Text.RegularExpressions.Match]::Empty
+        foreach ($attempt in 1..6) {
+            $shade = Read-UiHierarchy
             $phoneNode = [regex]::Match(
                 $shade,
-                '<node[^>]*(?:text|content-desc)="[^"]*PhoneLM[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+                '<node[^>]*(?:text|content-desc)="[^"]*PhoneLM[^"]*(?:完了|失敗|キャンセル)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+            if (-not $phoneNode.Success) {
+                $phoneNode = [regex]::Match(
+                    $shade,
+                    '<node[^>]*(?:text|content-desc)="[^"]*PhoneLM[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+            }
+            if ($phoneNode.Success) { break }
+            Invoke-Adb @('shell', 'input', 'swipe', '1000', '800', '1000', '300', '400') | Out-Null
+            Start-Sleep -Milliseconds 500
         }
         if ($phoneNode.Success) {
             $tapX = ([int]$phoneNode.Groups[1].Value +
@@ -265,8 +275,13 @@ try {
     ) | Set-Content -LiteralPath $privatePath -Encoding utf8
     $status = Result-Value $report 'status'
     if ($TestMode -eq 'UI_VALIDATION') {
+        $uiPassed = $status -eq 'SUCCESS' -and $uiConfigVisible -and
+            $uiProgressVisible -and $uiForegroundUpdate -and
+            $uiBackgroundUpdate -and $uiOngoingDuringRun -and
+            -not $uiOngoingAfterCompletion -and
+            $uiNotificationTapReturnedActivity -and $uiAutoCancel
         @(
-            "status=$(if ($status -eq 'SUCCESS') { 'PASS' } else { 'FAIL' })"
+            "status=$(if ($uiPassed) { 'PASS' } else { 'FAIL' })"
             "config_visible=$($uiConfigVisible.ToString().ToLowerInvariant())"
             "progress_visible=$($uiProgressVisible.ToString().ToLowerInvariant())"
             "foreground_update=$($uiForegroundUpdate.ToString().ToLowerInvariant())"

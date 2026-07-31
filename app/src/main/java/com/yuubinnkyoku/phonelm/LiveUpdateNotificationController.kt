@@ -36,6 +36,7 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(run.id.toString()).apply()
         current = run
         ensureChannel()
+        LiveUpdateForegroundService.start(appContext, run.id, kind)
         post(run, RunProgress.Started(kind, totalSteps), force = true)
     }
 
@@ -96,7 +97,17 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
         val notification = builder.build()
         // This is diagnostic only: OEM policy may still deny promotion after posting.
         run.promotable = Build.VERSION.SDK_INT >= 36 && notification.hasPromotableCharacteristics()
-        manager.notify(run.id, notification)
+        if (finished) {
+            LiveUpdateForegroundService.finish(
+                appContext,
+                run.id,
+                if (finished) "PhoneLM ${snapshot.kind} ${snapshot.terminalTitle}" else "PhoneLMを実行中",
+                snapshot.contentText(),
+                snapshot.detailText(),
+            )
+        } else {
+            manager.notify(run.id, notification)
+        }
     }
 
     private fun notificationsAllowed() = Build.VERSION.SDK_INT < 33 ||
