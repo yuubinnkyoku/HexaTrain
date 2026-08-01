@@ -175,6 +175,10 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jint correctnessInterval,
     jboolean benchmarkMode,
     jint seedSelectionMode,
+    jint trainingStabilityMode,
+    jint depthPairInitMode,
+    jboolean diagnosticTrajectory,
+    jstring diagnosticCheckpointDir,
     jobject progressCallback) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -234,6 +238,16 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.correctnessInterval = correctnessInterval;
     config.benchmarkMode = benchmarkMode == JNI_TRUE;
     config.seedSelectionMode = static_cast<int>(seedSelectionMode);
+    config.trainingStabilityMode = static_cast<int>(trainingStabilityMode);
+    config.depthPairInitMode = static_cast<int>(depthPairInitMode);
+    config.diagnosticTrajectory = diagnosticTrajectory == JNI_TRUE;
+    if (diagnosticCheckpointDir != nullptr) {
+        const char* chars = env->GetStringUTFChars(diagnosticCheckpointDir, nullptr);
+        if (chars != nullptr) {
+            config.diagnosticCheckpointDir = chars;
+            env->ReleaseStringUTFChars(diagnosticCheckpointDir, chars);
+        }
+    }
 
     try {
         const auto report = phonelm::TrainingEngine::run(

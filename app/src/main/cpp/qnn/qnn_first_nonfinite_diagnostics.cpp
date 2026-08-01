@@ -36,7 +36,10 @@ bool sameConfig(const Config& a, const Config& b) {
       a.numLayers == b.numLayers && a.numHeads == b.numHeads &&
       a.epsilon == b.epsilon && a.learningRate == b.learningRate &&
       a.beta1 == b.beta1 && a.beta2 == b.beta2 &&
-      a.adamEpsilon == b.adamEpsilon && a.clipThreshold == b.clipThreshold;
+      a.adamEpsilon == b.adamEpsilon && a.clipThreshold == b.clipThreshold &&
+      a.trainingStabilityMode == b.trainingStabilityMode &&
+      a.depthPairInitMode == b.depthPairInitMode &&
+      a.totalSteps == b.totalSteps;
 }
 bool sameRegistry(const std::vector<RegistryEntry>& a, const std::vector<RegistryEntry>& b) {
   if (a.size() != b.size()) return false;
@@ -78,6 +81,8 @@ void writeConfig(Writer* writer, const Config& c) {
   writer->pod(c.feedForwardDimension); writer->pod(c.numLayers); writer->pod(c.numHeads);
   writer->pod(c.epsilon); writer->pod(c.learningRate); writer->pod(c.beta1); writer->pod(c.beta2);
   writer->pod(c.adamEpsilon); writer->pod(c.clipThreshold);
+  writer->pod(c.trainingStabilityMode); writer->pod(c.depthPairInitMode);
+  writer->pod(c.totalSteps);
 }
 bool readConfig(Reader* reader, Config* c) {
   return reader->pod(&c->tokens) && reader->pod(&c->vocabularySize) &&
@@ -85,13 +90,17 @@ bool readConfig(Reader* reader, Config* c) {
       reader->pod(&c->numLayers) && reader->pod(&c->numHeads) &&
       reader->pod(&c->epsilon) && reader->pod(&c->learningRate) &&
       reader->pod(&c->beta1) && reader->pod(&c->beta2) &&
-      reader->pod(&c->adamEpsilon) && reader->pod(&c->clipThreshold);
+      reader->pod(&c->adamEpsilon) && reader->pod(&c->clipThreshold) &&
+      reader->pod(&c->trainingStabilityMode) && reader->pod(&c->depthPairInitMode) &&
+      reader->pod(&c->totalSteps);
 }
 void hashConfig(std::uint64_t* hash, const Config& c) {
   hashValue(hash, c.tokens); hashValue(hash, c.vocabularySize); hashValue(hash, c.dimension);
   hashValue(hash, c.feedForwardDimension); hashValue(hash, c.numLayers); hashValue(hash, c.numHeads);
   hashValue(hash, c.epsilon); hashValue(hash, c.learningRate); hashValue(hash, c.beta1); hashValue(hash, c.beta2);
   hashValue(hash, c.adamEpsilon); hashValue(hash, c.clipThreshold);
+  hashValue(hash, c.trainingStabilityMode); hashValue(hash, c.depthPairInitMode);
+  hashValue(hash, c.totalSteps);
 }
 bool fail(std::string* error, const char* message) { if (error) *error = message; return false; }
 }
@@ -121,6 +130,7 @@ bool validateCheckpoint(const Checkpoint& checkpoint, std::string* error) {
   }
   const Config& c = checkpoint.config;
   if (!c.tokens || !c.vocabularySize || !c.dimension || !c.feedForwardDimension || !c.numLayers || !c.numHeads || c.dimension % c.numHeads || !std::isfinite(c.epsilon) || c.epsilon <= 0.0f || !std::isfinite(c.learningRate) || !std::isfinite(c.beta1) || !std::isfinite(c.beta2) || !std::isfinite(c.adamEpsilon) || c.adamEpsilon <= 0.0f || !std::isfinite(c.clipThreshold)) return fail(error, "checkpoint configuration");
+  if (c.trainingStabilityMode > 6 || c.depthPairInitMode > 1) return fail(error, "checkpoint stability mode range");
   std::unordered_set<std::string> names;
   for (const auto& entry : checkpoint.registry) if (entry.name.empty() || !names.insert(entry.name).second || entry.shape.empty()) return fail(error, "checkpoint registry");
   std::size_t expected = 0;

@@ -9,13 +9,20 @@
 
 namespace phonelm::qnn::first_nonfinite {
 
-constexpr std::uint32_t kCheckpointVersion = 1;
+// Version 2 records the explicit training-stability contract beside the
+// shape contract: stability mode, paired-depth initialization mode and total
+// steps (needed to replay scheduled learning rates). Version-1 payloads fail
+// closed on decode.
+constexpr std::uint32_t kCheckpointVersion = 2;
 
 struct Config {
   std::uint32_t tokens = 0, vocabularySize = 0, dimension = 0;
   std::uint32_t feedForwardDimension = 0, numLayers = 0, numHeads = 0;
   float epsilon = 0.0f, learningRate = 0.0f, beta1 = 0.9f, beta2 = 0.999f;
   float adamEpsilon = 1.0e-8f, clipThreshold = 0.0f;
+  std::uint32_t trainingStabilityMode = 0;
+  std::uint32_t depthPairInitMode = 0;
+  std::uint32_t totalSteps = 0;
 };
 
 struct RegistryEntry {

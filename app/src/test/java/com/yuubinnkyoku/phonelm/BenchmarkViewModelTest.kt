@@ -54,7 +54,9 @@ class BenchmarkViewModelTest {
         assertEquals(
             "generic_configuration=B${config.batchSize} T${config.sampleCount} " +
                 "V${config.outputDimension} D${config.dimension} " +
-                "FFN${config.hiddenDimension} L${config.epochs} H${config.measuredSteps}",
+                "FFN${config.hiddenDimension} L${config.epochs} H${config.measuredSteps}" +
+                " seed_mode=${config.seedSelectionMode.name}" +
+                " stability_mode=${config.trainingStabilityMode.name}",
             viewModel.snapshot().configurationSummary,
         )
 

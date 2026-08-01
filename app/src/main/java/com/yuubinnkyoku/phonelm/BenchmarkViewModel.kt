@@ -75,6 +75,10 @@ object NativeBenchmarkEngine : BenchmarkEngine {
         correctnessInterval = config.correctnessInterval,
         benchmarkMode = config.benchmarkMode,
         seedSelectionMode = config.seedSelectionMode.nativeCode,
+        trainingStabilityMode = config.trainingStabilityMode.nativeCode,
+        depthPairInitMode = config.depthPairInitMode.nativeCode,
+        diagnosticTrajectory = config.diagnosticTrajectory,
+        diagnosticCheckpointDir = config.diagnosticCheckpointDir,
         progressCallback = ProgressCallback(progress),
     )
 }
@@ -142,7 +146,13 @@ class BenchmarkViewModel(
                     "generic_configuration=B${config.batchSize} " +
                         "T${config.sampleCount} V${config.outputDimension} " +
                         "D${config.dimension} FFN${config.hiddenDimension} " +
-                        "L${config.epochs} H${config.measuredSteps}"
+                        "L${config.epochs} H${config.measuredSteps}" +
+                        " seed_mode=${config.seedSelectionMode.name}" +
+                        (if (config.seedSelectionMode == SeedSelectionMode.EXACT_SEED)
+                            " exact_seed=${config.seed}" else "") +
+                        " stability_mode=${config.trainingStabilityMode.name}" +
+                        (if (config.depthPairInitMode != DepthPairInitMode.LEGACY)
+                            " pair_init=${config.depthPairInitMode.name}" else "")
                 } else {
                     ""
                 }

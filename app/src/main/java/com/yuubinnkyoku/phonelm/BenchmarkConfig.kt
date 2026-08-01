@@ -127,6 +127,25 @@ enum class SeedSelectionMode(val nativeCode: Int) {
     EXACT_SEED(1),
 }
 
+enum class TrainingStabilityMode(val nativeCode: Int) {
+    // Established formal protocol (default; preserves every legacy hash).
+    LEGACY(0),
+    WARMUP64(1),
+    DECAY_LINEAR(2),
+    ZERO_OUTPUT_PROJ_BRANCH_INIT(3),
+    DEPTH_SCALED_BRANCH_INIT(4),
+    // Reserved; not supported by the current HTP graphs (fail closed).
+    RESIDUAL_BRANCH_SCALING(5),
+    GRADIENT_CLIP_1(6),
+}
+
+enum class DepthPairInitMode(val nativeCode: Int) {
+    LEGACY(0),
+    // Diagnostic assertion that the phase-seeded initialization keeps the
+    // shared prefix identical to the one-layer-shallower model.
+    PAIRED_SHARED_PREFIX(1),
+}
+
 data class BenchmarkConfig(
     val backend: Backend,
     val batchSize: Int,
@@ -141,6 +160,10 @@ data class BenchmarkConfig(
     val correctnessInterval: Int = 0,
     val benchmarkMode: Boolean = false,
     val seedSelectionMode: SeedSelectionMode = SeedSelectionMode.COUNT_FROM_ONE,
+    val trainingStabilityMode: TrainingStabilityMode = TrainingStabilityMode.LEGACY,
+    val depthPairInitMode: DepthPairInitMode = DepthPairInitMode.LEGACY,
+    val diagnosticTrajectory: Boolean = false,
+    val diagnosticCheckpointDir: String? = null,
     val hiddenDimension: Int = dimension,
     val outputDimension: Int = maxOf(1, dimension / 2),
 ) {
@@ -163,6 +186,9 @@ data class BenchmarkConfig(
             if (correctnessInterval != seed.toInt()) {
                 return "EXACT_SEED requires correctnessInterval == seed"
             }
+        }
+        if (trainingStabilityMode == TrainingStabilityMode.RESIDUAL_BRANCH_SCALING) {
+            return "RESIDUAL_BRANCH_SCALING is reserved and unsupported on device"
         }
 
         val matrixElements = dimension.toLong() * dimension.toLong()

@@ -81,6 +81,10 @@ class HeadlessDeviceTestRunner {
                         warmupSteps = 0, learningRate = 0.1f, seed = 20_260_710L, sampleCount = 2,
                         epochs = 0, measuredSteps = 0, correctnessInterval = 1, benchmarkMode = false,
                         seedSelectionMode = 0,
+                        trainingStabilityMode = 0,
+                        depthPairInitMode = 0,
+                        diagnosticTrajectory = false,
+                        diagnosticCheckpointDir = null,
                         progressCallback = ProgressCallback { message ->
                             NativeProgressParser.parse(message)?.let { notification?.onProgress(it) }
                         },

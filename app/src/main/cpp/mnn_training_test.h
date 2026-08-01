@@ -35,6 +35,19 @@ struct TrainingConfig {
     //       `seed`, must be >= 1, and must equal correctnessInterval so that
     //       derived protocol flags match the legacy seed-k process slice.
     int seedSelectionMode = 0;
+    // Explicit experimental training-stability mode (training_stability.h).
+    // LEGACY is the default and keeps every established hash.
+    int trainingStabilityMode = 0;
+    // Paired-depth diagnostic initialization assertion (training_stability.h).
+    int depthPairInitMode = 0;
+    // Diagnostics: when true, the formal loop emits one trajectory_metrics
+    // record per training step.
+    bool diagnosticTrajectory = false;
+    // Diagnostics: when non-empty, private checkpoints are written to this
+    // app-private directory at the established checkpoint steps. The path is
+    // validated on the Kotlin side to stay below the app files directory;
+    // contents are never part of public artifacts.
+    std::string diagnosticCheckpointDir;
 };
 
 struct TrainingOutcome {

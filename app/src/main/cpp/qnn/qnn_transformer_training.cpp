@@ -4,13 +4,16 @@
 #include "qnn_first_nonfinite_diagnostics.h"
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
+#include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
+#include "../training_stability.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <numeric>
@@ -46,7 +49,23 @@ struct LateNonfiniteCheckpoint {
 void reportLateCheckpoint(const std::string &prefix,
                           const LateNonfiniteCheckpoint &checkpoint,
                           const tiny_lm::Config &config, float lr,
-                          float clipThreshold, std::ostringstream &report);
+                          float clipThreshold, std::ostringstream &report,
+                          std::uint32_t stabilityMode = 0,
+                          std::uint32_t pairInitMode = 0,
+                          std::uint32_t totalSteps = 0);
+namespace first_nonfinite_ns_fwd = phonelm::qnn::first_nonfinite;
+first_nonfinite_ns_fwd::Checkpoint privateLateCheckpoint(
+    const tiny_lm::Config &config, const LateNonfiniteCheckpoint &checkpoint,
+    float lr, float clipThreshold, std::uint32_t stabilityMode = 0,
+    std::uint32_t pairInitMode = 0, std::uint32_t totalSteps = 0);
+// Private checkpoint / phase-1 evaluation step schedule shared by the dump
+// lambda and the trajectory observer. Normal training observers only; they
+// never touch training state.
+inline const std::vector<int> &dumpStepSchedule() {
+  static const std::vector<int> steps{0,  1,  2,  4,  8,   16,  32,  64,
+                                      96, 128, 160, 192, 224, 256, 288, 320};
+  return steps;
+}
 std::vector<float> mm(const std::vector<float> &a, const std::vector<float> &b,
                       uint32_t rows, uint32_t inner, uint32_t cols) {
   std::vector<float> o(size_t(rows) * cols);
@@ -1465,7 +1484,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               float requestedLearningRate = 0.0f,
                               int firstSeed = 1,
                               const char* seedSelectionMode = "COUNT_FROM_ONE",
-                              int requestedSeed = 0) {
+                              int requestedSeed = 0,
+                              std::uint32_t stabilityMode = 0,
+                              std::uint32_t pairInitMode = 0,
+                              bool diagnosticTrajectory = false,
+                              const std::string& checkpointDir = {}) {
   // These are part of the model configuration, not a reporting-only scale
   // label.  The CPU reference and the QNN graph receive exactly the same
   // shape contract below.
@@ -1488,6 +1511,32 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   if (requestedLearningRate > 0.0f)
     selected.lr = requestedLearningRate;
   const bool formalPostFix = candidate == 3;
+  if (const char* stabilityError =
+          phonelm::validateTrainingStabilityMode(stabilityMode)) {
+    return std::string(
+               "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=") +
+           stabilityError + '\n';
+  }
+  if (const char* pairError = phonelm::validateDepthPairInitMode(pairInitMode)) {
+    return std::string(
+               "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=") +
+           pairError + '\n';
+  }
+  if (stabilityMode != 0 && !(formalPostFix && inferenceOnly)) {
+    return std::string(
+               "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\nerror="
+               "training stability modes are restricted to candidate 3 "
+               "formal protocol runs\n");
+  }
+  if (stabilityMode == 6) {  // GRADIENT_CLIP_1
+    selected.gradientClipping = true;
+    selected.clipThreshold = 1.0f;
+  }
+  int checkpointDumpErrors = 0;
+  std::ostringstream checkpointDumpSteps;
   const auto resources = tiny_lm::resourceEstimate(config);
   if (!resources.ok) {
     return "TINY_LANGUAGE_MODEL\nstatus=FAILED\nfailure_classification=" +
@@ -2054,8 +2103,68 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     double finalGradientNorm = 0.0;
     double finalCpuGradientNorm = 0.0;
     auto htp = tiny_lm::initialParameters(config, seed), cpu = htp;
+    if (pairInitMode == 1) {
+      // PAIRED_SHARED_PREFIX diagnostic assertion: shared tensors must be
+      // identical to the one-layer-shallower model for the same seed. The
+      // established phase-seeded initialization satisfies this structurally;
+      // anything else fails closed here.
+      if (config.numLayers < 2) {
+        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+               "error=PAIRED_SHARED_PREFIX requires at least two layers\n";
+      }
+      tiny_lm::Config shallower = config;
+      shallower.numLayers = config.numLayers - 1;
+      if (!phonelm::sharedPrefixParametersEqual(
+              tiny_lm::initialParameters(shallower, seed), htp)) {
+        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+               "error=PAIRED_SHARED_PREFIX shared-parameter mismatch\n";
+      }
+    }
+    htp = phonelm::applyInitStability(config, std::move(htp), stabilityMode);
+    cpu = htp;
     auto htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
     auto cpuFirst = htpFirst, cpuSecond = htpFirst;
+    auto dumpPrivateCheckpoint = [&](int completedStep) {
+      if (checkpointDir.empty()) return;
+      if (std::find(dumpStepSchedule().begin(), dumpStepSchedule().end(),
+                    completedStep) == dumpStepSchedule().end())
+        return;
+      const uint32_t pattern = uint32_t(completedStep % 4);
+      const auto dumpBatch = languageBatch(config, pattern, 0);
+      const LateNonfiniteCheckpoint state{seed, completedStep, htp, htpFirst,
+                                          htpSecond, dumpBatch.first,
+                                          dumpBatch.second};
+      const auto privateCheckpoint = privateLateCheckpoint(
+          config, state, selected.lr, selected.clipThreshold, stabilityMode,
+          pairInitMode, uint32_t(selected.steps));
+      std::vector<std::uint8_t> encoded;
+      std::string encodeError;
+      if (!first_nonfinite_ns_fwd::encodeCheckpoint(privateCheckpoint, &encoded,
+                                                    &encodeError)) {
+        ++checkpointDumpErrors;
+        return;
+      }
+      const std::string path = checkpointDir + "/ckpt_seed" +
+                               std::to_string(seed) + "_step" +
+                               std::to_string(completedStep) + ".bin";
+      std::ofstream file(path, std::ios::binary | std::ios::trunc);
+      if (!file) {
+        ++checkpointDumpErrors;
+        return;
+      }
+      file.write(reinterpret_cast<const char *>(encoded.data()),
+                 std::streamsize(encoded.size()));
+      file.close();
+      if (!file) {
+        ++checkpointDumpErrors;
+        return;
+      }
+      if (checkpointDumpSteps.tellp() > 0) checkpointDumpSteps << ',';
+      checkpointDumpSteps << completedStep;
+    };
+    dumpPrivateCheckpoint(0);
     LanguageQuality initial;
     if (!htpLanguageQuality(runtime, config, htp, 1, initial, error))
       return failure("adam_initial_eval", error, runtime);
@@ -2085,9 +2194,13 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       finalCpuGradientNorm = gradientNorm(cpuGradient.gradients);
       const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
       const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+      // Scheduled learning rate (LEGACY returns selected.lr unconditionally).
+      const float stepLearningRate = phonelm::stabilityLearningRate(
+          stabilityMode, selected.lr, std::uint32_t(step),
+          std::uint32_t(selected.steps));
       const auto cpuUpdate = tiny_lm::adamUpdate(
-          cpu, cpuGradient.gradients, cpuFirst, cpuSecond, selected.lr, .9f,
-          .999f, 1e-8f, c1, c2);
+          cpu, cpuGradient.gradients, cpuFirst, cpuSecond, stepLearningRate,
+          .9f, .999f, 1e-8f, c1, c2);
       if (formalPostFix)
         cpuAllStepsFinite =
             cpuAllStepsFinite && std::isfinite(cpuGradient.loss) &&
@@ -2132,9 +2245,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       maximumPreclipGradientNorm =
           std::max(maximumPreclipGradientNorm, preclipGradientNorm);
       if (!executeLanguageAdam(runtime, htp, htpGradient.gradients, htpFirst,
-                               htpSecond, selected.lr, step, clipScale, htpNext,
-                               firstNext, secondNext, &rawHtpUpdate, error,
-                               optimizerGraphElements)) {
+                               htpSecond, stepLearningRate, step, clipScale,
+                               htpNext, firstNext, secondNext, &rawHtpUpdate,
+                               error, optimizerGraphElements)) {
         std::ostringstream report;
         report << "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
                << "failure_classification=QNN_EXECUTE\n"
@@ -2328,6 +2441,41 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                    << "_next_parameter_canonical_hash="
                    << canonicalFloatSha256(rawHtpUpdate.weightNext) << '\n';
       }
+      if (diagnosticTrajectory) {
+        // One record per training step: HTP loss and HTP logits; accuracy,
+        // margin and probability are derived host-side from the same HTP
+        // output already copied out for loss/accuracy reporting.
+        const double update = parameterUpdateNorm(htp, htpNext);
+        const double norm = paramNorm(htp);
+        double logitMaxAbs = 0.0, marginSum = 0.0, probabilitySum = 0.0;
+        for (uint32_t row = 0; row < config.tokens; ++row) {
+          const size_t base = size_t(row) * config.vocabularySize;
+          uint32_t truth = 0;
+          float other = -std::numeric_limits<float>::infinity();
+          for (uint32_t column = 0; column < config.vocabularySize; ++column) {
+            logitMaxAbs =
+                std::max(logitMaxAbs,
+                         std::abs(double(htpGradient.logits[base + column])));
+            if (batch.second[base + column] > .5f) truth = column;
+          }
+          for (uint32_t column = 0; column < config.vocabularySize; ++column)
+            if (column != truth)
+              other = std::max(other, htpGradient.logits[base + column]);
+          marginSum += htpGradient.logits[base + truth] - other;
+          probabilitySum += htpGradient.probabilities[base + truth];
+        }
+        const bool stepFinite =
+            std::isfinite(htpGradient.loss) && finiteParams(htpNext) &&
+            finiteParams(firstNext) && finiteParams(secondNext);
+        trajectory << "trajectory_metrics_seed_" << seed << "_step_" << step
+                   << '=' << htpGradient.loss << ','
+                   << seedStepAccuracies.back() << ','
+                   << preclipGradientNorm << ',' << update << ',' << norm
+                   << ',' << (norm ? update / norm : 0) << ',' << logitMaxAbs
+                   << ',' << marginSum / config.tokens << ','
+                   << probabilitySum / config.tokens << ",0,"
+                   << (stepFinite ? "true" : "false") << '\n';
+      }
       cpu = cpuUpdate.next;
       cpuFirst = cpuUpdate.firstMoment;
       cpuSecond = cpuUpdate.secondMoment;
@@ -2343,6 +2491,23 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         break;
       }
       seedCompletedSteps = step;
+      dumpPrivateCheckpoint(step);
+      if (diagnosticTrajectory &&
+          std::find(dumpStepSchedule().begin(), dumpStepSchedule().end(), step) !=
+              dumpStepSchedule().end()) {
+        // Read-only phase-1 evaluation at the private-checkpoint steps. The
+        // extra executes do not touch training state; observer-effect is
+        // ruled out by the untapped final-hash equality of the LEGACY mode.
+        LanguageQuality checkpointEval;
+        if (htpLanguageQuality(runtime, config, htp, 1, checkpointEval,
+                               error)) {
+          trajectory << "trajectory_eval_seed_" << seed << "_step_" << step
+                     << '=' << checkpointEval.loss << ','
+                     << checkpointEval.accuracy << ','
+                     << checkpointEval.meanMargin << ','
+                     << checkpointEval.minimumMargin << '\n';
+        }
+      }
     }
     LanguageQuality finalAggregate;
     for (uint32_t pattern = 0; pattern < 4; ++pattern) {
@@ -3265,7 +3430,22 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           << "\nbinding_audit_all_outputs_finite="
           << (scalingAuditFinite ? "true" : "false")
           << "\ntraining_phase=0"
-          << "\nglobal_gradient_clipping=disabled"
+          << "\nglobal_gradient_clipping="
+          << (selected.gradientClipping ? "enabled" : "disabled")
+          << "\nlearning_rate_schedule="
+          << (stabilityMode == 1 ? "warmup64_linear"
+                                 : (stabilityMode == 2 ? "decay_linear_to_zero"
+                                                       : "constant"))
+          << "\ntraining_stability_mode="
+          << phonelm::trainingStabilityModeName(stabilityMode)
+          << "\ndepth_pair_init_mode="
+          << phonelm::depthPairInitModeName(pairInitMode)
+          << "\ndiagnostic_trajectory="
+          << (diagnosticTrajectory ? "true" : "false")
+          << "\ncheckpoint_dump_steps="
+          << (checkpointDumpSteps.str().empty() ? "NONE"
+                                                : checkpointDumpSteps.str())
+          << "\ncheckpoint_dump_errors=" << checkpointDumpErrors
           << "\nformal_oracle_case_count=" << formalOracleCaseCount
           << "\nformal_free_case_count=" << formalFreeCaseCount
           << "\nformal_prefix_logits_comparison_count="
@@ -3474,10 +3654,14 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
 namespace first_nonfinite = phonelm::qnn::first_nonfinite;
 
 first_nonfinite::Config lateDiagnosticConfig(const tiny_lm::Config &config,
-                                              float lr, float clipThreshold) {
+                                              float lr, float clipThreshold,
+                                              std::uint32_t stabilityMode = 0,
+                                              std::uint32_t pairInitMode = 0,
+                                              std::uint32_t totalSteps = 0) {
   return {config.tokens, config.vocabularySize, config.dimension,
           config.feedForwardDimension, config.numLayers, config.numHeads,
-          config.epsilon, lr, .9f, .999f, 1.0e-8f, clipThreshold};
+          config.epsilon, lr, .9f, .999f, 1.0e-8f, clipThreshold,
+          stabilityMode, pairInitMode, totalSteps};
 }
 
 std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
@@ -3505,9 +3689,11 @@ std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
 
 first_nonfinite::Checkpoint privateLateCheckpoint(
     const tiny_lm::Config &config, const LateNonfiniteCheckpoint &checkpoint,
-    float lr, float clipThreshold) {
+    float lr, float clipThreshold, std::uint32_t stabilityMode,
+    std::uint32_t pairInitMode, std::uint32_t totalSteps) {
   first_nonfinite::Checkpoint result;
-  result.config = lateDiagnosticConfig(config, lr, clipThreshold);
+  result.config = lateDiagnosticConfig(config, lr, clipThreshold, stabilityMode,
+                                       pairInitMode, totalSteps);
   result.seed = uint32_t(checkpoint.seed);
   result.completedStep = uint32_t(checkpoint.completedStep);
   result.nextOptimizerStep = uint32_t(checkpoint.completedStep + 1);
@@ -3534,14 +3720,16 @@ std::string privateBytesHex(const std::vector<uint8_t> &bytes) {
 bool appendPrivateCheckpointCodec(
     const std::string &prefix, const tiny_lm::Config &config,
     const LateNonfiniteCheckpoint &checkpoint, float lr, float clipThreshold,
-    std::ostringstream &report) {
+    std::ostringstream &report, std::uint32_t stabilityMode = 0,
+    std::uint32_t pairInitMode = 0, std::uint32_t totalSteps = 0) {
   const auto privateCheckpoint =
-      privateLateCheckpoint(config, checkpoint, lr, clipThreshold);
+      privateLateCheckpoint(config, checkpoint, lr, clipThreshold,
+                            stabilityMode, pairInitMode, totalSteps);
   std::vector<uint8_t> encoded;
   std::string error;
   const bool encodedOk = first_nonfinite::encodeCheckpoint(
       privateCheckpoint, &encoded, &error);
-  report << prefix << "_checkpoint_codec_format=phonelm.qnn.first_nonfinite.v1\n"
+  report << prefix << "_checkpoint_codec_format=phonelm.qnn.first_nonfinite.v2\n"
          << prefix << "_checkpoint_codec_private_device_only=true\n"
          << prefix << "_checkpoint_codec_valid="
          << (encodedOk ? "true" : "false") << '\n'
@@ -3724,7 +3912,10 @@ void reportLateCheckpoint(const std::string &prefix,
                           const LateNonfiniteCheckpoint &checkpoint,
                           const tiny_lm::Config &config, float lr,
                           float clipThreshold,
-                          std::ostringstream &report) {
+                          std::ostringstream &report,
+                          std::uint32_t stabilityMode,
+                          std::uint32_t pairInitMode,
+                          std::uint32_t totalSteps) {
   report << prefix << "_checkpoint_format=phonelm.qnn.late_nonfinite.v1\n"
          << prefix << "_checkpoint_private_raw=true\n"
          << prefix << "_checkpoint_capture_kind=LAST_FINITE_AND_FAILING_STEP_INPUT\n"
@@ -3733,7 +3924,7 @@ void reportLateCheckpoint(const std::string &prefix,
          << prefix << "_checkpoint_completed_step=" << checkpoint.completedStep << '\n'
          << prefix << "_checkpoint_optimizer_next_step=" << checkpoint.completedStep + 1 << '\n';
   appendPrivateCheckpointCodec(prefix, config, checkpoint, lr, clipThreshold,
-                               report);
+                               report, stabilityMode, pairInitMode, totalSteps);
   const auto parameters = flattenLanguageParameters(checkpoint.parameters);
   const auto first = flattenLanguageParameters(checkpoint.firstMoment);
   const auto second = flattenLanguageParameters(checkpoint.secondMoment);
@@ -4464,28 +4655,20 @@ std::string runTinyTransformerTrainingExperiment(
     }
     int firstSeed = 1;
     const char* seedSelectionMode = "COUNT_FROM_ONE";
+    if (const char* seedError = phonelm::validateSeedSelection(
+            std::uint32_t(trainingConfig.seedSelectionMode),
+            trainingConfig.seed,
+            std::int64_t(trainingConfig.correctnessInterval))) {
+      return std::string(
+                 "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+                 "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=") +
+             seedError +
+             " (EXACT_SEED requires correctness_interval == seed with "
+             "1 <= seed <= INT32_MAX)\n";
+    }
     if (trainingConfig.seedSelectionMode == 1) {
-      // EXACT_SEED: run exactly one established seed k. The seed value rides
-      // in TrainingConfig.seed (uint64) and must equal correctnessInterval so
-      // derived flags (scaling smoke threshold etc.) match the legacy seed-k
-      // process slice. Contradictory or out-of-range requests fail closed.
       seedSelectionMode = "EXACT_SEED";
-      const std::uint64_t exactSeed = trainingConfig.seed;
-      if (exactSeed < 1 ||
-          exactSeed > static_cast<std::uint64_t>(
-                          std::numeric_limits<int>::max()) ||
-          exactSeed != static_cast<std::uint64_t>(
-                           trainingConfig.correctnessInterval)) {
-        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
-               "failure_classification=APP_CONFIGURATION_VALIDATION\n"
-               "error=EXACT_SEED requires correctness_interval == seed with "
-               "1 <= seed <= INT32_MAX\n";
-      }
       firstSeed = trainingConfig.correctnessInterval;
-    } else if (trainingConfig.seedSelectionMode != 0) {
-      return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
-             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
-             "error=unknown seed_selection_mode\n";
     }
     tiny_lm::Config config;
     config.tokens = static_cast<uint32_t>(trainingConfig.sampleCount);
@@ -4501,7 +4684,11 @@ std::string runTinyTransformerTrainingExperiment(
         scalingSmoke, trainingConfig.epochs, trainingConfig.measuredSteps,
         progress, trainingConfig.steps, numericalProbe,
         trainingConfig.learningRate, firstSeed, seedSelectionMode,
-        trainingConfig.correctnessInterval);
+        trainingConfig.correctnessInterval,
+        std::uint32_t(trainingConfig.trainingStabilityMode),
+        std::uint32_t(trainingConfig.depthPairInitMode),
+        trainingConfig.diagnosticTrajectory,
+        trainingConfig.diagnosticCheckpointDir);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }
@@ -4589,12 +4776,17 @@ std::string replayFirstNonfiniteCheckpoint(
       ? float(std::min(1.0, double(checkpoint.config.clipThreshold) /
                              (cpuNorm + 1.0e-6))) : 1.0f;
   const float c1 = float(1.0 / (1.0 - std::pow(checkpoint.config.beta1,
-                                                double(checkpoint.nextOptimizerStep))));
+                                                 double(checkpoint.nextOptimizerStep))));
   const float c2 = float(1.0 / (1.0 - std::pow(checkpoint.config.beta2,
-                                                double(checkpoint.nextOptimizerStep))));
+                                                 double(checkpoint.nextOptimizerStep))));
+  // Scheduled modes replay the same schedule, anchored by the recorded
+  // totalSteps; LEGACY is a constant pass-through.
+  const float replayLearningRate = phonelm::stabilityLearningRate(
+      checkpoint.config.trainingStabilityMode, checkpoint.config.learningRate,
+      checkpoint.nextOptimizerStep, checkpoint.config.totalSteps);
   const auto cpuUpdate = tiny_lm::adamUpdate(
       parameters, scaleLanguageParameters(cpuGradient.gradients, cpuScale),
-      firstMoment, secondMoment, checkpoint.config.learningRate,
+      firstMoment, secondMoment, replayLearningRate,
       checkpoint.config.beta1, checkpoint.config.beta2,
       checkpoint.config.adamEpsilon, c1, c2);
   Runtime runtime;
@@ -4612,6 +4804,15 @@ std::string replayFirstNonfiniteCheckpoint(
          << "checkpoint_seed=" << checkpoint.seed << '\n'
          << "checkpoint_completed_step=" << checkpoint.completedStep << '\n'
          << "checkpoint_optimizer_next_step=" << checkpoint.nextOptimizerStep << '\n'
+         << "checkpoint_training_stability_mode="
+         << phonelm::trainingStabilityModeName(
+                checkpoint.config.trainingStabilityMode)
+         << '\n'
+         << "checkpoint_depth_pair_init_mode="
+         << phonelm::depthPairInitModeName(checkpoint.config.depthPairInitMode)
+         << '\n'
+         << "checkpoint_total_steps=" << checkpoint.config.totalSteps << '\n'
+         << "replay_learning_rate=" << replayLearningRate << '\n'
          << "replay_count=" << repeatCount << '\n'
          << "cpu_forward_success="
          << (std::isfinite(cpuGradient.loss) ? "true" : "false") << '\n'
@@ -4638,6 +4839,10 @@ std::string replayFirstNonfiniteCheckpoint(
   std::vector<std::string> htpHashes;
   bool htpForwardBackwardSuccess = true, htpAdamSuccess = true;
   bool htpAdamAttempted = false;
+  TinyTransformerTrainingOutputs htpGradientFirst;
+  bool htpGradientFirstValid = false;
+  Params htpNextFirst, htpMFirst, htpVFirst;
+  bool htpAdamFirstOk = false;
   for (uint32_t repeat = 0; repeat < repeatCount; ++repeat) {
     TinyTransformerTrainingOutputs htpGradient;
     std::string executionError;
@@ -4754,7 +4959,7 @@ std::string replayFirstNonfiniteCheckpoint(
     htpAdamAttempted = true;
     const bool adamOk = executeLanguageAdam(
         runtime, parameters, htpGradient.gradients, firstMoment, secondMoment,
-        checkpoint.config.learningRate, int(checkpoint.nextOptimizerStep),
+        replayLearningRate, int(checkpoint.nextOptimizerStep),
         htpScale, htpNext, htpM, htpV, &htpAdam, executionError);
     report << "repeat_" << repeat << "_htp_adam_success="
            << (adamOk ? "true" : "false") << '\n';
@@ -4763,8 +4968,96 @@ std::string replayFirstNonfiniteCheckpoint(
       report << "repeat_" << repeat << "_htp_adam_error=" << executionError << '\n';
       continue;
     }
+    if (repeat == 0) {
+      htpGradientFirst = htpGradient;
+      htpGradientFirstValid = true;
+      htpNextFirst = htpNext;
+      htpMFirst = htpM;
+      htpVFirst = htpV;
+      htpAdamFirstOk = true;
+    }
     emitSummary("repeat_" + std::to_string(repeat) + "_htp_adam_parameters",
                 flattenLanguageParameters(htpNext), report);
+  }
+  // CPU/HTP attribution from the identical checkpoint state: all four
+  // (CPU|HTP gradient) x (CPU|HTP Adam) combinations, plus the one-step
+  // continuation loss each path produces. htpGradientFirst from repeat 0 is
+  // deterministic (htp_repeat_deterministic evidence above).
+  if (htpGradientFirstValid && htpAdamFirstOk) {
+    const double firstHtpNorm = gradientNorm(htpGradientFirst.gradients);
+    const float firstHtpScale =
+        checkpoint.config.clipThreshold > 0.0f && std::isfinite(firstHtpNorm) &&
+                firstHtpNorm > 0.0
+            ? float(std::min(1.0, double(checkpoint.config.clipThreshold) /
+                                    (firstHtpNorm + 1.0e-6)))
+            : 1.0f;
+    const auto htpClipped = scaleLanguageParameters(htpGradientFirst.gradients,
+                                                    firstHtpScale);
+    const auto pathB = tiny_lm::adamUpdate(
+        parameters, htpClipped, firstMoment, secondMoment, replayLearningRate,
+        checkpoint.config.beta1, checkpoint.config.beta2,
+        checkpoint.config.adamEpsilon, c1, c2);
+    std::string twoByTwoError;
+    Params pathC, pathCm, pathCv;
+    AdamOptimizerOutputs pathCRaw;
+    const bool pathCOk = executeLanguageAdam(
+        runtime, parameters, cpuGradient.gradients, firstMoment, secondMoment,
+        replayLearningRate, int(checkpoint.nextOptimizerStep), cpuScale,
+        pathC, pathCm, pathCv, &pathCRaw, twoByTwoError);
+    const auto flatParams = flattenLanguageParameters(parameters);
+    const auto updateVector = [&](const Params &next) {
+      const auto flatNext = flattenLanguageParameters(next);
+      std::vector<float> delta(flatNext.size());
+      for (size_t i = 0; i < delta.size(); ++i)
+        delta[i] = flatNext[i] - flatParams[i];
+      return delta;
+    };
+    const auto uA = updateVector(cpuUpdate.next);
+    const auto uB = updateVector(pathB.next);
+    const auto uD = updateVector(htpNextFirst);
+    auto deltaL2 = [](const std::vector<float> &a, const std::vector<float> &b) {
+      double s = 0;
+      for (size_t i = 0; i < a.size(); ++i) {
+        const double d = double(a[i]) - double(b[i]);
+        s += d * d;
+      }
+      return std::sqrt(s);
+    };
+    auto vecL2 = [](const std::vector<float> &a) {
+      double s = 0;
+      for (float x : a) s += double(x) * double(x);
+      return std::sqrt(s);
+    };
+    auto nextLoss = [&](const Params &next) {
+      return tiny_lm::forwardBackward(config, checkpoint.input,
+                                      checkpoint.target, next, 0.0f)
+          .loss;
+    };
+    const std::vector<float> uC =
+        pathCOk ? updateVector(pathC) : std::vector<float>();
+    report << "two_by_two_cpu_grad_cpu_adam_update_l2=" << vecL2(uA) << '\n'
+           << "two_by_two_htp_grad_cpu_adam_update_l2=" << vecL2(uB) << '\n'
+           << "two_by_two_htp_grad_htp_adam_update_l2=" << vecL2(uD) << '\n'
+           << "two_by_two_cpu_grad_htp_adam_execute_success="
+           << (pathCOk ? "true" : "false") << '\n';
+    if (pathCOk) {
+      report << "two_by_two_cpu_grad_htp_adam_update_l2=" << vecL2(uC) << '\n'
+             << "two_by_two_gradient_source_update_rel_l2="
+             << deltaL2(uA, uB) / std::max(1.0e-12, vecL2(uA)) << '\n'
+             << "two_by_two_optimizer_source_update_rel_l2="
+             << deltaL2(uA, uC) / std::max(1.0e-12, vecL2(uA)) << '\n'
+             << "two_by_two_full_htp_update_rel_l2="
+             << deltaL2(uA, uD) / std::max(1.0e-12, vecL2(uA)) << '\n';
+    }
+    report << "two_by_two_cpu_grad_cpu_adam_next_step_loss="
+           << nextLoss(cpuUpdate.next) << '\n'
+           << "two_by_two_htp_grad_cpu_adam_next_step_loss="
+           << nextLoss(pathB.next) << '\n'
+           << "two_by_two_htp_grad_htp_adam_next_step_loss="
+           << nextLoss(htpNextFirst) << '\n';
+    if (pathCOk)
+      report << "two_by_two_cpu_grad_htp_adam_next_step_loss="
+             << nextLoss(pathC) << '\n';
   }
   if (tapSet == TinyTransformerTrainingTapSet::LN2_SQUARE) {
     const std::vector<float> minimalInput{279.75f};

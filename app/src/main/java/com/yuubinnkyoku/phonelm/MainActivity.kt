@@ -147,19 +147,43 @@ class MainActivity : Activity() {
         val seedSelectionMode = seedSelectionName?.let {
             runCatching { SeedSelectionMode.valueOf(it) }.getOrNull()
         } ?: SeedSelectionMode.COUNT_FROM_ONE
+        val stabilityName = intent.getStringExtra("phonelm.training_stability_mode")
+        val trainingStabilityMode = stabilityName?.let {
+            runCatching { TrainingStabilityMode.valueOf(it) }.getOrNull()
+        } ?: TrainingStabilityMode.LEGACY
+        val pairInitName = intent.getStringExtra("phonelm.depth_pair_init_mode")
+        val depthPairInitMode = pairInitName?.let {
+            runCatching { DepthPairInitMode.valueOf(it) }.getOrNull()
+        } ?: DepthPairInitMode.LEGACY
+        val diagnosticTrajectory = intent.getBooleanExtra("phonelm.diagnostic_trajectory", false)
+        val checkpointDir = intent.getStringExtra("phonelm.checkpoint_dump_dir")?.let { requestedDir ->
+            // Fail closed: private checkpoints never leave the app files dir.
+            filesDir.toPath().resolve("checkpoints").resolve(requestedDir)
+                .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
+        }
+        if (checkpointDir != null) checkpointDir.mkdirs()
         val config = BenchmarkConfig(backend = Backend.CPU, batchSize = batchSize, dimension = dimension,
             steps = steps, warmupSteps = warmupSteps, learningRate = learningRate, seed = seed,
             sampleCount = sampleCount, epochs = epochs, measuredSteps = measuredSteps,
             correctnessInterval = correctnessInterval, benchmarkMode = benchmarkMode,
             seedSelectionMode = seedSelectionMode,
+            trainingStabilityMode = trainingStabilityMode,
+            depthPairInitMode = depthPairInitMode,
+            diagnosticTrajectory = diagnosticTrajectory,
+            diagnosticCheckpointDir = checkpointDir?.absolutePath,
             hiddenDimension = hiddenDimension, outputDimension = outputDimension)
         applyPreset(config)
         Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
-        val validationError = if (seedSelectionName != null &&
-            seedSelectionMode.name != seedSelectionName) {
-            "unknown phonelm.seed_selection_mode: $seedSelectionName"
-        } else {
-            config.validationError()
+        val validationError = when {
+            seedSelectionName != null && seedSelectionMode.name != seedSelectionName ->
+                "unknown phonelm.seed_selection_mode: $seedSelectionName"
+            stabilityName != null && trainingStabilityMode.name != stabilityName ->
+                "unknown phonelm.training_stability_mode: $stabilityName"
+            pairInitName != null && depthPairInitMode.name != pairInitName ->
+                "unknown phonelm.depth_pair_init_mode: $pairInitName"
+            intent.getStringExtra("phonelm.checkpoint_dump_dir") != null && checkpointDir == null ->
+                "phonelm.checkpoint_dump_dir must resolve under the app files dir"
+            else -> config.validationError()
         }
         if (validationError != null) {
             Log.e("PhoneLMDeviceTest", "DEVICE_TEST_REJECTED error=$validationError")
@@ -189,6 +213,10 @@ class MainActivity : Activity() {
                 correctnessInterval = config.correctnessInterval,
                 benchmarkMode = config.benchmarkMode,
                 seedSelectionMode = config.seedSelectionMode.nativeCode,
+                trainingStabilityMode = config.trainingStabilityMode.nativeCode,
+                depthPairInitMode = config.depthPairInitMode.nativeCode,
+                diagnosticTrajectory = config.diagnosticTrajectory,
+                diagnosticCheckpointDir = config.diagnosticCheckpointDir,
                 progressCallback = ProgressCallback { },
             )
             openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
