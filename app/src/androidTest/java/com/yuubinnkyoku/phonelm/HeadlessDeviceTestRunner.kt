@@ -83,6 +83,7 @@ class HeadlessDeviceTestRunner {
                         seedSelectionMode = 0,
                         trainingStabilityMode = 0,
                         depthPairInitMode = 0,
+                        checkpointSelectionMode = 0,
                         diagnosticTrajectory = false,
                         diagnosticCheckpointDir = null,
                         progressCallback = ProgressCallback { message ->

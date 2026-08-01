@@ -146,6 +146,11 @@ enum class DepthPairInitMode(val nativeCode: Int) {
     PAIRED_SHARED_PREFIX(1),
 }
 
+enum class CheckpointSelectionMode(val nativeCode: Int) {
+    FINAL_STEP(0),
+    BEST_VALIDATION_V1(1),
+}
+
 data class BenchmarkConfig(
     val backend: Backend,
     val batchSize: Int,
@@ -162,6 +167,7 @@ data class BenchmarkConfig(
     val seedSelectionMode: SeedSelectionMode = SeedSelectionMode.COUNT_FROM_ONE,
     val trainingStabilityMode: TrainingStabilityMode = TrainingStabilityMode.LEGACY,
     val depthPairInitMode: DepthPairInitMode = DepthPairInitMode.LEGACY,
+    val checkpointSelectionMode: CheckpointSelectionMode = CheckpointSelectionMode.FINAL_STEP,
     val diagnosticTrajectory: Boolean = false,
     val diagnosticCheckpointDir: String? = null,
     val hiddenDimension: Int = dimension,
@@ -190,7 +196,11 @@ data class BenchmarkConfig(
         if (trainingStabilityMode == TrainingStabilityMode.RESIDUAL_BRANCH_SCALING) {
             return "RESIDUAL_BRANCH_SCALING is reserved and unsupported on device"
         }
-
+        if (checkpointSelectionMode == CheckpointSelectionMode.BEST_VALIDATION_V1 &&
+            sampleCount < 4
+        ) {
+            return "BEST_VALIDATION_V1 requires sampleCount >= 4"
+        }
         val matrixElements = dimension.toLong() * dimension.toLong()
         val batchElements = batchSize.toLong() * dimension.toLong()
         val estimatedBytes = (matrixElements * 3L + batchElements * 6L) * 12L * Float.SIZE_BYTES

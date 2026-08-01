@@ -30,6 +30,7 @@ if ($LASTEXITCODE -ne 0) {
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_hybrid_training.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_graph_shape_validator.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "app\src\main\cpp\validation_checkpoint.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_runtime_stub.cpp") `
     (Join-Path $Root "host_tests\qnn_sdk_independent_test.cpp") `
     -o $QnnSdkIndependentExecutable
@@ -48,6 +49,7 @@ $DepthQualityExecutable = Join-Path $OutputDirectory "depth_quality_test.exe"
     -I (Join-Path $Root "host_tests") `
     (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "app\src\main\cpp\validation_checkpoint.cpp") `
     (Join-Path $Root "host_tests\depth_quality_test.cpp") `
     -o $DepthQualityExecutable
 if ($LASTEXITCODE -ne 0) {

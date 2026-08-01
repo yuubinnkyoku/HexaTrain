@@ -12,6 +12,9 @@ sealed interface RunProgress {
         val phase: String? = null,
         val seed: Long? = null,
         val seeds: Long? = null,
+        val checkpointSelectionMode: String? = null,
+        val bestValidationStep: Long? = null,
+        val bestValidationLoss: Double? = null,
     ) : RunProgress
     data class Completed(val metric: String?) : RunProgress
     data class Failed(val reason: String) : RunProgress
@@ -33,6 +36,9 @@ internal object NativeProgressParser {
                 phase = values["phase"],
                 seed = values["seed"]?.toLongOrNull(),
                 seeds = values["seeds"]?.toLongOrNull(),
+                checkpointSelectionMode = values["checkpoint_selection_mode"],
+                bestValidationStep = values["best_validation_step"]?.toLongOrNull(),
+                bestValidationLoss = values["best_validation_loss"]?.toDoubleOrNull(),
             )
         }
         values["phase"]?.let { return RunProgress.PhaseChanged(it) }

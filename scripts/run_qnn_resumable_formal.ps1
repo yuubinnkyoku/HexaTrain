@@ -13,13 +13,13 @@
 #   against a canonical identity (configuration hash incl. seed selection
 #   mode, git HEAD, APK SHA-256, QAIRT Build ID, steps, result schema), and
 #   promoted atomically (result.tmp -> validate -> result.txt).
-# - ADB transport interruptions are not numeric failures. On reconnect the
+   # - ADB transport interruptions are not numeric failures. On reconnect the
 #   currently-online physical device is re-resolved and the app-private run
 #   context (run id + config hash) must match; otherwise the formal stops.
 # - Mismatched, partial, terminal=false, corrupted, duplicate or wrong-mode
 #   (selection mode / requested / executed seed mismatch) results are rejected
 #   fail-closed and never count as completed. Legacy schema-1 results are
-#   rejected as SCHEMA_MISMATCH, never silently reused as EXACT_SEED results.
+   #   rejected as SCHEMA_MISMATCH, never silently reused as EXACT_SEED results.
 # - Device serials, ADB endpoints, run ids and APK hashes stay private under
 #   build/reports; only aggregate CSVs in docs/results are publishable.
 [CmdletBinding()]
@@ -38,6 +38,7 @@ param(
     [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$LearningRate = '0.003',
     [ValidateSet('UI_VALIDATION', 'CORRECTNESS')][string]$TestMode = 'UI_VALIDATION',
     [ValidateSet('EXACT_SEED', 'COUNT_FROM_ONE')][string]$SeedSelectionMode = 'EXACT_SEED',
+    [ValidateSet('FINAL_STEP', 'BEST_VALIDATION_V1')][string]$CheckpointSelectionMode = 'FINAL_STEP',
     [ValidateRange(600, 86400)][int]$TimeoutSecondsPerAttempt = 21600,
     [ValidateRange(1, 10)][int]$MaxAttemptsPerSeed = 3,
     [ValidateRange(60, 21600)][int]$ReconnectGraceSeconds = 3600,
@@ -50,7 +51,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$ResultSchemaVersion = 2
+$ResultSchemaVersion = 3
 $MaxSeedCount = 5
 
 # ---------------------------------------------------------------------------
@@ -63,17 +64,53 @@ function Get-Sha256Hex([string]$Text) {
     return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
 }
 
+function Add-Fnv1a64([Numerics.BigInteger]$Hash, [byte[]]$Bytes) {
+    $modulus = [Numerics.BigInteger]::Pow(2, 64)
+    foreach ($byte in $Bytes) {
+        $Hash = (($Hash -bxor [Numerics.BigInteger]$byte) * [Numerics.BigInteger]1099511628211) % $modulus
+    }
+    return $Hash
+}
+
+function Get-ValidationSetHash([int]$T) {
+    $hash = [Numerics.BigInteger]1469598103934665603
+    $hash = Add-Fnv1a64 $hash ([BitConverter]::GetBytes([uint32]2))
+    $rules = @(@(0,1,2,3), @(4,5,6,7), @(8,9), @(10,11,12))
+    foreach ($pattern in @(0,1,3)) {
+        $hash = Add-Fnv1a64 $hash ([Text.Encoding]::UTF8.GetBytes("validation_v2_rotated_pattern_$pattern"))
+        $input = [Collections.Generic.List[uint32]]::new()
+        $target = [Collections.Generic.List[uint32]]::new()
+        for ($i = 0; $i -lt $T; $i++) {
+            $rule = $rules[$pattern]
+            $input.Add([uint32]$rule[($i + 2) % $rule.Count])
+            $target.Add([uint32]$rule[($i + 3) % $rule.Count])
+        }
+        foreach ($values in @($input, $target)) {
+            $hash = Add-Fnv1a64 $hash ([BitConverter]::GetBytes([uint64]$values.Count))
+            foreach ($value in $values) {
+                $hash = Add-Fnv1a64 $hash ([BitConverter]::GetBytes([uint32]$value))
+            }
+        }
+    }
+    return 'fnv1a64:' + ([uint64]$hash).ToString('x16')
+}
+
 function Get-CanonicalConfigHash {
     param(
         [int]$T, [int]$V, [int]$D, [int]$Ffn, [int]$L, [int]$H,
-        [string]$Lr, [int]$StepCount, [string]$SeedSelection = 'EXACT_SEED'
+        [string]$Lr, [int]$StepCount, [string]$SeedSelection = 'EXACT_SEED',
+        [string]$CheckpointSelection = 'FINAL_STEP'
     )
     if (($D % $H) -ne 0) { throw 'embedding dimension must be divisible by heads' }
     if ($SeedSelection -notin @('EXACT_SEED', 'COUNT_FROM_ONE')) { throw "unknown seed selection mode: $SeedSelection" }
-    $canonical = "phonelm-formal-config-v2|B=1|T=$T|V=$V|D=$D|FFN=$Ffn|L=$L|H=$H" +
+    if ($CheckpointSelection -notin @('FINAL_STEP', 'BEST_VALIDATION_V1')) { throw "unknown checkpoint selection mode: $CheckpointSelection" }
+    $validationHash = if ($CheckpointSelection -eq 'BEST_VALIDATION_V1') { Get-ValidationSetHash $T } else { 'NOT_APPLICABLE' }
+    $canonical = "phonelm-formal-config-v3|B=1|T=$T|V=$V|D=$D|FFN=$Ffn|L=$L|H=$H" +
         "|headDim=$($D / $H)|lr=$Lr|steps=$StepCount|clip=disabled" +
         "|optimizer=ADAM|mode=QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC|candidate=3" +
-        "|seed_selection=$SeedSelection"
+        "|seed_selection=$SeedSelection|checkpoint_selection=$CheckpointSelection" +
+        "|validation_schema=2|validation_domain=ROTATED_LAST_POSITION_V2" +
+        "|validation_set_hash=$validationHash"
     return Get-Sha256Hex $canonical
 }
 
@@ -83,7 +120,13 @@ function Protect-SeedResult([System.Collections.IDictionary]$Fields) {
     $order = @(
         'result_schema', 'terminal', 'classification', 'device_status',
         'seed', 'steps', 'attempt', 'device_seed_count', 'test_mode',
-        'seed_selection_mode', 'requested_seed', 'executed_seed',
+        'seed_selection_mode', 'checkpoint_selection_mode', 'requested_seed', 'executed_seed',
+        'validation_schema_version', 'validation_set_hash', 'validation_case_count',
+        'selected_step', 'cpu_independent_best_step',
+        'best_validation_loss', 'best_validation_accuracy',
+        'final_step_validation_loss', 'final_step_validation_accuracy',
+        'selected_checkpoint_state_hash', 'selected_checkpoint_persisted',
+        'validation_qnn_nonzero_count', 'validation_nonfinite_count',
         'step_completed', 'initial_loss', 'final_loss', 'final_accuracy',
         'all_steps_finite', 'final_evaluation_finite', 'cpu_all_steps_finite',
         'qnn_nonzero_count', 'nonfinite_count', 'qnn_execute_count',
@@ -148,7 +191,8 @@ function Test-SeedResultContent {
     if ([string]$fields['result_schema'] -ne [string]$Identity['result_schema']) {
         return @{ ok = $false; reason = 'SCHEMA_MISMATCH' }
     }
-    foreach ($key in @('config_hash', 'git_head', 'apk_sha256', 'qairt_build_id', 'steps')) {
+    foreach ($key in @('config_hash', 'git_head', 'apk_sha256', 'qairt_build_id', 'steps',
+            'checkpoint_selection_mode', 'validation_schema_version', 'validation_set_hash')) {
         if ([string]$fields[$key] -ne [string]$Identity[$key]) {
             return @{ ok = $false; reason = "IDENTITY_MISMATCH:$key" }
         }
@@ -157,7 +201,7 @@ function Test-SeedResultContent {
         return @{ ok = $false; reason = 'SEED_MISMATCH' }
     }
     if ([string]$Identity['result_schema'] -ge '2') {
-        # Schema 2 records the seed selection contract explicitly. A result
+        # Schema 2+ records the seed selection contract explicitly. A result
         # produced under another mode or for another requested/executed seed
         # is never reused as this run's seed evidence.
         if ([string]$fields['seed_selection_mode'] -ne [string]$Identity['seed_selection_mode']) {
@@ -169,6 +213,10 @@ function Test-SeedResultContent {
         if ([string]$fields['executed_seed'] -ne [string]$ExpectedSeed) {
             return @{ ok = $false; reason = 'EXECUTED_SEED_MISMATCH' }
         }
+    }
+    if ([string]$Identity['result_schema'] -ge '3' -and
+            [string]$fields['checkpoint_selection_mode'] -ne [string]$Identity['checkpoint_selection_mode']) {
+        return @{ ok = $false; reason = 'CHECKPOINT_SELECTION_MODE_MISMATCH' }
     }
     foreach ($required in @('classification', 'device_status', 'step_completed',
             'qnn_nonzero_count', 'nonfinite_count', 'parameter_hash', 'logits_hash')) {
@@ -299,7 +347,9 @@ function ConvertFrom-DeviceReport {
         [string]$Report,
         [int]$Seed,
         [int]$StepCount,
-        [string]$SeedSelectionMode = 'EXACT_SEED'
+        [string]$SeedSelectionMode = 'EXACT_SEED',
+        [string]$CheckpointSelectionMode = 'FINAL_STEP',
+        [string]$ExpectedValidationSetHash = 'NOT_APPLICABLE'
     )
     $reportMode = Get-ReportValue $Report 'seed_selection_mode'
     if ($reportMode -ne $SeedSelectionMode) {
@@ -321,9 +371,20 @@ function ConvertFrom-DeviceReport {
         poison_remaining = (Get-ReportValue $Report 'app_read_poison_residual_elements')
         device_seed_count = (Get-ReportValue $Report 'seed_count')
         seed_selection_mode = $reportMode
+        checkpoint_selection_mode = $CheckpointSelectionMode
         requested_seed = $deviceRequestedSeed
         executed_seed = [string]$Seed
     }
+    foreach ($pair in @(
+            @('validation_schema_version', $(if ($CheckpointSelectionMode -eq 'BEST_VALIDATION_V1') { '2' } else { 'NOT_APPLICABLE' })),
+            @('validation_set_hash', $ExpectedValidationSetHash),
+            @('validation_case_count', '0'), @('selected_step', [string]$StepCount),
+            @('cpu_independent_best_step', 'NOT_APPLICABLE'), @('best_validation_loss', 'NOT_APPLICABLE'),
+            @('best_validation_accuracy', 'NOT_APPLICABLE'), @('final_step_validation_loss', 'NOT_APPLICABLE'),
+            @('final_step_validation_accuracy', 'NOT_APPLICABLE'),
+            @('selected_checkpoint_state_hash', 'NOT_APPLICABLE'),
+            @('selected_checkpoint_persisted', 'false'), @('validation_qnn_nonzero_count', '0'),
+            @('validation_nonfinite_count', '0'))) { $result[$pair[0]] = $pair[1] }
     $nonzero = Get-ReportValue $Report 'formal_qnn_nonzero_return_count'
     if ($nonzero -match '^\d+$') { $result['qnn_nonzero_count'] = $nonzero }
     if ($classification -in @('SUCCESS', 'NUMERIC_FAILURE') -and
@@ -386,6 +447,34 @@ function ConvertFrom-DeviceReport {
         }
         $result['oracle_exact'] = "$oracleExact/4"
         $result['free_exact'] = "$freeExact/4"
+        if ($CheckpointSelectionMode -eq 'BEST_VALIDATION_V1') {
+            $globalSelection = Get-ReportValue $Report 'checkpoint_selection_mode'
+            $seedSelection = Get-ReportValue $Report "seed_${Seed}_checkpoint_selection_mode"
+            if ($globalSelection -ne $CheckpointSelectionMode -or $seedSelection -ne $CheckpointSelectionMode) {
+                throw "device report checkpoint selection mismatch"
+            }
+            foreach ($pair in @(
+                    @('validation_schema_version', "seed_${Seed}_validation_schema_version"),
+                    @('validation_set_hash', "seed_${Seed}_validation_set_hash"),
+                    @('validation_case_count', "seed_${Seed}_validation_case_count"),
+                    @('selected_step', "seed_${Seed}_selected_step"),
+                    @('cpu_independent_best_step', "seed_${Seed}_cpu_independent_best_step"),
+                    @('best_validation_loss', "seed_${Seed}_best_validation_loss"),
+                    @('best_validation_accuracy', "seed_${Seed}_best_validation_accuracy"),
+                    @('final_step_validation_loss', "seed_${Seed}_final_step_validation_loss"),
+                    @('final_step_validation_accuracy', "seed_${Seed}_final_step_validation_accuracy"),
+                    @('selected_checkpoint_state_hash', "seed_${Seed}_selected_checkpoint_state_hash"),
+                    @('selected_checkpoint_persisted', "seed_${Seed}_selected_checkpoint_persisted"),
+                    @('validation_qnn_nonzero_count', "seed_${Seed}_validation_qnn_nonzero_return_count"),
+                    @('validation_nonfinite_count', "seed_${Seed}_validation_output_nonfinite_count"))) {
+                $value = Get-ReportValue $Report $pair[1]
+                if ($null -eq $value) { throw "device report is missing validation field: $($pair[1])" }
+                $result[$pair[0]] = $value
+            }
+            if ($result['selected_checkpoint_persisted'] -ne 'true') {
+                throw 'device report did not persist the selected checkpoint'
+            }
+        }
     } else {
         $result['first_bad_seed'] = (Get-ReportValue $Report 'first_bad_seed')
         $result['first_bad_step'] = (Get-ReportValue $Report 'first_bad_step')
@@ -420,23 +509,31 @@ function Invoke-SelfTest {
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('phonelm-resumable-formal-selftest-' + [Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($tempRoot) | Out-Null
     try {
+        Assert-SelfTest ((Get-ValidationSetHash 8) -eq 'fnv1a64:8e1411f19126879c') `
+            'validation set hash is pinned'
         $identity = @{
-            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'EXACT_SEED'
+            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'EXACT_SEED' -CheckpointSelection 'FINAL_STEP'
             git_head = '0' * 40
             apk_sha256 = 'a' * 64
             qairt_build_id = 'selftest-build'
             steps = '320'
             result_schema = [string]$ResultSchemaVersion
             seed_selection_mode = 'EXACT_SEED'
+            checkpoint_selection_mode = 'FINAL_STEP'
+            validation_schema_version = 'NOT_APPLICABLE'
+            validation_set_hash = 'NOT_APPLICABLE'
         }
         $legacyIdentity = @{
-            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'COUNT_FROM_ONE'
+            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'COUNT_FROM_ONE' -CheckpointSelection 'FINAL_STEP'
             git_head = '0' * 40
             apk_sha256 = 'a' * 64
             qairt_build_id = 'selftest-build'
             steps = '320'
             result_schema = [string]$ResultSchemaVersion
             seed_selection_mode = 'COUNT_FROM_ONE'
+            checkpoint_selection_mode = 'FINAL_STEP'
+            validation_schema_version = 'NOT_APPLICABLE'
+            validation_set_hash = 'NOT_APPLICABLE'
         }
         $seedDir = Join-Path $tempRoot 'seeds'
 
@@ -448,6 +545,14 @@ function Invoke-SelfTest {
                 device_seed_count = if ($Id['seed_selection_mode'] -eq 'EXACT_SEED') { '1' } else { [string]$Seed }
                 test_mode = 'UI_VALIDATION'
                 seed_selection_mode = $Id['seed_selection_mode']
+                checkpoint_selection_mode = $Id['checkpoint_selection_mode']
+                validation_schema_version = 'NOT_APPLICABLE'; validation_set_hash = 'NOT_APPLICABLE'
+                validation_case_count = '0'; selected_step = $Id['steps']
+                cpu_independent_best_step = 'NOT_APPLICABLE'
+                best_validation_loss = 'NOT_APPLICABLE'; best_validation_accuracy = 'NOT_APPLICABLE'
+                final_step_validation_loss = 'NOT_APPLICABLE'; final_step_validation_accuracy = 'NOT_APPLICABLE'
+                selected_checkpoint_state_hash = 'NOT_APPLICABLE'; selected_checkpoint_persisted = 'false'
+                validation_qnn_nonzero_count = '0'; validation_nonfinite_count = '0'
                 requested_seed = [string]$Seed; executed_seed = [string]$Seed
                 step_completed = $Id['steps']
                 initial_loss = '9.1'; final_loss = '0.4'; final_accuracy = '0.9843'
@@ -561,7 +666,7 @@ function Invoke-SelfTest {
         Remove-Item -LiteralPath (Join-Path $seedDir 'seed-001') -Recurse -Force
         Promote-SeedResult -Seed 1 -Fields (New-GoodFields 1 $legacyIdentity) -Id $legacyIdentity
         $legacyState = Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 1 -Identity $legacyIdentity
-        Assert-SelfTest ($legacyState.completed.Contains(1)) 'COUNT_FROM_ONE result compatible with schema 2'
+        Assert-SelfTest ($legacyState.completed.Contains(1)) 'COUNT_FROM_ONE result compatible with current schema'
         # the same directory then rejects that legacy result under the exact identity
         $threw = $false
         try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 1 -Identity $identity | Out-Null }
@@ -586,6 +691,24 @@ function Invoke-SelfTest {
         try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
         catch { $threw = $_.Exception.Message -match 'SELECTION_MODE_MISMATCH|IDENTITY_MISMATCH:config_hash' }
         Assert-SelfTest $threw 'selection mode mismatch rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+
+        $checkpointMixed = New-GoodFields 3 $identity
+        $checkpointMixed['checkpoint_selection_mode'] = 'BEST_VALIDATION_V1'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $checkpointMixed)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'CHECKPOINT_SELECTION_MODE_MISMATCH|IDENTITY_MISMATCH:checkpoint_selection_mode' }
+        Assert-SelfTest $threw 'checkpoint selection mode mismatch rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+
+        $validationMixed = New-GoodFields 3 $identity
+        $validationMixed['validation_set_hash'] = 'fnv1a64:0000000000000000'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $validationMixed)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'IDENTITY_MISMATCH:validation_set_hash' }
+        Assert-SelfTest $threw 'validation set mismatch rejected'
         Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
 
         # 6e: requested / executed seed mismatch rejected
@@ -768,7 +891,8 @@ $runIdEffective = if ($RunId) { $RunId } else {
 }
 $configHash = Get-CanonicalConfigHash -T $SequenceLength -V $VocabularySize `
     -D $EmbeddingDimension -Ffn $FeedForwardDimension -L $NumLayers -H $NumHeads `
-    -Lr $LearningRate -StepCount $Steps -SeedSelection $SeedSelectionMode
+    -Lr $LearningRate -StepCount $Steps -SeedSelection $SeedSelectionMode `
+    -CheckpointSelection $CheckpointSelectionMode
 $gitHead = (& git -C $repoRoot rev-parse HEAD).Trim()
 $configRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "build\reports\qnn-resumable-formal\$ConfigurationId"))
 $reportsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build\reports'))
@@ -814,8 +938,11 @@ try {
         qairt_build_id = $ExpectedBuildId
         steps = [string]$Steps
         result_schema = [string]$ResultSchemaVersion
-        seed_selection_mode = $SeedSelectionMode
-    }
+            seed_selection_mode = $SeedSelectionMode
+            checkpoint_selection_mode = $CheckpointSelectionMode
+            validation_schema_version = if ($CheckpointSelectionMode -eq 'BEST_VALIDATION_V1') { '2' } else { 'NOT_APPLICABLE' }
+            validation_set_hash = if ($CheckpointSelectionMode -eq 'BEST_VALIDATION_V1') { Get-ValidationSetHash $SequenceLength } else { 'NOT_APPLICABLE' }
+        }
 
     # Run context: a new or resumed invocation. Existing results must match
     # identity; a mismatched history is never silently superseded.
@@ -839,6 +966,7 @@ try {
         "steps=$Steps"
         "result_schema=$ResultSchemaVersion"
         "seed_selection_mode=$SeedSelectionMode"
+        "checkpoint_selection_mode=$CheckpointSelectionMode"
     ) | Set-Content -LiteralPath $contextPath -Encoding utf8
 
     $device = Resolve-OnlineDevice $adb
@@ -916,6 +1044,7 @@ try {
                 "attempt=$attempt"
                 "steps=$Steps"
                 "seed_selection_mode=$SeedSelectionMode"
+                "checkpoint_selection_mode=$CheckpointSelectionMode"
                 "requested_seed=$seed"
             ) -join "`n"
             $contextDevice | & $adb -s $device shell run-as $package tee `
@@ -945,8 +1074,13 @@ try {
                 '--ei', 'phonelm.measured_steps', [string]$NumHeads,
                 '--ei', 'phonelm.correctness_interval', [string]$seed,
                 '--ez', 'phonelm.benchmark_mode', 'false',
-                '--es', 'phonelm.seed_selection_mode', $SeedSelectionMode
+                '--es', 'phonelm.seed_selection_mode', $SeedSelectionMode,
+                '--es', 'phonelm.checkpoint_selection_mode', $CheckpointSelectionMode
             )
+            if ($CheckpointSelectionMode -eq 'BEST_VALIDATION_V1') {
+                $arguments += @('--ez', 'phonelm.diagnostic_trajectory', 'true',
+                    '--es', 'phonelm.checkpoint_dump_dir', "formal-$ConfigurationId-seed$seed")
+            }
             if ($TestMode -eq 'UI_VALIDATION') {
                 $arguments += @('--ez', 'phonelm.live_update', 'true')
             }
@@ -1103,7 +1237,9 @@ try {
                 $ongoingAfter = $false
             }
 
-            $fields = ConvertFrom-DeviceReport -Report $report -Seed $seed -StepCount $Steps -SeedSelectionMode $SeedSelectionMode
+            $fields = ConvertFrom-DeviceReport -Report $report -Seed $seed -StepCount $Steps `
+                -SeedSelectionMode $SeedSelectionMode -CheckpointSelectionMode $CheckpointSelectionMode `
+                -ExpectedValidationSetHash $identity.validation_set_hash
             $classification = $fields.classification
             $fields['result_schema'] = [string]$ResultSchemaVersion
             $fields['terminal'] = 'true'
@@ -1205,6 +1341,7 @@ try {
         "status=$aggregateStatus"
         "stop_detail=$stopDetail"
         "seed_selection_mode=$SeedSelectionMode"
+        "checkpoint_selection_mode=$CheckpointSelectionMode"
         "seed_units_planned=$(if ($SeedSelectionMode -eq 'EXACT_SEED') { $Seeds } else { $Seeds * ($Seeds + 1) / 2 })"
         "seeds_completed=$($finalState.completed.Count)/$Seeds"
         "finite_seeds=$finiteSeeds/$Seeds"

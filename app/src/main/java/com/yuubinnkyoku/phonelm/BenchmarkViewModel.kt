@@ -77,6 +77,7 @@ object NativeBenchmarkEngine : BenchmarkEngine {
         seedSelectionMode = config.seedSelectionMode.nativeCode,
         trainingStabilityMode = config.trainingStabilityMode.nativeCode,
         depthPairInitMode = config.depthPairInitMode.nativeCode,
+        checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
         diagnosticTrajectory = config.diagnosticTrajectory,
         diagnosticCheckpointDir = config.diagnosticCheckpointDir,
         progressCallback = ProgressCallback(progress),
@@ -151,6 +152,7 @@ class BenchmarkViewModel(
                         (if (config.seedSelectionMode == SeedSelectionMode.EXACT_SEED)
                             " exact_seed=${config.seed}" else "") +
                         " stability_mode=${config.trainingStabilityMode.name}" +
+                        " checkpoint_selection=${config.checkpointSelectionMode.name}" +
                         (if (config.depthPairInitMode != DepthPairInitMode.LEGACY)
                             " pair_init=${config.depthPairInitMode.name}" else "")
                 } else {

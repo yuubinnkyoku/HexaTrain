@@ -13,6 +13,7 @@
 #pragma once
 #include "tiny_language_model_cpu.h"
 #include "training_stability.h"
+#include "validation_selection.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -561,6 +562,39 @@ inline Phase1Evaluation phase1Evaluation(const Config& config,
   return result;
 }
 
+inline validation_selection::Metrics validationEvaluation(
+    const Config& config, const Params& parameters) {
+  validation_selection::Metrics result;
+  result.loss = 0.0;
+  double correct = 0.0, rows = 0.0, margin = 0.0, probability = 0.0;
+  const auto cases = validation_selection::validationCases(config.tokens);
+  for (const auto& item : cases) {
+    const auto input = tiny_lm::oneHot(item.input, config.vocabularySize);
+    const auto target = tiny_lm::oneHot(item.target, config.vocabularySize);
+    const auto step = tiny_lm::forwardBackward(config, input, target,
+                                               parameters, 0.0f);
+    const std::size_t base = std::size_t(config.tokens - 1) * config.vocabularySize;
+    const std::uint32_t truth = item.target.back();
+    std::uint32_t prediction = 0;
+    float other = -std::numeric_limits<float>::infinity();
+    for (std::uint32_t token = 0; token < config.vocabularySize; ++token) {
+      if (step.logits[base + token] > step.logits[base + prediction]) prediction = token;
+      if (token != truth) other = std::max(other, step.logits[base + token]);
+    }
+    const double p = std::max(1.0e-30, double(step.probabilities[base + truth]));
+    result.loss -= std::log(p);
+    correct += prediction == truth;
+    rows += 1.0;
+    margin += step.logits[base + truth] - other;
+    probability += p;
+  }
+  result.loss /= cases.size();
+  result.accuracy = correct / rows;
+  result.targetMargin = margin / rows;
+  result.targetProbability = probability / rows;
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Full CPU formal run with per-step metrics and state for diagnostics
 // ---------------------------------------------------------------------------
@@ -762,6 +796,53 @@ inline GenerationQuality generationQuality(const Config& config,
     }
   }
   return q;
+}
+
+struct ValidationSelectedRun {
+  FormRun training;
+  int selectedStep = 0;
+  validation_selection::Metrics bestValidation;
+  validation_selection::Metrics finalStepValidation;
+  Params selectedParameters, selectedM, selectedV;
+  GenerationQuality generation;
+  std::vector<std::pair<int, validation_selection::Metrics>> validationTrajectory;
+};
+
+inline ValidationSelectedRun runValidationSelectedCpu(
+    const Config& config, std::uint32_t seed, int stepCount = 320,
+    validation_selection::Mode mode =
+        validation_selection::Mode::BEST_VALIDATION_V1) {
+  std::vector<int> checkpoints;
+  for (int step : validation_selection::evaluationSteps())
+    if (step <= stepCount) checkpoints.push_back(step);
+  if (std::find(checkpoints.begin(), checkpoints.end(), stepCount) ==
+      checkpoints.end())
+    checkpoints.push_back(stepCount);
+  ValidationSelectedRun result;
+  result.training = runFormalCpu(config, seed, stepCount, 0.003f,
+                                 StabilityMode::LEGACY, checkpoints);
+  result.selectedStep = mode == validation_selection::Mode::FINAL_STEP
+                            ? stepCount
+                            : 0;
+  for (int step : checkpoints) {
+    const auto metrics = validationEvaluation(config,
+                                               result.training.checkpoints.at(step));
+    result.validationTrajectory.push_back({step, metrics});
+    if (step == stepCount) result.finalStepValidation = metrics;
+    if (mode == validation_selection::Mode::FINAL_STEP ||
+        validation_selection::better(metrics, step, result.bestValidation,
+                                     result.selectedStep)) {
+      if (mode == validation_selection::Mode::FINAL_STEP && step != stepCount)
+        continue;
+      result.selectedStep = step;
+      result.bestValidation = metrics;
+    }
+  }
+  result.selectedParameters = result.training.checkpoints.at(result.selectedStep);
+  result.selectedM = result.training.firstMoments.at(result.selectedStep);
+  result.selectedV = result.training.secondMoments.at(result.selectedStep);
+  result.generation = generationQuality(config, result.selectedParameters);
+  return result;
 }
 
 // Per-layer gradient norms split by sub-block from a StepResult.

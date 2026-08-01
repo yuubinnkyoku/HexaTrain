@@ -155,6 +155,10 @@ class MainActivity : Activity() {
         val depthPairInitMode = pairInitName?.let {
             runCatching { DepthPairInitMode.valueOf(it) }.getOrNull()
         } ?: DepthPairInitMode.LEGACY
+        val checkpointSelectionName = intent.getStringExtra("phonelm.checkpoint_selection_mode")
+        val checkpointSelectionMode = checkpointSelectionName?.let {
+            runCatching { CheckpointSelectionMode.valueOf(it) }.getOrNull()
+        } ?: CheckpointSelectionMode.FINAL_STEP
         val diagnosticTrajectory = intent.getBooleanExtra("phonelm.diagnostic_trajectory", false)
         val checkpointDir = intent.getStringExtra("phonelm.checkpoint_dump_dir")?.let { requestedDir ->
             // Fail closed: private checkpoints never leave the app files dir.
@@ -169,6 +173,7 @@ class MainActivity : Activity() {
             seedSelectionMode = seedSelectionMode,
             trainingStabilityMode = trainingStabilityMode,
             depthPairInitMode = depthPairInitMode,
+            checkpointSelectionMode = checkpointSelectionMode,
             diagnosticTrajectory = diagnosticTrajectory,
             diagnosticCheckpointDir = checkpointDir?.absolutePath,
             hiddenDimension = hiddenDimension, outputDimension = outputDimension)
@@ -181,6 +186,12 @@ class MainActivity : Activity() {
                 "unknown phonelm.training_stability_mode: $stabilityName"
             pairInitName != null && depthPairInitMode.name != pairInitName ->
                 "unknown phonelm.depth_pair_init_mode: $pairInitName"
+            checkpointSelectionName != null &&
+                checkpointSelectionMode.name != checkpointSelectionName ->
+                "unknown phonelm.checkpoint_selection_mode: $checkpointSelectionName"
+            checkpointSelectionMode == CheckpointSelectionMode.BEST_VALIDATION_V1 &&
+                mode != ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC ->
+                "BEST_VALIDATION_V1 is only supported by QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC"
             intent.getStringExtra("phonelm.checkpoint_dump_dir") != null && checkpointDir == null ->
                 "phonelm.checkpoint_dump_dir must resolve under the app files dir"
             else -> config.validationError()
@@ -215,6 +226,7 @@ class MainActivity : Activity() {
                 seedSelectionMode = config.seedSelectionMode.nativeCode,
                 trainingStabilityMode = config.trainingStabilityMode.nativeCode,
                 depthPairInitMode = config.depthPairInitMode.nativeCode,
+                checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
                 diagnosticTrajectory = config.diagnosticTrajectory,
                 diagnosticCheckpointDir = config.diagnosticCheckpointDir,
                 progressCallback = ProgressCallback { },

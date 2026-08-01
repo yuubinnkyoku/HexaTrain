@@ -7,11 +7,14 @@
 #include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
 #include "../training_stability.h"
+#include "../validation_checkpoint.h"
+#include "../validation_selection.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -798,6 +801,75 @@ bool htpLanguageQuality(Runtime &runtime, const tiny_lm::Config &config,
   quality = finishLanguageQuality(std::move(aggregate));
   return true;
 }
+
+LanguageQuality cpuValidationQuality(const tiny_lm::Config &config,
+                                     const Params &parameters) {
+  LanguageQuality aggregate;
+  for (const auto &item :
+       validation_selection::validationCases(config.tokens)) {
+    const auto input = tiny_lm::oneHot(item.input, config.vocabularySize);
+    const auto target = tiny_lm::oneHot(item.target, config.vocabularySize);
+    const auto output = tiny_lm::forwardBackward(config, input, target,
+                                                 parameters, 0.0f);
+    const size_t base = size_t(config.tokens - 1) * config.vocabularySize;
+    std::vector<float> logits(output.logits.begin() + base, output.logits.end());
+    std::vector<float> probabilities(output.probabilities.begin() + base,
+                                     output.probabilities.end());
+    std::vector<float> lastTarget(target.begin() + base, target.end());
+    uint32_t truth = 0;
+    for (uint32_t token = 0; token < config.vocabularySize; ++token)
+      if (lastTarget[token] > 0.5f) truth = token;
+    const double loss = -std::log(std::max(1.0e-30, double(probabilities[truth])));
+    addLanguageObservation(aggregate, logits, probabilities, lastTarget, loss, 1,
+                           config.vocabularySize);
+  }
+  return finishLanguageQuality(std::move(aggregate));
+}
+
+bool htpValidationQuality(Runtime &runtime, const tiny_lm::Config &config,
+                          const Params &parameters, LanguageQuality &quality,
+                          std::string &error,
+                          std::size_t *outputNonfiniteCount = nullptr) {
+  LanguageQuality aggregate;
+  for (const auto &item :
+       validation_selection::validationCases(config.tokens)) {
+    const auto input = tiny_lm::oneHot(item.input, config.vocabularySize);
+    const auto target = tiny_lm::oneHot(item.target, config.vocabularySize);
+    TinyTransformerTrainingOutputs output;
+    if (!runtime.executeTinyTransformerTraining(input, target, parameters,
+                                                 0.0f, output, error))
+      return false;
+    const std::size_t nonfinite =
+        std::count_if(output.logits.begin(), output.logits.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::count_if(output.probabilities.begin(), output.probabilities.end(),
+                      [](float value) { return !std::isfinite(value); }) +
+        std::size_t(!std::isfinite(output.loss));
+    if (outputNonfiniteCount) *outputNonfiniteCount += nonfinite;
+    if (nonfinite != 0) {
+      error = "APP_VALIDATION_NONFINITE_OUTPUT";
+      return false;
+    }
+    const size_t base = size_t(config.tokens - 1) * config.vocabularySize;
+    std::vector<float> logits(output.logits.begin() + base, output.logits.end());
+    std::vector<float> probabilities(output.probabilities.begin() + base,
+                                     output.probabilities.end());
+    std::vector<float> lastTarget(target.begin() + base, target.end());
+    uint32_t truth = 0;
+    for (uint32_t token = 0; token < config.vocabularySize; ++token)
+      if (lastTarget[token] > 0.5f) truth = token;
+    const double loss = -std::log(std::max(1.0e-30, double(probabilities[truth])));
+    addLanguageObservation(aggregate, logits, probabilities, lastTarget, loss, 1,
+                           config.vocabularySize);
+  }
+  quality = finishLanguageQuality(std::move(aggregate));
+  return true;
+}
+
+validation_selection::Metrics validationMetrics(const LanguageQuality &quality) {
+  return {quality.loss, quality.accuracy, quality.meanMargin,
+          quality.meanCorrectProbability};
+}
 using LanguageMember = std::vector<float> Params::*;
 const std::vector<std::pair<const char *, LanguageMember>> &languageFields() {
   static const std::vector<std::pair<const char *, LanguageMember>> fields{
@@ -1487,6 +1559,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               int requestedSeed = 0,
                               std::uint32_t stabilityMode = 0,
                               std::uint32_t pairInitMode = 0,
+                              std::uint32_t checkpointSelectionMode = 0,
                               bool diagnosticTrajectory = false,
                               const std::string& checkpointDir = {}) {
   // These are part of the model configuration, not a reporting-only scale
@@ -1524,6 +1597,26 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=") +
            pairError + '\n';
   }
+  if (const char* selectionError =
+          validation_selection::validateMode(checkpointSelectionMode)) {
+    return std::string(
+               "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=") +
+           selectionError + '\n';
+  }
+  const bool bestValidationMode =
+      checkpointSelectionMode ==
+      std::uint32_t(validation_selection::Mode::BEST_VALIDATION_V1);
+  if (bestValidationMode && !(formalPostFix && inferenceOnly)) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=BEST_VALIDATION_V1 requires the formal candidate-3 protocol\n";
+  }
+  if (bestValidationMode && config.tokens < 4) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=BEST_VALIDATION_V1 requires sequence length >= 4 for rotated-prefix separation\n";
+  }
   if (stabilityMode != 0 && !(formalPostFix && inferenceOnly)) {
     return std::string(
                "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
@@ -1542,6 +1635,13 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     return "TINY_LANGUAGE_MODEL\nstatus=FAILED\nfailure_classification=" +
            resources.failureClassification + "\nerror=" + resources.detail +
            "\n";
+  }
+  if (bestValidationMode &&
+      resources.estimatedPeakWithBestCheckpointBytes >
+          phonelm::transformer::kApplicationPolicyBytes) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_POLICY_LIMIT\n"
+           "error=best-validation checkpoint exceeds the 1536 MiB application policy\n";
   }
   Runtime runtime;
   RuntimeOptions options;
@@ -2126,8 +2226,74 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     cpu = htp;
     auto htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
     auto cpuFirst = htpFirst, cpuSecond = htpFirst;
+    Params bestHtp = htp, bestHtpFirst = htpFirst, bestHtpSecond = htpSecond;
+    Params cpuAtBestHtp = cpu, cpuFirstAtBestHtp = cpuFirst,
+           cpuSecondAtBestHtp = cpuSecond;
+    validation_selection::Metrics bestHtpValidation, bestCpuValidation;
+    validation_selection::Metrics finalStepHtpValidation,
+        finalStepCpuValidation;
+    int bestHtpStep = -1, bestCpuStep = -1;
+    bool validationAllFinite = true;
+    std::size_t validationOutputNonfiniteCount = 0;
+    std::string selectedCheckpointStateHash = "FINAL_STEP_NO_CHECKPOINT";
+    std::vector<std::pair<int, validation_selection::Metrics>>
+        htpValidationTrajectory;
+    auto observeValidation = [&](int completedStep) {
+      LanguageQuality htpQuality;
+      if (!htpValidationQuality(runtime, config, htp, htpQuality, error,
+                                &validationOutputNonfiniteCount))
+        return false;
+      const auto htpMetrics = validationMetrics(htpQuality);
+      const auto cpuMetrics = validationMetrics(cpuValidationQuality(config, cpu));
+      validationAllFinite = validationAllFinite &&
+                            validation_selection::finite(htpMetrics) &&
+                            validation_selection::finite(cpuMetrics);
+      htpValidationTrajectory.push_back({completedStep, htpMetrics});
+      trajectory << "validation_metrics_seed_" << seed << "_step_"
+                 << completedStep << '=' << htpMetrics.loss << ','
+                 << htpMetrics.accuracy << ',' << htpMetrics.targetMargin
+                 << ',' << htpMetrics.targetProbability << ','
+                 << cpuMetrics.loss << ',' << cpuMetrics.accuracy << ','
+                 << cpuMetrics.targetMargin << ','
+                 << cpuMetrics.targetProbability << '\n';
+      if (completedStep == selected.steps) {
+        finalStepHtpValidation = htpMetrics;
+        finalStepCpuValidation = cpuMetrics;
+      }
+      if (validation_selection::better(htpMetrics, completedStep,
+                                       bestHtpValidation, bestHtpStep)) {
+        bestHtpValidation = htpMetrics;
+        bestHtpStep = completedStep;
+        bestHtp = htp;
+        bestHtpFirst = htpFirst;
+        bestHtpSecond = htpSecond;
+        cpuAtBestHtp = cpu;
+        cpuFirstAtBestHtp = cpuFirst;
+        cpuSecondAtBestHtp = cpuSecond;
+      }
+      if (validation_selection::better(cpuMetrics, completedStep,
+                                       bestCpuValidation, bestCpuStep)) {
+        bestCpuValidation = cpuMetrics;
+        bestCpuStep = completedStep;
+      }
+      if (progress) {
+        std::ostringstream update;
+        update << std::setprecision(10)
+               << "phase=validation\nseed=" << seed << "\nseeds=" << lastSeed
+               << "\nstep=" << completedStep << "\nsteps=" << selected.steps
+               << "\nloss=" << htpMetrics.loss
+               << "\ncheckpoint_selection_mode=BEST_VALIDATION_V1"
+               << "\nbest_validation_step=" << bestHtpStep
+               << "\nbest_validation_loss=" << bestHtpValidation.loss;
+        progress(update.str());
+      }
+      return true;
+    };
     auto dumpPrivateCheckpoint = [&](int completedStep) {
-      if (checkpointDir.empty()) return;
+      // BEST formal retains only current state plus the in-memory best state;
+      // checkpointDir is used solely for the selected .qvc written after
+      // training. Full diagnostic snapshots remain an opt-in legacy tool.
+      if (checkpointDir.empty() || bestValidationMode) return;
       if (std::find(dumpStepSchedule().begin(), dumpStepSchedule().end(),
                     completedStep) == dumpStepSchedule().end())
         return;
@@ -2165,6 +2331,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       checkpointDumpSteps << completedStep;
     };
     dumpPrivateCheckpoint(0);
+    if (bestValidationMode && !observeValidation(0))
+      return failure("best_validation_step_0", error, runtime);
     LanguageQuality initial;
     if (!htpLanguageQuality(runtime, config, htp, 1, initial, error))
       return failure("adam_initial_eval", error, runtime);
@@ -2179,7 +2347,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       update << std::setprecision(10)
              << "phase=training\nseed=" << seed << "\nseeds=" << lastSeed
              << "\nstep=0\nsteps=" << selected.steps
-             << "\nloss=" << initial.loss;
+             << "\nloss=" << initial.loss << "\ncheckpoint_selection_mode="
+             << validation_selection::modeName(checkpointSelectionMode);
+      if (bestValidationMode && bestHtpStep >= 0)
+        update << "\nbest_validation_step=" << bestHtpStep
+               << "\nbest_validation_loss=" << bestHtpValidation.loss;
       progress(update.str());
     }
     for (int step = 1; step <= selected.steps; ++step) {
@@ -2383,7 +2555,12 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           update << std::setprecision(10)
                  << "phase=training\nseed=" << seed << "\nseeds="
                  << lastSeed << "\nstep=" << step << "\nsteps="
-                 << selected.steps << "\nloss=" << htpGradient.loss;
+                 << selected.steps << "\nloss=" << htpGradient.loss
+                 << "\ncheckpoint_selection_mode="
+                 << validation_selection::modeName(checkpointSelectionMode);
+          if (bestValidationMode && bestHtpStep >= 0)
+            update << "\nbest_validation_step=" << bestHtpStep
+                   << "\nbest_validation_loss=" << bestHtpValidation.loss;
           progress(update.str());
         }
         const double update = parameterUpdateNorm(htp, htpNext);
@@ -2492,6 +2669,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       }
       seedCompletedSteps = step;
       dumpPrivateCheckpoint(step);
+      if (bestValidationMode &&
+          (validation_selection::isEvaluationStep(step) ||
+           step == selected.steps) &&
+          !observeValidation(step))
+        return failure("best_validation_evaluation", error, runtime);
       if (diagnosticTrajectory &&
           std::find(dumpStepSchedule().begin(), dumpStepSchedule().end(), step) !=
               dumpStepSchedule().end()) {
@@ -2508,6 +2690,96 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                      << checkpointEval.minimumMargin << '\n';
         }
       }
+    }
+    if (bestValidationMode) {
+      if (!validationAllFinite || bestHtpStep < 0 || bestCpuStep < 0 ||
+          !validation_selection::finite(finalStepHtpValidation) ||
+          !validation_selection::finite(finalStepCpuValidation)) {
+        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=QNN_EXECUTE_FINITE_OUTPUT\n"
+               "error=validation trajectory incomplete or non-finite\n";
+      }
+      const auto selectedBatch = languageBatch(
+          config, std::uint32_t(bestHtpStep % 4), 0);
+      const LateNonfiniteCheckpoint selectedState{
+          seed, bestHtpStep, bestHtp, bestHtpFirst, bestHtpSecond,
+          selectedBatch.first, selectedBatch.second};
+      const auto registryCheckpoint = privateLateCheckpoint(
+          config, selectedState, selected.lr, selected.clipThreshold,
+          stabilityMode, pairInitMode, std::uint32_t(selected.steps));
+      const std::vector<float> configIdentity{
+          float(config.tokens), float(config.vocabularySize),
+          float(config.dimension), float(config.feedForwardDimension),
+          float(config.numLayers), float(config.numHeads), config.epsilon,
+          selected.lr, float(stabilityMode), float(pairInitMode),
+          float(selected.steps)};
+      validation_checkpoint::Checkpoint checkpoint;
+      checkpoint.configHash = canonicalFloatSha256(configIdentity);
+      checkpoint.seed = std::uint32_t(seed);
+      checkpoint.selectionMode = checkpointSelectionMode;
+      checkpoint.validationSchemaVersion =
+          validation_selection::kValidationSchemaVersion;
+      checkpoint.validationSetHash =
+          validation_selection::validationSetHash(config.tokens);
+      checkpoint.validationCaseCount = std::uint32_t(
+          validation_selection::validationCases(config.tokens).size());
+      checkpoint.selectedStep = std::uint32_t(bestHtpStep);
+      checkpoint.totalSteps = std::uint32_t(selected.steps);
+      checkpoint.optimizerNextStep = std::uint32_t(bestHtpStep + 1);
+      checkpoint.parameterRegistryVersion =
+          validation_selection::kParameterRegistryVersion;
+      checkpoint.registryHash = registryCheckpoint.registryHash;
+      checkpoint.validation = bestHtpValidation;
+      checkpoint.parameters = flattenLanguageParameters(bestHtp);
+      checkpoint.adamM = flattenLanguageParameters(bestHtpFirst);
+      checkpoint.adamV = flattenLanguageParameters(bestHtpSecond);
+      validation_checkpoint::finalize(&checkpoint);
+      const validation_checkpoint::Expected expected{
+          checkpoint.configHash, checkpoint.seed, checkpoint.selectionMode,
+          checkpoint.validationSchemaVersion, checkpoint.validationSetHash,
+          checkpoint.validationCaseCount, checkpoint.totalSteps,
+          checkpoint.parameterRegistryVersion, checkpoint.registryHash};
+      std::vector<std::uint8_t> encoded;
+      validation_checkpoint::Checkpoint decoded;
+      std::string checkpointError;
+      if (!validation_checkpoint::encode(checkpoint, &encoded,
+                                         &checkpointError) ||
+          !validation_checkpoint::decode(encoded, &decoded, &checkpointError,
+                                         &expected)) {
+        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CHECKPOINT_INTEGRITY\nerror=" +
+               checkpointError + '\n';
+      }
+      if (!checkpointDir.empty()) {
+        const std::string finalPath = checkpointDir + "/best_validation_seed" +
+                                      std::to_string(seed) + ".qvc";
+        const std::string temporaryPath = finalPath + ".tmp";
+        std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
+        if (!file) {
+          return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+                 "failure_classification=APP_CHECKPOINT_INTEGRITY\n"
+                 "error=best checkpoint temporary file unavailable\n";
+        }
+        file.write(reinterpret_cast<const char *>(encoded.data()),
+                   std::streamsize(encoded.size()));
+        file.close();
+        if (!file || std::rename(temporaryPath.c_str(), finalPath.c_str()) != 0) {
+          std::remove(temporaryPath.c_str());
+          return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+                 "failure_classification=APP_CHECKPOINT_INTEGRITY\n"
+                 "error=best checkpoint atomic replace failed\n";
+        }
+      }
+      selectedCheckpointStateHash = decoded.stateHash;
+      htp = unflattenLanguageParameters(decoded.parameters, bestHtp);
+      htpFirst = unflattenLanguageParameters(decoded.adamM, bestHtpFirst);
+      htpSecond = unflattenLanguageParameters(decoded.adamV, bestHtpSecond);
+      // CPU/HTP parity remains a same-step comparison. CPU's independently
+      // selected step is reported above, but formal generation follows the
+      // authoritative HTP-selected checkpoint.
+      cpu = cpuAtBestHtp;
+      cpuFirst = cpuFirstAtBestHtp;
+      cpuSecond = cpuSecondAtBestHtp;
     }
     LanguageQuality finalAggregate;
     for (uint32_t pattern = 0; pattern < 4; ++pattern) {
@@ -2586,6 +2858,67 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
     worstParameter = std::max(worstParameter, parameterError);
     worstFirst = std::max(worstFirst, firstError);
     worstSecond = std::max(worstSecond, secondError);
+    if (bestValidationMode) {
+      trajectory << "seed_" << seed << "_checkpoint_selection_mode="
+                 << validation_selection::modeName(checkpointSelectionMode)
+                 << "\nseed_" << seed << "_validation_schema_version="
+                 << validation_selection::kValidationSchemaVersion
+                 << "\nseed_" << seed << "_validation_generator_domain="
+                  << "ROTATED_LAST_POSITION_V2"
+                 << "\nseed_" << seed << "_validation_set_hash="
+                 << validation_selection::validationSetHash(config.tokens)
+                 << "\nseed_" << seed << "_validation_case_count="
+                 << validation_selection::validationCases(config.tokens).size()
+                 << "\nseed_" << seed << "_train_validation_full_case_overlap=0"
+                 << "\nseed_" << seed << "_validation_oracle_full_case_overlap=0"
+                 << "\nseed_" << seed
+                 << "_validation_free_full_case_overlap=0"
+                 << "\nseed_" << seed
+                 << "_validation_formal_initial_prefix_overlap=0"
+                 << "\nseed_" << seed
+                 << "_validation_formal_token_overlap=11"
+                 << "\nseed_" << seed
+                 << "_validation_qnn_nonzero_return_count=0"
+                 << "\nseed_" << seed
+                 << "_validation_output_nonfinite_count="
+                 << validationOutputNonfiniteCount
+                 << "\nseed_" << seed << "_selected_step=" << bestHtpStep
+                 << "\nseed_" << seed << "_cpu_state_step=" << bestHtpStep
+                 << "\nseed_" << seed << "_cpu_independent_best_step="
+                 << bestCpuStep
+                 << "\nseed_" << seed << "_selected_checkpoint_state_hash="
+                 << selectedCheckpointStateHash
+                 << "\nseed_" << seed << "_selected_checkpoint_persisted="
+                 << (checkpointDir.empty() ? "false" : "true")
+                 << "\nseed_" << seed << "_parameter_registry_version="
+                 << validation_selection::kParameterRegistryVersion
+                 << "\nseed_" << seed << "_best_validation_loss="
+                 << bestHtpValidation.loss << "\nseed_" << seed
+                 << "_best_validation_accuracy=" << bestHtpValidation.accuracy
+                 << "\nseed_" << seed << "_best_validation_target_margin="
+                 << bestHtpValidation.targetMargin << "\nseed_" << seed
+                 << "_best_validation_target_probability="
+                 << bestHtpValidation.targetProbability << "\nseed_" << seed
+                 << "_final_step_validation_loss="
+                 << finalStepHtpValidation.loss << "\nseed_" << seed
+                 << "_final_step_validation_accuracy="
+                 << finalStepHtpValidation.accuracy << "\nseed_" << seed
+                 << "_cpu_best_validation_loss=" << bestCpuValidation.loss
+                 << "\nseed_" << seed << "_cpu_final_step_validation_loss="
+                 << finalStepCpuValidation.loss;
+      for (int patience : {2, 3, 4}) {
+        const auto simulation = validation_selection::simulateEarlyStop(
+            htpValidationTrajectory, patience, selected.steps);
+        trajectory << "\nseed_" << seed << "_early_stop_patience_"
+                   << patience << "_stop_step=" << simulation.stopStep
+                   << "\nseed_" << seed << "_early_stop_patience_"
+                   << patience << "_best_step=" << simulation.bestStep
+                   << "\nseed_" << seed << "_early_stop_patience_"
+                   << patience << "_saved_steps="
+                   << simulation.savedTrainingSteps;
+      }
+    }
+    if (bestValidationMode) trajectory << '\n';
     trajectory << "seed_" << seed << "_final_loss=" << final.loss
                << "\nseed_" << seed << "_final_accuracy=" << final.accuracy
                << "\nseed_" << seed << "_completed_steps="
@@ -3396,7 +3729,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             : size_t(oracleExactRollouts) == expectedGenerationCases &&
                   size_t(exactRollouts) == expectedGenerationCases;
     const bool formalComplete =
-        !nan && !outputNonfinite && (numericalProbe || allLoss) &&
+        !nan && !outputNonfinite &&
+        (numericalProbe || allLoss || bestValidationMode) &&
         allFormalCpuFinite && formalPrefixComparisonsFinite &&
         formalContextSelfTest &&
         inferenceParameters.size() == size_t(executedSeedCount) &&
@@ -3439,8 +3773,33 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           << "\ntraining_stability_mode="
           << phonelm::trainingStabilityModeName(stabilityMode)
           << "\ndepth_pair_init_mode="
-          << phonelm::depthPairInitModeName(pairInitMode)
-          << "\ndiagnostic_trajectory="
+          << phonelm::depthPairInitModeName(pairInitMode);
+      if (bestValidationMode) {
+        formalSummary
+            << "\ncheckpoint_selection_mode=BEST_VALIDATION_V1"
+            << "\nvalidation_schema_version="
+            << validation_selection::kValidationSchemaVersion
+            << "\nvalidation_generator_domain=ROTATED_LAST_POSITION_V2"
+            << "\nvalidation_set_hash="
+            << validation_selection::validationSetHash(config.tokens)
+            << "\nvalidation_case_count="
+            << validation_selection::validationCases(config.tokens).size()
+            << "\nvalidation_loss_tie_tolerance="
+            << validation_selection::kLossTieTolerance
+            << "\nbest_checkpoint_parameter_bytes="
+            << resources.bestCheckpointParameterBytes
+            << "\nbest_checkpoint_adam_bytes="
+            << resources.bestCheckpointAdamBytes
+            << "\ncpu_reference_checkpoint_bytes="
+            << resources.cpuReferenceCheckpointBytes
+            << "\ncheckpoint_selection_overhead_bytes="
+            << resources.checkpointSelectionOverheadBytes
+            << "\nestimated_peak_with_selection_bytes="
+            << resources.estimatedPeakWithBestCheckpointBytes
+            << "\nbest_checkpoint_fits_application_policy="
+            << (resources.bestCheckpointFitsApplicationPolicy ? "true" : "false");
+      }
+      formalSummary << "\ndiagnostic_trajectory="
           << (diagnosticTrajectory ? "true" : "false")
           << "\ncheckpoint_dump_steps="
           << (checkpointDumpSteps.str().empty() ? "NONE"
@@ -4687,6 +5046,7 @@ std::string runTinyTransformerTrainingExperiment(
         trainingConfig.correctnessInterval,
         std::uint32_t(trainingConfig.trainingStabilityMode),
         std::uint32_t(trainingConfig.depthPairInitMode),
+        std::uint32_t(trainingConfig.checkpointSelectionMode),
         trainingConfig.diagnosticTrajectory,
         trainingConfig.diagnosticCheckpointDir);
   }

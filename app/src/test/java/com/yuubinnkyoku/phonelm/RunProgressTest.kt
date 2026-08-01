@@ -37,6 +37,17 @@ class RunProgressTest {
         assertEquals("evaluation", event.phase)
     }
 
+    @Test fun parsesBestValidationProgress() {
+        val event = NativeProgressParser.parse(
+            "phase=validation\nseed=2\nseeds=5\nstep=128\nsteps=320\n" +
+                "loss=0.9659\ncheckpoint_selection_mode=BEST_VALIDATION_V1\n" +
+                "best_validation_step=128\nbest_validation_loss=0.9659",
+        ) as RunProgress.Step
+        assertEquals("BEST_VALIDATION_V1", event.checkpointSelectionMode)
+        assertEquals(128L, event.bestValidationStep)
+        assertEquals(0.9659, event.bestValidationLoss!!, 0.0)
+    }
+
     @Test fun throttlePostsPhaseAndOnePercentChangesButNotEveryStep() {
         val throttle = ProgressUpdateThrottle(minimumIntervalMs = 1_000)
         assertTrue(throttle.shouldPost(RunProgress.Started("学習", 100), 0))

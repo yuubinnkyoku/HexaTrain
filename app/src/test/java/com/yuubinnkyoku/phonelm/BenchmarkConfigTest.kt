@@ -19,6 +19,10 @@ class BenchmarkConfigTest {
         assertNotNull(BenchmarkConfig.small().copy(steps = 0).validationError())
         assertNotNull(BenchmarkConfig.small().copy(warmupSteps = -1).validationError())
         assertNotNull(BenchmarkConfig.small().copy(learningRate = Float.NaN).validationError())
+        assertNotNull(BenchmarkConfig.small().copy(
+            sampleCount = 3,
+            checkpointSelectionMode = CheckpointSelectionMode.BEST_VALIDATION_V1,
+        ).validationError())
     }
 
     @Test

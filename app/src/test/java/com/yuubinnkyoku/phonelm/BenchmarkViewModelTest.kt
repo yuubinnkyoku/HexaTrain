@@ -56,7 +56,8 @@ class BenchmarkViewModelTest {
                 "V${config.outputDimension} D${config.dimension} " +
                 "FFN${config.hiddenDimension} L${config.epochs} H${config.measuredSteps}" +
                 " seed_mode=${config.seedSelectionMode.name}" +
-                " stability_mode=${config.trainingStabilityMode.name}",
+                " stability_mode=${config.trainingStabilityMode.name}" +
+                " checkpoint_selection=${config.checkpointSelectionMode.name}",
             viewModel.snapshot().configurationSummary,
         )
 

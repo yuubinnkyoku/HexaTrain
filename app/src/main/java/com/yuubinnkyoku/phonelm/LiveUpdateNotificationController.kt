@@ -127,6 +127,8 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
         val throttle: ProgressUpdateThrottle = ProgressUpdateThrottle(), var phase: String = "初期化中",
         var completed: Long = 0, var loss: Double? = null, var seed: Long? = null,
         var seeds: Long? = null, var terminalTitle: String = "完了", var promotable: Boolean = false,
+        var checkpointSelectionMode: String? = null, var bestValidationStep: Long? = null,
+        var bestValidationLoss: Double? = null,
     ) {
         fun apply(event: RunProgress): ActiveRun = apply {
             when (event) {
@@ -138,6 +140,9 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
                     phase = event.phase ?: phase
                     seed = event.seed ?: seed
                     seeds = event.seeds ?: seeds
+                    checkpointSelectionMode = event.checkpointSelectionMode ?: checkpointSelectionMode
+                    bestValidationStep = event.bestValidationStep ?: bestValidationStep
+                    bestValidationLoss = event.bestValidationLoss ?: bestValidationLoss
                 }
                 is RunProgress.Completed -> { terminalTitle = "完了"; phase = "完了"; loss = event.metric?.removePrefix("loss ")?.toDoubleOrNull() ?: loss }
                 is RunProgress.Failed -> { terminalTitle = "失敗"; phase = "失敗" }
@@ -151,11 +156,20 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
                 seeds?.let { totalSeeds -> " seed $current / $totalSeeds" } ?: " seed $current"
             }.orEmpty()
             return "$phase$seedText — " +
-                (total?.let { "step $completed / $it" } ?: "進捗を確認中")
+                (total?.let { "step $completed / $it" } ?: "進捗を確認中") +
+                checkpointSelectionMode?.let { " — $it" }.orEmpty()
         }
         fun detailText(): String {
             val elapsed = ((System.currentTimeMillis() - startedAtMs) / 1_000).coerceAtLeast(0)
-            return listOfNotNull(loss?.let { "loss %.4f".format(java.util.Locale.ROOT, it) }, "経過 ${elapsed / 60}分${elapsed % 60}秒").joinToString("・")
+            return listOfNotNull(
+                loss?.let { "loss %.4f".format(java.util.Locale.ROOT, it) },
+                bestValidationStep?.let { step ->
+                    bestValidationLoss?.let { value ->
+                        "best validation step $step loss %.4f".format(java.util.Locale.ROOT, value)
+                    }
+                },
+                "経過 ${elapsed / 60}分${elapsed % 60}秒",
+            ).joinToString("・")
         }
         fun chipText() = percent?.let { "$it%" } ?: phase.take(7)
     }

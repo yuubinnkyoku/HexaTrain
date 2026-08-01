@@ -40,6 +40,10 @@ struct TrainingConfig {
     int trainingStabilityMode = 0;
     // Paired-depth diagnostic initialization assertion (training_stability.h).
     int depthPairInitMode = 0;
+    // Explicit checkpoint selection. FINAL_STEP=0 preserves the established
+    // training/evaluation/generation path bit-for-bit. BEST_VALIDATION_V1=1
+    // evaluates the disjoint validation set and restores the best full state.
+    int checkpointSelectionMode = 0;
     // Diagnostics: when true, the formal loop emits one trajectory_metrics
     // record per training step.
     bool diagnosticTrajectory = false;

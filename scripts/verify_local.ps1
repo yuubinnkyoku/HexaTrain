@@ -151,6 +151,9 @@ try {
         Invoke-PwshScript "depth-quality public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_depth_quality_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "validation-selection public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_validation_selected_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 

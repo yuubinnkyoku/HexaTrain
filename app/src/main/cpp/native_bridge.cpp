@@ -177,6 +177,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jint seedSelectionMode,
     jint trainingStabilityMode,
     jint depthPairInitMode,
+    jint checkpointSelectionMode,
     jboolean diagnosticTrajectory,
     jstring diagnosticCheckpointDir,
     jobject progressCallback) {
@@ -240,6 +241,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.seedSelectionMode = static_cast<int>(seedSelectionMode);
     config.trainingStabilityMode = static_cast<int>(trainingStabilityMode);
     config.depthPairInitMode = static_cast<int>(depthPairInitMode);
+    config.checkpointSelectionMode = static_cast<int>(checkpointSelectionMode);
     config.diagnosticTrajectory = diagnosticTrajectory == JNI_TRUE;
     if (diagnosticCheckpointDir != nullptr) {
         const char* chars = env->GetStringUTFChars(diagnosticCheckpointDir, nullptr);

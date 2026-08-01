@@ -123,6 +123,7 @@ add_library(phonelm_native SHARED
     benchmark_runner.cpp
     cpu_reference_training.cpp
     tiny_language_model_cpu.cpp
+    validation_checkpoint.cpp
     mnn_training_test.cpp
     training_engine.cpp
     qnn/qnn_backend_info.cpp

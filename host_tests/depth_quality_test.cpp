@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 // Host tests for the direct-seed contract, depth-pair initialization,
-// stability modes, trajectory classification and the v2 checkpoint codec.
+// stability modes, validation selection and checkpoint codecs.
 #include "depth_quality_lib.h"
 #include "qnn/qnn_first_nonfinite_diagnostics.h"
 #include "seed_selection.h"
+#include "validation_checkpoint.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 namespace dq = phonelm::depth_quality;
 namespace ff = phonelm::qnn::first_nonfinite;
+namespace vs = phonelm::validation_selection;
+namespace vc = phonelm::validation_checkpoint;
 using phonelm::tiny_lm::Config;
 
 static Config smallConfig(uint32_t layers = 2, uint32_t heads = 2) {
@@ -83,6 +87,99 @@ static void testLegacyTrajectoryHashInvariance() {
   assert(std::abs(l19s1.finalEvaluation.loss - 0.311677747) < 1e-5);
   const auto l18s2 = dq::runFormalCpu(smallConfig(18, 2), 2, 320);
   assert(std::abs(l18s2.finalEvaluation.loss - 1.23493402) < 1e-5);
+}
+
+static void testValidationPartitionAndSelection() {
+  const auto config = smallConfig(2, 2);
+  const auto validationA = vs::validationCases(config.tokens);
+  const auto validationB = vs::validationCases(config.tokens);
+  assert(validationA.size() == 3 && validationA.size() == validationB.size());
+  assert(vs::validationSetHash(config.tokens) == "fnv1a64:8e1411f19126879c");
+  assert(validationA[0].input ==
+         std::vector<std::uint32_t>({2, 3, 0, 1, 2, 3, 0, 1}));
+  assert(validationA[0].target ==
+         std::vector<std::uint32_t>({3, 0, 1, 2, 3, 0, 1, 2}));
+  std::vector<std::string> ids;
+  for (size_t i = 0; i < validationA.size(); ++i) {
+    assert(validationA[i].id == validationB[i].id);
+    assert(validationA[i].input == validationB[i].input);
+    assert(validationA[i].target == validationB[i].target);
+    ids.push_back(validationA[i].id);
+    for (auto token : validationA[i].input) assert(token <= 12);
+    for (auto token : validationA[i].target) assert(token <= 12);
+  }
+  std::sort(ids.begin(), ids.end());
+  assert(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+  // Full sequences/prefixes/target sequences are disjoint. Token transitions
+  // intentionally overlap so validation measures learned rules rather than
+  // untouched vocabulary rows.
+  for (std::uint32_t pattern = 0; pattern < 4; ++pattern) {
+    const auto train = dq::formalBatch(config, pattern, 0);
+    const auto phase1 = dq::formalBatch(config, pattern, 1);
+    for (const auto& item : validationA) {
+      const auto input = phonelm::tiny_lm::oneHot(item.input,
+                                                  config.vocabularySize);
+      const auto target = phonelm::tiny_lm::oneHot(item.target,
+                                                   config.vocabularySize);
+      assert(input != train.first && target != train.second);
+      assert(input != phase1.first && target != phase1.second);
+      assert(input != train.second && target != phase1.first);
+    }
+  }
+
+  vs::Metrics incumbent{1.0, 0.5, 0.0, 0.0};
+  assert(vs::better(vs::Metrics{0.9, 0.1, 0.0, 0.0}, 20,
+                    incumbent, 16));
+  assert(vs::better(vs::Metrics{1.0 + 0.5e-7, 0.75, 0.0, 0.0}, 20,
+                    incumbent, 16));
+  assert(vs::better(vs::Metrics{1.0, 0.5, 0.0, 0.0}, 12,
+                    incumbent, 16));
+  assert(!vs::better(vs::Metrics{1.0, 0.5, 0.0, 0.0}, 20,
+                     incumbent, 16));
+
+  const auto legacy = dq::runFormalCpu(config, 1, 40);
+  const auto selectedFinal = dq::runValidationSelectedCpu(
+      config, 1, 40, vs::Mode::FINAL_STEP);
+  const auto left = phonelm::tiny_lm::parameterRegistry(legacy.finalParameters);
+  const auto right =
+      phonelm::tiny_lm::parameterRegistry(selectedFinal.selectedParameters);
+  assert(selectedFinal.selectedStep == 40 && left.size() == right.size());
+  for (size_t i = 0; i < left.size(); ++i)
+    assert(*left[i].values == *right[i].values);
+  assert(legacy.steps.size() == selectedFinal.training.steps.size());
+  for (size_t i = 0; i < legacy.steps.size(); ++i) {
+    assert(legacy.steps[i].loss == selectedFinal.training.steps[i].loss);
+    assert(legacy.steps[i].accuracy == selectedFinal.training.steps[i].accuracy);
+    assert(legacy.steps[i].gradientNorm ==
+           selectedFinal.training.steps[i].gradientNorm);
+  }
+  const auto legacyGeneration = dq::generationQuality(config, legacy.finalParameters);
+  assert(legacyGeneration.oracleExact == selectedFinal.generation.oracleExact);
+  assert(legacyGeneration.freeExact == selectedFinal.generation.freeExact);
+
+  const auto selectedBest = dq::runValidationSelectedCpu(
+      config, 1, 40, vs::Mode::BEST_VALIDATION_V1);
+  vs::Metrics manualBest;
+  int manualStep = 0;
+  for (const auto& entry : selectedBest.validationTrajectory) {
+    if (vs::better(entry.second, entry.first, manualBest, manualStep)) {
+      manualBest = entry.second;
+      manualStep = entry.first;
+    }
+  }
+  assert(manualStep == selectedBest.selectedStep);
+  const auto selectedHash = fnvParams(selectedBest.selectedParameters);
+  (void)dq::generationQuality(config, selectedBest.selectedParameters);
+  assert(fnvParams(selectedBest.selectedParameters) == selectedHash &&
+         selectedBest.selectedStep == manualStep);
+
+  std::vector<std::pair<int, vs::Metrics>> early{{0, {3.0, 0.0, 0.0, 0.0}},
+      {4, {2.0, 0.2, 0.0, 0.0}}, {8, {2.1, 0.2, 0.0, 0.0}},
+      {12, {2.2, 0.2, 0.0, 0.0}}, {16, {2.3, 0.2, 0.0, 0.0}}};
+  const auto simulation = vs::simulateEarlyStop(early, 3, 320);
+  assert(simulation.stopStep == 16 && simulation.bestStep == 4 &&
+         simulation.savedTrainingSteps == 304);
 }
 
 static void testPairedDepthInitialization() {
@@ -294,6 +391,62 @@ static void testCheckpointCodecV2() {
   assert(!ff::decodeCheckpoint(downgraded, &any, &error));
 }
 
+static void testValidationCheckpointCodec() {
+  vc::Checkpoint checkpoint;
+  checkpoint.configHash = "config-v1";
+  checkpoint.seed = 2;
+  checkpoint.selectionMode = std::uint32_t(vs::Mode::BEST_VALIDATION_V1);
+  checkpoint.validationSchemaVersion = vs::kValidationSchemaVersion;
+  checkpoint.validationSetHash = vs::validationSetHash(8);
+  checkpoint.validationCaseCount = 3;
+  checkpoint.selectedStep = 64;
+  checkpoint.totalSteps = 320;
+  checkpoint.optimizerNextStep = 65;
+  checkpoint.parameterRegistryVersion = vs::kParameterRegistryVersion;
+  checkpoint.registryHash = "registry-v2";
+  checkpoint.validation = {0.5, 0.75, 1.25, 0.6};
+  checkpoint.parameters = {1.0f, 2.0f, 3.0f};
+  checkpoint.adamM = {0.1f, 0.2f, 0.3f};
+  checkpoint.adamV = {0.01f, 0.02f, 0.03f};
+  vc::finalize(&checkpoint);
+  std::vector<std::uint8_t> bytes;
+  std::string error;
+  assert(vc::encode(checkpoint, &bytes, &error));
+  const vc::Expected expected{checkpoint.configHash, checkpoint.seed,
+      checkpoint.selectionMode, checkpoint.validationSchemaVersion,
+      checkpoint.validationSetHash, checkpoint.validationCaseCount,
+      checkpoint.totalSteps, checkpoint.parameterRegistryVersion,
+      checkpoint.registryHash};
+  vc::Checkpoint decoded;
+  assert(vc::decode(bytes, &decoded, &error, &expected));
+  assert(decoded.stateHash == checkpoint.stateHash &&
+         decoded.parameters == checkpoint.parameters);
+
+  auto corrupt = bytes;
+  corrupt[corrupt.size() / 2] ^= 1;
+  assert(!vc::decode(corrupt, &decoded, &error, &expected));
+  auto truncated = bytes;
+  truncated.pop_back();
+  assert(!vc::decode(truncated, &decoded, &error, &expected));
+  auto wrong = expected;
+  wrong.seed = 3;
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  wrong = expected; wrong.selectionMode = 0;
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  wrong = expected; wrong.validationSetHash = "changed";
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  wrong = expected; wrong.validationSchemaVersion += 1;
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  wrong = expected; wrong.configHash = "changed";
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  wrong = expected; wrong.parameterRegistryVersion += 1;
+  assert(!vc::decode(bytes, &decoded, &error, &wrong));
+  auto nonfinite = checkpoint;
+  nonfinite.parameters[0] = std::numeric_limits<float>::infinity();
+  vc::finalize(&nonfinite);
+  assert(!vc::encode(nonfinite, &bytes, &error));
+}
+
 int main() {
   testExactSeedValidation();
   std::puts("exact_seed_validation=PASS");
@@ -301,6 +454,8 @@ int main() {
   std::puts("exact_seed_determinism_and_equivalence=PASS");
   testLegacyTrajectoryHashInvariance();
   std::puts("legacy_trajectory_hash_invariance=PASS");
+  testValidationPartitionAndSelection();
+  std::puts("validation_partition_and_selection=PASS");
   testPairedDepthInitialization();
   std::puts("paired_depth_initialization=PASS");
   testStabilityModeContract();
@@ -311,6 +466,8 @@ int main() {
   std::puts("first_divergence_selection=PASS");
   testCheckpointCodecV2();
   std::puts("checkpoint_codec_v2=PASS");
+  testValidationCheckpointCodec();
+  std::puts("validation_checkpoint_codec=PASS");
   std::puts("depth_quality_tests=PASS");
   return 0;
 }

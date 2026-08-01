@@ -47,6 +47,7 @@ object NativeBridge {
         seedSelectionMode: Int,
         trainingStabilityMode: Int,
         depthPairInitMode: Int,
+        checkpointSelectionMode: Int,
         diagnosticTrajectory: Boolean,
         diagnosticCheckpointDir: String?,
         progressCallback: ProgressCallback,

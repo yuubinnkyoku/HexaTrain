@@ -225,6 +225,14 @@ void testTinyLanguageModelGeneralizedCoverage() {
     assert(estimate.adamApplicationVisibleBytes ==
            size_t(11) * estimate.adamGraphElements * sizeof(float));
     assert(estimate.nodeCount > 0 && estimate.tensorCount > 0);
+    assert(estimate.bestCheckpointParameterBytes == estimate.parameterBytes);
+    assert(estimate.bestCheckpointAdamBytes == estimate.adamMomentBytes);
+    assert(estimate.checkpointSelectionOverheadBytes ==
+           2 * (estimate.parameterBytes + estimate.adamMomentBytes));
+    assert(estimate.estimatedPeakWithBestCheckpointBytes ==
+           estimate.estimatedPeakApplicationTensorBytes +
+               estimate.checkpointSelectionOverheadBytes);
+    assert(estimate.bestCheckpointFitsApplicationPolicy);
 }
 
 void testTinyLanguageModelSchemaFailClosedAndRegistry() {
