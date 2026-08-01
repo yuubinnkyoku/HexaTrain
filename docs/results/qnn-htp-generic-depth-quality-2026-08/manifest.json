@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "source_commit": "fb080a2fd496951eb78bc0d2757d0caf70be82aa",
+  "qairt_build_id": "2.48.40.260702151143",
+  "configurations": [
+    "T8/D16/FFN32/L18/H2",
+    "T8/D16/FFN32/L19/H2"
+  ],
+  "training_steps": 320,
+  "evaluated_seeds": "L18:1,2; L19:1,2,4",
+  "evaluated_stability_modes": [
+    "LEGACY",
+    "ZERO_OUTPUT_PROJ_BRANCH_INIT",
+    "DEPTH_SCALED_BRANCH_INIT",
+    "GRADIENT_CLIP_1"
+  ],
+  "selected_stabilized_mode": "NONE",
+  "selection_status": "NO_STABILIZER_SELECTED",
+  "legacy_default_unchanged": true,
+  "qnn_nonzero_return_count_all_runs": 0,
+  "all_observed_tensors_finite": true,
+  "raw_checkpoints_published": false,
+  "files": [
+    "README.md",
+    "manifest.json",
+    "trajectory.csv",
+    "candidate-comparison.csv"
+  ]
+}
