@@ -29,6 +29,12 @@ struct TrainingConfig {
     int measuredSteps = 0;
     int correctnessInterval = 0;
     bool benchmarkMode = false;
+    // Seed selection for QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC:
+    //   0 = COUNT_FROM_ONE (legacy): run seeds 1..correctnessInterval.
+    //   1 = EXACT_SEED: run exactly one seed; the seed value is carried by
+    //       `seed`, must be >= 1, and must equal correctnessInterval so that
+    //       derived protocol flags match the legacy seed-k process slice.
+    int seedSelectionMode = 0;
 };
 
 struct TrainingOutcome {

@@ -118,6 +118,15 @@ enum class ExecutionMode(val nativeCode: Int) {
     }
 }
 
+enum class SeedSelectionMode(val nativeCode: Int) {
+    // Legacy: the process runs seeds 1..correctnessInterval.
+    COUNT_FROM_ONE(0),
+    // Run exactly one established seed k. The seed value is carried by
+    // BenchmarkConfig.seed and must equal correctnessInterval so that derived
+    // protocol flags match the legacy seed-k process slice.
+    EXACT_SEED(1),
+}
+
 data class BenchmarkConfig(
     val backend: Backend,
     val batchSize: Int,
@@ -131,6 +140,7 @@ data class BenchmarkConfig(
     val measuredSteps: Int = 0,
     val correctnessInterval: Int = 0,
     val benchmarkMode: Boolean = false,
+    val seedSelectionMode: SeedSelectionMode = SeedSelectionMode.COUNT_FROM_ONE,
     val hiddenDimension: Int = dimension,
     val outputDimension: Int = maxOf(1, dimension / 2),
 ) {
@@ -148,6 +158,12 @@ data class BenchmarkConfig(
         if (epochs !in 0..100_000) return "epochs must be in 0..100000"
         if (measuredSteps !in 0..100_000) return "measuredSteps must be in 0..100000"
         if (correctnessInterval !in 0..100_000) return "correctnessInterval must be in 0..100000"
+        if (seedSelectionMode == SeedSelectionMode.EXACT_SEED) {
+            if (seed < 1L || seed > 100_000L) return "EXACT_SEED requires seed in 1..100000"
+            if (correctnessInterval != seed.toInt()) {
+                return "EXACT_SEED requires correctnessInterval == seed"
+            }
+        }
 
         val matrixElements = dimension.toLong() * dimension.toLong()
         val batchElements = batchSize.toLong() * dimension.toLong()

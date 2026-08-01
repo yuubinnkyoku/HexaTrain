@@ -44,6 +44,7 @@ object NativeBridge {
         measuredSteps: Int,
         correctnessInterval: Int,
         benchmarkMode: Boolean,
+        seedSelectionMode: Int,
         progressCallback: ProgressCallback,
     ): String
 

@@ -1462,7 +1462,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
                               const LogSink& progress = {},
                               int requestedSteps = 0,
                               bool numericalProbe = false,
-                              float requestedLearningRate = 0.0f) {
+                              float requestedLearningRate = 0.0f,
+                              int firstSeed = 1,
+                              const char* seedSelectionMode = "COUNT_FROM_ONE",
+                              int requestedSeed = 0) {
   // These are part of the model configuration, not a reporting-only scale
   // label.  The CPU reference and the QNN graph receive exactly the same
   // shape contract below.
@@ -1473,6 +1476,13 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   }
   config.numLayers = static_cast<uint32_t>(layers);
   config.numHeads = static_cast<uint32_t>(attentionHeads);
+  if (firstSeed < 1 || firstSeed > lastSeed) {
+    return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=firstSeed must satisfy 1 <= firstSeed <= lastSeed\n";
+  }
+  const int executedSeedCount = lastSeed - firstSeed + 1;
+  const int reportedRequestedSeed = requestedSeed > 0 ? requestedSeed : lastSeed;
   auto selected = adamCandidate(candidate);
   if (requestedSteps > 0) selected.steps = requestedSteps;
   if (requestedLearningRate > 0.0f)
@@ -2032,7 +2042,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   std::vector<Params> inferenceParameters;
   std::vector<Params> cpuInferenceParameters;
   std::vector<double> formalTrainingStepLatencyUs;
-  for (int seed = 1; seed <= lastSeed; ++seed) {
+  for (int seed = firstSeed; seed <= lastSeed; ++seed) {
     const auto seedExecuteStart = runtime.metrics().graphExecuteCount;
     bool seedAllStepsFinite = true;
     bool cpuAllStepsFinite = true;
@@ -2473,6 +2483,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   std::sort(reductions.begin(), reductions.end());
   const double median = reductions[reductions.size() / 2];
   if (inferenceOnly) {
+    // Report labels always name the actual native seed number so an
+    // EXACT_SEED=k report exposes the same seed_k_* keys as a legacy
+    // COUNT_FROM_ONE=k report.
+    const size_t formalSeedLabelOffset = size_t(firstSeed - 1);
     bool formalContextSelfTest = true;
     if (formalPostFix) {
       std::vector<uint32_t> oracleProbe{1, 2};
@@ -2675,7 +2689,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               size_t(config.tokens - 1) * config.vocabularySize;
           const std::string prefix =
               std::string("formal_logits_") + rolloutMode + "_s" +
-              std::to_string(seedIndex + 1) + "_p" +
+              std::to_string(seedIndex + 1 + formalSeedLabelOffset) + "_p" +
               std::to_string(pattern) + "_step_" + std::to_string(step);
           if (std::string(rolloutMode) == "free" && seedIndex == 0 &&
               pattern == 0 && step == 7)
@@ -2755,7 +2769,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         ++samePrefixNonfiniteCount;
         if (firstOutputNonfinite == "NONE")
           firstOutputNonfinite =
-              "same_prefix_seed" + std::to_string(seedIndex + 1);
+              "same_prefix_seed" + std::to_string(seedIndex + 1 + formalSeedLabelOffset);
         countOutputNonfinite(seedCpuEval.logits);
         countOutputNonfinite(seedCpuEval.probabilities);
         countOutputNonfinite(seedCpuGeneration.logits);
@@ -2771,7 +2785,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         allCpuHtpArgmax = false;
         allCpuHtpTop3 = false;
         worstCpuHtpLogits = std::numeric_limits<double>::infinity();
-        paritySeeds << "same_prefix_seed_" << (seedIndex + 1)
+        paritySeeds << "same_prefix_seed_" << (seedIndex + 1 + formalSeedLabelOffset)
                     << "_finite=false\n";
         continue;
       }
@@ -2806,14 +2820,14 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
       allCpuHtpTop3 = allCpuHtpTop3 && seedCpuTop3 == seedHtpTop3;
       worstCpuHtpLogits =
           std::max(worstCpuHtpLogits, seedCpuHtp.maximum);
-      paritySeeds << "same_prefix_seed_" << (seedIndex + 1)
-                  << "_finite=true\nsame_prefix_seed_" << (seedIndex + 1)
+      paritySeeds << "same_prefix_seed_" << (seedIndex + 1 + formalSeedLabelOffset)
+                  << "_finite=true\nsame_prefix_seed_" << (seedIndex + 1 + formalSeedLabelOffset)
                   << "_cpu_eval_generation_max_abs_error="
                   << seedCpuEvalGeneration.maximum << "\nsame_prefix_seed_"
-                  << (seedIndex + 1)
+                  << (seedIndex + 1 + formalSeedLabelOffset)
                   << "_htp_eval_generation_max_abs_error="
                   << seedHtpEvalGeneration.maximum << "\nsame_prefix_seed_"
-                  << (seedIndex + 1) << "_cpu_htp_max_abs_error="
+                  << (seedIndex + 1 + formalSeedLabelOffset) << "_cpu_htp_max_abs_error="
                   << seedCpuHtp.maximum << '\n';
     }
     std::ostringstream samePrefixPositions;
@@ -2864,7 +2878,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         << "\nsame_prefix_cpu_top3=" << cpuTop3[0] << ',' << cpuTop3[1]
         << ',' << cpuTop3[2] << "\nsame_prefix_htp_top3=" << htpTop3[0]
         << ',' << htpTop3[1] << ',' << htpTop3[2]
-        << "\nsame_prefix_seed_count=5"
+        << "\nsame_prefix_seed_count=" << executedSeedCount
         << "\nsame_prefix_all_cpu_eval_generation_argmax_match="
         << (allCpuEvalGenerationArgmax ? "true" : "false")
         << "\nsame_prefix_all_htp_eval_generation_argmax_match="
@@ -2928,7 +2942,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             return failure("adam_generation", error, runtime);
           if (!finite(output.logits) || !finite(output.probabilities)) {
             std::ostringstream location;
-            location << "seed" << (seedIndex + 1) << "_pattern" << pattern
+            location << "seed" << (seedIndex + 1 + formalSeedLabelOffset) << "_pattern" << pattern
                      << "_step" << step << "_logits_finite"
                      << finite(output.logits) << "_probabilities_finite"
                      << finite(output.probabilities);
@@ -3040,7 +3054,7 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             return failure("adam_oracle_generation", error, runtime);
           if (!finite(output.logits) || !finite(output.probabilities)) {
             std::ostringstream location;
-            location << "oracle_seed" << (seedIndex + 1) << "_pattern"
+            location << "oracle_seed" << (seedIndex + 1 + formalSeedLabelOffset) << "_pattern"
                      << pattern << "_step" << step << "_logits_finite"
                      << finite(output.logits) << "_probabilities_finite"
                      << finite(output.probabilities);
@@ -3091,10 +3105,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
               if (!formalPostFix) return;
               const std::string prefix =
                   std::string("formal_") + rolloutMode + "_case_s" +
-                  std::to_string(seedIndex + 1) + "_p" +
+                  std::to_string(seedIndex + 1 + formalSeedLabelOffset) + "_p" +
                   std::to_string(pattern);
               formalDetails
-                  << prefix << "_id=s" << (seedIndex + 1) << "_p" << pattern
+                  << prefix << "_id=s" << (seedIndex + 1 + formalSeedLabelOffset) << "_p" << pattern
                   << '\n' << prefix << "_prefix="
                   << formalTokenList(casePrompt) << '\n' << prefix
                   << "_expected_sequence=" << formalTokenList(caseExpected)
@@ -3131,51 +3145,51 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
             oracleExact, firstOracleError, firstOracleErrorExpected,
             firstOracleErrorPredicted, firstOracleErrorTop3,
             firstOracleErrorExpectedProbability);
-        trajectory << "seed_" << (seedIndex + 1) << "_generation_pattern_"
+        trajectory << "seed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_prompt=" << tokenList(prompt)
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_expected=" << tokenList(expectedTokens)
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_generated=" << tokenList(generated)
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_exact=" << (exact ? "true" : "false")
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_token_accuracy=" << correct / 8.0
-                   << "\nseed_" << (seedIndex + 1)
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset)
                    << "_generation_pattern_" << pattern
                    << "_evaluated_steps=" << evaluatedSteps
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_first_error=" << firstError
-                   << "\nseed_" << (seedIndex + 1) << "_generation_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_generation_pattern_"
                    << pattern << "_mean_correct_probability="
                    << (evaluatedSteps ? probability / evaluatedSteps : 0)
-                   << "\nseed_" << (seedIndex + 1)
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset)
                    << "_generation_pattern_" << pattern << "_mean_margin="
                    << (evaluatedSteps ? margin / evaluatedSteps : 0)
-                   << "\nseed_" << (seedIndex + 1)
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset)
                    << "_generation_pattern_" << pattern << "_minimum_margin=";
         if (evaluatedSteps)
           trajectory << minimumMargin;
         else
           trajectory << "NOT_AVAILABLE";
         trajectory << '\n';
-        trajectory << "seed_" << (seedIndex + 1)
+        trajectory << "seed_" << (seedIndex + 1 + formalSeedLabelOffset)
                    << "_oracle_pattern_" << pattern
                    << "_exact=" << (oracleExact ? "true" : "false")
-                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_oracle_pattern_"
                    << pattern << "_token_accuracy=" << oracleCorrect / 8.0
-                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_oracle_pattern_"
                    << pattern << "_evaluated_steps=" << oracleEvaluatedSteps
-                   << "\nseed_" << (seedIndex + 1) << "_oracle_pattern_"
+                   << "\nseed_" << (seedIndex + 1 + formalSeedLabelOffset) << "_oracle_pattern_"
                    << pattern << "_first_error=" << firstOracleError << '\n';
       }
       qualifyingSeeds += seedExactPatterns >= 3;
       oracleQualifyingSeeds += seedOracleExactPatterns == 4;
     }
     const bool exactSuccess = !outputNonfinite &&
-                              qualifyingSeeds >= std::min(4, lastSeed) &&
-                              exactRollouts >= std::min(16, lastSeed * 4) &&
-                              oracleQualifyingSeeds >= std::min(4, lastSeed);
+                              qualifyingSeeds >= std::min(4, executedSeedCount) &&
+                              exactRollouts >= std::min(16, executedSeedCount * 4) &&
+                              oracleQualifyingSeeds >= std::min(4, executedSeedCount);
     constexpr size_t kGenerationWarmupCalls = 16;
     constexpr size_t kTrainingWarmupSteps = 16;
     std::vector<double> measuredGenerationLatencyUs;
@@ -3202,11 +3216,11 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
           size_t(quantile * double(values.size() - 1)));
       return values[index];
     };
-    const size_t expectedGenerationCases = size_t(lastSeed) * 4;
+    const size_t expectedGenerationCases = size_t(executedSeedCount) * 4;
     const size_t expectedPrefixComparisons =
         expectedGenerationCases * 2 * 8;
     const size_t expectedTrainingSteps =
-        size_t(lastSeed) * size_t(selected.steps);
+        size_t(executedSeedCount) * size_t(selected.steps);
     const bool scalingGenerationComplete =
         numericalProbe
             ? size_t(formalOracleCaseCount) == expectedGenerationCases &&
@@ -3220,8 +3234,8 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
         !nan && !outputNonfinite && (numericalProbe || allLoss) &&
         allFormalCpuFinite && formalPrefixComparisonsFinite &&
         formalContextSelfTest &&
-        inferenceParameters.size() == size_t(lastSeed) &&
-        cpuInferenceParameters.size() == size_t(lastSeed) &&
+        inferenceParameters.size() == size_t(executedSeedCount) &&
+        cpuInferenceParameters.size() == size_t(executedSeedCount) &&
         formalFreeCaseCount == expectedGenerationCases &&
         formalOracleCaseCount == expectedGenerationCases &&
         formalPrefixComparisonCount == expectedPrefixComparisons &&
@@ -3359,7 +3373,10 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
            << "\nsampling="
            << (formalPostFix ? "pattern_round_robin_phase0"
                              : "pattern_balanced_phase01_round_robin")
-           << "\nseed_count=" << lastSeed
+           << "\nseed_selection_mode=" << seedSelectionMode
+           << "\nrequested_seed=" << reportedRequestedSeed
+           << "\nexecuted_seed_count=" << executedSeedCount
+           << "\nseed_count=" << executedSeedCount
            << "\nrepresentative_seed_exact_pattern_count="
            << exactPatterns << "\nqualifying_seed_count=" << qualifyingSeeds
            << "\nexact_rollout_count=" << exactRollouts
@@ -4445,6 +4462,31 @@ std::string runTinyTransformerTrainingExperiment(
              "error=generic mode requires B=1,T>0,V>=13,D>0,FFN>0,"
              "L>0,H>0,steps>0,seeds>0,and finite lr>0\n";
     }
+    int firstSeed = 1;
+    const char* seedSelectionMode = "COUNT_FROM_ONE";
+    if (trainingConfig.seedSelectionMode == 1) {
+      // EXACT_SEED: run exactly one established seed k. The seed value rides
+      // in TrainingConfig.seed (uint64) and must equal correctnessInterval so
+      // derived flags (scaling smoke threshold etc.) match the legacy seed-k
+      // process slice. Contradictory or out-of-range requests fail closed.
+      seedSelectionMode = "EXACT_SEED";
+      const std::uint64_t exactSeed = trainingConfig.seed;
+      if (exactSeed < 1 ||
+          exactSeed > static_cast<std::uint64_t>(
+                          std::numeric_limits<int>::max()) ||
+          exactSeed != static_cast<std::uint64_t>(
+                           trainingConfig.correctnessInterval)) {
+        return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+               "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+               "error=EXACT_SEED requires correctness_interval == seed with "
+               "1 <= seed <= INT32_MAX\n";
+      }
+      firstSeed = trainingConfig.correctnessInterval;
+    } else if (trainingConfig.seedSelectionMode != 0) {
+      return "TINY_LANGUAGE_MODEL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=unknown seed_selection_mode\n";
+    }
     tiny_lm::Config config;
     config.tokens = static_cast<uint32_t>(trainingConfig.sampleCount);
     config.vocabularySize =
@@ -4458,7 +4500,8 @@ std::string runTinyTransformerTrainingExperiment(
         false, 3, true, config, trainingConfig.correctnessInterval,
         scalingSmoke, trainingConfig.epochs, trainingConfig.measuredSteps,
         progress, trainingConfig.steps, numericalProbe,
-        trainingConfig.learningRate);
+        trainingConfig.learningRate, firstSeed, seedSelectionMode,
+        trainingConfig.correctnessInterval);
   }
   return "TINY_TRANSFORMER_TRAINING\nstatus=FAILED\nerror=unsupported mode\n";
 }

@@ -80,6 +80,7 @@ class HeadlessDeviceTestRunner {
                         outputDimension = 3, steps = if (suite == "qnn-reproducibility") 2 else 1,
                         warmupSteps = 0, learningRate = 0.1f, seed = 20_260_710L, sampleCount = 2,
                         epochs = 0, measuredSteps = 0, correctnessInterval = 1, benchmarkMode = false,
+                        seedSelectionMode = 0,
                         progressCallback = ProgressCallback { message ->
                             NativeProgressParser.parse(message)?.let { notification?.onProgress(it) }
                         },

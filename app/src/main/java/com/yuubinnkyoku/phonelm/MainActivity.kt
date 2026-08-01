@@ -143,14 +143,24 @@ class MainActivity : Activity() {
         val measuredSteps = intent.getIntExtra("phonelm.measured_steps", 0)
         val correctnessInterval = intent.getIntExtra("phonelm.correctness_interval", 0)
         val benchmarkMode = intent.getBooleanExtra("phonelm.benchmark_mode", false)
+        val seedSelectionName = intent.getStringExtra("phonelm.seed_selection_mode")
+        val seedSelectionMode = seedSelectionName?.let {
+            runCatching { SeedSelectionMode.valueOf(it) }.getOrNull()
+        } ?: SeedSelectionMode.COUNT_FROM_ONE
         val config = BenchmarkConfig(backend = Backend.CPU, batchSize = batchSize, dimension = dimension,
             steps = steps, warmupSteps = warmupSteps, learningRate = learningRate, seed = seed,
             sampleCount = sampleCount, epochs = epochs, measuredSteps = measuredSteps,
             correctnessInterval = correctnessInterval, benchmarkMode = benchmarkMode,
+            seedSelectionMode = seedSelectionMode,
             hiddenDimension = hiddenDimension, outputDimension = outputDimension)
         applyPreset(config)
         Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
-        val validationError = config.validationError()
+        val validationError = if (seedSelectionName != null &&
+            seedSelectionMode.name != seedSelectionName) {
+            "unknown phonelm.seed_selection_mode: $seedSelectionName"
+        } else {
+            config.validationError()
+        }
         if (validationError != null) {
             Log.e("PhoneLMDeviceTest", "DEVICE_TEST_REJECTED error=$validationError")
             return
@@ -178,6 +188,7 @@ class MainActivity : Activity() {
                 measuredSteps = config.measuredSteps,
                 correctnessInterval = config.correctnessInterval,
                 benchmarkMode = config.benchmarkMode,
+                seedSelectionMode = config.seedSelectionMode.nativeCode,
                 progressCallback = ProgressCallback { },
             )
             openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {

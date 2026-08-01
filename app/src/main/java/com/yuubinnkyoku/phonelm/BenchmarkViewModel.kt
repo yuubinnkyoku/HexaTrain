@@ -74,6 +74,7 @@ object NativeBenchmarkEngine : BenchmarkEngine {
         measuredSteps = config.measuredSteps,
         correctnessInterval = config.correctnessInterval,
         benchmarkMode = config.benchmarkMode,
+        seedSelectionMode = config.seedSelectionMode.nativeCode,
         progressCallback = ProgressCallback(progress),
     )
 }

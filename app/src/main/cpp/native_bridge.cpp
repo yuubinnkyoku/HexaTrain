@@ -174,6 +174,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jint measuredSteps,
     jint correctnessInterval,
     jboolean benchmarkMode,
+    jint seedSelectionMode,
     jobject progressCallback) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -232,6 +233,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.measuredSteps = measuredSteps;
     config.correctnessInterval = correctnessInterval;
     config.benchmarkMode = benchmarkMode == JNI_TRUE;
+    config.seedSelectionMode = static_cast<int>(seedSelectionMode);
 
     try {
         const auto report = phonelm::TrainingEngine::run(
