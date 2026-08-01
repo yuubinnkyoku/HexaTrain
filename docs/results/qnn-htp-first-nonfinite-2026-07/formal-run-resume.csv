@@ -1,0 +1,12 @@
+configuration,seed,attempt,classification,resumed,terminal_result_reused,detail
+T16_D256_FFN372_L3_H4,1,1,SUCCESS,false,true,seed1 process completed; atomic promote
+T16_D256_FFN372_L3_H4,2,1,SUCCESS,false,true,seed2 process completed; atomic promote
+T16_D256_FFN372_L3_H4,3,1,SUCCESS,false,true,seed3 process completed; atomic promote
+T16_D256_FFN372_L3_H4,4,1,SUCCESS,false,true,seed4 process completed; atomic promote
+T16_D256_FFN372_L3_H4,5,1,SUCCESS,false,true,seed5 process completed; atomic promote
+T8_D16_FFN32_L19_H2,1,1,SUCCESS,false,true,seed1 process completed; atomic promote
+T8_D16_FFN32_L19_H2,2,1,SUCCESS,false,true,seed2 process completed; atomic promote
+T8_D16_FFN32_L19_H2,3,1,SUCCESS,false,true,seed3 process completed; atomic promote
+T8_D16_FFN32_L19_H2,4,1,SUCCESS,false,true,seed4 process completed; atomic promote
+T8_D16_FFN32_L19_H2,5,1,SUCCESS,false,true,seed5 process completed; atomic promote
+T8_D16_FFN32_L64_H2_SMOKE,1,1,SUCCESS,false,true,seed1 smoke process completed; atomic promote

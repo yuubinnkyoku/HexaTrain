@@ -1,3 +1,5 @@
 probe,status,foreground_service,ongoing_during,ongoing_after,tap_activity,auto_cancel
 FFN372_80_step,PASS,true,true,false,true,true
-FFN372_formal,INCOMPLETE,true,true,NOT_EVALUATED,NOT_EVALUATED,NOT_EVALUATED
+FFN372_formal,PASS,true,true,false,NOT_RUN,NOT_RUN
+L19_formal,PASS,true,true,false,NOT_RUN,NOT_RUN
+L64_smoke,PASS,true,true,false,NOT_RUN,NOT_RUN
