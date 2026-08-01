@@ -239,17 +239,32 @@ function Get-ReportValue([string]$Report, [string]$Key) {
     return $null
 }
 
-function Get-DeviceClassification([string]$Report) {
+function Get-DeviceClassification([string]$Report, [int]$Seed = 1) {
     $status = Get-ReportValue $Report 'status'
     if ($status -eq 'SUCCESS') { return 'SUCCESS' }
     if ($status -notin @('FAILED', 'PARTIAL_SUCCESS')) { return 'INCOMPLETE' }
     $failureClass = Get-ReportValue $Report 'failure_classification'
-    switch -Regex ([string]$failureClass) {
-        '^QNN_EXECUTE_FINITE_OUTPUT' { return 'NUMERIC_FAILURE' }
-        '^QNN_EXECUTE' { return 'QNN_FAILURE' }
-        'NONFINITE|FINITE_OUTPUT' { return 'NUMERIC_FAILURE' }
-        default { return "UNEXPECTED_DEVICE_FAILURE:$failureClass" }
+    if ($failureClass -match '^QNN_EXECUTE_FINITE_OUTPUT') { return 'NUMERIC_FAILURE' }
+    if ($failureClass -match '^QNN_EXECUTE') { return 'QNN_FAILURE' }
+    if ($failureClass -match 'NONFINITE|FINITE_OUTPUT') { return 'NUMERIC_FAILURE' }
+    # A FAILED report can still carry a numerically complete, fully finite
+    # seed run whose device-side learning-quality thresholds were not met
+    # (e.g. deep configurations that do not reach all exact rollouts). That
+    # outcome is evidence for the formal tables, not a numeric failure.
+    $finalLoss = Get-ReportValue $Report "seed_${Seed}_final_loss"
+    if ($null -ne $finalLoss) {
+        $allFinite = Get-ReportValue $Report "seed_${Seed}_all_steps_finite"
+        $evalFinite = Get-ReportValue $Report "seed_${Seed}_final_evaluation_finite"
+        $nonfinite = Get-ReportValue $Report "seed_${Seed}_nonfinite_count"
+        $completedSteps = Get-ReportValue $Report "seed_${Seed}_completed_steps"
+        $steps = Get-ReportValue $Report 'steps'
+        if ($allFinite -eq 'false' -or $evalFinite -eq 'false' -or
+            $nonfinite -match '^[1-9]\d*$' -or $completedSteps -ne $steps) {
+            return 'NUMERIC_FAILURE'
+        }
+        return 'SUCCESS'
     }
+    return "UNEXPECTED_DEVICE_FAILURE:$failureClass"
 }
 
 function ConvertFrom-DeviceReport {
@@ -260,7 +275,7 @@ function ConvertFrom-DeviceReport {
         [int]$Seed,
         [int]$StepCount
     )
-    $classification = Get-DeviceClassification $Report
+    $classification = Get-DeviceClassification $Report -Seed $Seed
     $result = [ordered]@{
         classification = $classification
         device_status = (Get-ReportValue $Report 'status')
@@ -274,7 +289,11 @@ function ConvertFrom-DeviceReport {
     }
     $nonzero = Get-ReportValue $Report 'formal_qnn_nonzero_return_count'
     if ($nonzero -match '^\d+$') { $result['qnn_nonzero_count'] = $nonzero }
-    if ($classification -eq 'SUCCESS') {
+    if ($classification -in @('SUCCESS', 'NUMERIC_FAILURE') -and
+        $null -ne (Get-ReportValue $Report "seed_${Seed}_final_loss")) {
+        # Numerically completed seed run: terminal seed fields are available
+        # even when device-side quality thresholds were not met or a seed
+        # finite violation was observed.
         foreach ($pair in @(
                 @('initial_loss', "seed_${Seed}_initial_loss"),
                 @('final_loss', "seed_${Seed}_final_loss"),
@@ -298,6 +317,14 @@ function ConvertFrom-DeviceReport {
         }
         if ($result['device_seed_count'] -ne [string]$Seed) {
             throw "device report seed_count mismatch: expected $Seed"
+        }
+        if ($classification -eq 'NUMERIC_FAILURE') {
+            # No new localization this round: record only the boundary fields.
+            $result['first_bad_seed'] = [string]$Seed
+            $result['first_bad_step'] = $result['step_completed']
+            $result['first_bad_phase'] = 'FINITE_VIOLATION_DETAIL_NOT_LOCALIZED'
+            $result['first_bad_tensor'] = 'NOT_LOCALIZED_THIS_ROUND'
+            $result['qnn_execute_result'] = '0'
         }
         $oracleExact = 0
         $freeExact = 0
