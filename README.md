@@ -362,6 +362,7 @@ scripts/
 ## 詳細文書
 
 - [Experimental results](docs/results/README.md)
+- [QNN HTP validation-selected depth quality](docs/qnn-htp-validation-selected-depth-quality.md)
 - [QNN HTP generic Transformer depth/head resource envelope](docs/qnn-htp-generic-depth-head-resource-envelope.md)
 - [QNN Transformer op feasibility](docs/qnn-transformer-op-feasibility.md)
 - [QNN HTP LayerNorm](docs/qnn-htp-layernorm.md)
