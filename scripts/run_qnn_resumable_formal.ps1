@@ -2,19 +2,24 @@
 # Resumable per-seed formal runner for the generic depth/head QNN HTP suite.
 #
 # Design contract:
-# - Each seed runs in its own Android process. The native generic loop is
-#   deterministic and seed-independent, so the process for seed k is launched
-#   with correctness_interval=k and only the seed_k_* values are harvested.
-#   This keeps the native training implementation untouched.
+# - Each seed runs in its own Android process. With the default
+#   -SeedSelectionMode EXACT_SEED, the native generic trainer executes exactly
+#   the one requested seed k (seed-level bitwise equivalence with the legacy
+#   COUNT_FROM_ONE=k slice is validated separately), so a five-seed formal
+#   costs five seed-units instead of fifteen. The legacy COUNT_FROM_ONE mode
+#   (correctness_interval=k, harvest seed_k_*) is retained for backward
+#   compatibility and equivalence checks.
 # - Every completed seed result is pulled to the host immediately, validated
-#   against a canonical identity (configuration hash, git HEAD, APK SHA-256,
-#   QAIRT Build ID, steps, result schema), and promoted atomically
-#   (result.tmp -> validate -> result.txt).
+#   against a canonical identity (configuration hash incl. seed selection
+#   mode, git HEAD, APK SHA-256, QAIRT Build ID, steps, result schema), and
+#   promoted atomically (result.tmp -> validate -> result.txt).
 # - ADB transport interruptions are not numeric failures. On reconnect the
 #   currently-online physical device is re-resolved and the app-private run
 #   context (run id + config hash) must match; otherwise the formal stops.
-# - Mismatched, partial, terminal=false, corrupted or duplicate results are
-#   rejected fail-closed and never count as completed.
+# - Mismatched, partial, terminal=false, corrupted, duplicate or wrong-mode
+#   (selection mode / requested / executed seed mismatch) results are rejected
+#   fail-closed and never count as completed. Legacy schema-1 results are
+#   rejected as SCHEMA_MISMATCH, never silently reused as EXACT_SEED results.
 # - Device serials, ADB endpoints, run ids and APK hashes stay private under
 #   build/reports; only aggregate CSVs in docs/results are publishable.
 [CmdletBinding()]
@@ -32,6 +37,7 @@ param(
     [ValidateRange(1, 5)][int]$Seeds = 5,
     [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$LearningRate = '0.003',
     [ValidateSet('UI_VALIDATION', 'CORRECTNESS')][string]$TestMode = 'UI_VALIDATION',
+    [ValidateSet('EXACT_SEED', 'COUNT_FROM_ONE')][string]$SeedSelectionMode = 'EXACT_SEED',
     [ValidateRange(600, 86400)][int]$TimeoutSecondsPerAttempt = 21600,
     [ValidateRange(1, 10)][int]$MaxAttemptsPerSeed = 3,
     [ValidateRange(60, 21600)][int]$ReconnectGraceSeconds = 3600,
@@ -44,7 +50,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$ResultSchemaVersion = 1
+$ResultSchemaVersion = 2
 $MaxSeedCount = 5
 
 # ---------------------------------------------------------------------------
@@ -60,12 +66,14 @@ function Get-Sha256Hex([string]$Text) {
 function Get-CanonicalConfigHash {
     param(
         [int]$T, [int]$V, [int]$D, [int]$Ffn, [int]$L, [int]$H,
-        [string]$Lr, [int]$StepCount
+        [string]$Lr, [int]$StepCount, [string]$SeedSelection = 'EXACT_SEED'
     )
     if (($D % $H) -ne 0) { throw 'embedding dimension must be divisible by heads' }
-    $canonical = "phonelm-formal-config-v1|B=1|T=$T|V=$V|D=$D|FFN=$Ffn|L=$L|H=$H" +
+    if ($SeedSelection -notin @('EXACT_SEED', 'COUNT_FROM_ONE')) { throw "unknown seed selection mode: $SeedSelection" }
+    $canonical = "phonelm-formal-config-v2|B=1|T=$T|V=$V|D=$D|FFN=$Ffn|L=$L|H=$H" +
         "|headDim=$($D / $H)|lr=$Lr|steps=$StepCount|clip=disabled" +
-        '|optimizer=ADAM|mode=QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC|candidate=3'
+        "|optimizer=ADAM|mode=QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC|candidate=3" +
+        "|seed_selection=$SeedSelection"
     return Get-Sha256Hex $canonical
 }
 
@@ -75,6 +83,7 @@ function Protect-SeedResult([System.Collections.IDictionary]$Fields) {
     $order = @(
         'result_schema', 'terminal', 'classification', 'device_status',
         'seed', 'steps', 'attempt', 'device_seed_count', 'test_mode',
+        'seed_selection_mode', 'requested_seed', 'executed_seed',
         'step_completed', 'initial_loss', 'final_loss', 'final_accuracy',
         'all_steps_finite', 'final_evaluation_finite', 'cpu_all_steps_finite',
         'qnn_nonzero_count', 'nonfinite_count', 'qnn_execute_count',
@@ -146,6 +155,20 @@ function Test-SeedResultContent {
     }
     if ([string]$fields['seed'] -ne [string]$ExpectedSeed) {
         return @{ ok = $false; reason = 'SEED_MISMATCH' }
+    }
+    if ([string]$Identity['result_schema'] -ge '2') {
+        # Schema 2 records the seed selection contract explicitly. A result
+        # produced under another mode or for another requested/executed seed
+        # is never reused as this run's seed evidence.
+        if ([string]$fields['seed_selection_mode'] -ne [string]$Identity['seed_selection_mode']) {
+            return @{ ok = $false; reason = 'SELECTION_MODE_MISMATCH' }
+        }
+        if ([string]$fields['requested_seed'] -ne [string]$ExpectedSeed) {
+            return @{ ok = $false; reason = 'REQUESTED_SEED_MISMATCH' }
+        }
+        if ([string]$fields['executed_seed'] -ne [string]$ExpectedSeed) {
+            return @{ ok = $false; reason = 'EXECUTED_SEED_MISMATCH' }
+        }
     }
     foreach ($required in @('classification', 'device_status', 'step_completed',
             'qnn_nonzero_count', 'nonfinite_count', 'parameter_hash', 'logits_hash')) {
@@ -268,13 +291,24 @@ function Get-DeviceClassification([string]$Report, [int]$Seed = 1) {
 }
 
 function ConvertFrom-DeviceReport {
-    # Extracts the seed-k terminal values from a device report produced by a
-    # process whose generic loop covered seeds 1..k.
+    # Extracts the seed-k terminal values from a device report. In EXACT_SEED
+    # mode the process trained only the requested seed; in legacy
+    # COUNT_FROM_ONE mode the process covered seeds 1..k and only the seed_k_*
+    # values are harvested.
     param(
         [string]$Report,
         [int]$Seed,
-        [int]$StepCount
+        [int]$StepCount,
+        [string]$SeedSelectionMode = 'EXACT_SEED'
     )
+    $reportMode = Get-ReportValue $Report 'seed_selection_mode'
+    if ($reportMode -ne $SeedSelectionMode) {
+        throw "device report seed_selection_mode mismatch: expected $SeedSelectionMode, got '$reportMode'"
+    }
+    $deviceRequestedSeed = Get-ReportValue $Report 'requested_seed'
+    if ($deviceRequestedSeed -ne [string]$Seed) {
+        throw "device report requested_seed mismatch: expected $Seed, got '$deviceRequestedSeed'"
+    }
     $classification = Get-DeviceClassification $Report -Seed $Seed
     $result = [ordered]@{
         classification = $classification
@@ -286,6 +320,9 @@ function ConvertFrom-DeviceReport {
         app_write_unchanged = (Get-ReportValue $Report 'app_write_hashes_unchanged')
         poison_remaining = (Get-ReportValue $Report 'app_read_poison_residual_elements')
         device_seed_count = (Get-ReportValue $Report 'seed_count')
+        seed_selection_mode = $reportMode
+        requested_seed = $deviceRequestedSeed
+        executed_seed = [string]$Seed
     }
     $nonzero = Get-ReportValue $Report 'formal_qnn_nonzero_return_count'
     if ($nonzero -match '^\d+$') { $result['qnn_nonzero_count'] = $nonzero }
@@ -315,8 +352,18 @@ function ConvertFrom-DeviceReport {
         if ($result['step_completed'] -ne [string]$StepCount) {
             throw "device report seed $Seed completed $($result['step_completed']) steps, expected $StepCount"
         }
-        if ($result['device_seed_count'] -ne [string]$Seed) {
-            throw "device report seed_count mismatch: expected $Seed"
+        if ($SeedSelectionMode -eq 'COUNT_FROM_ONE') {
+            if ($result['device_seed_count'] -ne [string]$Seed) {
+                throw "device report seed_count mismatch: expected $Seed"
+            }
+        } else {
+            if ($result['device_seed_count'] -ne '1') {
+                throw "device report seed_count mismatch: EXACT_SEED executes exactly one seed, got $($result['device_seed_count'])"
+            }
+            $deviceExecutedCount = Get-ReportValue $Report 'executed_seed_count'
+            if ($deviceExecutedCount -ne '1') {
+                throw "device report executed_seed_count mismatch: expected 1, got '$deviceExecutedCount'"
+            }
         }
         if ($classification -eq 'NUMERIC_FAILURE') {
             # No new localization this round: record only the boundary fields.
@@ -374,12 +421,22 @@ function Invoke-SelfTest {
     [IO.Directory]::CreateDirectory($tempRoot) | Out-Null
     try {
         $identity = @{
-            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320
+            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'EXACT_SEED'
             git_head = '0' * 40
             apk_sha256 = 'a' * 64
             qairt_build_id = 'selftest-build'
             steps = '320'
             result_schema = [string]$ResultSchemaVersion
+            seed_selection_mode = 'EXACT_SEED'
+        }
+        $legacyIdentity = @{
+            config_hash = Get-CanonicalConfigHash -T 16 -V 32 -D 256 -Ffn 372 -L 3 -H 4 -Lr '0.003' -StepCount 320 -SeedSelection 'COUNT_FROM_ONE'
+            git_head = '0' * 40
+            apk_sha256 = 'a' * 64
+            qairt_build_id = 'selftest-build'
+            steps = '320'
+            result_schema = [string]$ResultSchemaVersion
+            seed_selection_mode = 'COUNT_FROM_ONE'
         }
         $seedDir = Join-Path $tempRoot 'seeds'
 
@@ -388,7 +445,10 @@ function Invoke-SelfTest {
                 result_schema = [string]$ResultSchemaVersion
                 terminal = 'true'; classification = 'SUCCESS'; device_status = 'SUCCESS'
                 seed = [string]$Seed; steps = $Id['steps']; attempt = '1'
-                device_seed_count = [string]$Seed; test_mode = 'UI_VALIDATION'
+                device_seed_count = if ($Id['seed_selection_mode'] -eq 'EXACT_SEED') { '1' } else { [string]$Seed }
+                test_mode = 'UI_VALIDATION'
+                seed_selection_mode = $Id['seed_selection_mode']
+                requested_seed = [string]$Seed; executed_seed = [string]$Seed
                 step_completed = $Id['steps']
                 initial_loss = '9.1'; final_loss = '0.4'; final_accuracy = '0.9843'
                 all_steps_finite = 'true'; final_evaluation_finite = 'true'
@@ -426,13 +486,13 @@ function Invoke-SelfTest {
         Assert-SelfTest ($state.completed.Count -eq 0) 'fresh configuration runs seeds 1..5'
 
         # atomic promotion helper mirrors the production write path
-        function Promote-SeedResult([int]$Seed, [System.Collections.IDictionary]$Fields) {
+        function Promote-SeedResult([int]$Seed, [System.Collections.IDictionary]$Fields, [hashtable]$Id = $identity) {
             $dir = Join-Path $seedDir ('seed-{0:d3}' -f $Seed)
             [IO.Directory]::CreateDirectory($dir) | Out-Null
             $tmp = Join-Path $dir 'result.tmp'
             [IO.File]::WriteAllText($tmp, (Protect-SeedResult $Fields))
             $content = [IO.File]::ReadAllText($tmp)
-            $verdict = Test-SeedResultContent -Content $content -Identity $identity -ExpectedSeed $Seed
+            $verdict = Test-SeedResultContent -Content $content -Identity $Id -ExpectedSeed $Seed
             if (-not $verdict.ok) {
                 Move-Item -LiteralPath $tmp -Destination (Join-Path $dir 'isolated-1.tmp') -Force
                 throw "promotion refused: $($verdict.reason)"
@@ -486,6 +546,62 @@ function Invoke-SelfTest {
         try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
         catch { $threw = $_.Exception.Message -match 'SCHEMA_MISMATCH' }
         Assert-SelfTest $threw 'result schema mismatch rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+
+        # 6b: legacy schema-1 result is never reused as an EXACT_SEED result
+        $legacySchema = New-GoodFields 3 $identity; $legacySchema['result_schema'] = '1'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $legacySchema)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'SCHEMA_MISMATCH' }
+        Assert-SelfTest $threw 'legacy schema 1 result rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+
+        # 6c: COUNT_FROM_ONE backward compatibility under a legacy identity
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-001') -Recurse -Force
+        Promote-SeedResult -Seed 1 -Fields (New-GoodFields 1 $legacyIdentity) -Id $legacyIdentity
+        $legacyState = Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 1 -Identity $legacyIdentity
+        Assert-SelfTest ($legacyState.completed.Contains(1)) 'COUNT_FROM_ONE result compatible with schema 2'
+        # the same directory then rejects that legacy result under the exact identity
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 1 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'SELECTION_MODE_MISMATCH|IDENTITY_MISMATCH:config_hash' }
+        Assert-SelfTest $threw 'legacy seed result rejected under exact-seed identity'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-001') -Recurse -Force
+        # a forged result keeping the exact config hash but flipping the
+        # declared mode hits the dedicated selection-mode guard
+        $forged = New-GoodFields 3 $identity; $forged['seed_selection_mode'] = 'COUNT_FROM_ONE'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $forged)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'SELECTION_MODE_MISMATCH' }
+        Assert-SelfTest $threw 'forged selection mode field rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+        Promote-SeedResult -Seed 1 -Fields (New-GoodFields 1 $identity)
+
+        # 6d: selection mode mismatch rejected
+        $modeMixed = New-GoodFields 3 $legacyIdentity
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $modeMixed)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'SELECTION_MODE_MISMATCH|IDENTITY_MISMATCH:config_hash' }
+        Assert-SelfTest $threw 'selection mode mismatch rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+
+        # 6e: requested / executed seed mismatch rejected
+        $requestedMixed = New-GoodFields 3 $identity; $requestedMixed['requested_seed'] = '4'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $requestedMixed)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'REQUESTED_SEED_MISMATCH' }
+        Assert-SelfTest $threw 'requested seed mismatch rejected'
+        Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
+        $executedMixed = New-GoodFields 3 $identity; $executedMixed['executed_seed'] = '4'
+        Write-SeedResult -Seed 3 -Content (Protect-SeedResult $executedMixed)
+        $threw = $false
+        try { Get-CompletedSeeds -SeedsRoot $seedDir -SeedCount 5 -Identity $identity | Out-Null }
+        catch { $threw = $_.Exception.Message -match 'EXECUTED_SEED_MISMATCH' }
+        Assert-SelfTest $threw 'executed seed mismatch rejected'
         Remove-Item -LiteralPath (Join-Path $seedDir 'seed-003') -Recurse -Force
 
         # 7: duplicate final state (result.txt + stray result.tmp) rejected
@@ -652,7 +768,7 @@ $runIdEffective = if ($RunId) { $RunId } else {
 }
 $configHash = Get-CanonicalConfigHash -T $SequenceLength -V $VocabularySize `
     -D $EmbeddingDimension -Ffn $FeedForwardDimension -L $NumLayers -H $NumHeads `
-    -Lr $LearningRate -StepCount $Steps
+    -Lr $LearningRate -StepCount $Steps -SeedSelection $SeedSelectionMode
 $gitHead = (& git -C $repoRoot rev-parse HEAD).Trim()
 $configRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "build\reports\qnn-resumable-formal\$ConfigurationId"))
 $reportsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build\reports'))
@@ -698,6 +814,7 @@ try {
         qairt_build_id = $ExpectedBuildId
         steps = [string]$Steps
         result_schema = [string]$ResultSchemaVersion
+        seed_selection_mode = $SeedSelectionMode
     }
 
     # Run context: a new or resumed invocation. Existing results must match
@@ -712,7 +829,7 @@ try {
         }
     }
     @(
-        'schema=1'
+        "schema=$ResultSchemaVersion"
         "configuration_id=$ConfigurationId"
         "latest_run_id=$runIdEffective"
         "config_hash=$configHash"
@@ -721,6 +838,7 @@ try {
         "qairt_build_id=$ExpectedBuildId"
         "steps=$Steps"
         "result_schema=$ResultSchemaVersion"
+        "seed_selection_mode=$SeedSelectionMode"
     ) | Set-Content -LiteralPath $contextPath -Encoding utf8
 
     $device = Resolve-OnlineDevice $adb
@@ -789,7 +907,7 @@ try {
             # lists and a stdin pipe through toybox tee instead.
             & $adb -s $device shell run-as $package mkdir files 2>$null | Out-Null
             $contextDevice = @(
-                'schema=1'
+                "schema=$ResultSchemaVersion"
                 "run_id=$runIdEffective"
                 "config_hash=$configHash"
                 "apk_sha256=$apkHash"
@@ -797,6 +915,8 @@ try {
                 "seed=$seed"
                 "attempt=$attempt"
                 "steps=$Steps"
+                "seed_selection_mode=$SeedSelectionMode"
+                "requested_seed=$seed"
             ) -join "`n"
             $contextDevice | & $adb -s $device shell run-as $package tee `
                 files/phonelm-formal-run-context.txt | Out-Null
@@ -804,6 +924,11 @@ try {
             & $adb -s $device shell am force-stop $package | Out-Null
             & $adb -s $device shell run-as $package rm -f files/device-test-result.txt | Out-Null
 
+            $exactSeedExtra = if ($SeedSelectionMode -eq 'EXACT_SEED') {
+                # EXACT_SEED carries the requested seed in phonelm.seed; the
+                # native side requires it to equal correctness_interval.
+                [string]$seed
+            } else { '1' }
             $arguments = @(
                 'shell', 'am', 'start', '-W', '-n', $activity,
                 '--es', 'phonelm.mode', 'QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC',
@@ -814,12 +939,13 @@ try {
                 '--ei', 'phonelm.steps', [string]$Steps,
                 '--ei', 'phonelm.warmup_steps', '0',
                 '--es', 'phonelm.learning_rate', $LearningRate,
-                '--es', 'phonelm.seed', '1',
+                '--es', 'phonelm.seed', $exactSeedExtra,
                 '--ei', 'phonelm.sample_count', [string]$SequenceLength,
                 '--ei', 'phonelm.epochs', [string]$NumLayers,
                 '--ei', 'phonelm.measured_steps', [string]$NumHeads,
                 '--ei', 'phonelm.correctness_interval', [string]$seed,
-                '--ez', 'phonelm.benchmark_mode', 'false'
+                '--ez', 'phonelm.benchmark_mode', 'false',
+                '--es', 'phonelm.seed_selection_mode', $SeedSelectionMode
             )
             if ($TestMode -eq 'UI_VALIDATION') {
                 $arguments += @('--ez', 'phonelm.live_update', 'true')
@@ -977,7 +1103,7 @@ try {
                 $ongoingAfter = $false
             }
 
-            $fields = ConvertFrom-DeviceReport -Report $report -Seed $seed -StepCount $Steps
+            $fields = ConvertFrom-DeviceReport -Report $report -Seed $seed -StepCount $Steps -SeedSelectionMode $SeedSelectionMode
             $classification = $fields.classification
             $fields['result_schema'] = [string]$ResultSchemaVersion
             $fields['terminal'] = 'true'
@@ -1078,6 +1204,8 @@ try {
         "configuration_id=$ConfigurationId"
         "status=$aggregateStatus"
         "stop_detail=$stopDetail"
+        "seed_selection_mode=$SeedSelectionMode"
+        "seed_units_planned=$(if ($SeedSelectionMode -eq 'EXACT_SEED') { $Seeds } else { $Seeds * ($Seeds + 1) / 2 })"
         "seeds_completed=$($finalState.completed.Count)/$Seeds"
         "finite_seeds=$finiteSeeds/$Seeds"
         "oracle_exact=$oracleExact/$($finalState.completed.Count * 4)"
