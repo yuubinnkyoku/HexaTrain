@@ -1,0 +1,7 @@
+"left","right","case_id_overlap","initial_prefix_overlap","full_sequence_overlap","unique_transition_overlap","transition_occurrence_multiset_overlap"
+"TRAIN","AR_VALIDATION_V3","0","0","0","13","32"
+"TRAIN","AR_DEVELOPMENT_V3","0","0","0","13","32"
+"TRAIN","AR_FINAL_HOLDOUT_V3","0","0","0","13","32"
+"AR_VALIDATION_V3","AR_DEVELOPMENT_V3","0","0","0","13","144"
+"AR_VALIDATION_V3","AR_FINAL_HOLDOUT_V3","0","0","0","13","144"
+"AR_DEVELOPMENT_V3","AR_FINAL_HOLDOUT_V3","0","0","0","13","144"

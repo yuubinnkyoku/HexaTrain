@@ -153,6 +153,9 @@ try {
         Invoke-PwshScript "validation-selection public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_validation_selected_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "autoregressive validation public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_autoregressive_validation.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 

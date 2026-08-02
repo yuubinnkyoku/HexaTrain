@@ -1,0 +1,5 @@
+"partition","schema","generator_domain","hash","case_count","target_transition_occurrences","unique_target_transitions"
+"TRAIN","AR_ROLLOUT_NLL_V1","HOMOGENEOUS_PHASE0","fnv1a64:5a64ca2d1aa7f29f","4","32","13"
+"AR_VALIDATION_V3","AR_ROLLOUT_NLL_V1","MIXED_PREFIX_DISTRACTOR_OFFSET_1","fnv1a64:aad785bd4dc88dc9","24","144","13"
+"AR_DEVELOPMENT_V3","AR_ROLLOUT_NLL_V1","MIXED_PREFIX_DISTRACTOR_OFFSET_2","fnv1a64:bd464d2a6e192d36","24","144","13"
+"AR_FINAL_HOLDOUT_V3","AR_ROLLOUT_NLL_V1","MIXED_PREFIX_DISTRACTOR_OFFSET_3","fnv1a64:aa5081e6df658b4a","24","144","13"

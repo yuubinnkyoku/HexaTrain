@@ -1,0 +1,93 @@
+{
+  "schema": "AR_ROLLOUT_NLL_V1",
+  "schema_version": 3,
+  "result_classification": "AUTOREGRESSIVE_VALIDATION_NOT_PREDICTIVE",
+  "quality_configuration": "T8/D16/FFN32/L19/H2",
+  "development_gate": "REJECT",
+  "final_holdout_gate": "NOT_RUN_GATE_REJECTED",
+  "checkpoint_selection_mode": "NONE",
+  "selection_tolerance": 1E-07,
+  "ar_validation_hash": "fnv1a64:aad785bd4dc88dc9",
+  "ar_development_hash": "fnv1a64:bd464d2a6e192d36",
+  "ar_final_holdout_hash": "fnv1a64:aa5081e6df658b4a",
+  "cpu_retrain_runs": 4,
+  "replay_available_steps": 56,
+  "replay_missing_requested_steps": 36,
+  "htp_smoke_runs": 0,
+  "htp_formal_runs": 0,
+  "stabilizer": "NONE",
+  "final_holdout_opened": false,
+  "legacy_final_step_oracle_exact": "13/20",
+  "legacy_final_step_free_exact": "13/20",
+  "prohibited_payloads_published": false,
+  "files": [
+    {
+      "name": "ar-development-metrics.csv",
+      "sha256": "97d7fccd67a8d6680e6ea028aa6ee7562d0a01dfb3e7733987499d68313502c5"
+    },
+    {
+      "name": "ar-final-holdout-metrics.csv",
+      "sha256": "415b18d67ad21564652f1c2c33b81eec7777f2b41216e170e7665b6529433cf5"
+    },
+    {
+      "name": "ar-validation-metrics.csv",
+      "sha256": "a222541c946ad0387b35940439e14d2778fd5bf3ca9addbbd262d3eabae96b1e"
+    },
+    {
+      "name": "checkpoint-replay.csv",
+      "sha256": "565563f211e6025f6154a331ca336c1883170234dd4df9fcf94919f4bacd80fa"
+    },
+    {
+      "name": "checkpoint-trajectory.csv",
+      "sha256": "2426f2d7f5c3fc58f516bff6b448abc79dac57feb4223ace40872e7ba3427512"
+    },
+    {
+      "name": "cpu-smoke.csv",
+      "sha256": "c8ee9ecb9f48c991ca28b392ecdfe2060db64d17804a30d06a8dff6181702157"
+    },
+    {
+      "name": "dataset-hashes.csv",
+      "sha256": "71a3ecf47d3f8f9adb2066cca004e023c00c833405b75c8e8585858a79aec924"
+    },
+    {
+      "name": "dataset-overlap.csv",
+      "sha256": "1e6ed1a65bc1b680d4588204246e588612007f2d217e4b843f05acc478db3546"
+    },
+    {
+      "name": "dataset-partitions.csv",
+      "sha256": "d9fad0c562fdc6d18d3db6b1e3a05798e377812474d71ec3b544fc9b859bb6c3"
+    },
+    {
+      "name": "decision.csv",
+      "sha256": "1f9b6ace6ac9bd02360671d0d4f425ba28dd5789f877bfc48d8e4853b591cfad"
+    },
+    {
+      "name": "formal-seeds.csv",
+      "sha256": "52019387c3e6ff23a3e04674c7d3f48e824633ae77f3204456e3b5675cfe87bf"
+    },
+    {
+      "name": "htp-smoke.csv",
+      "sha256": "90f0597ffe0bb3bf16cc544ebae28c92a155eddadda0532baed155eb460c932f"
+    },
+    {
+      "name": "legacy-generation.csv",
+      "sha256": "b7fe2043c34157fab8202617286910ac225264c4d20dee57b7f139b22aa0e04f"
+    },
+    {
+      "name": "README.md",
+      "sha256": "d50c22dac5fe1008da407bb7591eb8cfd8f1076bcdc71c557d5a0fc693af2954"
+    },
+    {
+      "name": "selected-step-distribution.csv",
+      "sha256": "4286a611e8376a0556865c9d7e2a498bb5544e67f571dace2e649bf1bc9ccce8"
+    },
+    {
+      "name": "selection-decisions.csv",
+      "sha256": "571e32936b32a15e9eaa394f57c3113c626abeea88b8277fb8d0b3bb56b1cb75"
+    },
+    {
+      "name": "thermal.csv",
+      "sha256": "7ee7d8c220e7f6c03a7bfa2f1b9558ddf1bfcbe2e284adf6d06bc920c4545500"
+    }
+  ]
+}
