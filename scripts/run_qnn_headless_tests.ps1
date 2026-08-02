@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][Alias("SdkRoot")][string]$QairtSdkRoot,
-    [string]$ExpectedBuildId = "2.48.40.260702151143",
+    [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
     [ValidateSet(
         "device-probe", "qnn-forward", "linear", "mlp-split", "mlp-fused", "mlp-full-step",
         "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward",
@@ -37,6 +37,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "qairt_version.ps1")
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 if ($RunId.Length -notin 1..64 -or $RunId -notmatch '^[A-Za-z0-9._-]+$') {
     throw "RunId must match [A-Za-z0-9._-]+ and be at most 64 characters."

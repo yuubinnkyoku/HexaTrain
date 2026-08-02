@@ -40,6 +40,7 @@ Build, audit, install, and execute the paired graph-prefix suite:
 ```powershell
 .\scripts\run_qnn_headless_tests.ps1 `
   -QairtSdkRoot <QAIRT-2.48.40-root> `
+  -ExpectedBuildId '2.48.40.260702151143' `
   -Suite qnn-graph-bisection `
   -TestMode BACKGROUND_CORRECTNESS `
   -RunId bisection-01

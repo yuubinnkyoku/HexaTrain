@@ -1,22 +1,21 @@
-# PhoneLM local verification gate.
+# PhoneLM common local verification base gate.
 # Default: no physical device, no QAIRT SDK, no writes outside build/ and the index.
-# All listed steps must PASS before a change is reported as complete.
+# All required steps must PASS; QNN/device/publication changes have extra gates.
 # See AGENTS.md "完了前の検証" and "実行Tier".
 param(
-    # Skip :app:assembleDebug and :app:assembleDebugAndroidTest (fast pre-check).
+    # Final gate only for docs/scripts-only changes; otherwise a fast pre-check.
     [switch]$SkipAndroidBuild,
     # Run gradle :app:clean first. Slow (CMake/NDK rebuild). Use only when required.
     [switch]$Clean,
     # Additionally verify the QAIRT SDK and a QNN-enabled build + APK audit.
     [switch]$WithQairt,
     [string]$QairtSdkRoot = "",
-    [string]$ExpectedBuildId = "2.48.40.260702151143"
+    [string]$ExpectedBuildId = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-
-if (-not $QairtSdkRoot -and $env:QAIRT_SDK_ROOT) { $QairtSdkRoot = $env:QAIRT_SDK_ROOT }
+. (Join-Path $PSScriptRoot "qairt_version.ps1")
 
 # Match README build instructions: the SDK lives under %LOCALAPPDATA%\Android\Sdk
 # on a fresh shell where ANDROID_HOME is not exported yet. Process-local only;
@@ -129,7 +128,7 @@ try {
     Invoke-Step "qairt-selection-self-test" {
         Invoke-PwshScript "check_qairt self-test" (Join-Path $Root "scripts\check_qairt.ps1") @(
             "-SelfTest")
-        "5/5 root-selection cases ok (temp-only; no SDK required)"
+        "pinned arguments, root selection, core/advisory classification ok (temp-only)"
     }
 
     Invoke-Step "public-exporter-self-test" {
@@ -202,10 +201,13 @@ try {
     }
 
     if ($WithQairt) {
-        if (-not $QairtSdkRoot) {
-            Add-Result "qairt-check" "FAIL" 0 "-WithQairt requires -QairtSdkRoot or QAIRT_SDK_ROOT"
+        if (-not $QairtSdkRoot -or -not $ExpectedBuildId) {
+            Add-Result "qairt-check" "FAIL" 0 `
+                "-WithQairt requires explicit -QairtSdkRoot and -ExpectedBuildId"
         } else {
             Invoke-Step "qairt-check" {
+                Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+                    -ExpectedBuildId $ExpectedBuildId
                 $pwshExe = Join-Path $PSHOME "pwsh.exe"
                 $checkOutput = & $pwshExe -NoProfile -File (Join-Path $Root "scripts\check_qairt.ps1") `
                     -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
@@ -218,11 +220,18 @@ try {
                     return $hit.Matches[0].Groups[1].Value
                 }
                 $checkStatus = Get-CheckValue "status"
-                if ($checkExit -eq 2 -or $checkStatus -eq "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED") {
+                if ($checkExit -eq 2 -or $checkStatus -in @(
+                        "QAIRT_SDK_ROOT_UNAVAILABLE", "QAIRT_SDK_ROOT_MISMATCH")) {
                     throw "check_qairt: QAIRT SDK not found at $QairtSdkRoot"
                 }
                 if ($checkExit -eq 4 -or $checkStatus -eq "QAIRT_BUILD_ID_MISMATCH") {
                     throw "check_qairt: expected build ID $ExpectedBuildId not satisfied by $QairtSdkRoot"
+                }
+                if ($checkExit -eq 5 -or $checkStatus -eq "QAIRT_CORE_INCOMPLETE") {
+                    throw "check_qairt: QAIRT core required items are incomplete at $QairtSdkRoot"
+                }
+                if ($checkExit -notin @(0, 3)) {
+                    throw "check_qairt failed with exit code $checkExit ($checkStatus)"
                 }
                 if (-not $checkStatus) { throw "check_qairt failed with exit code $checkExit" }
                 # Inventory completeness is advisory: the following QNN-enabled

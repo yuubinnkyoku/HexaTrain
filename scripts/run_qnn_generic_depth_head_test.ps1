@@ -22,6 +22,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 
 function Fail([string]$Message) { throw "generic depth/head device test: $Message" }
 function Invoke-Adb([string[]]$Arguments) {

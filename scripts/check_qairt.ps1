@@ -1,7 +1,7 @@
 param(
     [Parameter(Position = 0)]
     [string]$SdkRoot = "",
-    # Optional QAIRT build ID (e.g. 2.48.40.260702151143). Verified against
+    # Optional QAIRT Build ID from qairt_version.ps1. Verified against
     # sdk.yaml and include/QNN/QnnSdkBuildId.h inside the selected root only.
     [string]$ExpectedBuildId = "",
     # Run self-contained regression checks for the root-selection rules.
@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "qairt_version.ps1")
 
 if (-not [string]::IsNullOrWhiteSpace($SelfTestDiscoveryRoot)) {
     if ([string]::IsNullOrWhiteSpace($env:PHONELM_QAIRT_SELFTEST_ROOT)) {
@@ -28,8 +29,9 @@ if (-not [string]::IsNullOrWhiteSpace($SelfTestDiscoveryRoot)) {
     }
 }
 
-# Exit codes: 2 = SDK not installed / explicit root missing,
-# 3 = inventory incomplete, 4 = build ID mismatch, 1 = self-test failure.
+# Exit codes: 2 = pinned/explicit root unavailable or mismatched,
+# 3 = optional inventory incomplete, 4 = build ID mismatch,
+# 5 = core required items incomplete, 1 = self-test failure.
 
 function Write-Result([string]$Key, [object]$Value) {
     $text = if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
@@ -60,6 +62,7 @@ if ($SelfTest) {
     $selfTestDir = Join-Path $env:TEMP ("phonelm-qairt-selftest-" + [Guid]::NewGuid().ToString("N"))
     $fakeRoot = Join-Path $selfTestDir "explicit\9.99.0.999999"
     $fakeDiscoveryRoot = Join-Path $selfTestDir "discovery\8.88.0.888888"
+    $fakeCoreMissingRoot = Join-Path $selfTestDir "core-missing\7.77.0.777777"
     $fakeVersion = "9.99.0"
     $fakeBuildNumber = "999999123456"
     $fakeBuildId = "$fakeVersion.$fakeBuildNumber"
@@ -68,7 +71,12 @@ if ($SelfTest) {
     try {
         $env:PHONELM_QAIRT_SELFTEST_ROOT = $selfTestDir
 
-        function New-FakeSdk([string]$Root, [string]$Version, [string]$BuildNumber) {
+        function New-FakeSdk(
+            [string]$Root,
+            [string]$Version,
+            [string]$BuildNumber,
+            [switch]$IncludePhoneCore
+        ) {
             $buildId = "$Version.$BuildNumber"
             New-Item -ItemType Directory -Force -Path (Join-Path $Root "include\QNN") | Out-Null
             Set-Content -LiteralPath (Join-Path $Root "include\QNN\QnnInterface.h") -Value "// selftest stub"
@@ -77,10 +85,54 @@ if ($SelfTest) {
                 -Value "#define QNN_SDK_BUILD_ID `"v$buildId`""
             Set-Content -LiteralPath (Join-Path $Root "sdk.yaml") `
                 -Value "version: $Version`nbuild_id: $BuildNumber"
+            if ($IncludePhoneCore) {
+                $required = @(
+                    "lib\aarch64-android\libQnnSystem.so",
+                    "lib\aarch64-android\libQnnCpu.so",
+                    "lib\aarch64-android\libQnnHtp.so",
+                    "lib\aarch64-android\libQnnHtpPrepare.so",
+                    "lib\aarch64-android\libQnnHtpV81Stub.so",
+                    "lib\hexagon-v81\unsigned\libQnnHtpV81Skel.so"
+                )
+                foreach ($relativePath in $required) {
+                    $path = Join-Path $Root $relativePath
+                    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+                    Set-Content -LiteralPath $path -Value "selftest core stub"
+                }
+            }
         }
 
-        New-FakeSdk $fakeRoot $fakeVersion $fakeBuildNumber
-        New-FakeSdk $fakeDiscoveryRoot "8.88.0" "888888123456"
+        New-FakeSdk $fakeRoot $fakeVersion $fakeBuildNumber -IncludePhoneCore
+        New-FakeSdk $fakeDiscoveryRoot "8.88.0" "888888123456" -IncludePhoneCore
+        New-FakeSdk $fakeCoreMissingRoot "7.77.0" "777777123456"
+
+        function Test-PinnedAssertion([string]$Name, [scriptblock]$Action, [string]$ErrorPattern) {
+            try {
+                & $Action
+                if ($ErrorPattern) { throw "expected rejection matching $ErrorPattern" }
+                Write-Result "selftest_$Name" "PASS"
+            } catch {
+                if ($ErrorPattern -and $_.Exception.Message -match $ErrorPattern) {
+                    Write-Result "selftest_$Name" "PASS"
+                } else {
+                    Write-Result "selftest_$Name" "FAIL"
+                    $selfFailures.Add($Name)
+                }
+            }
+        }
+
+        Test-PinnedAssertion "pinned_arguments_match" {
+            Assert-PhoneLmQairtPinnedArguments -SdkRoot $PhoneLmQairtSdkRoot `
+                -ExpectedBuildId $PhoneLmQairtBuildId
+        } ""
+        Test-PinnedAssertion "pinned_build_id_mismatch_fails" {
+            Assert-PhoneLmQairtPinnedArguments -SdkRoot $PhoneLmQairtSdkRoot `
+                -ExpectedBuildId "0.0.0.000000000000"
+        } "QAIRT_BUILD_ID_MISMATCH"
+        Test-PinnedAssertion "alternate_version_root_fails_without_fallback" {
+            Assert-PhoneLmQairtPinnedArguments -SdkRoot "C:\Qualcomm\AIStack\QAIRT\2.47.0" `
+                -ExpectedBuildId $PhoneLmQairtBuildId
+        } "QAIRT_SDK_ROOT_MISMATCH"
 
         function Test-Case([string]$Name, [string[]]$Arguments, [scriptblock]$Assert) {
             $output = & $pwshExe -NoProfile -File $PSCommandPath @Arguments 2>&1 | Out-String
@@ -106,7 +158,7 @@ if ($SelfTest) {
             "-SdkRoot", (Join-Path $selfTestDir "does-not-exist"),
             "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
             param($out, $code)
-            ($code -eq 2) -and ($out -match "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED") -and
+            ($code -eq 2) -and ($out -match "QAIRT_SDK_ROOT_UNAVAILABLE") -and
                 ($out -notmatch "sdk_root_source=") -and
                 ($out -notmatch [regex]::Escape($fakeDiscoveryRoot))
         }
@@ -133,6 +185,22 @@ if ($SelfTest) {
             ($code -eq 4) -and ($out -match "expected_build_id_match=false") -and
                 ($out -match "QAIRT_BUILD_ID_MISMATCH")
         }
+
+        Test-Case "optional_inventory_incomplete_is_advisory" @(
+            "-SdkRoot", $fakeRoot, "-ExpectedBuildId", $fakeBuildId,
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 3) -and ($out -match "QAIRT_INVENTORY_INCOMPLETE") -and
+                ($out -match "phone_build_candidate_ready=true")
+        }
+
+        Test-Case "core_incomplete_is_fatal" @(
+            "-SdkRoot", $fakeCoreMissingRoot,
+            "-SelfTestDiscoveryRoot", $fakeDiscoveryRoot) {
+            param($out, $code)
+            ($code -eq 5) -and ($out -match "QAIRT_CORE_INCOMPLETE") -and
+                ($out -match "phone_build_candidate_ready=false")
+        }
     } finally {
         $env:PHONELM_QAIRT_SELFTEST_ROOT = $previousSelfTestRoot
         Remove-Item -LiteralPath $selfTestDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -142,8 +210,28 @@ if ($SelfTest) {
         Write-Result "selftest_failed_cases" ($selfFailures -join ";")
         exit 1
     }
-    Write-Result "selftest_passed_cases" "5/5"
+    Write-Result "selftest_passed_cases" "10/10"
     exit 0
+}
+
+# Supplying an expected Build ID selects PhoneLM's strict pinned mode. The
+# no-argument / root-only form remains a read-only inventory command.
+if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and
+        [string]::IsNullOrWhiteSpace($SelfTestDiscoveryRoot)) {
+    try {
+        Assert-PhoneLmQairtPinnedArguments -SdkRoot $SdkRoot `
+            -ExpectedBuildId $ExpectedBuildId
+    } catch {
+        $message = $_.Exception.Message
+        if ($message -match '^QAIRT_BUILD_ID_MISMATCH') {
+            Write-Result "status" "QAIRT_BUILD_ID_MISMATCH"
+            Write-Result "detail" $message
+            exit 4
+        }
+        Write-Result "status" "QAIRT_SDK_ROOT_MISMATCH"
+        Write-Result "detail" $message
+        exit 2
+    }
 }
 
 function Get-PropertyCandidates {
@@ -272,7 +360,7 @@ if (-not $selected -or -not (Test-Path -LiteralPath $selected.Path -PathType Con
     Write-Result "optional_samples_present" "false"
     Write-Result "inventory_complete" "false"
     Write-Result "phone_build_candidate_ready" "false"
-    Write-Result "status" "BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED"
+    Write-Result "status" "QAIRT_SDK_ROOT_UNAVAILABLE"
     exit 2
 }
 
@@ -282,7 +370,10 @@ if (-not [string]::IsNullOrWhiteSpace($SdkRoot)) {
     $requestedRoot = [System.IO.Path]::GetFullPath($SdkRoot)
     $resolvedSelected = [System.IO.Path]::GetFullPath($resolvedRoot)
     if ($requestedRoot -ne $resolvedSelected) {
-        throw "Explicit QAIRT SDK root was not honored: requested=$requestedRoot resolved=$resolvedSelected"
+        Write-Result "status" "QAIRT_SDK_ROOT_MISMATCH"
+        Write-Result "detail" `
+            "Explicit QAIRT SDK root was not honored: requested=$requestedRoot resolved=$resolvedSelected"
+        exit 2
     }
 }
 
@@ -423,6 +514,12 @@ Write-Result "optional_samples_present" $optionalSamplesPresent.ToString().ToLow
 Write-Result "phone_build_candidate_ready" $phoneBuildCandidateReady.ToString().ToLowerInvariant()
 Write-Result "phone_build_candidate_note" "Candidate readiness is advisory; strict readiness requires QNN Android build plus APK Build ID/ABI/hash/path audit."
 
+if (-not $phoneBuildCandidateReady) {
+    Write-Result "inventory_complete" "false"
+    Write-Result "status" "QAIRT_CORE_INCOMPLETE"
+    exit 5
+}
+
 $inventoryComplete = $interfaceHeaders.Count -gt 0 -and $typesHeaders.Count -gt 0 -and
     $sdkVersions.Count -gt 0 -and $apiVersions.Count -gt 0 -and
     $androidArm64Objects.Count -gt 0 -and
@@ -438,5 +535,5 @@ if ($inventoryComplete) {
     exit 0
 }
 
-Write-Result "status" "QAIRT_SDK_FOUND_INVENTORY_INCOMPLETE"
+Write-Result "status" "QAIRT_INVENTORY_INCOMPLETE"
 exit 3

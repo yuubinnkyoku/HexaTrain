@@ -10,6 +10,8 @@ param(
  [switch]$SkipBuild,[switch]$SkipRegression,[switch]$RerunSuccessful,[switch]$WhatIf
 )
 $ErrorActionPreference="Stop";$root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "qairt_version.ps1")
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $adb=Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 $env:ANDROID_HOME=Join-Path $env:LOCALAPPDATA "Android\Sdk";$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
 $package="com.yuubinnkyoku.phonelm";$activity="$package/.MainActivity";$apk=Join-Path $root "app\build\outputs\apk\debug\app-debug.apk"

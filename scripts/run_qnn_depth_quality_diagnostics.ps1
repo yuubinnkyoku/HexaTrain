@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param(
     [string]$QairtSdkRoot = '',
-    [string]$ExpectedBuildId = '2.48.40.260702151143',
+    [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
     [string]$Runs = 'l18s2,l19s2,l19s1,l19s4,l18s1',
     [ValidateRange(0, 6)][int]$TrainingStabilityMode = 0,
     [switch]$NoTrajectory,
@@ -25,6 +25,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $QairtSdkRoot) { throw '-QairtSdkRoot is required' }
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 if ($TrainingStabilityMode -eq 5) { throw 'RESIDUAL_BRANCH_SCALING is unsupported on device' }
 
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))

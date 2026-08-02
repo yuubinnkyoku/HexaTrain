@@ -19,7 +19,7 @@
 [CmdletBinding()]
 param(
     [string]$QairtSdkRoot = '',
-    [string]$ExpectedBuildId = '2.48.40.260702151143',
+    [string]$ExpectedBuildId = '',
     [ValidatePattern('^[a-z0-9][a-z0-9._-]*$')][string]$WorkId = '',
     [string]$Configurations = 'l2h2,l19,ffn372',
     [switch]$InstallAuditedApk,
@@ -143,6 +143,10 @@ function Invoke-SelfTest {
 
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if (-not $QairtSdkRoot) { throw '-QairtSdkRoot is required' }
+if (-not $ExpectedBuildId) { throw '-ExpectedBuildId is required' }
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 if (-not (Test-Path -LiteralPath $adb -PathType Leaf)) { throw 'adb executable unavailable' }

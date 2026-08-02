@@ -25,7 +25,7 @@
 [CmdletBinding()]
 param(
     [string]$QairtSdkRoot = '',
-    [string]$ExpectedBuildId = '2.48.40.260702151143',
+    [string]$ExpectedBuildId = '',
     [ValidatePattern('^[a-z0-9][a-z0-9._-]*$')][string]$ConfigurationId = '',
     [ValidateRange(1, 65536)][int]$SequenceLength = 8,
     [ValidateRange(13, 65536)][int]$VocabularySize = 32,
@@ -879,6 +879,10 @@ if ($SelfTest) {
 }
 
 if (-not $QairtSdkRoot) { throw '-QairtSdkRoot is required' }
+if (-not $ExpectedBuildId) { throw '-ExpectedBuildId is required' }
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 if (-not $ConfigurationId) { throw '-ConfigurationId is required' }
 
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))

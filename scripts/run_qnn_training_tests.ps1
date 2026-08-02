@@ -12,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "qairt_version.ps1")
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA "Android\Sdk"

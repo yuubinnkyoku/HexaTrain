@@ -6,6 +6,8 @@ param(
   [switch]$SkipBuild
 )
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 if(!$ReportRoot){$ReportRoot=Join-Path $root 'build\reports\qnn-htp-api-trace-ab'}
 [IO.Directory]::CreateDirectory((Join-Path $ReportRoot 'runs'))|Out-Null

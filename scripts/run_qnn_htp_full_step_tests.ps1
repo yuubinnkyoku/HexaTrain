@@ -9,6 +9,8 @@ param(
   [switch]$RunPerformance
 )
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 if(!$ReportRoot){$ReportRoot=Join-Path $root ('build\reports\qnn-htp-full-step-'+(Get-Date -Format yyyyMMdd-HHmmss))}
 [IO.Directory]::CreateDirectory((Join-Path $ReportRoot 'runs'))|Out-Null

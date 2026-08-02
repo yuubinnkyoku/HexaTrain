@@ -1,7 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 yuubinnkyoku
-param([switch]$SkipInstall,[ValidateRange(1,3)][int]$StartCandidate=1)
+param(
+  [Parameter(Mandatory = $true)][string]$QairtSdkRoot,
+  [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
+  [switch]$SkipInstall,
+  [ValidateRange(1,3)][int]$StartCandidate=1
+)
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+  -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 $adb=Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $package='com.yuubinnkyoku.phonelm';$activity="$package/.MainActivity"

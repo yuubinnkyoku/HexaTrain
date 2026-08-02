@@ -7,6 +7,8 @@ param(
  [switch]$SkipBuild,[switch]$SkipRegression,[switch]$RunPerformance
 )
 $ErrorActionPreference='Stop';$root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 if(!$ReportRoot){$ReportRoot=Join-Path $root ('build\reports\qnn-htp-mlp-'+(Get-Date -Format yyyyMMdd-HHmmss))}
 [IO.Directory]::CreateDirectory((Join-Path $ReportRoot 'runs'))|Out-Null
 $env:ANDROID_HOME=Join-Path $env:LOCALAPPDATA 'Android\Sdk';$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME

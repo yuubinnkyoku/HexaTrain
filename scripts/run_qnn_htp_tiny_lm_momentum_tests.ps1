@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 yuubinnkyoku
 param(
+    [Parameter(Mandatory = $true)][string]$QairtSdkRoot,
+    [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
     [switch]$SkipInstall,
     [ValidateSet('step', 'candidate1', 'candidate2', 'candidates', 'inference', 'all')]
     [string]$Scope = 'all'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 
 $root = Split-Path -Parent $PSScriptRoot
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'

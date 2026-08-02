@@ -8,8 +8,13 @@ plugins {
 val phoneLmEnableQnn = providers.gradleProperty("phonelm.enableQnn").orElse("false")
 val qairtSdkRoot = providers.gradleProperty("qairt.sdkRoot").orElse("")
 val expectedQairtBuildId = providers.gradleProperty("qairt.expectedBuildId")
-    .orElse("2.48.40.260702151143")
-val expectedQairtVersion = "2.48.40"
+val qairtPolicyText = rootProject.file("scripts/qairt_version.ps1").readText()
+fun pinnedQairtValue(name: String): String =
+    Regex("""(?m)^\${'$'}$name\s*=\s*'([^']+)'\s*$""")
+        .find(qairtPolicyText)?.groupValues?.get(1)
+        ?: error("Missing $name in scripts/qairt_version.ps1")
+val pinnedQairtSdkRoot = pinnedQairtValue("PhoneLmQairtSdkRoot")
+val pinnedQairtBuildId = pinnedQairtValue("PhoneLmQairtBuildId")
 val androidNdkVersion = "26.2.11394342"
 val htpArchitecture = "V81"
 
@@ -32,7 +37,16 @@ data class QairtMetadata(
 )
 
 fun inspectQairt(): QairtMetadata {
+    val expectedBuildId = expectedQairtBuildId.orNull?.takeIf { it.isNotBlank() }
+        ?: error("QNN build requires explicit -Pqairt.expectedBuildId")
+    require(expectedBuildId == pinnedQairtBuildId) {
+        "QAIRT Build ID differs from scripts/qairt_version.ps1"
+    }
+    val expectedVersion = expectedBuildId.substringBeforeLast('.')
     val root = file(qairtSdkRoot.get())
+    require(root.canonicalFile == file(pinnedQairtSdkRoot).canonicalFile) {
+        "QAIRT SDK root differs from scripts/qairt_version.ps1; fallback is forbidden"
+    }
     require(root.isDirectory) { "QAIRT SDK root does not exist: $root" }
     val yaml = root.resolve("sdk.yaml").readText()
     val header = root.resolve("include/QNN/QnnSdkBuildId.h").readText()
@@ -41,11 +55,11 @@ fun inspectQairt(): QairtMetadata {
     val headerId = Regex("QNN_SDK_BUILD_ID\\s+\"v([^\"]+)\"").find(header)!!.groupValues[1]
     val yamlId = "$version.$build"
     require(headerId == yamlId) { "Mixed QAIRT distribution: sdk.yaml=$yamlId, header=$headerId" }
-    require(headerId == expectedQairtBuildId.get()) {
-        "Unsupported QAIRT distribution: expected=${expectedQairtBuildId.get()}, actual=$headerId"
+    require(headerId == expectedBuildId) {
+        "Unsupported QAIRT distribution: expected=$expectedBuildId, actual=$headerId"
     }
-    require(version == expectedQairtVersion) {
-        "Unsupported QAIRT version: expected=$expectedQairtVersion, actual=$version"
+    require(version == expectedVersion) {
+        "Unsupported QAIRT version: expected=$expectedVersion, actual=$version"
     }
     require(Regex("(?m)^android-ndk:\\s*r26c\\s*$").containsMatchIn(yaml)) {
         "QAIRT 2.48 metadata does not declare the expected Android NDK r26c"

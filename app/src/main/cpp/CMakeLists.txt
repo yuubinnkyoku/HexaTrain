@@ -13,8 +13,41 @@ set(MNN_ROOT "${PHONELM_ROOT}/third_party/MNN")
 option(PHONELM_ENABLE_QNN "Compile the SDK-specific QAIRT/QNN adapter" OFF)
 set(QAIRT_SDK_ROOT "" CACHE PATH "Root of a locally installed QAIRT SDK")
 set(PHONELM_EXPECTED_QAIRT_BUILD_ID "" CACHE STRING "Expected QAIRT build id")
-if(QAIRT_SDK_ROOT STREQUAL "" AND DEFINED ENV{QAIRT_SDK_ROOT})
-    file(TO_CMAKE_PATH "$ENV{QAIRT_SDK_ROOT}" QAIRT_SDK_ROOT)
+
+if(PHONELM_ENABLE_QNN)
+    set(PHONELM_QAIRT_POLICY_FILE "${PHONELM_ROOT}/scripts/qairt_version.ps1")
+    if(NOT EXISTS "${PHONELM_QAIRT_POLICY_FILE}")
+        message(FATAL_ERROR "Missing QAIRT policy source: ${PHONELM_QAIRT_POLICY_FILE}")
+    endif()
+    file(READ "${PHONELM_QAIRT_POLICY_FILE}" PHONELM_QAIRT_POLICY_TEXT)
+    string(REGEX MATCH "[$]PhoneLmQairtSdkRoot[ \t]*=[ \t]*'([^']+)'"
+        _ "${PHONELM_QAIRT_POLICY_TEXT}")
+    set(PHONELM_PINNED_QAIRT_SDK_ROOT "${CMAKE_MATCH_1}")
+    string(REGEX MATCH "[$]PhoneLmQairtBuildId[ \t]*=[ \t]*'([^']+)'"
+        _ "${PHONELM_QAIRT_POLICY_TEXT}")
+    set(PHONELM_PINNED_QAIRT_BUILD_ID "${CMAKE_MATCH_1}")
+    if(PHONELM_PINNED_QAIRT_SDK_ROOT STREQUAL "" OR
+       PHONELM_PINNED_QAIRT_BUILD_ID STREQUAL "")
+        message(FATAL_ERROR "Incomplete QAIRT policy source: ${PHONELM_QAIRT_POLICY_FILE}")
+    endif()
+    file(TO_CMAKE_PATH "${PHONELM_PINNED_QAIRT_SDK_ROOT}"
+        PHONELM_PINNED_QAIRT_SDK_ROOT)
+    file(TO_CMAKE_PATH "${QAIRT_SDK_ROOT}" QAIRT_SDK_ROOT)
+    if(QAIRT_SDK_ROOT STREQUAL "")
+        message(FATAL_ERROR "PHONELM_ENABLE_QNN=ON requires explicit QAIRT_SDK_ROOT")
+    endif()
+    if(NOT QAIRT_SDK_ROOT STREQUAL PHONELM_PINNED_QAIRT_SDK_ROOT)
+        message(FATAL_ERROR
+            "QAIRT_SDK_ROOT differs from scripts/qairt_version.ps1; fallback is forbidden")
+    endif()
+    if(PHONELM_EXPECTED_QAIRT_BUILD_ID STREQUAL "")
+        message(FATAL_ERROR
+            "PHONELM_ENABLE_QNN=ON requires explicit PHONELM_EXPECTED_QAIRT_BUILD_ID")
+    endif()
+    if(NOT PHONELM_EXPECTED_QAIRT_BUILD_ID STREQUAL PHONELM_PINNED_QAIRT_BUILD_ID)
+        message(FATAL_ERROR
+            "PHONELM_EXPECTED_QAIRT_BUILD_ID differs from scripts/qairt_version.ps1")
+    endif()
 endif()
 
 set(PHONELM_QAIRT_SDK_DETECTED 0)
@@ -42,8 +75,7 @@ endif()
 if(PHONELM_ENABLE_QNN)
     file(READ "${QAIRT_SDK_ROOT}/include/QNN/QnnSdkBuildId.h" _qairt_build_header)
     string(REGEX MATCH "QNN_SDK_BUILD_ID[ \t]+\"v([^\"]+)\"" _ "${_qairt_build_header}")
-    if(NOT PHONELM_EXPECTED_QAIRT_BUILD_ID STREQUAL "" AND
-       NOT CMAKE_MATCH_1 STREQUAL PHONELM_EXPECTED_QAIRT_BUILD_ID)
+    if(NOT CMAKE_MATCH_1 STREQUAL PHONELM_EXPECTED_QAIRT_BUILD_ID)
         message(FATAL_ERROR "Mixed QAIRT distribution: expected=${PHONELM_EXPECTED_QAIRT_BUILD_ID}, headers=${CMAKE_MATCH_1}")
     endif()
     message(STATUS "PhoneLM QAIRT SDK: ${QAIRT_SDK_ROOT} (${CMAKE_MATCH_1})")

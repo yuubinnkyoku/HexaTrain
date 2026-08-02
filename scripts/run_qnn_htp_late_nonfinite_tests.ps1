@@ -2,13 +2,16 @@
 # Runs the bounded historical condition before the long fixed-checkpoint study.
 param(
     [Parameter(Mandatory = $true)][string]$QairtSdkRoot,
-    [string]$ExpectedBuildId = "2.48.40.260702151143",
+    [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipAudit
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 $runner = Join-Path $PSScriptRoot 'run_qnn_headless_tests.ps1'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $common = @{ QairtSdkRoot = $QairtSdkRoot; ExpectedBuildId = $ExpectedBuildId; TimeoutSeconds = 14400 }

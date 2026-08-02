@@ -2,7 +2,7 @@
 # Runs the formal post-fix Tiny LM evaluation through the existing headless gate.
 param(
     [Parameter(Mandatory = $true)][Alias('SdkRoot')][string]$QairtSdkRoot,
-    [string]$ExpectedBuildId = '2.48.40.260702151143',
+    [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
     [ValidateRange(3, 5)][int]$Repetitions = 3,
     [switch]$RunPerformance,
     [ValidateRange(60, 86400)][int]$TimeoutSeconds = 14400,
@@ -11,6 +11,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
+    -ExpectedBuildId $ExpectedBuildId
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $buildReportsRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'build\reports'))
