@@ -12,12 +12,14 @@
 // equal to tiny_lm::forwardBackward before any metric is trusted.
 #pragma once
 #include "tiny_language_model_cpu.h"
+#include "autoregressive_validation.h"
 #include "training_stability.h"
 #include "validation_selection.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -596,6 +598,221 @@ inline validation_selection::Metrics validationEvaluation(
 }
 
 // ---------------------------------------------------------------------------
+// Autoregressive validation V3 (CPU reference)
+// ---------------------------------------------------------------------------
+// The V3 objective deliberately evaluates the same parameter state twice at
+// every rollout position: the free-running context receives the model's
+// prediction, while the teacher-forced context receives the gold token.  The
+// forward output and its probability tensor are checked independently before
+// any metric is accumulated; a malformed or non-finite tensor therefore
+// cannot silently become a quality score.
+namespace ar = phonelm::autoregressive_validation;
+
+struct AutoregressiveEvaluation {
+  ar::Metrics metrics;
+  std::uint64_t forwardCalls = 0;
+  std::uint64_t inputValidationFailures = 0;
+  std::uint64_t forwardReturnFailures = 0;
+  std::uint64_t nonfiniteTensorFailures = 0;
+  std::uint64_t invalidProbabilityFailures = 0;
+};
+
+inline bool finiteTensor(const std::vector<float>& values, std::size_t expected,
+                         bool* allNonnegative = nullptr) {
+  if (values.size() != expected) {
+    if (allNonnegative) *allNonnegative = false;
+    return false;
+  }
+  bool nonnegative = true;
+  for (const float value : values) {
+    if (!std::isfinite(value)) return false;
+    if (value < 0.0f) nonnegative = false;
+  }
+  if (allNonnegative) *allNonnegative = nonnegative;
+  return true;
+}
+
+inline bool validProbabilityTensor(const std::vector<float>& values,
+                                   std::size_t rows, std::size_t columns,
+                                   double rowTolerance = 1.0e-4) {
+  if (rows == 0 || columns == 0 || values.size() != rows * columns)
+    return false;
+  for (std::size_t row = 0; row < rows; ++row) {
+    double sum = 0.0;
+    for (std::size_t column = 0; column < columns; ++column) {
+      const float value = values[row * columns + column];
+      if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+        return false;
+      sum += value;
+    }
+    if (!std::isfinite(sum) || std::abs(sum - 1.0) > rowTolerance)
+      return false;
+  }
+  return true;
+}
+
+inline AutoregressiveEvaluation evaluateAutoregressive(
+    const Config& config, const Params& parameters, ar::Partition partition) {
+  AutoregressiveEvaluation result;
+  std::string configError;
+  if (!tiny_lm::validateConfig(config, &configError) || config.tokens != 8 ||
+      !ar::hashMatchesPinned(partition, config.tokens)) {
+    result.inputValidationFailures = 1;
+    return result;
+  }
+  const auto generated = ar::cases(partition, config.tokens);
+  auto& metrics = result.metrics;
+  metrics.perCase.reserve(generated.size());
+  bool allFinite = !generated.empty();
+
+  const std::size_t expectedTensorSize =
+      std::size_t(config.tokens) * config.vocabularySize;
+  for (const auto& item : generated) {
+    ar::CaseMetrics caseMetrics;
+    caseMetrics.id = item.id;
+    caseMetrics.tokenTotal = static_cast<std::uint32_t>(item.targets.size());
+    caseMetrics.firstErrorPosition = -1;
+    bool caseFinite = item.initialPrefix.size() == config.tokens &&
+                      !item.targets.empty();
+    for (const auto token : item.initialPrefix)
+      caseFinite = caseFinite && token < config.vocabularySize;
+    for (const auto token : item.targets)
+      caseFinite = caseFinite && token < config.vocabularySize;
+    if (!caseFinite) ++result.inputValidationFailures;
+    std::vector<std::uint32_t> freeContext = item.initialPrefix;
+    std::vector<std::uint32_t> teacherContext = item.initialPrefix;
+    double caseArNll = 0.0, caseTeacherNll = 0.0;
+    std::uint32_t caseCorrect = 0, caseRecovery = 0;
+    int firstError = -1;
+
+    for (std::size_t position = 0;
+         caseFinite && position < item.targets.size(); ++position) {
+      const std::uint32_t truth = item.targets[position];
+      const auto freeInput = tiny_lm::oneHot(freeContext, config.vocabularySize);
+      const auto teacherInput =
+          tiny_lm::oneHot(teacherContext, config.vocabularySize);
+      const auto target = tiny_lm::oneHot(
+          std::vector<std::uint32_t>(config.tokens, truth),
+          config.vocabularySize);
+      tiny_lm::StepResult freeStep, teacherStep;
+      try {
+        freeStep = tiny_lm::forwardBackward(config, freeInput, target,
+                                            parameters, 0.0f);
+        ++result.forwardCalls;
+      } catch (const std::exception&) {
+        ++result.forwardReturnFailures;
+        caseFinite = false;
+        break;
+      }
+      try {
+        teacherStep = tiny_lm::forwardBackward(config, teacherInput, target,
+                                               parameters, 0.0f);
+        ++result.forwardCalls;
+      } catch (const std::exception&) {
+        ++result.forwardReturnFailures;
+        caseFinite = false;
+        break;
+      }
+
+      bool freeProbabilitiesNonnegative = false;
+      bool teacherProbabilitiesNonnegative = false;
+      const bool freeLogitsFinite = finiteTensor(
+          freeStep.logits, expectedTensorSize, nullptr);
+      const bool teacherLogitsFinite = finiteTensor(
+          teacherStep.logits, expectedTensorSize, nullptr);
+      const bool freeProbabilitiesFinite = finiteTensor(
+          freeStep.probabilities, expectedTensorSize,
+          &freeProbabilitiesNonnegative);
+      const bool teacherProbabilitiesFinite = finiteTensor(
+          teacherStep.probabilities, expectedTensorSize,
+          &teacherProbabilitiesNonnegative);
+      if (!freeLogitsFinite || !teacherLogitsFinite ||
+          !freeProbabilitiesFinite || !teacherProbabilitiesFinite) {
+        ++result.nonfiniteTensorFailures;
+        caseFinite = false;
+        break;
+      }
+      if (!freeProbabilitiesNonnegative || !teacherProbabilitiesNonnegative) {
+        ++result.invalidProbabilityFailures;
+        caseFinite = false;
+        break;
+      }
+      if (!validProbabilityTensor(freeStep.probabilities, config.tokens,
+                                  config.vocabularySize) ||
+          !validProbabilityTensor(teacherStep.probabilities, config.tokens,
+                                  config.vocabularySize)) {
+        ++result.invalidProbabilityFailures;
+        caseFinite = false;
+        break;
+      }
+
+      const std::size_t base =
+          std::size_t(config.tokens - 1) * config.vocabularySize;
+      const float freeProbability = freeStep.probabilities[base + truth];
+      const float teacherProbability = teacherStep.probabilities[base + truth];
+      if (!(std::isfinite(freeProbability) && freeProbability > 0.0f &&
+            std::isfinite(teacherProbability) && teacherProbability > 0.0f)) {
+        ++result.invalidProbabilityFailures;
+        caseFinite = false;
+        break;
+      }
+      caseArNll -= std::log(static_cast<double>(freeProbability));
+      caseTeacherNll -= std::log(static_cast<double>(teacherProbability));
+
+      std::uint32_t prediction = 0;
+      for (std::uint32_t token = 1; token < config.vocabularySize; ++token)
+        if (freeStep.logits[base + token] > freeStep.logits[base + prediction])
+          prediction = token;
+      if (prediction == truth) {
+        ++caseCorrect;
+        if (firstError >= 0) ++caseRecovery;
+      } else if (firstError < 0) {
+        firstError = static_cast<int>(position) + 1;
+      }
+
+      freeContext.erase(freeContext.begin());
+      freeContext.push_back(prediction);
+      teacherContext.erase(teacherContext.begin());
+      teacherContext.push_back(truth);
+    }
+
+    caseMetrics.finite = caseFinite &&
+                         std::isfinite(caseArNll) &&
+                         std::isfinite(caseTeacherNll);
+    if (caseMetrics.finite) {
+      const double denominator = static_cast<double>(item.targets.size());
+      caseMetrics.autoregressiveNll = caseArNll / denominator;
+      caseMetrics.teacherForcedNll = caseTeacherNll / denominator;
+      caseMetrics.tokenExact = caseCorrect;
+      caseMetrics.sequenceExact = firstError < 0;
+      caseMetrics.firstErrorPosition = firstError;
+      caseMetrics.postErrorRecoveryTokens = caseRecovery;
+    } else {
+      allFinite = false;
+    }
+    metrics.perCase.push_back(std::move(caseMetrics));
+  }
+
+  metrics = ar::aggregate(metrics.perCase);
+  metrics.allFinite = metrics.allFinite && allFinite;
+  return result;
+}
+
+inline ar::Metrics autoregressiveEvaluation(const Config& config,
+                                            const Params& parameters,
+                                            ar::Partition partition) {
+  return evaluateAutoregressive(config, parameters, partition).metrics;
+}
+
+inline ar::Metrics poolAutoregressiveMetrics(
+    const std::vector<ar::Metrics>& values) {
+  std::vector<ar::CaseMetrics> perCase;
+  for (const auto& value : values)
+    perCase.insert(perCase.end(), value.perCase.begin(), value.perCase.end());
+  return ar::aggregate(perCase);
+}
+
+// ---------------------------------------------------------------------------
 // Full CPU formal run with per-step metrics and state for diagnostics
 // ---------------------------------------------------------------------------
 struct FormRun {
@@ -719,6 +936,104 @@ inline FormRun runFormalCpu(const Config& config, uint32_t seed, int stepCount,
   run.summary = summarizeTrajectory(run.steps);
   run.finalEvaluation = phase1Evaluation(config, params);
   return run;
+}
+
+enum class AutoregressiveSelectionMode : std::uint32_t {
+  FINAL_STEP = 0,
+  BEST_AR_VALIDATION_V1 = 1,
+};
+
+inline bool validAutoregressiveSelectionMode(
+    AutoregressiveSelectionMode mode) {
+  switch (mode) {
+    case AutoregressiveSelectionMode::FINAL_STEP:
+    case AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1: return true;
+  }
+  return false;
+}
+
+inline const char* autoregressiveSelectionModeName(
+  AutoregressiveSelectionMode mode) {
+  switch (mode) {
+    case AutoregressiveSelectionMode::FINAL_STEP: return "FINAL_STEP";
+    case AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1:
+      return "BEST_AR_VALIDATION_V1";
+  }
+  return "UNKNOWN_CHECKPOINT_SELECTION_MODE";
+}
+
+struct AutoregressiveSelectedRun {
+  // Host-only experimental evidence container.  Retaining all requested
+  // checkpoints here is intentionally not the Phase 9 native current+best
+  // state-management design and must not be reported as such.
+  FormRun training;
+  int selectedStep = 0;
+  ar::Metrics bestValidation;
+  ar::Metrics finalStepValidation;
+  ar::Metrics selectedValidation;
+  Params selectedParameters, selectedM, selectedV;
+  std::vector<std::pair<int, ar::Metrics>> validationTrajectory;
+  AutoregressiveSelectionMode mode = AutoregressiveSelectionMode::FINAL_STEP;
+  std::uint32_t validationSchemaVersion = ar::kSchemaVersion;
+  std::string validationSetHash;
+};
+
+inline std::vector<int> autoregressiveEvaluationSteps(int stepCount = 320) {
+  std::vector<int> result;
+  for (const int step : validation_selection::evaluationSteps())
+    if (step <= stepCount) result.push_back(step);
+  if (std::find(result.begin(), result.end(), stepCount) == result.end())
+    result.push_back(stepCount);
+  return result;
+}
+
+inline AutoregressiveSelectedRun runAutoregressiveSelectedCpu(
+    const Config& config, std::uint32_t seed, int stepCount = 320,
+    AutoregressiveSelectionMode mode =
+        AutoregressiveSelectionMode::FINAL_STEP) {
+  if (!validAutoregressiveSelectionMode(mode))
+    throw std::invalid_argument("UNKNOWN_CHECKPOINT_SELECTION_MODE");
+  if (stepCount < 0 || stepCount > 320)
+    throw std::invalid_argument("AR_SELECTION_STEP_COUNT_RANGE");
+  std::string partitionError;
+  if (!ar::validatePartitions(config.tokens, &partitionError))
+    throw std::invalid_argument(partitionError);
+  const auto checkpoints = autoregressiveEvaluationSteps(stepCount);
+  AutoregressiveSelectedRun result;
+  result.mode = mode;
+  result.validationSetHash =
+      ar::partitionHash(ar::Partition::VALIDATION, config.tokens);
+  result.training = runFormalCpu(config, seed, stepCount, 0.003f,
+                                 StabilityMode::LEGACY, checkpoints);
+  result.selectedStep = stepCount;
+  for (const int step : checkpoints) {
+    const auto metrics = autoregressiveEvaluation(
+        config, result.training.checkpoints.at(step),
+        ar::Partition::VALIDATION);
+    result.validationTrajectory.push_back({step, metrics});
+    if (step == stepCount) result.finalStepValidation = metrics;
+    if (mode == AutoregressiveSelectionMode::FINAL_STEP) continue;
+    if (ar::better(metrics, step, result.bestValidation, result.selectedStep)) {
+      result.bestValidation = metrics;
+      result.selectedStep = step;
+    }
+  }
+  if (mode == AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1 &&
+      result.validationTrajectory.empty())
+    throw std::runtime_error("NO_AR_VALIDATION_EVALUATION_STEPS");
+  if (mode == AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1 &&
+      !ar::finite(result.bestValidation))
+    throw std::runtime_error("NO_FINITE_AR_VALIDATION_CANDIDATE");
+  if (mode == AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1) {
+    result.selectedValidation = result.bestValidation;
+  } else {
+    result.selectedValidation = result.finalStepValidation;
+    result.bestValidation = result.finalStepValidation;
+  }
+  result.selectedParameters = result.training.checkpoints.at(result.selectedStep);
+  result.selectedM = result.training.firstMoments.at(result.selectedStep);
+  result.selectedV = result.training.secondMoments.at(result.selectedStep);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@
 #include <limits>
 
 namespace dq = phonelm::depth_quality;
+namespace ar = phonelm::autoregressive_validation;
 namespace ff = phonelm::qnn::first_nonfinite;
 namespace vs = phonelm::validation_selection;
 namespace vc = phonelm::validation_checkpoint;
@@ -180,6 +181,196 @@ static void testValidationPartitionAndSelection() {
   const auto simulation = vs::simulateEarlyStop(early, 3, 320);
   assert(simulation.stopStep == 16 && simulation.bestStep == 4 &&
          simulation.savedTrainingSteps == 304);
+}
+
+static ar::Metrics syntheticArMetrics(double nll, std::uint64_t tokenExact,
+                                      std::uint64_t sequenceExact) {
+  ar::Metrics result;
+  result.allFinite = true;
+  result.autoregressiveNll = nll;
+  result.teacherForcedNll = nll;
+  result.autoregressiveTeacherGap = 0.0;
+  result.tokenExact = tokenExact;
+  result.tokenTotal = 10;
+  result.sequenceExact = sequenceExact;
+  result.sequenceTotal = 2;
+  return result;
+}
+
+static void testAutoregressivePartitionsAndObjective() {
+  std::string error;
+  assert(ar::validatePartitions(8, &error));
+  assert(error.empty());
+  assert(ar::cases(ar::Partition::TRAIN, 8).size() == 4);
+  for (const auto partition : {ar::Partition::VALIDATION,
+                               ar::Partition::DEVELOPMENT,
+                               ar::Partition::FINAL_HOLDOUT}) {
+    assert(ar::cases(partition, 8).size() == 24);
+    assert(ar::duplicateCaseIds(partition, 8) == 0);
+    assert(ar::duplicateInitialPrefixes(partition, 8) == 0);
+    assert(ar::duplicateFullSequences(partition, 8) == 0);
+    assert(ar::targetTransitions(partition, 8).size() == 144);
+  }
+  assert(ar::targetTransitions(ar::Partition::TRAIN, 8).size() == 32);
+  assert(ar::partitionHash(ar::Partition::TRAIN, 8) ==
+         "fnv1a64:5a64ca2d1aa7f29f");
+  assert(ar::partitionHash(ar::Partition::VALIDATION, 8) ==
+         "fnv1a64:aad785bd4dc88dc9");
+  assert(ar::partitionHash(ar::Partition::DEVELOPMENT, 8) ==
+         "fnv1a64:bd464d2a6e192d36");
+  assert(ar::partitionHash(ar::Partition::FINAL_HOLDOUT, 8) ==
+         "fnv1a64:aa5081e6df658b4a");
+  for (const auto partition : ar::kPartitions)
+    assert(ar::hashMatchesPinned(partition, 8));
+  assert(!ar::hashMatchesPinned(ar::Partition::VALIDATION, 7));
+  assert(!ar::validatePartitions(7, &error));
+  const std::array<ar::Partition, 4> partitions{
+      ar::Partition::TRAIN, ar::Partition::VALIDATION,
+      ar::Partition::DEVELOPMENT, ar::Partition::FINAL_HOLDOUT};
+  for (std::size_t i = 0; i < partitions.size(); ++i) {
+    for (std::size_t j = i + 1; j < partitions.size(); ++j) {
+      const auto stats = ar::overlap(partitions[i], partitions[j], 8);
+      assert(stats.caseId == 0 && stats.initialPrefix == 0 &&
+             stats.fullSequence == 0);
+      assert(stats.uniqueTargetTransitions == 13);
+      assert(stats.targetTransitionOccurrences ==
+             (i == 0 || j == 0 ? 32u : 144u));
+    }
+  }
+
+  const auto config = smallConfig(1, 1);
+  const auto parameters = phonelm::tiny_lm::initialParameters(config, 1);
+  const auto evaluated = dq::evaluateAutoregressive(
+      config, parameters, ar::Partition::VALIDATION);
+  assert(ar::finite(evaluated.metrics));
+  assert(evaluated.metrics.perCase.size() == 24);
+  assert(evaluated.metrics.tokenTotal == 144);
+  assert(evaluated.metrics.sequenceTotal == 24);
+  assert(evaluated.forwardCalls == 288);
+  assert(evaluated.inputValidationFailures == 0);
+  assert(evaluated.forwardReturnFailures == 0);
+  assert(evaluated.nonfiniteTensorFailures == 0);
+  assert(evaluated.invalidProbabilityFailures == 0);
+  for (const auto& item : evaluated.metrics.perCase) {
+    assert(item.finite);
+    assert(item.tokenExact <= item.tokenTotal);
+    assert(item.firstErrorPosition == -1 ||
+           (item.firstErrorPosition >= 1 &&
+            item.firstErrorPosition <= static_cast<int>(item.tokenTotal)));
+  }
+
+  const auto pooled = dq::poolAutoregressiveMetrics(
+      {evaluated.metrics, evaluated.metrics});
+  assert(ar::finite(pooled) && pooled.tokenTotal == 288 &&
+         pooled.sequenceTotal == 48);
+
+  assert(dq::validProbabilityTensor({0.25f, 0.75f}, 1, 2));
+  assert(!dq::validProbabilityTensor({0.25f, 1.25f}, 1, 2));
+  assert(!dq::validProbabilityTensor({0.25f, 0.25f}, 1, 2));
+  assert(!dq::validProbabilityTensor(
+      {std::numeric_limits<float>::quiet_NaN(), 1.0f}, 1, 2));
+  auto invalidCase = evaluated.metrics.perCase.front();
+  invalidCase.finite = false;
+  invalidCase.firstErrorPosition = -1;
+  const auto invalidAggregate = ar::aggregate({invalidCase});
+  assert(!ar::finite(invalidAggregate));
+  assert(invalidAggregate.noErrorCases == 0);
+
+  auto invalidTokenConfig = config;
+  invalidTokenConfig.vocabularySize = 12;
+  const auto invalidTokenParameters =
+      phonelm::tiny_lm::initialParameters(invalidTokenConfig, 1);
+  const auto invalidTokenEvaluation = dq::evaluateAutoregressive(
+      invalidTokenConfig, invalidTokenParameters, ar::Partition::VALIDATION);
+  assert(!ar::finite(invalidTokenEvaluation.metrics));
+  assert(invalidTokenEvaluation.inputValidationFailures > 0);
+}
+
+static void testAutoregressiveSelectionAndLegacyRoundTrip() {
+  const auto config = smallConfig(1, 1);
+  const auto steps = dq::autoregressiveEvaluationSteps();
+  assert(steps.size() == 23 && steps.front() == 0 && steps.back() == 320);
+  assert(steps[11] == 48 && steps[14] == 80);
+
+  const auto incumbent = syntheticArMetrics(1.0, 4, 1);
+  assert(ar::better(syntheticArMetrics(0.9, 0, 0), 20, incumbent, 16));
+  assert(ar::better(syntheticArMetrics(1.0 + 0.5e-7, 5, 1), 20,
+                    incumbent, 16));
+  assert(ar::better(syntheticArMetrics(1.0, 4, 1), 12, incumbent, 16));
+  assert(ar::better(syntheticArMetrics(1.0, 4, 2), 20, incumbent, 16));
+  assert(!ar::better(syntheticArMetrics(1.0 + 2.0e-7, 9, 2), 12,
+                     incumbent, 16));
+
+  const auto legacy = dq::runFormalCpu(
+      config, 1, 4, 0.003f, dq::StabilityMode::LEGACY, {0, 4});
+  const auto selected = dq::runAutoregressiveSelectedCpu(
+      config, 1, 4, dq::AutoregressiveSelectionMode::FINAL_STEP);
+  assert(selected.selectedStep == 4);
+  assert(selected.validationTrajectory.size() == 2);
+  assert(ar::finite(selected.finalStepValidation));
+  const auto legacyRegistry =
+      phonelm::tiny_lm::parameterRegistry(legacy.finalParameters);
+  const auto selectedRegistry =
+      phonelm::tiny_lm::parameterRegistry(selected.selectedParameters);
+  assert(legacyRegistry.size() == selectedRegistry.size());
+  for (std::size_t i = 0; i < legacyRegistry.size(); ++i)
+    assert(*legacyRegistry[i].values == *selectedRegistry[i].values);
+  assert(dq::registryDifferenceNorm(legacy.finalM, selected.selectedM) == 0.0);
+  assert(dq::registryDifferenceNorm(legacy.finalV, selected.selectedV) == 0.0);
+  assert(legacy.steps.size() == selected.training.steps.size());
+  for (std::size_t i = 0; i < legacy.steps.size(); ++i) {
+    const auto& left = legacy.steps[i];
+    const auto& right = selected.training.steps[i];
+    assert(left.step == right.step && left.loss == right.loss &&
+           left.accuracy == right.accuracy &&
+           left.gradientNorm == right.gradientNorm &&
+           left.parameterNorm == right.parameterNorm &&
+           left.updateNorm == right.updateNorm &&
+           left.updateToParameter == right.updateToParameter &&
+           left.logitMaxAbs == right.logitMaxAbs &&
+           left.targetMargin == right.targetMargin &&
+           left.targetProbability == right.targetProbability);
+  }
+  assert(legacy.summary.initialLoss == selected.training.summary.initialLoss &&
+         legacy.summary.minimumLoss == selected.training.summary.minimumLoss &&
+         legacy.summary.finalLoss == selected.training.summary.finalLoss &&
+         legacy.summary.minimumStep == selected.training.summary.minimumStep &&
+         legacy.summary.lastImprovementStep ==
+             selected.training.summary.lastImprovementStep &&
+         legacy.summary.movingAverageFinalWindow ==
+             selected.training.summary.movingAverageFinalWindow &&
+         legacy.summary.maximumWorseningWindow ==
+             selected.training.summary.maximumWorseningWindow &&
+         legacy.summary.classification ==
+             selected.training.summary.classification);
+  assert(legacy.finalEvaluation.loss == selected.training.finalEvaluation.loss &&
+         legacy.finalEvaluation.accuracy ==
+             selected.training.finalEvaluation.accuracy);
+  assert(legacy.checkpointBatches == selected.training.checkpointBatches);
+  assert(selected.mode == dq::AutoregressiveSelectionMode::FINAL_STEP);
+  assert(selected.validationSchemaVersion == ar::kSchemaVersion);
+  assert(selected.validationSetHash == ar::kValidationHash);
+  const auto defaultSelected = dq::runAutoregressiveSelectedCpu(config, 1, 4);
+  assert(defaultSelected.mode == dq::AutoregressiveSelectionMode::FINAL_STEP &&
+         defaultSelected.selectedStep == 4);
+  bool invalidModeRejected = false;
+  try {
+    (void)dq::runAutoregressiveSelectedCpu(
+        config, 1, 4,
+        static_cast<dq::AutoregressiveSelectionMode>(99));
+  } catch (const std::invalid_argument&) {
+    invalidModeRejected = true;
+  }
+  assert(invalidModeRejected);
+  const auto best = dq::runAutoregressiveSelectedCpu(
+      config, 1, 4, dq::AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1);
+  const auto bestRepeat = dq::runAutoregressiveSelectedCpu(
+      config, 1, 4, dq::AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1);
+  assert(best.selectedStep == 0 || best.selectedStep == 4);
+  assert(ar::finite(best.selectedValidation));
+  assert(best.selectedStep == bestRepeat.selectedStep);
+  assert(fnvParams(best.selectedParameters) ==
+         fnvParams(bestRepeat.selectedParameters));
 }
 
 static void testPairedDepthInitialization() {
@@ -456,6 +647,10 @@ int main() {
   std::puts("legacy_trajectory_hash_invariance=PASS");
   testValidationPartitionAndSelection();
   std::puts("validation_partition_and_selection=PASS");
+  testAutoregressivePartitionsAndObjective();
+  std::puts("autoregressive_partitions_and_objective=PASS");
+  testAutoregressiveSelectionAndLegacyRoundTrip();
+  std::puts("autoregressive_selection_and_legacy_round_trip=PASS");
   testPairedDepthInitialization();
   std::puts("paired_depth_initialization=PASS");
   testStabilityModeContract();
