@@ -158,10 +158,13 @@ try {
     }
 
     Invoke-Step "resumable-formal-runner-self-test" {
+        Invoke-PwshScript "direct-seed identity self-test" `
+            (Join-Path $Root "scripts\run_qnn_direct_seed_equivalence.ps1") @(
+                "-SelfTest")
         Invoke-PwshScript "resumable formal runner self-test" `
             (Join-Path $Root "scripts\run_qnn_resumable_formal.ps1") @(
                 "-SelfTest")
-        "resume/atomic/identity-rejection/reattach cases ok (temp-only; no device required)"
+        "direct identity plus resume/atomic/identity-rejection/reattach cases ok (temp-only; no device required)"
     }
 
     if ($Clean) {

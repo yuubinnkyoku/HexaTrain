@@ -14,6 +14,8 @@ param(
     [ValidateRange(10, 86400)][int]$TimeoutSeconds = 1800,
     [ValidateSet('CORRECTNESS', 'EXCLUSIVE_BENCHMARK', 'UI_VALIDATION')]
     [string]$TestMode = 'CORRECTNESS',
+    [ValidateSet('COUNT_FROM_ONE', 'EXACT_SEED')]
+    [string]$SeedSelectionMode = 'COUNT_FROM_ONE',
     [switch]$InstallAuditedApk,
     [switch]$AllowFailure
 )
@@ -144,11 +146,12 @@ try {
         '--ei', 'phonelm.steps', [string]$Steps,
         '--ei', 'phonelm.warmup_steps', '0',
         '--es', 'phonelm.learning_rate', '0.003',
-        '--es', 'phonelm.seed', '1',
+        '--es', 'phonelm.seed', $(if ($SeedSelectionMode -eq 'EXACT_SEED') { [string]$Seeds } else { '1' }),
         '--ei', 'phonelm.sample_count', [string]$SequenceLength,
         '--ei', 'phonelm.epochs', [string]$NumLayers,
         '--ei', 'phonelm.measured_steps', [string]$NumHeads,
         '--ei', 'phonelm.correctness_interval', [string]$Seeds,
+        '--es', 'phonelm.seed_selection_mode', $SeedSelectionMode,
         '--ez', 'phonelm.benchmark_mode',
         $(if ($TestMode -eq 'EXCLUSIVE_BENCHMARK') { 'true' } else { 'false' })
     )
@@ -274,6 +277,13 @@ try {
         $report
     ) | Set-Content -LiteralPath $privatePath -Encoding utf8
     $status = Result-Value $report 'status'
+    $expectedExecutedSeedCount = if ($SeedSelectionMode -eq 'EXACT_SEED') { 1 } else { $Seeds }
+    if ((Result-Value $report 'seed_selection_mode') -ne $SeedSelectionMode -or
+        (Result-Value $report 'requested_seed') -ne [string]$Seeds -or
+        (Result-Value $report 'executed_seed_count') -ne [string]$expectedExecutedSeedCount -or
+        (Result-Value $report 'seed_count') -ne [string]$expectedExecutedSeedCount) {
+        Fail 'seed selection contract mismatch'
+    }
     if ($TestMode -eq 'UI_VALIDATION') {
         $uiPassed = $status -eq 'SUCCESS' -and $uiConfigVisible -and
             $uiProgressVisible -and $uiForegroundUpdate -and
@@ -305,6 +315,9 @@ try {
         attention_heads = Result-Value $report 'attention_heads'
         steps = Result-Value $report 'steps'
         seed_count = Result-Value $report 'seed_count'
+        seed_selection_mode = Result-Value $report 'seed_selection_mode'
+        requested_seed = Result-Value $report 'requested_seed'
+        executed_seed_count = Result-Value $report 'executed_seed_count'
         nonfinite_count = Result-Value $report 'seed_1_nonfinite_count'
         qnn_nonzero_return_count = Result-Value $report 'formal_qnn_nonzero_return_count'
         graph_creation_ms = Result-Value $report 'performance_graph_creation_ms'

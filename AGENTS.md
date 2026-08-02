@@ -49,16 +49,23 @@ Expected Build ID を必ず明示して渡す。
 禁止事項:
 
 - QAIRT 2.47 を QNN build、APK 監査、実機試験に使用しない
-- 2.48 SDK が存在しない、不完全、または Build ID 不一致の場合に別 version へ fallback しない
+- 2.48 SDK が存在しない、core required item が不完全、または Build ID 不一致の場合に別 version へ fallback しない
 - 自動探索で見つかった SDK を、そのまま PhoneLM の build 対象として採用しない
 - SDK root と Build ID を確認せず、既存 APK や build cache だけを根拠に実機試験を開始しない
 
-明示した SDK を利用できない場合は、SDK のインストール、移動、version 変更を行わず、
+明示した SDK の core required item を利用できない場合は、SDK のインストール、移動、version 変更を行わず、
 次のいずれかを報告して停止する。
 
 - `QAIRT_SDK_ROOT_UNAVAILABLE`
 - `QAIRT_BUILD_ID_MISMATCH`
 - `QAIRT_SDK_INCOMPLETE`
+
+`check_qairt.ps1` の `QAIRT_SDK_FOUND_INVENTORY_INCOMPLETE`（exit 3）は、
+固定 root、Expected Build ID、core QNN headers、PhoneLM が直接 packaging する
+arm64 runtime/backend/Stub/Skel が揃っている場合、optional CLI/tools/samples の
+inventory advisory とする。QNN 有効操作の正式 gate は `verify_local.ps1 -WithQairt`
+による QNN build と `audit_qnn_apk.ps1` の ABI/hash/path/2.47 混入検査である。
+exit 3 だけを理由に runner を停止せず、strict gate が失敗した場合だけ停止する。
 
 引数なしの自動探索は、インストール済み SDK の読み取り専用 inventory 調査に限って使用できる。
 `check_qairt.ps1 -SelfTest` は偽 SDK を使う選択ルールの回帰試験であり、この制限の対象外とする。
@@ -72,7 +79,7 @@ Expected Build ID を必ず明示して渡す。
 - `.\gradlew.bat :app:assembleDebug --no-daemon` — QNN無効 build
 - `.\gradlew.bat :app:assembleDebugAndroidTest --no-daemon`
 - `.\scripts\verify_local.ps1` — 上記一括 + git/binary/secret 監査
-- `.\scripts\check_qairt.ps1` — QAIRT SDK の読み取り専用検査。明示 `-SdkRoot` は排他的に優先され、存在しない/不完全な場合は別 version へ fallback せず FAIL。選択ルールの回帰は `-SelfTest`
+- `.\scripts\check_qairt.ps1` — QAIRT SDK の読み取り専用 inventory 検査。明示 `-SdkRoot` は排他的に優先され、存在しない/core required item不完全な場合は別 version へ fallback せず FAIL。optional inventory不足の exit 3 は advisory。選択ルールの回帰は `-SelfTest`
 - `.\scripts\export_qnn_tiny_lm_graph_map.ps1` — graph map の静的 export
 
 ### Tier 2: 条件を満たせば自動実行可

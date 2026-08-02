@@ -27,14 +27,123 @@ param(
     # reclamation; enable for configurations whose single run outlasts the
     # background-process grace window. Numerics are path-independent.
     [switch]$LiveUpdate,
-    [switch]$AllowFailure
+    [switch]$AllowFailure,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$EvidenceSchemaVersion = 2
+
+function Get-Sha256Hex([string]$Text) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+    return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+}
+
+function Get-ReportValue([string]$Report, [string]$Key) {
+    $match = [regex]::Match($Report, "(?m)^$([regex]::Escape($Key))=(.*)$")
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return $null
+}
+
+function Get-DirectConfigHash([System.Collections.IDictionary]$Config, [string]$Mode) {
+    if ($Mode -notin @('EXACT_SEED', 'COUNT_FROM_ONE')) { throw "unknown seed selection mode: $Mode" }
+    if (($Config['D'] % $Config['H']) -ne 0) { throw 'embedding dimension must be divisible by heads' }
+    $canonical = "phonelm-direct-equivalence-v2|B=1|T=$($Config['T'])|V=$($Config['V'])" +
+        "|D=$($Config['D'])|FFN=$($Config['FFN'])|L=$($Config['L'])|H=$($Config['H'])" +
+        "|headDim=$($Config['D'] / $Config['H'])|lr=0.003|steps=$($Config['Steps'])|clip=disabled" +
+        "|optimizer=ADAM|mode=QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC|candidate=3" +
+        "|stability=LEGACY|seed_selection=$Mode|checkpoint_selection=FINAL_STEP"
+    return Get-Sha256Hex $canonical
+}
+
+function Get-ExpectedScalingEvaluation([int]$Seed) {
+    # The generic native protocol labels the seed-5 scaling path FORMAL and
+    # all earlier requested seeds SMOKE. This label is independent of direct
+    # versus count-from-one selection.
+    return $(if ($Seed -eq 5) { 'FORMAL' } else { 'SMOKE' })
+}
+
+function ConvertTo-KeyMap([string]$Text) {
+    $map = @{}
+    foreach ($line in ($Text -split "`n")) {
+        $pair = $line.TrimEnd("`r") -split '=', 2
+        if ($pair.Count -eq 2) { $map[$pair[0]] = $pair[1] }
+    }
+    return $map
+}
+
+function Test-CacheIdentity {
+    param($Meta, [string]$ApkHash, [string]$BuildId, [string]$ConfigHash,
+        [string]$RunnerHash, [string]$Mode, [int]$Seed)
+    return $Meta['evidence_schema'] -eq [string]$EvidenceSchemaVersion -and
+        $Meta['apk_sha256'] -eq $ApkHash -and $Meta['qairt_build_id'] -eq $BuildId -and
+        $Meta['config_hash'] -eq $ConfigHash -and $Meta['direct_runner_hash'] -eq $RunnerHash -and
+        $Meta['seed_selection_mode'] -eq $Mode -and $Meta['requested_seed'] -eq [string]$Seed -and
+        $Meta['device_seed_selection_mode'] -eq $Mode -and
+        $Meta['device_requested_seed'] -eq [string]$Seed -and
+        $Meta['device_executed_seed_count'] -eq [string]$(if ($Mode -eq 'EXACT_SEED') { 1 } else { $Seed }) -and
+        $Meta['device_seed_count'] -eq [string]$(if ($Mode -eq 'EXACT_SEED') { 1 } else { $Seed })
+}
+
+function Assert-RunContract([string]$Report, [System.Collections.IDictionary]$Config,
+        [int]$Seed, [string]$Mode) {
+    $expectedCount = if ($Mode -eq 'EXACT_SEED') { 1 } else { $Seed }
+    $required = [ordered]@{
+        status = @('SUCCESS','FAILED','PARTIAL_SUCCESS')
+        optimizer = @('ADAM'); learning_rate = @('0.003'); steps = @([string]$Config['Steps'])
+        seed_selection_mode = @($Mode); requested_seed = @([string]$Seed)
+        executed_seed_count = @([string]$expectedCount); seed_count = @([string]$expectedCount)
+        source_protocol = @('POST_FIX_ADAM_LR0.003_STEPS320_V1')
+        scaling_evaluation = @(Get-ExpectedScalingEvaluation $Seed); global_gradient_clipping = @('disabled')
+        sequence_length = @([string]$Config['T']); embedding_dimension = @([string]$Config['D'])
+        transformer_layers = @([string]$Config['L']); attention_heads = @([string]$Config['H'])
+        feed_forward_dimension = @([string]$Config['FFN']); formal_qnn_nonzero_return_count = @('0')
+    }
+    foreach ($entry in $required.GetEnumerator()) {
+        $actual = Get-ReportValue $Report $entry.Key
+        if ($actual -notin $entry.Value) { throw "direct report contract mismatch: $($entry.Key)=$actual" }
+    }
+    $seedRequired = [ordered]@{
+        "seed_${Seed}_completed_steps" = [string]$Config['Steps']
+        "seed_${Seed}_all_steps_finite" = 'true'
+        "seed_${Seed}_final_evaluation_finite" = 'true'
+        "seed_${Seed}_nonfinite_count" = '0'
+    }
+    foreach ($entry in $seedRequired.GetEnumerator()) {
+        if ((Get-ReportValue $Report $entry.Key) -ne $entry.Value) {
+            throw "direct seed completeness mismatch: $($entry.Key)"
+        }
+    }
+}
+
+function Invoke-SelfTest {
+    $config = [ordered]@{ id='self'; T=16; V=32; D=32; FFN=64; L=6; H=8; Steps=320 }
+    $hash = Get-DirectConfigHash $config 'EXACT_SEED'
+    if ($hash -notmatch '^[0-9a-f]{64}$') { throw 'direct config hash self-test failed' }
+    if ((Get-ExpectedScalingEvaluation 1) -ne 'SMOKE' -or
+        (Get-ExpectedScalingEvaluation 2) -ne 'SMOKE' -or
+        (Get-ExpectedScalingEvaluation 5) -ne 'FORMAL') {
+        throw 'scaling evaluation contract self-test failed'
+    }
+    $meta = @{evidence_schema='2';apk_sha256=('a'*64);qairt_build_id='build';config_hash=$hash;
+        direct_runner_hash=('b'*64);seed_selection_mode='EXACT_SEED';requested_seed='5';
+        device_seed_selection_mode='EXACT_SEED';device_requested_seed='5';device_executed_seed_count='1';device_seed_count='1';git_head=('0'*40)}
+    if (-not (Test-CacheIdentity $meta ('a'*64) 'build' $hash ('b'*64) 'EXACT_SEED' 5)) { throw 'matching cache identity rejected' }
+    $meta.git_head = 'f'*40
+    if (-not (Test-CacheIdentity $meta ('a'*64) 'build' $hash ('b'*64) 'EXACT_SEED' 5)) { throw 'docs-only Git HEAD delta invalidated APK evidence' }
+    foreach ($field in @('apk_sha256','config_hash','direct_runner_hash','device_requested_seed','device_executed_seed_count')) {
+        $bad = @{} + $meta; $bad[$field] = 'mismatch'
+        if (Test-CacheIdentity $bad ('a'*64) 'build' $hash ('b'*64) 'EXACT_SEED' 5) { throw "stale cache accepted: $field" }
+    }
+    'SELF_TEST=PASS'
+}
+
+if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if (-not $QairtSdkRoot) { throw '-QairtSdkRoot is required' }
 
-$repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 if (-not (Test-Path -LiteralPath $adb -PathType Leaf)) { throw 'adb executable unavailable' }
 $package = 'com.yuubinnkyoku.phonelm'
@@ -47,6 +156,11 @@ if (-not $workRoot.StartsWith($reportsParent + [IO.Path]::DirectorySeparatorChar
     throw 'report path escaped build/reports'
 }
 [IO.Directory]::CreateDirectory($workRoot) | Out-Null
+$gitHead = (& git -C $repoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $gitHead -notmatch '^[0-9a-f]{40}$') {
+    throw 'Git HEAD is unavailable'
+}
+$directRunnerHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 # QAIRT gate: explicit root + build id, no fallback.
 $checkOutput = (& (Join-Path $PSScriptRoot 'check_qairt.ps1') -SdkRoot $QairtSdkRoot `
@@ -85,12 +199,6 @@ function Read-DeviceState([string]$Device) {
     }
 }
 
-function Get-ReportValue([string]$Report, [string]$Key) {
-    $match = [regex]::Match($Report, "(?m)^$([regex]::Escape($Key))=(.*)$")
-    if ($match.Success) { return $match.Groups[1].Value.Trim() }
-    return $null
-}
-
 $cases = @{
     l2h2 = [ordered]@{ id = 't32_d32_ffn32_l2_h2'; T = 32; V = 32; D = 32; FFN = 32; L = 2; H = 2; Steps = 320; Seeds = @(1, 2, 5) }
     l19 = [ordered]@{ id = 't8_d16_ffn32_l19_h2'; T = 8; V = 32; D = 16; FFN = 32; L = 19; H = 2; Steps = 320; Seeds = @(2) }
@@ -113,12 +221,22 @@ foreach ($name in $requested) {
         $runLabel = '{0}-{1}-{2}' -f $Mode.ToLowerInvariant(), $Seed, $C['id']
         $reportPath = Join-Path $caseDir "$runLabel.device-report.txt"
         $metaPath = Join-Path $caseDir "$runLabel.run.txt"
+        $configHash = Get-DirectConfigHash $C $Mode
         if ((Test-Path -LiteralPath $reportPath -PathType Leaf) -and
             (Test-Path -LiteralPath $metaPath -PathType Leaf)) {
             $cached = [IO.File]::ReadAllText($reportPath)
-            if ($cached -match '(?m)^status=') {
+            $cachedMeta = [IO.File]::ReadAllText($metaPath)
+            $cachedMetaMap = ConvertTo-KeyMap $cachedMeta
+            $cacheIdentityMatches = Test-CacheIdentity $cachedMetaMap $apkHash $ExpectedBuildId `
+                $configHash $directRunnerHash $Mode $Seed
+            if ($cached -match '(?m)^status=(SUCCESS|FAILED|PARTIAL_SUCCESS)\r?$' -and
+                $cacheIdentityMatches) {
+                Assert-RunContract $cached $C $Seed $Mode
                 Write-Host "$runLabel : cached report reused"
-                return @{ report = $cached; meta = [IO.File]::ReadAllText($metaPath); cached = $true }
+                return @{ report = $cached; meta = $cachedMeta; cached = $true }
+            }
+            if ($cached -match '(?m)^status=') {
+                Write-Host "$runLabel : cached report rejected by terminal/identity gate"
             }
         }
         $before = Read-DeviceState $device
@@ -171,11 +289,15 @@ foreach ($name in $requested) {
             }
         }
         if (-not $report) { throw "$runLabel : no terminal device result" }
+        Assert-RunContract $report $C $Seed $Mode
         $completed = [DateTime]::UtcNow
         $after = Read-DeviceState $device
         $executeCount = Get-ReportValue $report "seed_${Seed}_qnn_execute_count"
         $meta = @(
+            "evidence_schema=$EvidenceSchemaVersion"
             "run_label=$runLabel"
+            "config_hash=$configHash"
+            "direct_runner_hash=$directRunnerHash"
             "seed_selection_mode=$Mode"
             "requested_seed=$Seed"
             "device_seed_selection_mode=$(Get-ReportValue $report 'seed_selection_mode')"
@@ -194,6 +316,7 @@ foreach ($name in $requested) {
             "battery_temperature_after_c=$(if ($after) { $after.battery_temperature_c } else { 'NOT_READ' })"
             "thermal_status_before=$(if ($before) { $before.android_thermal_status } else { 'NOT_READ' })"
             "thermal_status_after=$(if ($after) { $after.android_thermal_status } else { 'NOT_READ' })"
+            "git_head=$gitHead"
             "apk_sha256=$apkHash"
             "qairt_build_id=$ExpectedBuildId"
         ) -join "`n"
@@ -234,18 +357,41 @@ foreach ($name in $requested) {
         foreach ($line in ($legacy.meta -split "`n")) { $p = $line.TrimEnd("`r") -split '=', 2; if ($p.Count -eq 2) { $legacyMeta[$p[0]] = $p[1] } }
         $exactMeta = @{}
         foreach ($line in ($exact.meta -split "`n")) { $p = $line.TrimEnd("`r") -split '=', 2; if ($p.Count -eq 2) { $exactMeta[$p[0]] = $p[1] } }
+        $contractMatches = $legacyMeta['device_seed_selection_mode'] -eq 'COUNT_FROM_ONE' -and
+            $exactMeta['device_seed_selection_mode'] -eq 'EXACT_SEED' -and
+            $legacyMeta['device_requested_seed'] -eq [string]$seed -and
+            $exactMeta['device_requested_seed'] -eq [string]$seed -and
+            $legacyMeta['device_executed_seed_count'] -eq [string]$seed -and
+            $exactMeta['device_executed_seed_count'] -eq '1'
+        if (-not $contractMatches) { $equivalenceFailures++; $equivalent = $false }
         $rows += [pscustomobject][ordered]@{
             configuration = $case.id
             seed = $seed
+            evidence_schema = $EvidenceSchemaVersion
+            legacy_config_hash = $legacyMeta['config_hash']
+            exact_config_hash = $exactMeta['config_hash']
+            direct_runner_hash = $directRunnerHash
             compared_fields = $allKeys.Count
             mismatch_count = $mismatches.Count
             bitwise_equivalent = $equivalent
+            contract_fields_valid = $contractMatches
+            legacy_selection_mode = $legacyMeta['device_seed_selection_mode']
+            exact_selection_mode = $exactMeta['device_seed_selection_mode']
+            legacy_requested_seed = $legacyMeta['device_requested_seed']
+            exact_requested_seed = $exactMeta['device_requested_seed']
+            legacy_executed_seed_count = $legacyMeta['device_executed_seed_count']
+            exact_executed_seed_count = $exactMeta['device_executed_seed_count']
             legacy_wall_time_ms = $legacyMeta['wall_time_ms']
             exact_wall_time_ms = $exactMeta['wall_time_ms']
             legacy_seed_units = $legacyMeta['seed_units']
             exact_seed_units = $exactMeta['seed_units']
             legacy_qnn_execute_count = $legacyMeta["seed_${seed}_qnn_execute_count"]
             exact_qnn_execute_count = $exactMeta["seed_${seed}_qnn_execute_count"]
+            initial_parameter_hash = $legacyKeys["${prefix}step_1_parameter_before_canonical_hash"]
+            initial_adam_m_hash = $legacyKeys["${prefix}step_1_first_moment_before_canonical_hash"]
+            initial_adam_v_hash = $legacyKeys["${prefix}step_1_second_moment_before_canonical_hash"]
+            all_step_loss_hash = $legacyKeys["${prefix}all_step_loss_canonical_hash"]
+            all_step_accuracy_hash = $legacyKeys["${prefix}all_step_accuracy_canonical_hash"]
             final_parameter_hash = $legacyKeys["${prefix}final_parameter_canonical_hash"]
             final_logits_hash = $legacyKeys["${prefix}step_$($case.Steps)_logits_canonical_hash"]
         }
