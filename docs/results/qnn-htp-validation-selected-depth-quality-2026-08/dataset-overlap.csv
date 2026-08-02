@@ -1,0 +1,7 @@
+"left","right","exact_case_overlap","identical_initial_prefixes","identical_target_sequences","shared_token_ids","shared_transitions","scope"
+"TRAIN","VALIDATION","0","0","0","11","11","full cases"
+"VALIDATION","ORACLE_TEST","0","0","0","11","11","static full cases"
+"VALIDATION","FREE_TEST","0","0","0","11","11","static initial cases; free contexts prediction-dependent"
+"TRAIN","CURRENT_PHASE1_EVAL","0","0","0","13","13","full cases"
+"TRAIN","ORACLE_TEST","0","4","0","13","13","initial prefix versus rollout"
+"TRAIN","FREE_TEST","0","4","0","13","13","initial prefix versus rollout"

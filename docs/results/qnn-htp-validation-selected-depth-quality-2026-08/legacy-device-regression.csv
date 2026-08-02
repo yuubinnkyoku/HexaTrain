@@ -1,0 +1,3 @@
+"configuration","numeric_regression","quality_oracle","quality_free","terminal_classification","anchor_match"
+"T16/D32/FFN64/L6/H8","PASS","4/4","4/4","SUCCESS","true"
+"T8/D16/FFN32/L19/H2","PASS","2/4","2/4","FINITE_QUALITY_SHORTFALL","true"

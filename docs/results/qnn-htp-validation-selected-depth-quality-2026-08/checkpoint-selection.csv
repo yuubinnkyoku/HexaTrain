@@ -1,0 +1,6 @@
+"configuration","seed","mode","selected_step","best_validation_loss","final_validation_loss","selected_oracle_exact","final_oracle_exact","selected_free_exact","final_free_exact","candidate_accepted"
+"T8/D16/FFN32/L19/H2","1","BEST_VALIDATION_V1","320","0.055550682568970465","0.055550682568970465","4","4","4","4","false"
+"T8/D16/FFN32/L19/H2","2","BEST_VALIDATION_V1","128","0.9658971029181561","1.5114111792745148","2","2","2","2","false"
+"T8/D16/FFN32/L19/H2","4","BEST_VALIDATION_V1","320","0.011144547616702416","0.011144547616702416","4","4","4","4","false"
+"T8/D16/FFN32/L18/H2","1","BEST_VALIDATION_V1","320","0.18240826485255354","0.18240826485255354","4","4","4","4","false"
+"T8/D16/FFN32/L18/H2","2","BEST_VALIDATION_V1","128","0.5311882852156987","0.6486498009022162","2","3","2","3","false"

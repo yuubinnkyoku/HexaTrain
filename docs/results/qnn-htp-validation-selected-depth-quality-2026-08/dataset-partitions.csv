@@ -1,0 +1,6 @@
+"set","case_count","generator","input_prefix","target","checkpoint_selection"
+"TRAIN","4","SINGLE_RULE_PHASE0","phase-0 cyclic prefix","per-row rule successor","never"
+"CURRENT_PHASE1_EVAL","4","SINGLE_RULE_PHASE1","phase-1 cyclic prefix","per-row rule successor","never"
+"VALIDATION","3","ROTATED_LAST_POSITION_V2","phase-2 cyclic prefix; 2-token family excluded","last-position rule successor","BEST_VALIDATION_V1 only"
+"ORACLE_TEST","4","ORACLE_8_STEP_PHASE0","phase-0 cyclic prefix","8 held-out successor tokens; expected-token feedback","never"
+"FREE_TEST","4","FREE_8_STEP_PHASE0","phase-0 cyclic prefix","8 held-out successor tokens; prediction feedback","never"

@@ -1,0 +1,125 @@
+{
+  "schema_version": 4,
+  "source_commit": "20afebb0ec4b025f70f75ab23e19e701ce8a1385",
+  "qairt_build_id": "2.48.40.260702151143",
+  "result_classification": "DIRECT_SEED_COMPLETE_VALIDATION_NOT_PREDICTIVE",
+  "direct_seed_equivalence": "5/5",
+  "validation_schema_version": 2,
+  "validation_generator_domain": "ROTATED_LAST_POSITION_V2",
+  "validation_set_hash": "fnv1a64:8e1411f19126879c",
+  "checkpoint_selection_mode": "BEST_VALIDATION_V1",
+  "default_checkpoint_selection_mode": "FINAL_STEP",
+  "cpu_candidate_accepted": false,
+  "cpu_gate_decision": "REJECT",
+  "validation_heldout_generation_improved": false,
+  "l18_control": "DEGRADED",
+  "legacy_l6_h8_regression": "PASS",
+  "legacy_l19_regression": "PASS",
+  "legacy_l19_terminal_classification": "FINITE_QUALITY_SHORTFALL",
+  "live_update_progress": "PASS",
+  "live_update_foreground_service": "PASS",
+  "live_update_completion_state": "PASS",
+  "live_update_tap_return": "FAIL_DEFERRED",
+  "live_update_auto_cancel": "FAIL_DEFERRED",
+  "deferred_ui_issue": "NOTIFICATION_TAP_AND_AUTO_CANCEL",
+  "htp_smoke": "NOT_RUN_CPU_GATE_REJECTED",
+  "formal": "NOT_RUN_CPU_GATE_REJECTED",
+  "raw_checkpoints_published": false,
+  "aggregate": {
+    "direct_case_count": 5,
+    "direct_compared_fields_total": 3320.0,
+    "direct_mismatch_count_total": 0.0,
+    "cpu_case_count": 5,
+    "cpu_l19_seed2_oracle_delta": 0,
+    "cpu_l19_seed2_free_delta": 0,
+    "cpu_l18_seed2_oracle_delta": -1,
+    "cpu_l18_seed2_free_delta": -1,
+    "l18_control_classification": "DEGRADED",
+    "cpu_gate_decision": "REJECT",
+    "legacy_l6_h8_regression": "PASS",
+    "legacy_l19_regression": "PASS",
+    "legacy_l19_quality_oracle": "2/4",
+    "legacy_l19_quality_free": "2/4",
+    "live_update_progress": "PASS",
+    "live_update_tap_return": "FAIL_DEFERRED",
+    "live_update_auto_cancel": "FAIL_DEFERRED"
+  },
+  "files": [
+    {
+      "name": "checkpoint-selection.csv",
+      "sha256": "871c5637849bfb5393f282b64f10653212bfe5f8ca7634ceee44b902d5773375"
+    },
+    {
+      "name": "cpu-smoke.csv",
+      "sha256": "ff861c150feb5178f2974f8c1907cb1ff467b9dfa0db6efd497352d93be035b4"
+    },
+    {
+      "name": "dataset-overlap.csv",
+      "sha256": "f1adae846ff84d98db2dabb1b5e5636d64c894985f0f0b60d4952444ab2fbe01"
+    },
+    {
+      "name": "dataset-partitions.csv",
+      "sha256": "f2f2c03a36a1d32c2218ac617f24cedd461fffc403464f35a2d00ad1035776bc"
+    },
+    {
+      "name": "decision.csv",
+      "sha256": "142c67ae6513b4b8be4d216c1d732ad6dde2514bf1e82a10e287180a8ee6703a"
+    },
+    {
+      "name": "direct-seed-equivalence.csv",
+      "sha256": "37a91d0bb224b184d9675a3c637980388d9ee20a477791bd8233e86efbd1c1f4"
+    },
+    {
+      "name": "early-stop-simulation.csv",
+      "sha256": "6b82314413475ef9b9775566d72c7b6173b69222b74eab9234e55b1ddcad2ebd"
+    },
+    {
+      "name": "formal-seeds.csv",
+      "sha256": "5f9103b4904dd6e81108319c6894f8b606ffbf81c70965d3360c56ed7de4c40b"
+    },
+    {
+      "name": "generation-free.csv",
+      "sha256": "af5c3867091b2a3a3c7da65b40c61cc373abd89be92d19db14424d5409bcc86a"
+    },
+    {
+      "name": "generation-oracle.csv",
+      "sha256": "af5c3867091b2a3a3c7da65b40c61cc373abd89be92d19db14424d5409bcc86a"
+    },
+    {
+      "name": "htp-smoke.csv",
+      "sha256": "5f9103b4904dd6e81108319c6894f8b606ffbf81c70965d3360c56ed7de4c40b"
+    },
+    {
+      "name": "l18-control.csv",
+      "sha256": "6a5816e3bdc888c5ef56fdcd5b5e765b04822c72714171466a8c2f5ea795e095"
+    },
+    {
+      "name": "legacy-device-regression.csv",
+      "sha256": "897f0ddfd481e780d32ee37901fb1f95c421d53cdcf29af5b7d251c2ca53ec95"
+    },
+    {
+      "name": "live-update-ui.csv",
+      "sha256": "c5cb6209357b4117330396b8a89d48df555b8fe378d7d5ef4ea25220da26c2cb"
+    },
+    {
+      "name": "README.md",
+      "sha256": "e48388de9e061fe42d360f99353667711d87615a0c42fe5c57985c1415fdcd85"
+    },
+    {
+      "name": "selected-step-distribution.csv",
+      "sha256": "50d9b4eb6e39f78b2d53d3c1d543db4b5adce1a65b738277861369410af71a1a"
+    },
+    {
+      "name": "thermal.csv",
+      "sha256": "5f9103b4904dd6e81108319c6894f8b606ffbf81c70965d3360c56ed7de4c40b"
+    },
+    {
+      "name": "ui-validation.csv",
+      "sha256": "5f9103b4904dd6e81108319c6894f8b606ffbf81c70965d3360c56ed7de4c40b"
+    },
+    {
+      "name": "validation-trajectories.csv",
+      "sha256": "0c7e862a462840044bdf3e18aafa6146549d7e3e6a91a7844a12059aad888cb7"
+    }
+  ]
+}
