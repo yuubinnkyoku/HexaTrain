@@ -1,173 +1,121 @@
-必要があれば、このAGENTS.mdを自由に編集して良い。
+誤り、重複、陳腐化を発見した場合は更新してよい。
+ただし、ユーザーの明示指示なしに、安全条件、検証条件、実機Tier、QAIRT固定条件を弱めてはならない。
+変更理由を完了報告に記載する。
+
+## 絶対規則
+
+- Tier 3 はユーザーの明示指示なしに実行しない。
+- QAIRT の自動 fallback、2.47との混在、固定値と異なるSDKの使用を禁止する。
+- QNN return code の成功と tensor の有限性を別々に確認する。
+- raw checkpoint、logcat、ADB endpoint、ローカル絶対pathをcommitしない。
+- reset、rebase、amendは禁止する。ユーザーの既存変更を破棄・stashしない。
+- 「NPUだけで学習した」「CPUを完全に使用していない」「QNNが自動微分した」と誇張しない。
 
 ## 完了前の検証
 
-コードを変更したら、完了を報告する前に必ず次を実行する。
+変更や検証報告の前に [verification.md](docs/agent/verification.md) を読む。
+`verify_local.ps1` は全変更に共通するローカル基礎ゲートであり、
+対象に応じてQNN build、実機試験、公開bundleの追加gateが必要である。
 
 ```powershell
 .\scripts\verify_local.ps1
 ```
 
-既定の `verify_local.ps1` は実機不要・QAIRT不要・tracked ファイルを変更しない。
-`git-diff-check`、`tracked-binary-audit`、`secret-path-audit`、
-`qairt-selection-self-test`（temp内の5ケース）、公開結果exporter self-test、
-`resumable-formal-runner-self-test`（temp内のsynthetic fixture、実機不要）、
-JVM unit tests、C++ host tests、`assembleDebug`、`assembleDebugAndroidTest` の
-10工程が唯一のローカル検証ゲートである。
-全工程が PASS になるまで完了を報告しない。失敗を隠して完了しない。
+全必須工程がPASSするまで完了と報告しない。
+検証不能なら未実行工程、原因、再現コマンドを示して `BLOCKED` とし、
+環境を勝手にインストール・変更しない。
+`-SkipAndroidBuild` は docs/scripts-only 変更の最終確認に使用できるが、
+Android/JNI/Gradle/CMake/APK packaging変更では途中確認専用である。
+incremental buildを既定とし、必要な場合だけ `-Clean` を使う。
 
-```powershell
-.\scripts\verify_local.ps1                               # 通常
-.\scripts\verify_local.ps1 -SkipAndroidBuild             # Android build を省略（速い）
-.\scripts\verify_local.ps1 -Clean                        # clean build（遅いので必要時のみ）
-.\scripts\verify_local.ps1 `
-  -WithQairt `
-  -QairtSdkRoot 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702' `
-  -ExpectedBuildId '2.48.40.260702151143'
-```
+QNN node/tensor変更では `run_host_tests.ps1` のshape validatorを必須とし、
+shape変更時はgraph-map exporterとnegative testも更新する。
+GitHub Actionsも `verify_local.ps1` を使い、CI専用の検証列を追加しない。
+pinned MNN sourceはignoredな`third_party/MNN/`へ取得し、QAIRT SDK、
+ADB端末、secrets、APK artifactをCIで使わない。
 
-incremental build が既定。clean が必要な場合だけ `-Clean` を使う。
+## QAIRT固定
 
-GitHub Actions は `.github/workflows/verify.yml` から同じ
-`.\scripts\verify_local.ps1` を実行する。CI専用のテスト列は追加せず、
-Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` へ取得する。
-QAIRT SDK、ADB端末、repository secrets、APK artifactを使用しない。
+QNN/QAIRT build、APK監査、実機操作の前に [qairt-policy.md](docs/agent/qairt-policy.md) を読む。
+設定正本は `scripts/qairt_version.ps1` である。
 
-## QAIRT SDK の固定
+- SDK root: `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`
+- Build ID: `2.48.40.260702151143`
 
-PhoneLM の QNN 有効 build、APK 監査、実機試験では、次の SDK を明示的に使用する。
+QNN有効操作ではrootとBuild IDを明示し、正本との一致をfail closedで確認する。
+自動探索の結果、別version、既存APK、build cacheへfallbackしてはならない。
+固定rootの不在、Build ID不一致、core required item不足では、
+SDKをインストール・移動・変更せず停止する。
+`QAIRT_CORE_INCOMPLETE` はfatal、optional tools/samplesだけの
+`QAIRT_INVENTORY_INCOMPLETE` はadvisoryである。
+正式gateは固定引数付き `verify_local.ps1 -WithQairt` と
+`audit_qnn_apk.ps1` のABI/hash/path/2.47混入監査であり、advisoryだけでは停止しない。
+引数なし自動探索は読み取り専用inventory調査に限る。self-testのtemp内偽SDKは例外とする。
 
-- QAIRT SDK root: `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`
-- Expected Build ID: `2.48.40.260702151143`
+## 実機Tier
 
-QNN 有効操作では、SDK root と Expected Build ID を省略した自動選択を使用しない。
-複数の QAIRT version がインストールされていても、最初に見つかった SDK を暗黙に採用しない。
+実機またはdevice runnerを扱う前に
+[device-test-tiers.md](docs/agent/device-test-tiers.md) を読む。
 
-既存の QNN build、APK 監査、実機 runner にも、対応する SDK root と
-Expected Build ID を必ず明示して渡す。
+- Tier 1は実機不要のunit/host/build/static検証だけで、自動実行できる。
+- Tier 2は既存headless correctness runnerに限り、固定QAIRT確認、QNN build、
+  APK audit、物理端末同一性、focus takeover 0、非破壊条件を
+  すべて満たす場合だけ自動実行できる。
+- Tier 3（UI前面化、`EXCLUSIVE_BENCHMARK`、UI_VALIDATIONのformal runner、
+  通知/permission、app data削除、firmware/SDK変更、長時間training、
+  公開、push）は明示指示なしに実行しない。
 
-禁止事項:
+`adb devices` のendpoint数を物理端末数として扱わない。
+安定識別子でUSB/TCP aliasを重複排除し、正式endpointを1つだけ選ぶ。
+同一性を確認できなければ停止する。
+root化、SELinux変更、system領域変更を禁止する。ADB transport中断を数値失敗に分類しない。
 
-- QAIRT 2.47 を QNN build、APK 監査、実機試験に使用しない
-- 2.48 SDK が存在しない、core required item が不完全、または Build ID 不一致の場合に別 version へ fallback しない
-- 自動探索で見つかった SDK を、そのまま PhoneLM の build 対象として採用しない
-- SDK root と Build ID を確認せず、既存 APK や build cache だけを根拠に実機試験を開始しない
+## QNN graph
 
-明示した SDK の core required item を利用できない場合は、SDK のインストール、移動、version 変更を行わず、
-次のいずれかを報告して停止する。
+- producerの推論shapeと宣言output shapeを一致させる。
+- Reduceのaxis、keep_dims、output shapeをvalidatorで確認し、broadcastを暗黙に仮定しない。
+- APP_READ/APP_WRITEの方向と全面書き込みを維持する。
+- QNN node/tensor変更後は `run_host_tests.ps1` で
+  `qnn_graph_shape_validator` testsを実行する。
 
-- `QAIRT_SDK_ROOT_UNAVAILABLE`
-- `QAIRT_BUILD_ID_MISMATCH`
-- `QAIRT_SDK_INCOMPLETE`
+## 数値・Evidence
 
-`check_qairt.ps1` の `QAIRT_SDK_FOUND_INVENTORY_INCOMPLETE`（exit 3）は、
-固定 root、Expected Build ID、core QNN headers、PhoneLM が直接 packaging する
-arm64 runtime/backend/Stub/Skel が揃っている場合、optional CLI/tools/samples の
-inventory advisory とする。QNN 有効操作の正式 gate は `verify_local.ps1 -WithQairt`
-による QNN build と `audit_qnn_apk.ps1` の ABI/hash/path/2.47 混入検査である。
-exit 3 だけを理由に runner を停止せず、strict gate が失敗した場合だけ停止する。
+数値変更、回帰判定、結果報告の前に [numerical-evidence.md](docs/agent/numerical-evidence.md) を読む。
 
-引数なしの自動探索は、インストール済み SDK の読み取り専用 inventory 調査に限って使用できる。
-`check_qairt.ps1 -SelfTest` は偽 SDK を使う選択ルールの回帰試験であり、この制限の対象外とする。
+- HTP内部精度をFP32と断定しない。平方、exp、divide前のdynamic rangeを監査する。
+- clamp、epsilon増加、learning rate低下だけで原因修正扱いにしない。
+- CPUとの差と、同一HTP実行の非決定性を区別する。
+- 数値主張にはseed数、step数、発生率を記載する。
+- regressionは承認済みcanonical anchorとの一致で判定し、
+  既知の低品質はquality shortfallとして分離する。
+  runnerのterminal `FAILED`だけでコード回帰FAILにしない。
+- 公開結果はallow-list exporterを使い、private evidenceや端末識別情報を含めない。
 
-## 実行Tier
+## Git
 
-### Tier 1: 自動実行可（実機不要）
+開始時に現在branch、HEAD、upstreamとの差分を確認する。
+mainで最新origin/mainを取得できる場合だけHEAD一致を確認し、
+不一致時はreset/rebase/mergeせず報告する。
+現在branchを勝手に切り替えず、ユーザーの未commit変更を保持する。
+commit権限があるタスクでのみcommitし、自分が今回変更したpathだけをstageする。
+開始時から存在したユーザー変更を含めない。
+pushは明示指示時だけfast-forwardで行う。reset、rebase、amendは禁止する。
+終了時に `git status` を確認し、検証生成物が `build/` 以下だけであることを確かめる。
+commit messageは `type(scope): 概要` とし、typeは `feat` `fix` `test`
+`build` `docs`、scopeは `qnn` `android` `lm` などを使う。
 
-- `.\gradlew.bat :app:testDebugUnitTest --no-daemon` — JVM unit tests
-- `.\scripts\run_host_tests.ps1` — C++ host tests。`qnn_graph_shape_validator` の検証を含む。g++ が必要
-- `.\gradlew.bat :app:assembleDebug --no-daemon` — QNN無効 build
-- `.\gradlew.bat :app:assembleDebugAndroidTest --no-daemon`
-- `.\scripts\verify_local.ps1` — 上記一括 + git/binary/secret 監査
-- `.\scripts\check_qairt.ps1` — QAIRT SDK の読み取り専用 inventory 検査。明示 `-SdkRoot` は排他的に優先され、存在しない/core required item不完全な場合は別 version へ fallback せず FAIL。optional inventory不足の exit 3 は advisory。選択ルールの回帰は `-SelfTest`
-- `.\scripts\export_qnn_tiny_lm_graph_map.ps1` — graph map の静的 export
+## 表現・成果物
 
-### Tier 2: 条件を満たせば自動実行可
+「学習stepの数値演算をHTPで実行した」と表現する。
+NPU-only、CPU未使用、QNN自動微分を主張しない。
+QAIRTライブラリ、Stub、Skel、MNN source treeをGitへ追加しない。
+数値結果や実験手順を変更したら対応する `docs/` も更新する。
 
-対象: 既存の headless QNN suite（`.\scripts\run_qnn_headless_tests.ps1`）、README に記載の既存回帰 runner（`run_qnn_device_tests.ps1`、`run_qnn_training_tests.ps1`、`run_qnn_htp_*_tests.ps1`）、fixed-state 試験、device probe、Skel reuse/recovery。TestMode は `BACKGROUND_CORRECTNESS` を使う。
+## Windows編集
 
-条件（全て満たすこと）:
-
-- オンライン物理端末を明示的に選択し、`adb devices` で online が 1 台のみであることを確認する
-- QAIRT SDK root を `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`、Expected Build ID を `2.48.40.260702151143` として明示している
-- `check_qairt.ps1` で明示 root と Build ID の一致を確認している
-- QNN 有効 build 後に `.\scripts\audit_qnn_apk.ps1` を実行し、runtime、V81 Stub、V81 Skel の hash が同じ 2.48 SDK と一致し、`forbidden_2_47_strings=false` である
-- Activity/focus takeover が 0（headless runner が 2 秒ごとの top-resumed 監視と `focus_takeover_count=0` 確認で自動検出する）
-- root 化、SELinux 変更、システム領域変更を伴わない
-
-### Tier 3: 明示指示が必要
-
-- UI を前面化する試験。`EXCLUSIVE_BENCHMARK` を含む。
-  `.\scripts\run_qnn_resumable_formal.ps1` も既定 TestMode=UI_VALIDATION で
-  Activity を意図的に前面化するためこの Tier。seed 単位で atomic に保存・再開し、
-  ADB transport 中断は数値失敗に分類しない。
-- 通知・permission の操作
-- app data の削除
-- firmware や QAIRT SDK のバージョン変更
-- 長時間 training
-- 公開（`docs/results` への export や外部共有）や push
-
-## QNN graph rules
-
-- producer の推論 shape と宣言 output shape を一致させる
-- Reduce の axis、keep_dims、output shape を validator で確認する
-- broadcast を暗黙に仮定しない
-- tensor shape 変更時は graph-map exporter（`.\scripts\export_qnn_tiny_lm_graph_map.ps1`）と negative test を更新する
-- APP_READ/APP_WRITE の方向と全面書き込みを維持する
-- QNN node/tensor を変更したら shape validator tests を必ず実行する。
-  `.\scripts\run_host_tests.ps1`（`host_tests/qnn_sdk_independent_test.cpp` が `qnn_graph_shape_validator.cpp` を直接検証する）
-
-## Numerical rules
-
-- HTP 内部精度を FP32 と断定しない
-- 平方、exp、divide 前の dynamic range を監査する
-- clamp、epsilon 増加、learning rate 低下だけで原因修正扱いにしない
-- CPU との差と、同一 HTP 実行の非決定性を区別する
-
-## Evidence rules
-
-- QNN return code 成功と tensor 有限性を別々に確認する
-- 数値結果を主張する場合は seed 数、step 数、発生率を記載する
-- private report から公開結果を作るときは allow-list exporter（`scripts\export_public_*.ps1`）を使う
-- raw checkpoint、logcat、ADB endpoint、絶対 path を commit しない
-
-## Git 運用
-
-- 作業開始時に `HEAD == origin/main` であることを確認する
-- milestone ごとに commit する
-- 現在の branch を勝手に切り替えない。ユーザーの未 commit 変更を stash しない
-- 指示されていないタスクでは push しない。push する場合は fast-forward のみ
-- reset、rebase、amend は禁止
-- 作業終了時に `git status` を確認し、検証生成物が `build/` 以下だけであることを確かめる
-- commit message は `type(scope): 概要` とする。
-  type は `feat` `fix` `test` `build` `docs`、scope は `qnn` `android` `lm` などを使う
-
-## 表現とドキュメント
-
-- 「学習 step の数値演算を HTP で実行した」と表現する。「NPU だけで学習した」「CPU を完全に使用していない」「QNN が自動微分した」とは表現しない
-- QAIRT 2.47 との混在は禁止。QNN有効操作では固定した2.48 rootとBuild IDを必ず明示する
-- QAIRT ライブラリ、Stub、Skel、MNN source tree を Git へ追加しない
-- 数値結果や実験手順を変更したら、対応する `docs/` も同じタスクで更新する
-
-## Windows でのファイル編集
-
-Codex Desktop の Windows 環境では、組み込みの `apply_patch` が次の sandbox
-初期化エラーで失敗することがある。
-
-```text
-windows unelevated restricted-token sandbox cannot enforce split writable root sets directly
-```
-
-このエラーはリポジトリや patch 内容の問題ではない。同じ呼び出しを何度も再試行しない。
-また、`apply_patch.bat` を shell から実行すると WindowsApps 配下の実体が
-`Access is denied` になることがあるため、この経路も繰り返さない。
-
-組み込み `apply_patch` が上記理由で利用できない場合に限り、次の順で安全な代替を使う。
-
-1. unified diff を `git apply --check -` で検証する。
-2. 同じ diff を `git apply --whitespace=error -` で適用する。
-3. diff 適用が構文上困難な場合だけ、PowerShell で一意な完全一致アンカーを検証して置換する。
-4. 編集後に必ず `git diff --check` と対象差分を確認する。
-
-代替編集では、対象が workspace 内にあることを確認し、既存のユーザー変更を保持する。
-`Set-Content` によるファイル全体の無条件上書きや、曖昧な正規表現置換は行わない。
+Windowsで編集する前、または組み込み `apply_patch` が失敗した場合は
+[windows-editing.md](docs/agent/windows-editing.md) を読む。
+restricted-token sandboxエラー時に同じ `apply_patch` や `apply_patch.bat` を反復しない。
+代替は `git apply --check -` で検証後に同じdiffを適用し、
+曖昧な置換や `Set-Content` によるファイル全体の無条件上書きを行わない。
+編集後は `git diff --check` と対象差分を確認し、workspace外や既存ユーザー変更に触れない。
