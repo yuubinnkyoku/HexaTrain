@@ -60,3 +60,21 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "depth quality host tests failed"
 }
+
+$MarginAnalysisExecutable = Join-Path $OutputDirectory "margin_analysis_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "app\src\main\cpp\validation_checkpoint.cpp") `
+    (Join-Path $Root "host_tests\margin_analysis_test.cpp") `
+    -o $MarginAnalysisExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "margin analysis host test compilation failed"
+}
+
+& $MarginAnalysisExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "margin analysis host tests failed"
+}

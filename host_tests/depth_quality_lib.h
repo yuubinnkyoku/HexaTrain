@@ -973,6 +973,15 @@ struct AutoregressiveSelectedRun {
   ar::Metrics selectedValidation;
   Params selectedParameters, selectedM, selectedV;
   std::vector<std::pair<int, ar::Metrics>> validationTrajectory;
+  // Post-hoc (non-selection) reference steps for the margin/first-error
+  // decomposition analysis.  They answer "which training step maximized each
+  // existing validation component" without defining a selection mode.  -1
+  // means "no step achieved a positive count".
+  int bestTokenExactStep = -1;
+  int bestSequenceExactStep = -1;
+  static constexpr int kBestStepUnseen = 0x3fffffff;
+  std::uint64_t bestTokenExactCount = 0;
+  std::uint64_t bestSequenceExactCount = 0;
   AutoregressiveSelectionMode mode = AutoregressiveSelectionMode::FINAL_STEP;
   std::uint32_t validationSchemaVersion = ar::kSchemaVersion;
   std::string validationSetHash;
@@ -1013,10 +1022,32 @@ inline AutoregressiveSelectedRun runAutoregressiveSelectedCpu(
     result.validationTrajectory.push_back({step, metrics});
     if (step == stepCount) result.finalStepValidation = metrics;
     if (mode == AutoregressiveSelectionMode::FINAL_STEP) continue;
-    if (ar::better(metrics, step, result.bestValidation, result.selectedStep)) {
-      result.bestValidation = metrics;
-      result.selectedStep = step;
-    }
+      if (ar::better(metrics, step, result.bestValidation, result.selectedStep)) {
+        result.bestValidation = metrics;
+        result.selectedStep = step;
+      }
+      // Post-hoc analysis bookkeeping only (not a selection mode): the best
+      // validation token-exact and sequence-exact steps are retained so the
+      // first-error/margin decomposition probe can compare objective variants.
+      const int tokenStepKey = result.bestTokenExactStep < 0
+                                   ? AutoregressiveSelectedRun::kBestStepUnseen
+                                   : result.bestTokenExactStep;
+      if (metrics.tokenExact > result.bestTokenExactCount ||
+          (metrics.tokenExact == result.bestTokenExactCount &&
+           metrics.tokenExact > 0 && step < tokenStepKey)) {
+        result.bestTokenExactCount = metrics.tokenExact;
+        result.bestTokenExactStep = step;
+      }
+      const int sequenceStepKey =
+          result.bestSequenceExactStep < 0
+              ? AutoregressiveSelectedRun::kBestStepUnseen
+              : result.bestSequenceExactStep;
+      if (metrics.sequenceExact > result.bestSequenceExactCount ||
+          (metrics.sequenceExact == result.bestSequenceExactCount &&
+           metrics.sequenceExact > 0 && step < sequenceStepKey)) {
+        result.bestSequenceExactCount = metrics.sequenceExact;
+        result.bestSequenceExactStep = step;
+      }
   }
   if (mode == AutoregressiveSelectionMode::BEST_AR_VALIDATION_V1 &&
       result.validationTrajectory.empty())
