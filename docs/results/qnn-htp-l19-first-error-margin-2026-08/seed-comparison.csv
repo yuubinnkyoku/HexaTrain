@@ -1,0 +1,4 @@
+"seed","selected_step","selected_nll","final_nll","nll_delta","token_exact_selected","token_exact_final","sequence_exact_selected","sequence_exact_final","swfc_token_count","swfc_median_margin","attribution_dominant","h1_supported","h2_supported","h3_supported"
+"1","16","3.3078138181566086","8.1239203249880703","693.51933698373034","14","30","0","2","25","-1.4938762187957764","MIXED","false","true","false"
+"2","4","3.197133062669808","4.1834252619661516","142.02607669867342","20","63","0","6","59","-0.33928132057189941","MIXED","false","true","false"
+"4","12","3.050374745325422","7.5872917441801651","653.31604783508305","22","46","0","6","40","-1.0678668022155762","MIXED","false","true","false"

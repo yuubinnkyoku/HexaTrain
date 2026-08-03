@@ -1,0 +1,3 @@
+"configuration_id","depth","seed","selected_step","selected_nll","final_nll","nll_delta","token_exact_selected","token_exact_final","sequence_exact_selected","sequence_exact_final","swfc_count","swfc_median_margin","attribution_dominant","depth_control_observation"
+"L18_SEED_2_CONTROL","18","2","4","3.2160299292650301","5.3026052051209884","300.46683972325803","18","65","0","8","57","-0.23561555147171021","MIXED","CONTROL_FINAL_EXACT_AT_LEAST_L19"
+"L19_SEED_2","19","2","4","3.197133062669808","4.1834252619661516","142.02607669867342","20","63","0","6","59","-0.33928132057189941","MIXED","CONTROL_FINAL_EXACT_AT_LEAST_L19"

@@ -1,0 +1,72 @@
+{
+  "schema": "FIRST_ERROR_MARGIN_V1",
+  "schema_version": 1,
+  "result_classification": "CRITICAL_TOKEN_MARGIN_LOSS",
+  "quality_configuration": "T8/D16/FFN32/L19/H2",
+  "analysis_partition": "AR_DEVELOPMENT_V3",
+  "selected_steps": {
+    "L19_SEED_2": "4",
+    "L19_SEED_1": "16",
+    "L19_SEED_4": "12"
+  },
+  "easy_probability_threshold": 0.5,
+  "swfc_minimum_count": 3,
+  "drift_minimum_count": 2,
+  "h1_supported": false,
+  "h2_supported": true,
+  "h3_supported": false,
+  "dominant_hypothesis": "H2_CRITICAL_TOKEN_MARGIN_LOSS",
+  "cpu_replay_runs": 4,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "final_holdout_opened": false,
+  "regression_anchor": "docs/results/qnn-htp-autoregressive-validation-2026-08",
+  "depth_control_observation": "CONTROL_FINAL_EXACT_AT_LEAST_L19",
+  "prohibited_payloads_published": false,
+  "files": [
+    {
+      "name": "checkpoint-comparison.csv",
+      "sha256": "7d05fed7e588c7231b4c188c22365fccf0a90fe9ec095a4fbf19b2e51411f35b"
+    },
+    {
+      "name": "common-prefix-attribution.csv",
+      "sha256": "a9f12afaf86b90c070ddfa21da173d39a25ba2b4ed885996180c8a78fb18be1a"
+    },
+    {
+      "name": "configuration.csv",
+      "sha256": "52f1bf93025c2ca61e743a28b21eb1dcb977dc540412412ff628006971480891"
+    },
+    {
+      "name": "depth-control.csv",
+      "sha256": "b411286476a23830291951073e69064b83fb71bea6f9a5b16bbfd5570ab42f6d"
+    },
+    {
+      "name": "first-error-summary.csv",
+      "sha256": "c3d36923d5cabb794a42992ad0280642c8ed608ed991a26ff4ed8e25f4acd798"
+    },
+    {
+      "name": "hypothesis-decision.csv",
+      "sha256": "538f2131d0e23c5a09a646e7cbc9cdcf625a6075ff53c304942c061a33b1a4d9"
+    },
+    {
+      "name": "margin-rank-summary.csv",
+      "sha256": "afee2728dd9748c334ae327ea2bc1002b5684ce1ab7ae253b5f55a0b21ae6cb4"
+    },
+    {
+      "name": "next-objective-candidates.csv",
+      "sha256": "ddc25c3b2e71ec16747333a2f29665a26e90e608badc22c0f266d78f22b8d929"
+    },
+    {
+      "name": "README.md",
+      "sha256": "b04a8638e26b4c0e6cf393b47fb75f2749844fc3b0f11884221cfcac27b193dd"
+    },
+    {
+      "name": "seed-comparison.csv",
+      "sha256": "f8e836b0a6effbd2f1f8ccbf7145ecdbd53e412c91d0c65f056572bbdae3a787"
+    },
+    {
+      "name": "token-buckets.csv",
+      "sha256": "2564ba9ac55ab6c54e2d4286e5cb10d52d246b39da2c0f431c886fb56d45cc95"
+    }
+  ]
+}

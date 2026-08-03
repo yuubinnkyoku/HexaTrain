@@ -11,3 +11,7 @@ PhoneLMで再現・検証した研究結果の公開用indexです。生ログ�
 - [QNN HTP fixed-state graph-prefix bisection (2026-07)](qnn-htp-graph-bisection-2026-07/README.md) — 同一input/stateのfull graphが2 fresh processで変動し、後続の`lm_dembedding`境界graphでは決定的になるgraph variant/Runtime順序依存条件。
 - [QNN HTP fixed-state Runtime/context order study (2026-07)](qnn-htp-graph-order-2026-07/README.md) — 60 fresh processの順序直交化で、graph variant固有・固定position・先行graph必須ではないfresh instance関連の数値変動を集計。
 - [QNN HTP fixed-state root-cause study (2026-07)](qnn-htp-root-cause-2026-07/README.md) — Softmax backwardの`SOFTMAX_DOT` ReduceSum出力shape不整合、first-changing区間、修正前後fresh-process対照、および修正後未再発を集計。
+- [QNN HTP generic depth-quality diagnosis (2026-08)](qnn-htp-generic-depth-quality-2026-08/README.md) — L18/L19 phase-1 trajectory、明示的stability候補3種、finite/QNN return監査、および採用stabilizerなしの結果。
+- [QNN HTP validation-selected depth quality (2026-08)](qnn-htp-validation-selected-depth-quality-2026-08/README.md) — checkpoint selection導入後の検証選択された深度品質の結果。
+- [QNN HTP autoregressive validation (2026-08)](qnn-htp-autoregressive-validation-2026-08/README.md) — AR rollout NLLに基づくcheckpoint選択の開発gate評価と、選択非採用（`AUTOREGRESSIVE_VALIDATION_NOT_PREDICTIVE`）の結果。
+- [QNN HTP L19 first-error and margin decomposition (2026-08)](qnn-htp-l19-first-error-margin-2026-08/README.md) — 最終checkpointがAR rollout NLLを悪化させつつexact向上を示す理由をtoken rank/margin/first-error/prefixへ分解し、結論`CRITICAL_TOKEN_MARGIN_LOSS`を報告。

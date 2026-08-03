@@ -1,0 +1,5 @@
+"candidate_objective","addresses","proposed_fix","status"
+"FIRST_ERROR_MARGIN_OBJECTIVE","exact degrades when the gold token sits just below the argmax at the first autoregressive error","auxiliary training loss that pushes the gold-token expected margin positive at the first free-running error","NOT_RUN_CANDIDATE"
+"MINIMUM_CORRECT_TOKEN_MARGIN","already-correct tokens absorb most of the NLL improvement while the decisive tokens lose margin","loss term on a margin floor for tokens that must stay exact","NOT_RUN_CANDIDATE"
+"PAIRWISE_CORRECT_VS_TOP1_RANKING","the selected checkpoint ranks a wrong token first on tokens the final checkpoint later corrects","ranking loss preferring the correct token over the top-1 wrong token whenever they differ","NOT_RUN_CANDIDATE"
+"FREE_RUNNING_ROLLOUT_NLL","diverged-prefix attribution where the context, not the local ranking, is the failure","train on own predictions so prefix drift is inside the optimization loop","NOT_RUN_CANDIDATE"

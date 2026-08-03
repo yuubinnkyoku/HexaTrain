@@ -1,0 +1,5 @@
+"configuration_id","selected_no_error","selected_late_single_error","selected_error_with_recovery","selected_early_irreversible_divergence","selected_multiple_local_errors","final_no_error","final_late_single_error","final_error_with_recovery","final_early_irreversible_divergence","final_multiple_local_errors","selected_mean_first_error_position","final_mean_first_error_position","selected_median_first_error_position","final_median_first_error_position","selected_first_error_cases","final_first_error_cases"
+"L19_SEED_1","0","0","2","21","1","2","0","3","19","0","1.0416666666666667","1.2727272727272727","1","1","24","22"
+"L19_SEED_2","0","0","0","20","4","6","0","5","13","0","1.0833333333333333","1.6666666666666667","1","2","24","18"
+"L19_SEED_4","0","0","0","19","5","6","0","1","17","0","1.0833333333333333","1.3333333333333333","1","1","24","18"
+"L18_SEED_2_CONTROL","0","0","0","20","4","8","0","1","14","1","1","1.5625","1","1","24","16"
