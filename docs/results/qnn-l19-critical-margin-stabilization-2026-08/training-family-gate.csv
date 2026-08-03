@@ -1,0 +1,3 @@
+"family_id","finite","improved_seeds_count","control_nonworse","margin_improved","stability_pass","pooled_token_delta","pooled_sequence_delta","pooled_ltm_delta","pass"
+"PAIRWISE_MARGIN_CE_V1","true","2","false","true","true","67","12","2.0772110203901946","false"
+"SEQUENCE_WORST_MARGIN_CE_V1","false","1","true","false","false","-61","-4","NOT_FINITE","false"

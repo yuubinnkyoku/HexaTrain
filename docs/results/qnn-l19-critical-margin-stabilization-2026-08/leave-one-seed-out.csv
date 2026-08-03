@@ -1,0 +1,4 @@
+"held_out_seed","chosen_objective","chosen_parameter","chosen_priority","selected_step","token_exact","token_total","sequence_exact","sequence_total","delta_token_exact_vs_final","delta_sequence_exact_vs_final","collapse_free","finite"
+"1","MARGIN_DEFICIT_MEAN_D0","0","0","0","7","144","0","24","-43","-8","false","true"
+"2","MARGIN_DEFICIT_MEAN_D0","0","0","0","15","144","0","24","-50","-9","false","true"
+"4","MARGIN_DEFICIT_MEAN_D0","0","0","0","2","144","0","24","-84","-12","false","true"

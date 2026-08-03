@@ -1,0 +1,5 @@
+"configuration_id","pinned_selected_step","regenerated_selected_step","selected_token_exact","final_token_exact","selected_sequence_exact","final_sequence_exact","selected_step_matches_pinned","anchors_match","loss_parity_all_steps","gradient_parity_all_steps"
+"L19_SEED_1","16","16","14","30","0","2","true","true","true","true"
+"L19_SEED_2","4","4","20","63","0","6","true","true","true","true"
+"L19_SEED_4","12","12","22","46","0","6","true","true","true","true"
+"L18_SEED_2_CONTROL","4","4","18","65","0","8","true","true","true","true"

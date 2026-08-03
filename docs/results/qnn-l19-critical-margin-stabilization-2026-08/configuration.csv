@@ -1,0 +1,5 @@
+"source","configuration_id","depth","seed","steps","evaluation_step_count","calibration_partition","development_partition","calibration_hash","development_hash","pinned_selected_step","selected_step_matches_pinned"
+"CPU_REFERENCE_REGENERATION","L19_SEED_1","19","1","320","23","MARGIN_CALIBRATION_V1","MARGIN_DEVELOPMENT_V1","fnv1a64:71806d5bf19c090a","fnv1a64:f06fcc3e2d12ca99","16","true"
+"CPU_REFERENCE_REGENERATION","L19_SEED_2","19","2","320","23","MARGIN_CALIBRATION_V1","MARGIN_DEVELOPMENT_V1","fnv1a64:71806d5bf19c090a","fnv1a64:f06fcc3e2d12ca99","4","true"
+"CPU_REFERENCE_REGENERATION","L19_SEED_4","19","4","320","23","MARGIN_CALIBRATION_V1","MARGIN_DEVELOPMENT_V1","fnv1a64:71806d5bf19c090a","fnv1a64:f06fcc3e2d12ca99","12","true"
+"CPU_REFERENCE_REGENERATION","L18_SEED_2_CONTROL","18","2","320","23","MARGIN_CALIBRATION_V1","MARGIN_DEVELOPMENT_V1","fnv1a64:71806d5bf19c090a","fnv1a64:f06fcc3e2d12ca99","4","true"

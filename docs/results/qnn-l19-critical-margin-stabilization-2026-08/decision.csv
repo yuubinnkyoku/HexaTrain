@@ -1,0 +1,2 @@
+"hypothesis_prior","passing_variant_count","best_variant","development_gate","loso_collapse_free","gradient_attribution","recommended_training_family","recommended_training_family_evidence","checkpoint_objective_conclusion"
+"CRITICAL_TOKEN_MARGIN_LOSS","0","MARGIN_DEFICIT_MEAN_D0","REJECT","REJECT","OUTPUT_HEAD_RANKING_DRIFT","PAIRWISE_MARGIN_CE_V1;SEQUENCE_WORST_MARGIN_CE_V1","GRADIENT_ATTRIBUTION","CHECKPOINT_OBJECTIVE_DEVELOPMENT_REJECT"

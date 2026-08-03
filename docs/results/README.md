@@ -15,3 +15,4 @@ PhoneLMで再現・検証した研究結果の公開用indexです。生ログ�
 - [QNN HTP validation-selected depth quality (2026-08)](qnn-htp-validation-selected-depth-quality-2026-08/README.md) — checkpoint selection導入後の検証選択された深度品質の結果。
 - [QNN HTP autoregressive validation (2026-08)](qnn-htp-autoregressive-validation-2026-08/README.md) — AR rollout NLLに基づくcheckpoint選択の開発gate評価と、選択非採用（`AUTOREGRESSIVE_VALIDATION_NOT_PREDICTIVE`）の結果。
 - [QNN HTP L19 first-error and margin decomposition (2026-08)](qnn-htp-l19-first-error-margin-2026-08/README.md) — 最終checkpointがAR rollout NLLを悪化させつつexact向上を示す理由をtoken rank/margin/first-error/prefixへ分解し、結論`CRITICAL_TOKEN_MARGIN_LOSS`を報告。
+- [QNN L19 critical-margin stabilization objective (2026-08)](qnn-l19-critical-margin-stabilization-2026-08/README.md) — margin-aware checkpoint選択12 variantとmargin-aware training loss 2 familyを事前登録gateで評価し、全てREJECT（`CHECKPOINT_OBJECTIVE_DEVELOPMENT_REJECT` / `NO_TRAINING_FAMILY_ACCEPTED`）の結果。

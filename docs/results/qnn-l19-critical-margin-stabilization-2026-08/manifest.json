@@ -1,0 +1,112 @@
+{
+  "schema": "CRITICAL_MARGIN_STABILIZATION_V1",
+  "schema_version": 1,
+  "result_classification": "CHECKPOINT_OBJECTIVE_DEVELOPMENT_REJECT",
+  "hypothesis_prior": "CRITICAL_TOKEN_MARGIN_LOSS",
+  "quality_configuration": "T8/D16/FFN32/L19/H2",
+  "control_configuration": "T8/D16/FFN32/L18/H2",
+  "calibration_partition": "MARGIN_CALIBRATION_V1",
+  "development_partition": "MARGIN_DEVELOPMENT_V1",
+  "calibration_hash": "fnv1a64:71806d5bf19c090a",
+  "development_hash": "fnv1a64:f06fcc3e2d12ca99",
+  "calibration_cases": 24,
+  "development_cases": 24,
+  "prefix_tokens": 8,
+  "rollout_tokens": "4/8",
+  "transition_overlap_unique": 13,
+  "transition_overlap_occurrence": 144,
+  "cpu_replay_runs": 4,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "final_holdout_opened": false,
+  "passing_variant_count": 0,
+  "best_variant": "MARGIN_DEFICIT_MEAN_D0",
+  "development_gate": "REJECT",
+  "loso_collapse_free": "REJECT",
+  "gradient_attribution": "OUTPUT_HEAD_RANKING_DRIFT",
+  "training_families": [
+    "PAIRWISE_MARGIN_CE_V1",
+    "SEQUENCE_WORST_MARGIN_CE_V1"
+  ],
+  "training_micro_runs": 4,
+  "training_full_runs": 8,
+  "training_steps": 320,
+  "accepted_training_family": null,
+  "training_family_decision": "NO_TRAINING_FAMILY_ACCEPTED",
+  "regression_anchor": "docs/results/qnn-htp-l19-first-error-margin-2026-08",
+  "prohibited_payloads_published": false,
+  "files": [
+    {
+      "name": "checkpoint-metrics.csv",
+      "sha256": "a3306b60084c8ec7dd8bf29cb47446596db325202ebca413b6e8ea17fc89afb8"
+    },
+    {
+      "name": "checkpoint-selection.csv",
+      "sha256": "7f8dec36d10ba1472cb4592dc6f78663b05d4f42cf7462d6dbe376a23516aa13"
+    },
+    {
+      "name": "configuration.csv",
+      "sha256": "eaa5402ca7a17ca01723edf21fd56a09f33043c882ec548768a7025fd4a2e38b"
+    },
+    {
+      "name": "consistency.csv",
+      "sha256": "95d67c1285df51a2577f9d8d837f953bbd73f2e8da08c4927bf0e21b7291f4aa"
+    },
+    {
+      "name": "dataset-hashes.csv",
+      "sha256": "1fcf2e7e82575824c76a953e98b68836054de4e5f9a3026524c81668ef40de92"
+    },
+    {
+      "name": "dataset-overlap.csv",
+      "sha256": "7396fcc2357f23b83cbfa89b3b8e01c4b9fe00bd1d94d5213b8b2dc331343cc3"
+    },
+    {
+      "name": "dataset-partitions.csv",
+      "sha256": "50a793ae35f13c311cb01712c5f121625c2c2f1f4424911f82ca56cb4c116abd"
+    },
+    {
+      "name": "decision.csv",
+      "sha256": "efa8e109167c0d8e45ba72c1e6dea50f35a170f9e50da35d9a9a851de4489b11"
+    },
+    {
+      "name": "development-gate.csv",
+      "sha256": "c8b58873b4f22285589be9f523802c743db74131184e4b21a1dbdd15d6803698"
+    },
+    {
+      "name": "gradient-attribution.csv",
+      "sha256": "75b0ae435cef638d499c36d7e80d45998563e9f8c5266c51fa0becca44680e28"
+    },
+    {
+      "name": "leave-one-seed-out.csv",
+      "sha256": "2d0cec048b962062cf34dd6ae4a9e861398c4c3279485a79a8022a981512bc56"
+    },
+    {
+      "name": "objective-correlations.csv",
+      "sha256": "89e2b930b81b837b6ca289ee23b4ee05c55089c479ede9e215fd56d8e6e08011"
+    },
+    {
+      "name": "objective-scores.csv",
+      "sha256": "60a55ae412a5afdbaf5a60a23748c2def85573570f7f15dcc6f3d4eb3052ab2f"
+    },
+    {
+      "name": "README.md",
+      "sha256": "706d3f3ec698d7dd296f30ba7bb5663967f8ee80807c5f09f42490bef213f410"
+    },
+    {
+      "name": "training-family-decision.csv",
+      "sha256": "1c2bfd52b816517e11aa41f906efef98259442ab2b0bcbb646ef9dccf31f4318"
+    },
+    {
+      "name": "training-family-gate.csv",
+      "sha256": "156193193a2d307496a47cf9810e0d75f917059d98bb1a0262be77ab97cee44e"
+    },
+    {
+      "name": "training-family-metrics.csv",
+      "sha256": "4e20f98b9704652a443c8be2eb0b9ab850f06e8d7ecd8283c7cdf16b934f1249"
+    },
+    {
+      "name": "training-trajectory.csv",
+      "sha256": "08d5b945a026b472e251c63cb42d8647282276dc9a05f8d115b76bb95174918f"
+    }
+  ]
+}
