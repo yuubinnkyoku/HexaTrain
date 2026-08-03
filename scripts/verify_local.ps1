@@ -131,6 +131,12 @@ try {
         "pinned arguments, root selection, core/advisory classification ok (temp-only)"
     }
 
+    Invoke-Step "margin-decomposition-probe" {
+        Invoke-PwshScript "l19 first-error/margin decomposition probe" `
+            (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
+        "deterministic CPU reports regenerated (private margin-tokens included)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
