@@ -137,6 +137,16 @@ try {
         "deterministic CPU reports regenerated (private margin-tokens included)"
     }
 
+    Invoke-Step "critical-margin-objective-probe" {
+        Invoke-PwshScript "critical margin objective probe" `
+            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @()
+        Invoke-PwshScript "critical margin training probe" `
+            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @(
+                "-Train", "-BaselineDir", (Join-Path $Root "build\reports\qnn-critical-margin-objective"),
+                "-ReportRoot", (Join-Path $Root "build\reports\qnn-critical-margin-training"))
+        "deterministic CPU objective/training reports regenerated (private)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -164,6 +174,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "first-error/margin public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_margin_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "critical margin stabilization public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_critical_margin_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
