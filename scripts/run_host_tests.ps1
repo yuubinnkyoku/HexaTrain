@@ -78,3 +78,38 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "margin analysis host tests failed"
 }
+
+$CriticalMarginObjectiveExecutable = Join-Path $OutputDirectory "critical_margin_objective_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "app\src\main\cpp\validation_checkpoint.cpp") `
+    (Join-Path $Root "host_tests\critical_margin_objective_test.cpp") `
+    -o $CriticalMarginObjectiveExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "critical margin objective host test compilation failed"
+}
+
+& $CriticalMarginObjectiveExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "critical margin objective host tests failed"
+}
+
+$CriticalMarginProbeExecutable = Join-Path $OutputDirectory "critical_margin_objective_probe.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "host_tests\critical_margin_objective_probe.cpp") `
+    -o $CriticalMarginProbeExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "critical margin objective probe compilation failed"
+}
+
+& $CriticalMarginProbeExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "critical margin objective probe self-test failed"
+}
