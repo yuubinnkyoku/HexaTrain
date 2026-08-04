@@ -889,11 +889,17 @@ inline FormRun runFormalCpu(const Config& config, uint32_t seed, int stepCount,
     metric.parameterNorm = std::sqrt(paramSq);
     // update norm & per-token margin/probability
     double updSq = 0, logitMax = 0, marginSum = 0, probSum = 0;
+    // Evaluate the next-parameter registry once. Calling parameterRegistry
+    // twice inside find_if created iterators into two different temporaries,
+    // which is undefined behavior (begin from object A, end from object B).
+    const auto nextRegistry = tiny_lm::parameterRegistry(update.next);
     for (const auto& e : tiny_lm::parameterRegistry(params)) {
       const auto nextIt = std::find_if(
-          tiny_lm::parameterRegistry(update.next).begin(),
-          tiny_lm::parameterRegistry(update.next).end(),
+          nextRegistry.begin(), nextRegistry.end(),
           [&](const tiny_lm::ParameterInfo& n) { return n.name == e.name; });
+      if (nextIt == nextRegistry.end())
+        throw std::runtime_error("ADAM_UPDATE_REGISTRY_NAME_MISMATCH: " +
+                                 e.name);
       for (size_t i = 0; i < e.values->size(); ++i) {
         const double d = double((*nextIt->values)[i]) - double((*e.values)[i]);
         updSq += d * d;

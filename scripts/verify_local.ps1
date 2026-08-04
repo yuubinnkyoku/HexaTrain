@@ -171,6 +171,18 @@ try {
         "deterministic CPU intra-block readability reports regenerated (private; exporter self-test pre-fly uses them)"
     }
 
+    Invoke-Step "attention-internal-self-test" {
+        Invoke-PwshScript "attention-internal diagnosis self-test" `
+            (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @("-SelfTest")
+        "attention-internal diagnosis self-test PASS (private)"
+    }
+
+    Invoke-Step "attention-internal-run" {
+        Invoke-PwshScript "attention-internal diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @()
+        "deterministic CPU attention-internal diagnosis reports regenerated (private; exporter self-test pre-fly uses them)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -207,6 +219,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "intra-block readability public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_intra_block_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "attention-internal diagnosis public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_attention_internal_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
