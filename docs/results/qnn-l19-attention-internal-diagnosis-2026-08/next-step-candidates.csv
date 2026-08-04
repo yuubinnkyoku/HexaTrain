@@ -1,0 +1,2 @@
+candidate,rationale,verdict
+probe output-projection columns per head,head context and concat maintain readability; the loss appears at the output projection. Inspect per-head output-projection columns and residual alignment.,OUTPUT_PROJECTION

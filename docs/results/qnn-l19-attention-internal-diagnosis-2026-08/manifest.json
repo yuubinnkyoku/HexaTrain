@@ -1,0 +1,75 @@
+{
+  "schema": "ATTENTION_INTERNAL_DIAGNOSIS_V1",
+  "schema_version": 1,
+  "protocol": "ATTENTION_INTERNAL_V1",
+  "verdict": "OUTPUT_PROJECTION",
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "files": [
+    {
+      "name": "attention-statistics.csv",
+      "sha256": "77c145445b83747c341e95878c88ac78db54f8769d2365b6b7add5e24255b553"
+    },
+    {
+      "name": "attention-vs-value-swap.csv",
+      "sha256": "19940ddaa404d553f50b7ae0f9757a9b3f04a2787ea18cb2ad194d85f96d61eb"
+    },
+    {
+      "name": "budget.csv",
+      "sha256": "033ae3e517daea3d76e2bf580ed4f77ad0d856cb1a3abf3c549710166e97933e"
+    },
+    {
+      "name": "context-vs-projection.csv",
+      "sha256": "b73fd11b818b5907cb696161abdbd08ac13d18d99281621d3b4c631039c8dade"
+    },
+    {
+      "name": "dataset-anchors.csv",
+      "sha256": "70acfd680d225ebfce791bdfe39a5acc1a02508fc646e05249f9c3955f225582"
+    },
+    {
+      "name": "depth-control.csv",
+      "sha256": "8b03919d3c2df488cdb8ac7d1497631259adcc749861018e9898d0001b6cadac"
+    },
+    {
+      "name": "diagnosis.csv",
+      "sha256": "4958d35c5122ece3698f25196d24b46b329b6b3c1a29f12f1da7e2a1383f5ef5"
+    },
+    {
+      "name": "head-ablation.csv",
+      "sha256": "90a5c4f2f11f0bb8ddc030959b5d8aa157089862941eee1a19a1d34ec86a6924"
+    },
+    {
+      "name": "head-only.csv",
+      "sha256": "94bae0dc1bbee3c6555341d4e9edd0fdfbf64a6e3c00c18df2c228a963842875"
+    },
+    {
+      "name": "head-pair-interactions.csv",
+      "sha256": "15f0587b51487dafd45bc00c7cbf2110f9f2885cbc5f3b7a6c5b8a326e785119"
+    },
+    {
+      "name": "head-probe-by-seed.csv",
+      "sha256": "ae868cf7f6f2c35abf5f3e06add038361a214bf76237f695003d9813715066a9"
+    },
+    {
+      "name": "next-step-candidates.csv",
+      "sha256": "c79981a1575b12db4c4158439856f6724369db10ec8c396b1f183e82ae73de94"
+    },
+    {
+      "name": "projection-contributions.csv",
+      "sha256": "36e159745778745eead15aa23f72b2cbb724235a364d010aa0cc642e9f63f7ae"
+    },
+    {
+      "name": "README.md",
+      "sha256": "393b72faa1edde038353cd5704e36011db848fd0bc58a981868eb6c2a81a9558"
+    },
+    {
+      "name": "teacher-forced-free-running.csv",
+      "sha256": "a038393c80958fe9b678870fafb6c1450d1c63870d32c15a6519f8daa74ab89b"
+    },
+    {
+      "name": "trajectory-anchors.csv",
+      "sha256": "dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+    }
+  ]
+}

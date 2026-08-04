@@ -1,0 +1,5 @@
+configuration_id,layers,max_drop_block,proj_drop
+L19_SEED_1,19,9,18
+L19_SEED_2,19,7,13
+L19_SEED_4,19,12,10
+L18_SEED_2_CONTROL,18,6,4

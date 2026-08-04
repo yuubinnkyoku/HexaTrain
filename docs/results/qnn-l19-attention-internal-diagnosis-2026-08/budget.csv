@@ -1,0 +1,10 @@
+item,count,limit,ok
+attention_tap_evals,459,500,true
+head_probe_trainings,153,400,true
+head_zero_interventions,102,300,true
+head_only_interventions,64,150,true
+cross_seed_context_swaps,32,60,true
+attention_value_separation,16,32,true
+head_pair_interventions,24,24,true
+free_running_interventions,10,40,true
+trajectory_regenerations,4,4,true

@@ -1,0 +1,5 @@
+configuration_id,layer,ctx_concat_dev_tf_exact,attn_update_dev_tf_exact,proj_drop
+L19_SEED_1,9,24,6,18
+L19_SEED_2,7,37,24,13
+L19_SEED_4,12,57,47,10
+L18_SEED_2_CONTROL,6,68,64,4

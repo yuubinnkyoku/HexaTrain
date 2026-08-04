@@ -1,0 +1,2 @@
+verdict,reasons,thresholds_fixed_before_results
+OUTPUT_PROJECTION,S1 proj_drop=18 S2 proj_drop=13 S4 proj_drop=10 control_proj_drop=4; S2 head-zero deltas at max-drop: 1 1; S4 head-zero deltas at max-drop: -1 0; S2 AV recovery (D): 8 1; S4 AV recovery (D): 0 -1; S2 swap recovery: 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0; S4 swap recovery: 0 -1 -1 0 -6 -1 0 0 1 0 0 0 0 0 0 0,true
