@@ -1,0 +1,2 @@
+verdict,preserved_layers,ill_conditioned_layers,lost_layers,audited_layers,criteria_fixed_before_results,reason
+OUTPUT_PROJECTION_PRESERVES_INFORMATION,4,0,0,4,true,All audited matrices are full rank and the transported context probe matches the projection probe at step 0 with no argmax flips; the observed previous drop is a learning/standardization/optimization artifact.

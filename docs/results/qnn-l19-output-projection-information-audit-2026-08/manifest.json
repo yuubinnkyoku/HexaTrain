@@ -1,0 +1,76 @@
+{
+  "schema": "OUTPUT_PROJECTION_AUDIT_V1",
+  "schema_version": 1,
+  "protocol": "OUTPUT_PROJECTION_AUDIT_V1",
+  "protocol_hash": "fnv1a64:c35a2e6ae3102772",
+  "verdict": "OUTPUT_PROJECTION_PRESERVES_INFORMATION",
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "files": [
+    {
+      "name": "budget.csv",
+      "sha256": "708f142d340d4df2bcbe065393817d5458e9b0a04e335f43dbdb42f3c1728326"
+    },
+    {
+      "name": "configuration.csv",
+      "sha256": "cc4dda76fb77bf0b683193ad057ccc83b2f5c1916bf49786e8fadcf7defec2fb"
+    },
+    {
+      "name": "dataset-usage.csv",
+      "sha256": "8ca37e96db70852fe92215789bfad503a0094cbcb65868616b386af7bbed04af"
+    },
+    {
+      "name": "depth-control.csv",
+      "sha256": "de021240c048f00eedc9b929b9dd77b6bb634d71b45bfdd8dd0cafc97fb88835"
+    },
+    {
+      "name": "diagnosis.csv",
+      "sha256": "0c54c73e98e9e1ba6545d66903b45243867b5299ae44140ec04b4210bb4dd95a"
+    },
+    {
+      "name": "float-double-comparison.csv",
+      "sha256": "cee686eaab0c34f0c264298d37dd1b5c37b9ca77f32dbbfe569b6071d3584a2b"
+    },
+    {
+      "name": "from-scratch-vs-transport.csv",
+      "sha256": "0842bad5241bb62e50aa64ed71d661d01aa84a9b3fecbb60c4031d59091dcea5"
+    },
+    {
+      "name": "next-step-candidates.csv",
+      "sha256": "d88bd5b90c8e7a28605cc789b0e5567b87731b3fc81cd44c6191b1153231a1b2"
+    },
+    {
+      "name": "nullspace-summary.csv",
+      "sha256": "db54c4b7fa99fe0fb092472a33b26ffe98fd65d6ab22ea5a6e1657f8eb546a6d"
+    },
+    {
+      "name": "previous-result-correction.csv",
+      "sha256": "3e72ac51bd6a69381fc95131bf81bff2ba7ab84d21e48b6b46c1ff3b2e0b86d8"
+    },
+    {
+      "name": "probe-transport-by-seed.csv",
+      "sha256": "50107751f6adddcc981280fd735a24d955dd32f733d2d44a94cb0253e2bbe0ee"
+    },
+    {
+      "name": "probe-transport-summary.csv",
+      "sha256": "50107751f6adddcc981280fd735a24d955dd32f733d2d44a94cb0253e2bbe0ee"
+    },
+    {
+      "name": "projection-matrix-summary.csv",
+      "sha256": "dd3881b813ee1cec507a7fc2fc23fbc1f2b2991e7286696f416e951c30fbda68"
+    },
+    {
+      "name": "rank-and-conditioning.csv",
+      "sha256": "dd3881b813ee1cec507a7fc2fc23fbc1f2b2991e7286696f416e951c30fbda68"
+    },
+    {
+      "name": "README.md",
+      "sha256": "c563a7e1a8532112f4292820790dcb9b937f269f433f421f50a2262e83d39a14"
+    },
+    {
+      "name": "singular-value-summary.csv",
+      "sha256": "8f5cdf21c1155cb9f1e4dba637d5fdc73e7cba204d934af966a356a05e0fb6c7"
+    }
+  ]
+}

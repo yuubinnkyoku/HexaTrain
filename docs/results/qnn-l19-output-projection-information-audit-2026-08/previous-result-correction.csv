@@ -1,0 +1,2 @@
+previous_claim,previous_evidence,this_audit_verdict,correction_required
+Attention output projection causes information loss,CTX_CONCAT dev TF exact >> ATT_UPDATE dev TF exact in ATTENTION_INTERNAL_V1,OUTPUT_PROJECTION_PRESERVES_INFORMATION,yes: rephrase as optimization/standardization/numerical difficulty

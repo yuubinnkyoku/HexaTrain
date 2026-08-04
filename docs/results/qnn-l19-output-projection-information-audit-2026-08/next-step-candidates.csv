@@ -1,0 +1,3 @@
+candidate,rationale,verdict
+Probe initialization / standardization audit,The projection preserves linear information; the observed drop is a learning/standardization artifact.,OUTPUT_PROJECTION_PRESERVES_INFORMATION
+Alternative optimizer or longer warm-start,Transported probe matches at step 0; investigate why from-scratch optimization does not find the same solution.,OUTPUT_PROJECTION_PRESERVES_INFORMATION

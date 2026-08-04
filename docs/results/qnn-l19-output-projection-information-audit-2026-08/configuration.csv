@@ -1,0 +1,5 @@
+configuration_id,seed,layers,final_step,max_drop_block,ar_selected_step
+L19_SEED_1,1,19,320,9,16
+L19_SEED_2,2,19,320,7,4
+L19_SEED_4,4,19,320,12,12
+L18_SEED_2_CONTROL,2,18,320,6,4
