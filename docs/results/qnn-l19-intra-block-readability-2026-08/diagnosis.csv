@@ -1,0 +1,2 @@
+verdict,reasons,thresholds_fixed_before_results
+ATTENTION,L19 deep-band CT/16 per seed: 1/1/0; IL/16: 9/11/13; attn_drop_blocks/8: 0/6/6; ffn_drop_blocks/8: 0/4/4; norm1_drop_blocks/8: 5/0/0; norm2_drop_blocks/8: 5/0/0; attn_overwrite_blocks/8: 0/0/0; ffn_overwrite_blocks/8: 0/0/0; control_il=7 (L18 deep-band IL below majority (guard OK)),true

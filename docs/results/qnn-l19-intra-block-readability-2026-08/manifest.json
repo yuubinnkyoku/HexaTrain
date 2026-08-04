@@ -1,0 +1,67 @@
+{
+  "schema": "INTRA_BLOCK_READABILITY_DIAGNOSIS_V1",
+  "schema_version": 1,
+  "protocol": "INTRA_BLOCK_READABILITY_V1",
+  "verdict": "ATTENTION",
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "files": [
+    {
+      "name": "budget.csv",
+      "sha256": "8c6ca4d1bca85f83e4fe2acbd82ed39d02078523e67121299f63db6fb02d3a31"
+    },
+    {
+      "name": "clone-parity.csv",
+      "sha256": "a3e87d6042b297c33dc283aa3e0627248accb7c55927da768036315f905b213f"
+    },
+    {
+      "name": "dataset-anchors.csv",
+      "sha256": "31c712213340d713da6bcf59e84c9f8e9e786dd40c6127ac4ed83fd38286a91f"
+    },
+    {
+      "name": "diagnosis.csv",
+      "sha256": "04922ab6b2c56d8236e60dfa5a5e49fa123fbd90086c9d073c722127fa9e19ba"
+    },
+    {
+      "name": "README.md",
+      "sha256": "e7956ec9b93268a363bbbfc1f3b5589793b1a326424883c05e83ecba7a49ba27"
+    },
+    {
+      "name": "summary.csv",
+      "sha256": "cdc9212ab82cc93c47cae54086c6204fcb0d095e6d65d365b8a601e97515ecc7"
+    },
+    {
+      "name": "tap-alignments.csv",
+      "sha256": "bce026c7eae6796d8123211ce813b3441cc32f2732c948e9889b4143a7e2274c"
+    },
+    {
+      "name": "tap-aux.csv",
+      "sha256": "b2e3ebccaeb80ee58c1aacfe273687931385697abe8ea8f40741462b4de778e2"
+    },
+    {
+      "name": "tap-free-running.csv",
+      "sha256": "b7f3e67404c47b3ea93220c020e4c0ab2118ef5cc576420defd6ce650d1c4887"
+    },
+    {
+      "name": "tap-geometry.csv",
+      "sha256": "630c6f60bc95ba0dd11e1644a9f44cdcd14be849946c6be9ae588c79910805f7"
+    },
+    {
+      "name": "tap-probes.csv",
+      "sha256": "22f6d417e3c920c7af2947b13be93c9750073c0a9c681c15e9f3936b371f3e4c"
+    },
+    {
+      "name": "tap-transfers.csv",
+      "sha256": "af2868bd78d83c795995f6f1c9e8f6c44357c31e92762879e3e8eef8ce38732f"
+    },
+    {
+      "name": "token-baselines.csv",
+      "sha256": "5c3c73d727f66ba9e3d0e14da384c7779857ecc2f0ddda4f715af05705f1085f"
+    },
+    {
+      "name": "trajectory-anchors.csv",
+      "sha256": "dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+    }
+  ]
+}

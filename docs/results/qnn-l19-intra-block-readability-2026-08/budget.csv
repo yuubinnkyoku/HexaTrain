@@ -1,0 +1,7 @@
+item,count,limit,ok
+tap_probe_trainings,498,500,true
+cross_tap_transfer_evals,444,500,true
+alignment_fits,150,300,true
+free_running_rollouts,12,16,true
+trajectory_regenerations,4,4,true
+token_baselines,3,3,true

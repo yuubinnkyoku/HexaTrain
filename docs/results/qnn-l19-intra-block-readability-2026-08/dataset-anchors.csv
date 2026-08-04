@@ -1,0 +1,5 @@
+dataset,role,hash,rows
+TRAIN,probe_and_alignment_learning,fnv1a64:5a64ca2d1aa7f29f,32
+MARGIN_CALIBRATION_V1,step_selection_only,fnv1a64:71806d5bf19c090a,144
+MARGIN_DEVELOPMENT_V1,final_evaluation_only,fnv1a64:f06fcc3e2d12ca99,144
+AR_FINAL_HOLDOUT_V3,UNOPENED_hash_verified_only,fnv1a64:aa5081e6df658b4a,0
