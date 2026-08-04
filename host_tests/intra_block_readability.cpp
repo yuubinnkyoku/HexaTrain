@@ -644,7 +644,7 @@ Diagnosis diagnose(const std::vector<TapRun>& runs, const DataSet& ds) {
     diag.ffnOverwrites.push_back(ffnOv);
   }
 
-  // L18 control: deep band = blocks 10..16 (7 blocks, 14 pairs).
+  // L18 control: deep band = blocks 10..17 (8 blocks, 16 pairs).
   if (control) {
     int il = 0;
     const int depth = static_cast<int>(control->spec->layers);

@@ -502,6 +502,7 @@ if ($SelfTest) {
     $savedOutput = $OutputRoot
     $OutputRoot = $fixture.Output
     $negative = {
+        Copy-Item -LiteralPath (Join-Path $script:ReportRoot 'diagnosis.csv') -Destination (Join-Path $script:FixtureInput 'diagnosis.csv') -Force
         $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'diagnosis.csv'))
         $tampered = $text -replace 'thresholds_fixed_before_results', 'thresholds_fixed_after_results'
         [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'diagnosis.csv'), $tampered)
@@ -510,14 +511,18 @@ if ($SelfTest) {
     ExpectSelfTestFailure 'tampered diagnosis header' $negative
     $script:FixtureInput = $fixture.Input
     $negative2 = {
+        Copy-Item -LiteralPath (Join-Path $script:ReportRoot 'trajectory-anchors.csv') -Destination (Join-Path $script:FixtureInput 'trajectory-anchors.csv') -Force
         $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'trajectory-anchors.csv'))
-        $tampered = $text -replace '"true"', '"false"'
+        # The match column is the last, unquoted field (CsvWriter quotes only
+        # fields containing commas/newlines/quotes): tamper ',true' at EOL.
+        $tampered = $text -replace '(?m),true\r?$', ',false'
         [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'trajectory-anchors.csv'), $tampered)
         AssertSourceEvidence
     }
     ExpectSelfTestFailure 'tampered trajectory match' $negative2
     $script:FixtureInput = $fixture.Input
     $negative3 = {
+        Copy-Item -LiteralPath (Join-Path $script:ReportRoot 'dataset-anchors.csv') -Destination (Join-Path $script:FixtureInput 'dataset-anchors.csv') -Force
         $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'dataset-anchors.csv'))
         $tampered = $text.Replace($kFinalHash, 'fnv1a64:0000000000000000')
         [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'dataset-anchors.csv'), $tampered)
