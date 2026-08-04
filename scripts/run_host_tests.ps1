@@ -113,3 +113,20 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "critical margin objective probe self-test failed"
 }
+
+$ReadoutProbeExecutable = Join-Path $OutputDirectory "readout_probe_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "host_tests\readout_probe.cpp") `
+    -o $ReadoutProbeExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "readout probe compilation failed"
+}
+
+& $ReadoutProbeExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "readout probe self-test failed"
+}

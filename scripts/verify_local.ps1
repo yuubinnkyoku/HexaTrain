@@ -147,6 +147,12 @@ try {
         "deterministic CPU objective/training reports regenerated (private)"
     }
 
+    Invoke-Step "readout-probe-self-test" {
+        Invoke-PwshScript "readout probe self-test" `
+            (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @("-SelfTest")
+        "readout probe self-test PASS (private)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -177,6 +183,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "critical margin stabilization public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_critical_margin_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "readout diagnosis public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_readout_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
