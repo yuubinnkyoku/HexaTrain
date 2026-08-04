@@ -1,0 +1,59 @@
+{
+  "schema": "READOUT_REPRESENTATION_DIAGNOSIS_V1",
+  "schema_version": 1,
+  "protocol": "READOUT_PROBE_V1",
+  "verdict": "DEEP_DEGRADATION",
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "files": [
+    {
+      "name": "baseline-current-head.csv",
+      "sha256": "d0673df523c935dd1d59f91c83e3efc6d979c7c59697ca16e698a23ed399f217"
+    },
+    {
+      "name": "dataset-anchors.csv",
+      "sha256": "3a5612a324f3dbedec3dbd600ac7f90ba2a162d61cd8cb36ce5e4ee0c61f667d"
+    },
+    {
+      "name": "decision.csv",
+      "sha256": "698699e7699e8735f04e7c32ae164dbbed94434075920e7830a9dfda1c2a8f90"
+    },
+    {
+      "name": "head-geometry.csv",
+      "sha256": "930c178889b15ee73e4765755b93b7b6e6653cc46b30c2fe07e02430de9f6d72"
+    },
+    {
+      "name": "head-retraining.csv",
+      "sha256": "f65cc34927a26d16c4eb8f3040ac5436169f4ca7e68f07ba8eeac1a434bd25ad"
+    },
+    {
+      "name": "probe-layer-curve.csv",
+      "sha256": "9b6baddf651b739ec2faf579f20b1d8545422c193687b50f38ebf6d8284f354f"
+    },
+    {
+      "name": "probe-selection.csv",
+      "sha256": "c60de045167ee694a0af67563d8ce9cec704e72388b31325a2abaaedec9cd6a5"
+    },
+    {
+      "name": "probe-training-grid.csv",
+      "sha256": "c768184ce88c0386ce5dd6182597039925b8f2495c3d43af5f9da18b52ac7d1b"
+    },
+    {
+      "name": "README.md",
+      "sha256": "5b489bbb387c20209b24707f887c019a68563d4f3d28c2bba417df4bfad2aa28"
+    },
+    {
+      "name": "representation-metrics.csv",
+      "sha256": "29b09860981997a717ac3d7017b1d3649ef8e84b53c01a1e4d68702751d7220c"
+    },
+    {
+      "name": "summary.csv",
+      "sha256": "2d3d2e1dc014c68186617caea5b378aea2103342e1530ed1c08e985e69e09e5b"
+    },
+    {
+      "name": "trajectory-anchors.csv",
+      "sha256": "dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+verdict,reasons,thresholds_fixed_before_results
+DEEP_DEGRADATION,pooled_head_fr=201 pooled_final_probe_fr=113 seed_wins_ge5=0 control_delta=-32 best_intermediate_pooled=432 intermediate_wins_ge5=3 deep_multi_checkpoint=true pooled_train_tf=87 pooled_dev_tf=264,true
