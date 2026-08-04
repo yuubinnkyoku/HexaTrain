@@ -153,6 +153,12 @@ try {
         "readout probe self-test PASS (private)"
     }
 
+    Invoke-Step "readout-representation-probe" {
+        Invoke-PwshScript "readout/representation diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @()
+        "deterministic CPU readout/representation reports regenerated (private; exporter self-test pre-fly uses them)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
