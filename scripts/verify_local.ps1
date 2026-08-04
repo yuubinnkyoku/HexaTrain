@@ -159,6 +159,18 @@ try {
         "deterministic CPU readout/representation reports regenerated (private; exporter self-test pre-fly uses them)"
     }
 
+    Invoke-Step "intra-block-readability-self-test" {
+        Invoke-PwshScript "intra-block readability self-test" `
+            (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @("-SelfTest")
+        "intra-block readability self-test PASS (private)"
+    }
+
+    Invoke-Step "intra-block-readability-run" {
+        Invoke-PwshScript "intra-block readability diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @()
+        "deterministic CPU intra-block readability reports regenerated (private; exporter self-test pre-fly uses them)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -192,6 +204,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "readout diagnosis public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_readout_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "intra-block readability public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_intra_block_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }

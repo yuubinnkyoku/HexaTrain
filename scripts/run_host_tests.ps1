@@ -130,3 +130,20 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "readout probe self-test failed"
 }
+
+$IntraBlockExecutable = Join-Path $OutputDirectory "intra_block_readability_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
+    (Join-Path $Root "host_tests\intra_block_readability.cpp") `
+    -o $IntraBlockExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "intra-block readability compilation failed"
+}
+
+& $IntraBlockExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "intra-block readability self-test failed"
+}
