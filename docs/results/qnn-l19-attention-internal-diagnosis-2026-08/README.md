@@ -8,6 +8,13 @@ AR_FINAL_HOLDOUT_V3 dataset (hash verified only: fnv1a64:aa5081e6df658b4a) and p
 device, HTP, or QNN work. All numbers come from the checked-in CPU reference
 implementation (tiny_language_model_cpu.cpp), regenerated deterministically.
 
+## Current status: historical verdict superseded
+
+The OUTPUT_PROJECTION verdict, legacy learned-probe scores, cross-seed swap,
+and projection-contribution norm/cosine below are retained as historical
+artifacts and are not current cause evidence. The seed-instability root-cause
+investigation is the current decision source.
+
 ## Method
 
 For each of the four pinned configurations (L19 seeds 1/2/4 and the L18 depth
@@ -29,7 +36,7 @@ ATTENTION_INTERNAL_V1): attention taps <= 500, head probe trainings <= 400,
 head-zero <= 300, head-only <= 150, context swaps <= 60, attention/value
 separation <= 32, head pairs <= 24, free-running <= 40.
 
-## Verdict
+## Historical verdict (superseded)
 
 Diagnosis (fixed thresholds, never tuned):
 **OUTPUT_PROJECTION**
@@ -42,6 +49,17 @@ L19_SEED_1: ctx=24 upd=6 drop=18; L19_SEED_2: ctx=37 upd=24 drop=13; L19_SEED_4:
 Interpretation, thresholds and all raw values are in the CSVs; the decision
 rules are pinned in the private protocol (ATTENTION_INTERNAL_V1) before any
 results were produced.
+
+## Superseding measurement correction (2026-08-05)
+
+The historical TRAIN probe rows contain four contract conflicts, so learned
+probe absolute scores are excluded from later causal claims. In addition,
+the published cross-seed context swap reused a malformed donor-row-0 vector
+for every development row, and projection-contribution norm/cosine retained
+only one row. Those swap and aggregate claims are invalid and were not used
+by the root-cause decision. Full-rank, pseudoinverse/transport evidence and
+direct logit interventions are independent. The implementation now has
+row-wise replacement and self-swap identity tests.
 
 ## Files
 

@@ -6,6 +6,13 @@ generation quality gate. It does not open the AR_FINAL_HOLDOUT_V3 dataset
 All numbers come from the checked-in CPU reference implementation
 (tiny_language_model_cpu.cpp), regenerated deterministically.
 
+## Current status: learned-probe measurements superseded
+
+The TRAIN row-contract correction excludes learned-probe absolute scores and
+depth curves below from current cause evidence. AR trajectories, head-clone
+parity, and direct head interventions are independent. The seed-instability
+root-cause investigation is the current decision source.
+
 ## Method
 
 For each of the four pinned configurations (L19 seeds 1/2/4 and the L18 depth
@@ -49,6 +56,16 @@ pooled_head_fr=201 pooled_final_probe_fr=113 seed_wins_ge5=0 control_delta=-32 b
 Interpretation, thresholds and all raw values are in the CSVs; the decision
 rules are pinned in the private protocol (READOUT_PROBE_V1) before any
 results were produced.
+
+## Superseding measurement correction (2026-08-05)
+
+The seed-instability root-cause re-audit found that the legacy TRAIN probe
+row builder interpreted position-wise training targets as a continuation and
+created four contract-conflicting rows (current-token exact 28/32 rather than
+the formal batch's 32/32). Learned-probe absolute scores and depth curves in
+this historical bundle are excluded from subsequent causal claims until
+regenerated with the corrected row contract. AR trajectories, head-clone
+parity, and head interventions are independent of that row builder.
 
 ## Files
 

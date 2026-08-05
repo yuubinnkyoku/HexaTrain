@@ -21,3 +21,20 @@ fnv1a64:5a64ca2d1aa7f29f, MARGIN_CALIBRATION_V1 fnv1a64:71806d5bf19c090a,
 MARGIN_DEVELOPMENT_V1 fnv1a64:f06fcc3e2d12ca99; AR_FINAL_HOLDOUT_V3
 fnv1a64:aa5081e6df658b4a remains unopened. All evidence is CPU host-side; no device,
 QAIRT, or QNN involvement.
+
+## Current status
+
+Full-rank classifier-coordinate transport and equivalent whitened-space
+objectives remain mathematical evidence. Learned-probe absolute scores and
+z-statistics below are superseded by the TRAIN row-contract correction and
+are not current root-cause evidence.
+
+## Superseding measurement correction (2026-08-05)
+
+Both legacy and canonical probes in this historical bundle were trained on
+rows containing four TRAIN-contract conflicts. Their absolute scores and
+z-statistics are excluded from later causal claims until corrected-row
+regeneration. The algebraic conclusion that a full-rank output projection
+admits classifier-coordinate transport, and the equivalent whitened-space
+objectives, remain valid; the historical learned scores are not used as
+root-cause evidence.

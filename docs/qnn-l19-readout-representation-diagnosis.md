@@ -2,6 +2,12 @@
 
 ## Scope and classification
 
+> **現在の状態: legacy probe数値はsuperseded。** TRAIN row契約不具合により、
+> 本文の学習済みprobe絶対値・深度曲線を現在の原因証拠として使用しない。
+> AR trajectory、head clone、直接head介入は独立である。現在の原因判定は
+> [`qnn-l19-seed-instability-root-cause.md`](qnn-l19-seed-instability-root-cause.md)
+> を正本とする。
+
 This investigation answers one question: why does the L19 model fail its
 generation quality gate — is the failure a readout problem (the final
 representation still holds the answer but the output head cannot read it), a
@@ -108,6 +114,15 @@ unopened.
 > は最適性から遠く、信頼できる probe には canonical solver が必要とされた。
 
 ## Reproduction
+
+> **追加修正（2026-08-05、seed-instability root-cause再監査）**
+> legacy `teacherForcedRows`は正式training batchのposition別targetを
+> continuation列として扱い、契約にない4行を作っていた。legacy TRAIN行の
+> current-token exactは28/32、正式row/targetでは32/32である。このため本書の
+> 学習済みprobe絶対値と深度曲線は再生成まで原因証拠から除外する。head clone
+> parity、AR trajectory、出力head介入はこのrow生成に依存しない。新しい因果調査は
+> [`qnn-l19-seed-instability-root-cause.md`](qnn-l19-seed-instability-root-cause.md)
+> を参照。
 
 - Probe run: `scripts/run_l19_readout_probe.ps1` (optionally `-SelfTest`),
   reports under `build/reports/qnn-readout-representation-diagnosis` (private

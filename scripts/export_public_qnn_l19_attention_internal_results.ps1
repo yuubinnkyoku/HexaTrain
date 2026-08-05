@@ -47,6 +47,10 @@ $kPinned = @{
 }
 $kVerdicts = @('SPECIFIC_HEAD', 'WEIGHT_SIDE', 'VALUE_SIDE', 'OUTPUT_PROJECTION',
     'HEAD_INTERFERENCE', 'MULTI_HEAD_ACCUMULATION', 'SEED_DEPENDENT', 'UNDETERMINED')
+$historicalHashes = [ordered]@{
+    'diagnosis.csv' = '4958d35c5122ece3698f25196d24b46b329b6b3c1a29f12f1da7e2a1383f5ef5'
+    'projection-contributions.csv' = '36e159745778745eead15aa23f72b2cbb724235a364d010aa0cc642e9f63f7ae'
+}
 $script:FixtureInput = $null
 $script:Invariant = [Globalization.CultureInfo]::InvariantCulture
 
@@ -157,6 +161,25 @@ function CopySafe([string]$Name) {
 function GetSha256([string]$Name) {
     return (Get-FileHash -LiteralPath (Join-Path $OutputRoot $Name) -Algorithm SHA256).Hash.ToLowerInvariant()
 }
+function GetNormalizedSha256([string]$Text) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+    $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+    return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+}
+function AssertAndNormalizeHistoricalFiles() {
+    foreach ($name in $historicalHashes.Keys) {
+        $path = Join-Path $OutputRoot $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Fail "historical CSV missing: $name"
+        }
+        $text = [IO.File]::ReadAllText($path).Replace("`r`n", "`n").Replace("`r", "`n")
+        $historicalBytes = $text.Replace("`n", "`r`n")
+        if ((GetNormalizedSha256 $historicalBytes) -ne $historicalHashes[$name]) {
+            Fail "historical CSV changed: $name"
+        }
+        [IO.File]::WriteAllText($path, $historicalBytes, $utf8)
+    }
+}
 function AssertBundle() {
     $entries = @(Get-ChildItem -LiteralPath $OutputRoot -Force)
     if (@($entries | Where-Object { $_.PSIsContainer }).Count -ne 0) { Fail 'public bundle must not contain subdirectories' }
@@ -173,7 +196,7 @@ function AssertBundle() {
     }
 }
 function NewReadme() {
-    $diag = @(Import-Csv -LiteralPath (SourcePath 'diagnosis.csv'))[0]
+    $diag = @(Import-Csv -LiteralPath (Join-Path $OutputRoot 'diagnosis.csv'))[0]
     $proj = @(Import-Csv -LiteralPath (SourcePath 'context-vs-projection.csv') | ForEach-Object { "$($_.configuration_id): ctx=$($_.ctx_concat_dev_tf_exact) upd=$($_.attn_update_dev_tf_exact) drop=$($_.proj_drop)" }) -join '; '
     @"
 # L19 attention-internal diagnosis, August 2026
@@ -185,6 +208,13 @@ context, concat, output projection, and residual add. It does not open the
 AR_FINAL_HOLDOUT_V3 dataset (hash verified only: $kFinalHash) and performs no
 device, HTP, or QNN work. All numbers come from the checked-in CPU reference
 implementation (tiny_language_model_cpu.cpp), regenerated deterministically.
+
+## Current status: historical verdict superseded
+
+The OUTPUT_PROJECTION verdict, legacy learned-probe scores, cross-seed swap,
+and projection-contribution norm/cosine below are retained as historical
+artifacts and are not current cause evidence. The seed-instability root-cause
+investigation is the current decision source.
 
 ## Method
 
@@ -207,7 +237,7 @@ ATTENTION_INTERNAL_V1): attention taps <= 500, head probe trainings <= 400,
 head-zero <= 300, head-only <= 150, context swaps <= 60, attention/value
 separation <= 32, head pairs <= 24, free-running <= 40.
 
-## Verdict
+## Historical verdict (superseded)
 
 Diagnosis (fixed thresholds, never tuned):
 **$($diag.verdict)**
@@ -220,6 +250,17 @@ $proj
 Interpretation, thresholds and all raw values are in the CSVs; the decision
 rules are pinned in the private protocol (ATTENTION_INTERNAL_V1) before any
 results were produced.
+
+## Superseding measurement correction (2026-08-05)
+
+The historical TRAIN probe rows contain four contract conflicts, so learned
+probe absolute scores are excluded from later causal claims. In addition,
+the published cross-seed context swap reused a malformed donor-row-0 vector
+for every development row, and projection-contribution norm/cosine retained
+only one row. Those swap and aggregate claims are invalid and were not used
+by the root-cause decision. Full-rank, pseudoinverse/transport evidence and
+direct logit interventions are independent. The implementation now has
+row-wise replacement and self-swap identity tests.
 
 ## Files
 
@@ -242,6 +283,9 @@ results were produced.
 }
 
 if ($SelfTest) {
+    $OutputRoot = RequireOutputRoot $OutputRoot
+    AssertAndNormalizeHistoricalFiles
+    AssertBundle
     $script:FixtureInput = $null
     AssertSourceEvidence
     $fixtureRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\attention-internal-exporter-selftest-{0}" -f ([Guid]::NewGuid().ToString('N')))))
@@ -284,9 +328,12 @@ if ($SelfTest) {
 }
 
 $OutputRoot = RequireOutputRoot $OutputRoot
+$canonicalHistoryRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'docs\results\qnn-l19-attention-internal-diagnosis-2026-08'))
+if ($OutputRoot -ne $canonicalHistoryRoot) { Fail 'historical exporter only supports the canonical history bundle' }
 if (-not (Test-Path -LiteralPath $ReportRoot -PathType Container)) { Fail 'ReportRoot does not exist' }
 AssertSourceEvidence
-foreach ($name in $sourceFiles) { CopySafe $name }
+AssertAndNormalizeHistoricalFiles
+foreach ($name in ($sourceFiles | Where-Object { -not $historicalHashes.Contains($_) })) { CopySafe $name }
 WriteUtf8 'README.md' (NewReadme)
 $manifestFiles = foreach ($name in ($allowed | Where-Object { $_ -ne 'manifest.json' } | Sort-Object)) {
     [ordered]@{ name = $name; sha256 = (GetSha256 $name) }
@@ -295,7 +342,7 @@ $manifest = [ordered]@{
     schema = 'ATTENTION_INTERNAL_DIAGNOSIS_V1'
     schema_version = 1
     protocol = 'ATTENTION_INTERNAL_V1'
-    verdict = @(Import-Csv -LiteralPath (SourcePath 'diagnosis.csv'))[0].verdict
+    verdict = @(Import-Csv -LiteralPath (Join-Path $OutputRoot 'diagnosis.csv'))[0].verdict
     final_holdout_opened = $false
     device_runs = 0
     htp_runs = 0

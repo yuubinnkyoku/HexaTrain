@@ -2,6 +2,12 @@
 
 ## Scope and classification
 
+> **現在の状態: learned-probe局在判定はsuperseded。** TRAIN row契約不具合により、
+> 本文のprobe絶対値とtap/block低下数を現在の原因証拠として使用しない。
+> observer、head clone、直接forward介入は独立である。現在の原因判定は
+> [`qnn-l19-seed-instability-root-cause.md`](qnn-l19-seed-instability-root-cause.md)
+> を正本とする。
+
 The previous milestone
 ([`qnn-l19-readout-representation-diagnosis.md`](qnn-l19-readout-representation-diagnosis.md))
 established `DEEP_DEGRADATION`: the next-token identity that a linear probe
@@ -162,6 +168,12 @@ unopened.
 > hash `fnv1a64:b36b4745b9b4807f`）を参照。
 
 ## Reproduction
+
+> **追加修正（2026-08-05、seed-instability root-cause再監査）**
+> TRAIN probe row生成に4行の契約不整合が判明したため、学習済みprobeに基づく
+> block/tap別の絶対scoreと低下数は再生成まで原因証拠から除外する。observer、
+> head clone parity、直接forward介入はこの不具合に依存しない。Attention経路の
+> 因果的重要性は、別のAttention-zero対FFN-zero学習介入で再構築した。
 
 - Probe run: `scripts/run_l19_intra_block_readability.ps1` (optionally
   `-SelfTest`; `--run --report-root`), reports under

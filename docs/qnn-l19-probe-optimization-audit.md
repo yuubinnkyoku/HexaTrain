@@ -2,6 +2,10 @@
 
 ## 結論
 
+> **現在の状態:** full-rank射影の座標transportと目的同値という数学的結論は
+> 維持するが、TRAIN row契約不具合のある学習済みprobe絶対値・z-statは
+> supersededであり、現在の原因証拠には使用しない。
+
 **CTX_CONCAT と ATT_UPDATE の dev-token-exact 差（24/6, 37/24, 57/47, 68/64）は、表現の情報損失ではなく、legacy Adam 線形 probe 学習の座標標準化不足による最適化 artifact である。**
 
 座標安定な canonical solver（PCA whitening 特徴・whitened 空間のみへの L2 λ=1e-4・gauge固定・L-BFGS 判定）では、全最大低下層で CTX と ATT の probe が同一の収束点に到達する（dev token exact が CTX==ATT で 16/16, 32/32, 52/52, 30/30）。verdict は `C1_OPTIMIZATION_INSUFFICIENCY`（C1=4 層、C2=1、C3=3、C4=0、C5=0）。
@@ -128,6 +132,13 @@ AMENDMENT_5（独立レビュー対応）により corrected-layer-curve の uin
 （情報用、gate ではない）。
 
 ## 公開成果物
+
+> **追加修正（2026-08-05、seed-instability root-cause再監査）**
+> legacy/canonical probeはいずれも、4行の契約不整合を含むTRAIN probe rowで
+> 学習されていた。従って公開済み絶対scoreとz-statは再生成まで原因証拠から
+> 除外する。可逆な出力射影で最適なlinear classifierを座標transportできること、
+> full-rank、whitened座標での目的同値という数学的結論は維持するが、旧数値を
+> 新しい根本原因の根拠には用いない。
 
 - [docs/results/qnn-l19-probe-optimization-audit-2026-08/](results/qnn-l19-probe-optimization-audit-2026-08/)
   - README.md、manifest.json、各集計 CSV（configuration / dataset-usage / legacy-vs-canonical-probe / corrected-layer-curve / corrected-attention-taps / feature-geometry / row-nullspace / calibration-selection / optimization-summary / diagnosis / previous-result-corrections / next-step-candidates / budget）

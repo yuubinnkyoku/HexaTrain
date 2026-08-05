@@ -600,6 +600,8 @@ TapRun evaluateFinalCheckpoint(const ConfigSpec& spec, const DataSet& ds,
           cr.marginContribution = correctContrib - compContrib;
           out.contributions.push_back(cr);
         } else {
+          it->norm += hc.norm;
+          it->cosineWithInput += hc.cosineWithInput;
           it->correctLogitContribution += correctContrib;
           it->maxCompetitorContribution += compContrib;
           it->marginContribution += correctContrib - compContrib;
@@ -608,6 +610,8 @@ TapRun evaluateFinalCheckpoint(const ConfigSpec& spec, const DataSet& ds,
     }
     const double n = static_cast<double>(ds.devRows.size());
     for (auto& c : out.contributions) {
+      c.norm /= n;
+      c.cosineWithInput /= n;
       c.correctLogitContribution /= n;
       c.maxCompetitorContribution /= n;
       c.marginContribution /= n;
@@ -635,22 +639,26 @@ void runCrossSeedSwaps(std::vector<TapRun>& runs, const DataSet& ds) {
     const int deepFirst = aid::kDeepBandFirstL19;
     for (int li = deepFirst; li < static_cast<int>(run.spec->layers); ++li)
       for (int h = 0; h < 2; ++h) {
-        std::vector<float> replacement(
-            static_cast<std::size_t>(config.tokens) * (config.dimension / 2),
-            0.0f);
-        const auto& row = ds.devRows[0];
-        const auto oh = tiny::oneHot(row.context, config.vocabularySize);
-        const train::GF g1 = train::generalForward(config, oh, s1Params);
-        const std::size_t lastRow =
-            static_cast<std::size_t>(config.tokens - 1) * config.dimension;
         const std::uint32_t dh = config.dimension / config.numHeads;
-        for (uint32_t d = 0; d < dh; ++d)
-          replacement[static_cast<std::size_t>(h) * dh + d] =
-              g1.layers[static_cast<std::size_t>(li)].ctx[lastRow + h * dh + d];
-        std::vector<aid::HeadIntervention> iv;
-        iv.push_back({li, h, aid::HeadAction::kSwap, replacement});
-        const auto intervened =
-            aid::scoreIntervenedHead(config, params, ds.devRows, iv);
+        std::vector<std::vector<aid::HeadIntervention>> rowInterventions;
+        rowInterventions.reserve(ds.devRows.size());
+        for (const auto& row : ds.devRows) {
+          const auto oh = tiny::oneHot(row.context, config.vocabularySize);
+          const train::GF donor =
+              train::generalForward(config, oh, s1Params);
+          std::vector<float> replacement(
+              static_cast<std::size_t>(config.tokens) * dh, 0.0f);
+          for (uint32_t r = 0; r < config.tokens; ++r)
+            for (uint32_t d = 0; d < dh; ++d)
+              replacement[static_cast<std::size_t>(r) * dh + d] =
+                  donor.layers[static_cast<std::size_t>(li)]
+                      .ctx[static_cast<std::size_t>(r) * config.dimension +
+                           static_cast<std::size_t>(h) * dh + d];
+          rowInterventions.push_back(
+              {{li, h, aid::HeadAction::kSwap, std::move(replacement)}});
+        }
+        const auto intervened = aid::scoreIntervenedHeadRowwise(
+            config, params, ds.devRows, rowInterventions);
         TapRun::ContextSwapResult r;
         r.layer = li;
         r.head = h;
@@ -1617,6 +1625,31 @@ void selfTest() {
     iv.push_back({0, 0, aid::HeadAction::kSwap, replacement});
     const auto g2 = aid::generalForwardIntervened(config, oh, params, iv, {});
     require(g1.logits == g2.logits, "head swap with same ctx == no change");
+
+    std::vector<std::vector<aid::HeadIntervention>> rowInterventions;
+    const std::vector<rp::ProbeRow> rows{ds.trainRows[0], ds.trainRows[1]};
+    for (const auto& current : rows) {
+      const auto currentOh = tiny::oneHot(current.context,
+                                          config.vocabularySize);
+      const auto currentForward =
+          train::generalForward(config, currentOh, params);
+      std::vector<float> currentReplacement(
+          static_cast<std::size_t>(config.tokens) * dh, 0.0f);
+      for (uint32_t r = 0; r < config.tokens; ++r)
+        for (uint32_t d = 0; d < dh; ++d)
+          currentReplacement[static_cast<std::size_t>(r) * dh + d] =
+              currentForward.layers[0]
+                  .ctx[static_cast<std::size_t>(r) * config.dimension + d];
+      rowInterventions.push_back(
+          {{0, 0, aid::HeadAction::kSwap, std::move(currentReplacement)}});
+    }
+    const auto baseline = aid::scoreIntervenedHead(config, params, rows, {});
+    const auto rowwise = aid::scoreIntervenedHeadRowwise(
+        config, params, rows, rowInterventions);
+    require(rowwise.tokenExact == baseline.tokenExact &&
+                rowwise.meanNll == baseline.meanNll &&
+                rowwise.meanMargin == baseline.meanMargin,
+            "row-wise self swap identity across distinct rows");
   }
 
   // 5. Contribution sum == ATT_UPDATE.

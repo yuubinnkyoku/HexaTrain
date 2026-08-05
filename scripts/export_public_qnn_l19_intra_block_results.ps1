@@ -420,6 +420,13 @@ AR_FINAL_HOLDOUT_V3 dataset (hash verified only: $kFinalHash) and performs no
 device, HTP, or QNN work. All numbers come from the checked-in CPU reference
 implementation (tiny_language_model_cpu.cpp), regenerated deterministically.
 
+## Current status: learned-probe localization superseded
+
+The TRAIN row-contract correction excludes learned-probe absolute tap scores
+and block/drop counts below from current cause evidence. Observer output,
+head-clone parity, and direct forward interventions are independent. The
+seed-instability root-cause investigation is the current decision source.
+
 ## Method
 
 For each of the four pinned configurations (L19 seeds 1/2/4 and the L18 depth
@@ -471,6 +478,17 @@ Max per-block dev-TF drop (block_input probe vs after_ffn probe): $maxDrop
 Interpretation, thresholds and all raw values are in the CSVs; the decision
 rules are pinned in the private protocol (INTRA_BLOCK_READABILITY_V1) before
 any results were produced.
+
+## Superseding measurement correction (2026-08-05)
+
+The TRAIN probe row builder used by this historical bundle created four
+contract-conflicting synthetic rows (28/32 current-token exact rather than
+the formal batch's 32/32). Learned-probe absolute tap scores and drop counts
+are excluded from subsequent causal claims until regenerated with the
+corrected contract. Observer outputs, head-clone parity, and direct forward
+interventions are independent of that row builder. Attention-path causality
+is instead established by the later Attention-zero versus FFN-zero training
+intervention.
 
 ## Files
 

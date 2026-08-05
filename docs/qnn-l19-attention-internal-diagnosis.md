@@ -2,6 +2,13 @@
 
 ## Overview
 
+> **現在の状態: 本文中の旧因果判定はsuperseded。** 以下の
+> `OUTPUT_PROJECTION` verdict、legacy probe score、cross-seed swap、
+> projection contribution norm/cosineは現在の原因証拠として使用しない。
+> 履歴と当時の判定規則を保持するため残している。現在の判定は
+> [`qnn-l19-seed-instability-root-cause.md`](qnn-l19-seed-instability-root-cause.md)
+> を正本とする。
+
 This document describes the ATTENTION_INTERNAL_V1 host-only diagnosis that
 decomposes the deep-layer attention-path linear readability loss of the L19
 transformer into its internal stages: normalized input, Q/K/V projections,
@@ -56,7 +63,7 @@ Per target layer, the observer extracts:
 
 ## Results
 
-**Verdict: OUTPUT_PROJECTION**
+**Historical verdict (superseded): OUTPUT_PROJECTION**
 
 The evidence supports the hypothesis that the attention-path readability loss
 is primarily caused by the output projection, not by a specific head, the
@@ -94,6 +101,14 @@ coordinate mismatch rather than a single transferable fix.
 > と結論された。低次元 head 介入の干渉実測そのものは維持される。
 
 ## Public bundle
+
+> **追加修正（2026-08-05、seed-instability root-cause再監査）**
+> TRAIN probe row生成に4行の契約不整合があり、旧probe絶対値は再生成まで除外する。
+> また旧cross-seed context swapはdonor row 0の不正なreplacementを全DEV rowへ
+> 再利用しており、row-wise identityを満たさなかった。旧swap recoveryは無効である。
+> projection contributionのnorm/cosineも1 rowだけを保持していたため無効である。
+> 実装とself-testは修正した。full-rank、疑似逆、probe transport、直接logit介入は
+> 独立であり、Attention経路の因果判定は新しいbranch介入で行った。
 
 The public results are in
 `docs/results/qnn-l19-attention-internal-diagnosis-2026-08/`.

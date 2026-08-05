@@ -2,7 +2,7 @@
   "schema": "PROBE_OPTIMIZATION_AUDIT_V1",
   "schema_version": 1,
   "protocol_hash": "fnv1a64:b36b4745b9b4807f",
-  "generated_at": "2026-08-05T19:25:25Z",
+  "generated_at": "2026-08-05T23:56:45Z",
   "final_holdout_opened": false,
   "device_runs": 0,
   "htp_runs": 0,
@@ -57,7 +57,7 @@
     },
     {
       "name": "README.md",
-      "sha256": "c4a35aa66cc412217d93c44543ea2a35fbf7a8129a6d93865fd32cd25018c2e2"
+      "sha256": "7669d325d8a011dcdecfc1c517d3fc15a402221e0772ef3cb0da59f0ab0d0b4b"
     },
     {
       "name": "row-nullspace.csv",

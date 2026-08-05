@@ -706,6 +706,7 @@ inline std::vector<HeadContribution> decomposeContributions(
     const tiny::Config& config, const train::P& params, const train::GF& g,
     int layer, const std::vector<rp::ProbeRow>& devRows,
     std::size_t devBegin) {
+  (void)devRows;
   (void)devBegin;
   const std::uint32_t dim = config.dimension;
   const std::uint32_t dh = dim / config.numHeads;
@@ -727,26 +728,24 @@ inline std::vector<HeadContribution> decomposeContributions(
                p.wo[static_cast<std::size_t>(h * dh + dd) * dim + d];
         hc.contribution[static_cast<std::size_t>(r) * dim + d] = float(s);
       }
-    // Norm over DEV rows (last token position).
+    // This forward pass represents one row. Aggregate these per-row values in
+    // the caller; repeating the same tensor devRows.size() times would only
+    // disguise a single-row value as a DEV aggregate.
     double normSq = 0.0;
     const std::size_t lastRow = static_cast<std::size_t>(config.tokens - 1) * dim;
-    for (std::size_t i = 0; i < devRows.size(); ++i) {
-      for (uint32_t d = 0; d < dim; ++d) {
-        const double v = hc.contribution[lastRow + d];
-        normSq += v * v;
-      }
+    for (uint32_t d = 0; d < dim; ++d) {
+      const double v = hc.contribution[lastRow + d];
+      normSq += v * v;
     }
-    hc.norm = std::sqrt(normSq / static_cast<double>(devRows.size()));
+    hc.norm = std::sqrt(normSq);
     // Cosine with block input x (residual before attention).
     double dot = 0.0, nx = 0.0, nc = 0.0;
-    for (std::size_t i = 0; i < devRows.size(); ++i) {
-      for (uint32_t d = 0; d < dim; ++d) {
-        const double c = hc.contribution[lastRow + d];
-        const double x = z.x[lastRow + d];
-        dot += c * x;
-        nc += c * c;
-        nx += x * x;
-      }
+    for (uint32_t d = 0; d < dim; ++d) {
+      const double c = hc.contribution[lastRow + d];
+      const double x = z.x[lastRow + d];
+      dot += c * x;
+      nc += c * c;
+      nx += x * x;
     }
     hc.cosineWithInput =
         (nc > 0.0 && nx > 0.0) ? dot / (std::sqrt(nc) * std::sqrt(nx)) : 0.0;
@@ -834,6 +833,58 @@ inline InterventionMetrics scoreIntervenedHead(
     double sum = 0.0;
     for (std::size_t i = 0; i < cut; ++i) sum += margins[i];
     metrics.marginQ10 = sum / static_cast<double>(cut);
+  }
+  return metrics;
+}
+
+// Row-wise variant used for cross-model context swaps. Each DEV row must have
+// a replacement computed from the donor under the same case/context.
+inline InterventionMetrics scoreIntervenedHeadRowwise(
+    const tiny::Config& config, const train::P& params,
+    const std::vector<rp::ProbeRow>& devRows,
+    const std::vector<std::vector<HeadIntervention>>& rowInterventions) {
+  if (rowInterventions.size() != devRows.size())
+    throw std::invalid_argument("ROWWISE_INTERVENTION_COUNT");
+  InterventionMetrics metrics;
+  metrics.total = devRows.size();
+  std::vector<double> margins;
+  margins.reserve(devRows.size());
+  for (std::size_t ri = 0; ri < devRows.size(); ++ri) {
+    const auto& row = devRows[ri];
+    const auto oh = tiny::oneHot(row.context, config.vocabularySize);
+    const train::GF g = generalForwardIntervened(
+        config, oh, params, rowInterventions[ri], {});
+    const std::size_t base =
+        std::size_t(config.tokens - 1) * config.vocabularySize;
+    std::vector<double> logits(config.vocabularySize);
+    std::vector<double> probs(config.vocabularySize);
+    for (std::uint32_t j = 0; j < config.vocabularySize; ++j) {
+      logits[j] = static_cast<double>(g.logits[base + j]);
+      probs[j] = static_cast<double>(g.prob[base + j]);
+    }
+    if (!std::isfinite(logits[row.truth])) {
+      metrics.finite = false;
+      continue;
+    }
+    const ma::Score score = rp::stableScoreFromLogits(logits, probs, row.truth);
+    if (score.predicted == row.truth) ++metrics.tokenExact;
+    metrics.meanMargin += score.expectedMinusTop1Margin;
+    metrics.meanRank += score.expectedRank;
+    metrics.meanNll += score.tokenNll;
+    margins.push_back(score.expectedMinusTop1Margin);
+  }
+  const double n = static_cast<double>(devRows.size());
+  if (n > 0.0) {
+    metrics.meanMargin /= n;
+    metrics.meanRank /= n;
+    metrics.meanNll /= n;
+  }
+  if (!margins.empty()) {
+    std::sort(margins.begin(), margins.end());
+    const std::size_t cut = std::max<std::size_t>(1, margins.size() / 10);
+    metrics.marginQ10 = std::accumulate(margins.begin(),
+                                        margins.begin() + cut, 0.0) /
+                         static_cast<double>(cut);
   }
   return metrics;
 }
