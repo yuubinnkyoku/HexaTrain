@@ -36,7 +36,7 @@
     },
     {
       "name": "host_tests\\critical_margin_objective_lib.h",
-      "sha256": "05d255711816f747841c0b29cd4c60177de7d7912c5d097b4eb76df7fddac5c2"
+      "sha256": "1ee4347172df164c51268966e59b73ff3b86af0582e4ae7ed748a39f143b321d"
     },
     {
       "name": "host_tests\\seed_instability_diagnostics_lib.h",

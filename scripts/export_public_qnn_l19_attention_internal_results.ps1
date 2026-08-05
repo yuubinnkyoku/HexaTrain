@@ -158,13 +158,17 @@ function CopySafe([string]$Name) {
     if (-not (Safe $text)) { Fail "unsafe source content: $Name" }
     WriteUtf8 $Name $text
 }
-function GetSha256([string]$Name) {
-    return (Get-FileHash -LiteralPath (Join-Path $OutputRoot $Name) -Algorithm SHA256).Hash.ToLowerInvariant()
-}
 function GetNormalizedSha256([string]$Text) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($text)
     $hash = [Security.Cryptography.SHA256]::HashData($bytes)
     return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+}
+function GetManifestSha256([string]$Name) {
+    if ($historicalHashes.Contains($Name)) {
+        return $historicalHashes[$Name]
+    }
+    $text = [IO.File]::ReadAllText((Join-Path $OutputRoot $Name)).Replace("`r`n", "`n").Replace("`r", "`n")
+    return GetNormalizedSha256 $text
 }
 function AssertAndNormalizeHistoricalFiles() {
     foreach ($name in $historicalHashes.Keys) {
@@ -192,7 +196,7 @@ function AssertBundle() {
     if ($manifest.schema -ne 'ATTENTION_INTERNAL_DIAGNOSIS_V1' -or $manifest.schema_version -ne 1) { Fail 'manifest schema mismatch' }
     if ($manifest.final_holdout_opened -ne $false -or $manifest.device_runs -ne 0 -or $manifest.htp_runs -ne 0) { Fail 'manifest run accounting mismatch' }
     foreach ($entry in $manifest.files) {
-        if ((GetSha256 $entry.name) -ne $entry.sha256) { Fail "manifest hash mismatch: $($entry.name)" }
+        if ((GetManifestSha256 $entry.name) -ne $entry.sha256) { Fail "manifest hash mismatch: $($entry.name)" }
     }
 }
 function NewReadme() {
@@ -336,7 +340,7 @@ AssertAndNormalizeHistoricalFiles
 foreach ($name in ($sourceFiles | Where-Object { -not $historicalHashes.Contains($_) })) { CopySafe $name }
 WriteUtf8 'README.md' (NewReadme)
 $manifestFiles = foreach ($name in ($allowed | Where-Object { $_ -ne 'manifest.json' } | Sort-Object)) {
-    [ordered]@{ name = $name; sha256 = (GetSha256 $name) }
+    [ordered]@{ name = $name; sha256 = (GetManifestSha256 $name) }
 }
 $manifest = [ordered]@{
     schema = 'ATTENTION_INTERNAL_DIAGNOSIS_V1'

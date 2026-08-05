@@ -958,7 +958,7 @@ inline std::vector<LeaveOneSeedOutFold> runLeaveOneSeedOut(
     const VariantEvidence* best = &evidence.front();
     for (const auto& item : evidence)
       if (betterVariantEvidence(item, *best)) best = &item;
-    const auto* chosen =
+    const auto chosen =
         std::find_if(kObjectives.begin(), kObjectives.end(),
                      [&](const ObjectiveSpec& spec) {
                        return std::string(spec.id) == best->objectiveId;
