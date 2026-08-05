@@ -1,0 +1,67 @@
+{
+  "schema": "PROBE_OPTIMIZATION_AUDIT_V1",
+  "schema_version": 1,
+  "protocol_hash": "fnv1a64:b36b4745b9b4807f",
+  "generated_at": "2026-08-05T19:25:25Z",
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "files": [
+    {
+      "name": "budget.csv",
+      "sha256": "96523847c3f07f3cf12e27be8e87f4dd8abcb19c5eda38d2d011befd2f9f7416"
+    },
+    {
+      "name": "calibration-selection.csv",
+      "sha256": "d810bc249808cd35c89fd1c275969c15cbfd88fcf6d6e2e68b9e93142389e492"
+    },
+    {
+      "name": "configuration.csv",
+      "sha256": "c8c6070a2520ba41a3b86114674aee5eb83894cc85fa21df16737e7102cc0f30"
+    },
+    {
+      "name": "corrected-attention-taps.csv",
+      "sha256": "f315364186fb0092acefa4db0d73ff52e280eb8952b0cb158ef4833ecb178e6b"
+    },
+    {
+      "name": "corrected-layer-curve.csv",
+      "sha256": "04902c3fb87feaf6b4b9f3c3c0a697620a6bbec565e44b637cacd53e3e9626ba"
+    },
+    {
+      "name": "dataset-usage.csv",
+      "sha256": "6d942256a112432633f42799b354708980d1f54a3b47ae3e2c13048cb85ade99"
+    },
+    {
+      "name": "diagnosis.csv",
+      "sha256": "ed30bb4e71b612fbf72e74b287e9c86756a0d00a7e19c02cef6c83f5511d6c2b"
+    },
+    {
+      "name": "feature-geometry.csv",
+      "sha256": "a199da15ac2af946aedca4aa7ea92694062fa66bc56677217b4ae9e5985bbfdf"
+    },
+    {
+      "name": "legacy-vs-canonical-probe.csv",
+      "sha256": "8c455c24951764a9edccaacf56c30070ac027fa1680bee8c7efa2509ed9d3203"
+    },
+    {
+      "name": "next-step-candidates.csv",
+      "sha256": "fe3fce11c5853c9a4779c741abf318a8eb09c8add4fe6b624570d9ea8d61feca"
+    },
+    {
+      "name": "optimization-summary.csv",
+      "sha256": "65f38fb7117f89d244f9dede99b7588661bc7019f2f7a5743a7f0ebaabf5f9c2"
+    },
+    {
+      "name": "previous-result-corrections.csv",
+      "sha256": "9f6cc968499b2ca6a8fffaace8ba7b146304fa22511ea06be2203df40052e0a7"
+    },
+    {
+      "name": "README.md",
+      "sha256": "c4a35aa66cc412217d93c44543ea2a35fbf7a8129a6d93865fd32cd25018c2e2"
+    },
+    {
+      "name": "row-nullspace.csv",
+      "sha256": "843d501a55c406aa060f2ce6838481cca5f484ee14683dd17e73720b0c8015e7"
+    }
+  ]
+}

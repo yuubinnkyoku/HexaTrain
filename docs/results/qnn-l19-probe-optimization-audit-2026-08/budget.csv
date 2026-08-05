@@ -1,0 +1,12 @@
+item,count,limit,ok
+detailed_optimization_comparisons,20,24,true
+representative_non_drop_comparisons,32,32,true
+canonical_probe_full_reevaluation,461,700,true
+convex_solver_runs,76,100,true
+legacy_adam_runs,40,60,true
+cpu_trajectory_regenerations,4,4,true
+final_holdout_opened,0,0,true
+device_runs,0,0,true
+htp_runs,0,0,true
+count_from_one,0,0,true
+ui_runs,0,0,true

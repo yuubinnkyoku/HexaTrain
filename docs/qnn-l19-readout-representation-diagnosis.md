@@ -98,6 +98,15 @@ diagnosis therefore does not select a head-side or checkpoint-selection
 change, and no HTP/device run is scheduled. The final holdout remains
 unopened.
 
+> 後続監査による修正（2026-08, PROBE_OPTIMIZATION_AUDIT_V1）: 「深度とともに
+> 単調減少」は legacy Adam probe の artifact として一部修正された。同特徴・
+> 同 partition で PCA-whitened + L-BFGS の canonical solver を用いると曲線は
+> 非単調（spearman ρ≈−0.05）となり、legacy の単調減衰は最適化不足に帰属
+> する。深層ほど線形読み出し情報が根本的に無い、という主張は撤回し、
+> 標準化・最適化が不十分な probe での観測として言い換える。
+> また「legacy Adam は両 tap で収束する」も一部修正され、legacy の最終勾配
+> は最適性から遠く、信頼できる probe には canonical solver が必要とされた。
+
 ## Reproduction
 
 - Probe run: `scripts/run_l19_readout_probe.ps1` (optionally `-SelfTest`),

@@ -145,6 +145,22 @@ non-linearly-identifiable features into the residual stream), to be
 investigated in a training-side experiment. The final holdout remains
 unopened.
 
+> **修正注記（2026-08-05、probe-optimization audit による再検証）**
+> 本診断の probe は z-score 特徴 + legacy Adam 学習で得られた。その後、
+> 同じ tap を用いた canonical 学習（PCA whitening 特徴・whitened 空間のみへの
+> L2 λ=1e-4・gauge 固定・L-BFGS 収束判定）では、CTX と ATT の probe は同一の
+> 収束点に到達する（dev token exact CTX==ATT 16/16, 32/32, 52/52, 30/30）。
+> ブロック内の attention 書き込みによる readability 低下（NORM1→AFTER_ATTN で
+> dev exact ≥5 低下）は canonical でも再現し、SEED_2 4/9、SEED_4 5/8、
+> L18 6/9 のブロックで維持される。したがって「attention 書き込み経路が
+> 線形 next-token 同一性を破壊する」という本診断の結論は不変である。
+> ただし深度方向の曲線は canonical では非単調であり（EMBEDDING 144 から深層で
+> 26〜65 の帯域、spearman ρ −0.49〜+0.13）、legacy で見えた単調な深層低下は
+> 一部 legacy-Adam の artifact を含む。検証内容は
+> [`qnn-l19-probe-optimization-audit.md`](qnn-l19-probe-optimization-audit.md)
+> （PROBE_OPTIMIZATION_AUDIT_V1 version 6、
+> hash `fnv1a64:b36b4745b9b4807f`）を参照。
+
 ## Reproduction
 
 - Probe run: `scripts/run_l19_intra_block_readability.ps1` (optionally

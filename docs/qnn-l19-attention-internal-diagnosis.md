@@ -86,6 +86,13 @@ value-side cause.
 Cross-seed context swaps show near-zero recovery, consistent with model
 coordinate mismatch rather than a single transferable fix.
 
+> 後続監査による修正（2026-08, PROBE_OPTIMIZATION_AUDIT_V1）: 「出力射影が
+> 原因」という解釈は、probe 学習の artifact として修正された。座標安定な
+> canonical solver（PCA-whitened, L2 λ=1e-4, L-BFGS）では全最大低下層で
+> CTX == ATT（dev token exact 16/16, 32/32, 52/52, 30/30）となり、投影差
+> は legacy Adam の標準化不足によるもの（C1_OPTIMIZATION_INSUFFICIENCY）
+> と結論された。低次元 head 介入の干渉実測そのものは維持される。
+
 ## Public bundle
 
 The public results are in

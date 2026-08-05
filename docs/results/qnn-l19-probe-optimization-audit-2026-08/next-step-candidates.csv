@@ -1,0 +1,6 @@
+candidate,rationale,verdict
+"Canonical L-BFGS probe (whitened, L2=1e-4) for layer diagnostics",coordinate-stable convex objective with convergence certificate,C1_OPTIMIZATION_INSUFFICIENCY
+PCA-whitened probe features as default,whitening still validated; conditioning evidence recorded,inactive
+Calibration step selection on whitened CE grid,selection stages comparable,inactive
+Probe training-data indeterminacy audit,no nullspace-hidden differences found,inactive
+Legacy Adam replacement in production diagnostics,legacy final gradients far from optimality (C1),C1_OPTIMIZATION_INSUFFICIENCY

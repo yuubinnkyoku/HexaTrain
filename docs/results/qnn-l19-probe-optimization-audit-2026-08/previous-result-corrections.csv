@@ -1,0 +1,6 @@
+previous_claim,previous_evidence,canonical_evidence,verdict,correction_required,status_label
+CTX_CONCAT dev TF exact exceeds ATT_UPDATE dev TF exact (attention-internal diagnosis),"context-vs-projection.csv: 24/6, 37/24, 57/47, 68/64",L19_SEED_1 b9 legacy 24/6 canonical 16/16; L19_SEED_2 b7 legacy 37/24 canonical 32/32; L19_SEED_4 b12 legacy 57/47 canonical 52/52; L18_SEED_2_CONTROL b6 legacy 68/64 canonical 30/30,PROJECTION_DROP_IS_PROBE_ARTIFACT,yes: rephrase as probe-training artifact,後続監査で撤回
+Legacy dev-TF accuracy decays monotonically with depth (readout representation diagnosis),tap-probes.csv: EMBEDDING 144 -> POST_LN_FINAL 90/144,canonical curve in corrected-layer-curve.csv,NOT_MAINTAINED,partial,後続監査で一部修正
+Attention blocks 11-18 degrade readout accuracy (attention-internal diagnosis),attention-internal report: NORM1->AFTER_ATTN drops in deep band,canonical deep band in corrected-attention-taps.csv,ATTENTION_REMAINS,no,後続監査で維持
+Output projection preserves linear class information (output-projection audit),"transport logit-exact at step 0, full-rank matrices",Y,TRANSPORT_PARITY_RETAINED,no,後続監査で維持
+Legacy Adam probe training converges on both taps,legacy trainCe at selected step (READOUT_PROBE_V1),C1 trainCe gap + gradient comparison (optimization-summary.csv),LEGACY_NOT_CONVERGED,yes: canonical solver required for reliable probes,後続監査で一部修正

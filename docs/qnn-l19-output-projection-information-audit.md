@@ -130,6 +130,11 @@ float 精度で計算した疑似逆行列による transport でも、最大 lo
 - 複数層にわたる residual/FFN 経路での情報回復を調べる。
 - head 間の interference や multi-head accumulation が実際に情報を損なうかを独立に監査する。
 
+> 後続監査による追記（2026-08, PROBE_OPTIMIZATION_AUDIT_V1）: 「次の候補」
+> の1つ目は本監査で検証され、座標安定な solver（PCA-whitened + L2 + L-BFGS）
+> が射影前後の両 tap で同一収束点へ到達することが確認された
+> （C1_OPTIMIZATION_INSUFFICIENCY）。transport parity の結論は不変。
+
 ## 実行予算
 
 - CPU trajectory 再生成：4 / 4

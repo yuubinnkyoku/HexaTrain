@@ -1,0 +1,5 @@
+configuration_id,seed,layers,final_step,max_drop_block,ar_selected_step,non_drop_first,non_drop_last,legacy_ctx_dev_exact_published,legacy_att_dev_exact_published
+L19_SEED_1,1,19,320,9,16,1,18,24,6
+L19_SEED_2,2,19,320,7,4,1,18,37,24
+L19_SEED_4,4,19,320,12,12,1,18,57,47
+L18_SEED_2_CONTROL,2,18,320,6,4,1,16,68,64

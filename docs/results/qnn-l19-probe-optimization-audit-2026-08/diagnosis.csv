@@ -1,0 +1,2 @@
+verdict,c1_layers,c2_layers,c3_layers,c4_layers,c5_layers,c1_ok,c2_ok,c3_ok,c4_ok,c5_ok,curve_maintained,curve_shrunk,curve_gone,projection_artifact,attention_remains,criteria_fixed_before_results
+C1_OPTIMIZATION_INSUFFICIENCY,4,1,3,0,0,true,false,true,false,false,false,false,false,true,true,true
