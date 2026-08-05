@@ -198,3 +198,19 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "probe-optimization audit self-test failed"
 }
+
+$SeedInstabilityExecutable = Join-Path $OutputDirectory "seed_instability_diagnostics_test.exe"
+& g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "host_tests\seed_instability_diagnostics.cpp") `
+    -o $SeedInstabilityExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "seed-instability diagnostics compilation failed"
+}
+
+& $SeedInstabilityExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "seed-instability diagnostics self-test failed"
+}

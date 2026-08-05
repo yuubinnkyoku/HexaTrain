@@ -207,6 +207,12 @@ try {
         "deterministic CPU probe-optimization audit reports regenerated (private; exporter self-test pre-fly uses them)"
     }
 
+    Invoke-Step "seed-instability-diagnostics-self-test" {
+        Invoke-PwshScript "seed-instability diagnostics self-test" `
+            (Join-Path $Root "scripts\run_l19_seed_instability_diagnostics.ps1") @("-SelfTest")
+        "deterministic rerun, intervention scope, corrected TRAIN contract, and negative branch control fixtures PASS"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -252,6 +258,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "probe-optimization audit public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_probe_optimization_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "seed-instability root-cause public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_seed_instability_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
