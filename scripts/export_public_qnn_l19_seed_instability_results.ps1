@@ -61,7 +61,10 @@ function Export-StableCsv([object[]]$Rows, [string]$Path) {
 }
 
 function Get-Sha256([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $text = [IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+    $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+    return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
 }
 
 function Assert-NoPrivateData([string]$Root) {

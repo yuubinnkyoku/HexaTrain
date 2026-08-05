@@ -52,117 +52,117 @@
     },
     {
       "name": "scripts\\export_public_qnn_l19_seed_instability_results.ps1",
-      "sha256": "77f5dba5588090b5a9c496ae7910c91cef9436485468cbb0859bc50b1616c39f"
+      "sha256": "485c3c02e5270dd6baa08588ed3dcdb66d224fe261ee4a2a783690702e2cd5e7"
     },
     {
       "name": "docs\\results\\qnn-l19-critical-margin-stabilization-2026-08\\gradient-attribution.csv",
-      "sha256": "75b0ae435cef638d499c36d7e80d45998563e9f8c5266c51fa0becca44680e28"
+      "sha256": "0683b18ea0008f258d1ad017d4b88c05604e2b9cdad9a48636fa99b0698f2817"
     },
     {
       "name": "docs\\results\\qnn-l19-readout-representation-diagnosis-2026-08\\trajectory-anchors.csv",
-      "sha256": "dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+      "sha256": "d48481a288dfc082368b4a8655728627219ce1606fc112b47dec6995b98aac3e"
     }
   ],
   "private_aggregate_hashes": [
     {
       "name": "measurement-audit.csv",
-      "sha256": "a96f80062f6f9ce1856576f45d6974693e8f801d37396abb9988ef25ca253c5c"
+      "sha256": "90f6afa0695d9aedb98c4de47eab62711197755782f20f09667e100aeecb1604"
     },
     {
       "name": "data-structure.csv",
-      "sha256": "eb2051cf2a9fc43f1449528a86bfe6e95c5257485ffbd684840a9eb6a5fd6c07"
+      "sha256": "150f289b8531a6fd7573e2b7ef80696fffad822eea1023cb787f591a2945c694"
     },
     {
       "name": "context-shift.csv",
-      "sha256": "7462ed7cbaf43af25e6457f608fbe3f13b9b4b893fd469e93494125da8504a23"
+      "sha256": "2cb88bb24b20566f8134ea56876b6cb59ca1aad8daaf9911c550cc4160864de6"
     },
     {
       "name": "optimization-interventions.csv",
-      "sha256": "64db076a3b3c5a6d04ab640d53c1b562df20f85db7ca05f4751b621b4e25d0a3"
+      "sha256": "49747e1c9193bc5b9652e8aecb4895fff6416d0c5510c41dcc9528834a1ea3f4"
     },
     {
       "name": "branch-ablation.csv",
-      "sha256": "adc5f002e0dbb0bc9a71404ebf1286a86a872efd3275b8bd56e9faf1423dd6c5"
+      "sha256": "cecfab6e67402e5be7f547b2096ff568e0becdf4628aa7d6abe700a6f0d30935"
     }
   ],
   "private_identity_hashes": [
     {
       "name": "qnn-probe-optimization-audit/manifest.csv",
-      "sha256": "3dd2862e75bb5156d34777aa9a9b0ccfe1b213cfdede54996b6570a8862995b7"
+      "sha256": "808a159e776b518c2be1655945ae70c804fa52f17dc05675cb28635facf41ae5"
     }
   ],
   "files": [
     {
       "name": "README.md",
-      "sha256": "9cb778436660a131622b45ae49d69c72a886ef356ee18879e39827bd5a88061c"
+      "sha256": "db35edac9fb8247b65e70b58be6e4fa4d27b7e0f3aa22acbfe48a738b84b1085"
     },
     {
       "name": "configuration.csv",
-      "sha256": "4ad065e09d32020905eac76a92ab62da5bd106604f80b08ca54cddaf78a03941"
+      "sha256": "2cdd2179fcaccd1dba4d17f78851e579aa59782c18cdf5756c90418177fd1821"
     },
     {
       "name": "evidence-inventory.csv",
-      "sha256": "cedceaf19ab26f7cf4f0ff3877fe22d7606d75a6c7c14d7372c02cbb8c917c8c"
+      "sha256": "99f797964c0cd3b511b0a0fea8a0f8668e5461de69c43978cb686e94274a7bba"
     },
     {
       "name": "hypothesis-registry.csv",
-      "sha256": "686bc956bc4f38963505ad05bb7bcd190d7abefeb1e4319135a683707c533a63"
+      "sha256": "63b132a234303632b2e6d01aa968ccdaa4059e5f858d2127b1b028fe36a6a6cf"
     },
     {
       "name": "decision-log.csv",
-      "sha256": "39cd816ac377b71943d4ef1faabc9fea04ab33a12bb0a0f7273e28d3dc1cf71e"
+      "sha256": "09b3d324c8610e9f9b7593746f5648cf1f63cd880b2aa00c57c11cea511c217c"
     },
     {
       "name": "measurement-audit.csv",
-      "sha256": "5653774e1bb8223355527f3188f5bf312d2802660fb72bc6e06a2506a85fa89a"
+      "sha256": "f468254c20af6923d7b02e8c3ae865761bd2f734ac30926493d21932db06c3bf"
     },
     {
       "name": "data-structure.csv",
-      "sha256": "07dfea603bae9d00b38813b6ec0dd9680f4e2a0c8fcf092848ed2b3f99e1d575"
+      "sha256": "059c571c4bb0798d53766f1f0bb1a3a1ae46ce863a3656ab3366cda61b4ae643"
     },
     {
       "name": "trajectory-divergence.csv",
-      "sha256": "553da4a605a5278b24d36d2690c53e2c3e17a6ec9fcb4bd85bd202fea8fb7ff3"
+      "sha256": "b31621db337075b385aac5878612d88e6c911d643f80f600c24910f2b434ae74"
     },
     {
       "name": "gradient-and-update-summary.csv",
-      "sha256": "87458d714f3e26bb1e2d94deff64682b12757dcc917aa6fb3b15d38585a26c5c"
+      "sha256": "02ba919f623b48f7cbe00b4c50ab1889845bd1fd1a08f18fb7f20e9d3e8348da"
     },
     {
       "name": "intervention-summary.csv",
-      "sha256": "60995a44958a6197cda7ce4f6b6200298174d60126fda4062aed2ed2b427dfb3"
+      "sha256": "5ce481d314c4059ca610a5d6c3f3fea3e58a6052d03813183801204f9ee45afb"
     },
     {
       "name": "negative-controls.csv",
-      "sha256": "a44a2dd13f07ab5a53a800b3a76250024cff217fca866e109d604052e05f4381"
+      "sha256": "d42a64aa415c15207580b88a06602b3ace059ed2f0ed1242d3e61bda3ffb2d51"
     },
     {
       "name": "seed-comparison.csv",
-      "sha256": "97de389ee6ae91c08be50437d291918b24ddde9ad2187d8cb7daa7a566e06414"
+      "sha256": "6973d298bd3a5fb7c8fc6f5d5a8192aca25703dbebede82f7e60b30d7e887744"
     },
     {
       "name": "depth-control.csv",
-      "sha256": "523019ff9851cf4c0b855b29e2decf35ca51751dc06ce0aea78a9706dc00b679"
+      "sha256": "81eb4515361551acae2070f62016896c5659a4f4bba0f3dd945ea39c76aa75de"
     },
     {
       "name": "hypothesis-outcomes.csv",
-      "sha256": "686bc956bc4f38963505ad05bb7bcd190d7abefeb1e4319135a683707c533a63"
+      "sha256": "63b132a234303632b2e6d01aa968ccdaa4059e5f858d2127b1b028fe36a6a6cf"
     },
     {
       "name": "causal-evidence.csv",
-      "sha256": "c0d28605f7eeeadfa345f7b92a6f2d08be82650b8f5a8df7084a301bcfc20d96"
+      "sha256": "a473437e2061835c51669cfcdc9752ad788190009aed42ea18dc45e5f5325463"
     },
     {
       "name": "diagnosis.csv",
-      "sha256": "0cdf0abaeac80511b640832426ba87db03f4b095ec3c43a9a0fd46bf3ca83719"
+      "sha256": "64e24b179034f9f36d7c6526a746d8d938a98c999690867351a47e4a2e4b980e"
     },
     {
       "name": "remaining-uncertainties.csv",
-      "sha256": "d4659518cff7518151cd557f5016e66d96f0f9e11503da11ea9dcf481e44643b"
+      "sha256": "d8fea462caf6f7b2e1b657e21d3039a5f460da7f296ecd8f278150a60dbb9316"
     },
     {
       "name": "next-step-candidates.csv",
-      "sha256": "0401596da7be4e0fac3fb049570158ebe6a62fda3f24d325b3d839a70c10c02a"
+      "sha256": "8e69c2b08b79b434ed720027719f30a00acce6d18a287a630d6ea22324182140"
     }
   ]
 }

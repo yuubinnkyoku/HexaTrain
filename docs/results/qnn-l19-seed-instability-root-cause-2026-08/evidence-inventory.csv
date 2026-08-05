@@ -5,7 +5,7 @@
 "gradient_attribution","qnn-l19-critical-margin-stabilization-2026-08/gradient-attribution.csv","PUBLIC_SOURCE","trajectory_timing"
 "legacy_probe_training_rows","source_audit_and_token_baseline","SUPERSEDED_MEASUREMENT","excluded_from_primary_cause"
 "historical_cross_seed_swap","attention_internal_diagnosis","INVALID_NOT_REUSED","excluded"
-"canonical_trajectory_anchors","qnn-l19-readout-representation-diagnosis-2026-08/trajectory-anchors.csv","PUBLIC_SHA256_VERIFIED","dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+"canonical_trajectory_anchors","qnn-l19-readout-representation-diagnosis-2026-08/trajectory-anchors.csv","PUBLIC_SHA256_VERIFIED","d48481a288dfc082368b4a8655728627219ce1606fc112b47dec6995b98aac3e"
 "step320_parameter_content_hash_L19_SEED_1","canonical_CPU_final_checkpoint_hash","HASH_ONLY_NO_WEIGHTS","fnv1a64:643e09a80b4de96e"
 "step320_parameter_content_hash_L19_SEED_2","canonical_CPU_final_checkpoint_hash","HASH_ONLY_NO_WEIGHTS","fnv1a64:35394c806dd48fca"
 "step320_parameter_content_hash_L19_SEED_4","canonical_CPU_final_checkpoint_hash","HASH_ONLY_NO_WEIGHTS","fnv1a64:ec23064d8b6a8807"
