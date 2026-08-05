@@ -195,6 +195,18 @@ try {
         "deterministic CPU output-projection audit reports regenerated (private; exporter self-test pre-fly uses them)"
     }
 
+    Invoke-Step "probe-optimization-self-test" {
+        Invoke-PwshScript "probe-optimization audit self-test" `
+            (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @("-SelfTest")
+        "probe-optimization audit self-test PASS (private)"
+    }
+
+    Invoke-Step "probe-optimization-run" {
+        Invoke-PwshScript "probe-optimization audit run" `
+            (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @()
+        "deterministic CPU probe-optimization audit reports regenerated (private; exporter self-test pre-fly uses them)"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -237,6 +249,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "output-projection audit public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_output_projection_audit_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "probe-optimization audit public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_probe_optimization_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
