@@ -1,0 +1,6 @@
+"uncertainty","impact","status"
+"context shortcut versus branch optimization/normalization interference","finer Attention mechanism; path-level compound cause remains causal","OPEN"
+"which attention layer/head first mediates the failure","localization only","OPEN"
+"corrected canonical probe layer curves","historical magnitude/cut-point only","NOT_RERUN_WITHIN_PROBE_BUDGET"
+"mixed-context training intervention","independent data-side causal confirmation","NOT_RUN_FULL_TRAINING_BUDGET_EXHAUSTED"
+"final holdout performance","not needed for root-cause diagnosis","UNOPENED"

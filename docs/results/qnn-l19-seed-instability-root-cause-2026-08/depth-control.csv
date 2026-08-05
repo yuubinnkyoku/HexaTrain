@@ -1,0 +1,4 @@
+"comparison","l19_seed_range","l18_seed2","conclusion"
+"baseline_mixed_free","30-63/144","65/144","control_not_worse"
+"attention_zero_mixed_free","144-144/144","144/144","matches_tested_L18_seed2_scope_control"
+"ffn_zero_mixed_free","26-39/144","23/144","negative_control_consistent"

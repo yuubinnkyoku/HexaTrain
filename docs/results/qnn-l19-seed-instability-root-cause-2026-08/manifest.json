@@ -1,0 +1,168 @@
+{
+  "schema": "L19_SEED_INSTABILITY_ROOT_CAUSE_V1",
+  "schema_version": 1,
+  "result_classification": "COMPOUND_ATTENTION_CONTEXT_SENSITIVITY_ROOT_CAUSE",
+  "evidence_strength": "ROOT_CAUSE_COMPOUND",
+  "major_experiment_cycles": 3,
+  "cpu_trajectory_regenerations": 4,
+  "short_training_runs": 4,
+  "full_training_runs": 20,
+  "parameter_state_interventions": 20,
+  "internal_state_interventions": 0,
+  "additional_probe_trainings": 0,
+  "final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "adb_operations": 0,
+  "ui_work": false,
+  "count_from_one": 0,
+  "final_holdout_hash": "fnv1a64:aa5081e6df658b4a",
+  "production_sources": [
+    {
+      "name": "app\\src\\main\\cpp\\tiny_language_model_cpu.cpp",
+      "sha256": "376f73180ba3f2236addb6afe3e198491c1c0f9fa4b51e70bb61745685cde109"
+    },
+    {
+      "name": "app\\src\\main\\cpp\\autoregressive_validation.h",
+      "sha256": "6bc5ac4b3f640155791cfebf34190654a31f3ec32c2196eb3b548f38bec75f4a"
+    },
+    {
+      "name": "host_tests\\depth_quality_lib.h",
+      "sha256": "10ddd50ee492955c6a9a3fedefbb020050ed15b0db5d7568a8787e15da8bd7d4"
+    },
+    {
+      "name": "host_tests\\readout_probe_lib.h",
+      "sha256": "41e9a7d06aa0a30f71a84d51f8c9b12a9d9b861412edfce6787a54ce4ef2ece6"
+    },
+    {
+      "name": "host_tests\\critical_margin_objective_lib.h",
+      "sha256": "05d255711816f747841c0b29cd4c60177de7d7912c5d097b4eb76df7fddac5c2"
+    },
+    {
+      "name": "host_tests\\seed_instability_diagnostics_lib.h",
+      "sha256": "0b2a9aaa470d9a886638d465bda676ecc8d1e3697a67d8012ae82cb44d2a7161"
+    },
+    {
+      "name": "host_tests\\seed_instability_diagnostics.cpp",
+      "sha256": "90bdbc6dd5a0ee32b4dbbccde0f5855cb564ee6f02b1bfbaab0cac22fa12e02d"
+    },
+    {
+      "name": "scripts\\run_l19_seed_instability_diagnostics.ps1",
+      "sha256": "a01fd84dfb1303016002d1bfa20a54cb3b934c4221843e946a4bd1e4dcb1226e"
+    },
+    {
+      "name": "scripts\\export_public_qnn_l19_seed_instability_results.ps1",
+      "sha256": "77f5dba5588090b5a9c496ae7910c91cef9436485468cbb0859bc50b1616c39f"
+    },
+    {
+      "name": "docs\\results\\qnn-l19-critical-margin-stabilization-2026-08\\gradient-attribution.csv",
+      "sha256": "75b0ae435cef638d499c36d7e80d45998563e9f8c5266c51fa0becca44680e28"
+    },
+    {
+      "name": "docs\\results\\qnn-l19-readout-representation-diagnosis-2026-08\\trajectory-anchors.csv",
+      "sha256": "dc32940b67e834b41d93a0f3130b36bfe0c083e2f61eba41e1ea97e3261bfb0d"
+    }
+  ],
+  "private_aggregate_hashes": [
+    {
+      "name": "measurement-audit.csv",
+      "sha256": "a96f80062f6f9ce1856576f45d6974693e8f801d37396abb9988ef25ca253c5c"
+    },
+    {
+      "name": "data-structure.csv",
+      "sha256": "eb2051cf2a9fc43f1449528a86bfe6e95c5257485ffbd684840a9eb6a5fd6c07"
+    },
+    {
+      "name": "context-shift.csv",
+      "sha256": "7462ed7cbaf43af25e6457f608fbe3f13b9b4b893fd469e93494125da8504a23"
+    },
+    {
+      "name": "optimization-interventions.csv",
+      "sha256": "64db076a3b3c5a6d04ab640d53c1b562df20f85db7ca05f4751b621b4e25d0a3"
+    },
+    {
+      "name": "branch-ablation.csv",
+      "sha256": "adc5f002e0dbb0bc9a71404ebf1286a86a872efd3275b8bd56e9faf1423dd6c5"
+    }
+  ],
+  "private_identity_hashes": [
+    {
+      "name": "qnn-probe-optimization-audit/manifest.csv",
+      "sha256": "3dd2862e75bb5156d34777aa9a9b0ccfe1b213cfdede54996b6570a8862995b7"
+    }
+  ],
+  "files": [
+    {
+      "name": "README.md",
+      "sha256": "9cb778436660a131622b45ae49d69c72a886ef356ee18879e39827bd5a88061c"
+    },
+    {
+      "name": "configuration.csv",
+      "sha256": "4ad065e09d32020905eac76a92ab62da5bd106604f80b08ca54cddaf78a03941"
+    },
+    {
+      "name": "evidence-inventory.csv",
+      "sha256": "cedceaf19ab26f7cf4f0ff3877fe22d7606d75a6c7c14d7372c02cbb8c917c8c"
+    },
+    {
+      "name": "hypothesis-registry.csv",
+      "sha256": "686bc956bc4f38963505ad05bb7bcd190d7abefeb1e4319135a683707c533a63"
+    },
+    {
+      "name": "decision-log.csv",
+      "sha256": "39cd816ac377b71943d4ef1faabc9fea04ab33a12bb0a0f7273e28d3dc1cf71e"
+    },
+    {
+      "name": "measurement-audit.csv",
+      "sha256": "5653774e1bb8223355527f3188f5bf312d2802660fb72bc6e06a2506a85fa89a"
+    },
+    {
+      "name": "data-structure.csv",
+      "sha256": "07dfea603bae9d00b38813b6ec0dd9680f4e2a0c8fcf092848ed2b3f99e1d575"
+    },
+    {
+      "name": "trajectory-divergence.csv",
+      "sha256": "553da4a605a5278b24d36d2690c53e2c3e17a6ec9fcb4bd85bd202fea8fb7ff3"
+    },
+    {
+      "name": "gradient-and-update-summary.csv",
+      "sha256": "87458d714f3e26bb1e2d94deff64682b12757dcc917aa6fb3b15d38585a26c5c"
+    },
+    {
+      "name": "intervention-summary.csv",
+      "sha256": "60995a44958a6197cda7ce4f6b6200298174d60126fda4062aed2ed2b427dfb3"
+    },
+    {
+      "name": "negative-controls.csv",
+      "sha256": "a44a2dd13f07ab5a53a800b3a76250024cff217fca866e109d604052e05f4381"
+    },
+    {
+      "name": "seed-comparison.csv",
+      "sha256": "97de389ee6ae91c08be50437d291918b24ddde9ad2187d8cb7daa7a566e06414"
+    },
+    {
+      "name": "depth-control.csv",
+      "sha256": "523019ff9851cf4c0b855b29e2decf35ca51751dc06ce0aea78a9706dc00b679"
+    },
+    {
+      "name": "hypothesis-outcomes.csv",
+      "sha256": "686bc956bc4f38963505ad05bb7bcd190d7abefeb1e4319135a683707c533a63"
+    },
+    {
+      "name": "causal-evidence.csv",
+      "sha256": "c0d28605f7eeeadfa345f7b92a6f2d08be82650b8f5a8df7084a301bcfc20d96"
+    },
+    {
+      "name": "diagnosis.csv",
+      "sha256": "0cdf0abaeac80511b640832426ba87db03f4b095ec3c43a9a0fd46bf3ca83719"
+    },
+    {
+      "name": "remaining-uncertainties.csv",
+      "sha256": "d4659518cff7518151cd557f5016e66d96f0f9e11503da11ea9dcf481e44643b"
+    },
+    {
+      "name": "next-step-candidates.csv",
+      "sha256": "0401596da7be4e0fac3fb049570158ebe6a62fda3f24d325b3d839a70c10c02a"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+"measurement","status","observed","expected","impact"
+"legacy_train_current_token_exact","FAIL","28","32","probe_fit_rows_contain_four_contract_conflicts"
+"corrected_train_current_token_exact","PASS","32","32","formal_batch_row_and_target_are_aligned"
+"cal_dev_current_token_ambiguity","PASS","0","0","target_is_unique"
+"cross_seed_swap_historical","INVALID","NOT_RECOMPUTED","ROW_WISE_IDENTITY","excluded_from_causal_inference"
+"projection_contribution_norm_cosine_historical","INVALID","ONE_ROW","DEV_AGGREGATE","excluded_from_causal_inference"
+"final_holdout","PASS","0","0","hash_only_not_evaluated"

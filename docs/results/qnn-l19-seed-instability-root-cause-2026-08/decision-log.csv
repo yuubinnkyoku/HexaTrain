@@ -1,0 +1,4 @@
+"cycle","experiment","reason","result","next"
+"1","measurement_and_homogeneous_vs_mixed","audit evaluator before mechanisms","ambiguity zero; context shift large; seed spread remains","optimizer state intervention"
+"2","step24 output/attention state intervention","separate head drift from upstream state","no common rescue; seed2 depends on late head","branch ablation"
+"3","attention-zero vs FFN-zero training","causal path isolation with negative control","attention-zero 144/144 all; FFN-zero 23-39/144","stop condition met"

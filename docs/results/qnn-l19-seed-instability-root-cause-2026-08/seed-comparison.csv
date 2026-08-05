@@ -1,0 +1,5 @@
+"configuration_id","baseline_homogeneous_free_exact","baseline_homogeneous_free_total","baseline_mixed_teacher_exact","baseline_mixed_free_exact","baseline_mixed_free_total","attention_zero_mixed_free_exact","attention_zero_mixed_free_total","ffn_zero_mixed_free_exact","ffn_zero_mixed_free_total"
+"L19_SEED_1","32","32","96","30","144","144","144","26","144"
+"L19_SEED_2","24","32","103","63","144","144","144","39","144"
+"L19_SEED_4","32","32","101","46","144","144","144","27","144"
+"L18_SEED_2_CONTROL","26","32","114","65","144","144","144","23","144"

@@ -1,0 +1,2 @@
+"root_cause","data_rule","training_context","model_path","mechanism_candidate","optimization","amplifier","attention_zero_all_exact","ffn_negative_control","l18_seed2_scope_control_matches","evidence_strength"
+"COMPOUND_ATTENTION_CONTEXT_SENSITIVITY_ROOT_CAUSE","CURRENT_TOKEN_SUCCESSOR_UNAMBIGUOUS","HOMOGENEOUS_PHASE0_ONLY","ATTENTION_PATH_CAUSALLY_REQUIRED_FOR_MIXED_FAILURE","CONTEXT_SHORTCUT_OR_BRANCH_OPTIMIZATION_INTERFERENCE","SEED_CHANGES_INITIAL_PARAMETERS_ONLY_TRAJECTORY_MECHANISM_UNRESOLVED","ARGMAX_FREE_RUNNING_EXACT","true","true","true","ROOT_CAUSE_COMPOUND"

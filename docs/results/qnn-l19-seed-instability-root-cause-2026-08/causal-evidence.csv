@@ -1,0 +1,4 @@
+"claim","intervention","seeds","outcome","negative_control","strength"
+"Attention path is required for mixed-context instability","ATTENTION_BRANCH_ZERO","L19_1_2_4","144/144 each","FFN_BRANCH_ZERO 26/39/27","MAJOR_FACTOR"
+"late output head drift is common cause","OUTPUT_FREEZE_AND_MOMENT_RESET","L19_1_2_4","mixed deltas +1/-30/+2 and +2/-7/+2","ATTENTION_MOMENT_RESET","REJECTED_COMMON_CAUSE"
+"effect is exclusive to L19","ATTENTION_BRANCH_ZERO","L18_SEED_2","65->144/144","single_depth18_seed2","NOT_EXCLUSIVE_IN_TESTED_SCOPE"
