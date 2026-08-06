@@ -246,3 +246,11 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "context-supervision stability self-test failed"
 }
+
+# CI uses a deterministic synthetic Japanese fixture; the licensed corpus and
+# all private token/checkpoint artifacts remain outside the repository.
+$pwshExe = Join-Path $PSHOME "pwsh.exe"
+& $pwshExe -NoProfile -File (Join-Path $Root "scripts\run_nicopedia_real_text_pilot.ps1") -SelfTest
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia real-text pipeline self-tests failed"
+}

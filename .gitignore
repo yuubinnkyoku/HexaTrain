@@ -12,5 +12,6 @@
 /diagnostics/*.log
 /diagnostics/*.txt
 *.iml
+__pycache__/
 # Local agent state
 .omo/
