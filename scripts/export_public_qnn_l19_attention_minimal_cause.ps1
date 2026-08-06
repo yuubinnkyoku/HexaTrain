@@ -47,6 +47,172 @@ function Assert-PrivateInputs([string]$Root) {
     }
 }
 
+function Test-PrivateInputs([string]$Root) {
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw 'PRIVATE_ROOT_NOT_DIRECTORY'
+    }
+    Assert-PrivateInputs $Root
+    return $true
+}
+
+function Assert-ExactUniqueSet([object[]]$Actual, [string[]]$Expected, [string]$Label) {
+    $actualStrings = @($Actual | ForEach-Object {[string]$_})
+    if (@($actualStrings | Sort-Object -Unique).Count -ne $actualStrings.Count) {
+        throw "${Label}_DUPLICATE"
+    }
+    if ((@($actualStrings | Sort-Object) -join "`n") -ne (@($Expected | Sort-Object) -join "`n")) {
+        throw "${Label}_SET_MISMATCH"
+    }
+}
+
+function Assert-TrackedBundle([string]$Output) {
+    $manifestPath = Join-Path $Output 'manifest.json'
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $expectedManifestProperties = @(
+        'schema_version','source_commit','protocol','result_classification','claim_strength',
+        'major_cycles','cpu_trajectory_regenerations','short_training_runs','full_training_runs',
+        'parameter_state_interventions','internal_state_interventions','additional_probes',
+        'final_holdout_opens','device_runs','htp_runs','adb_operations','ui_operations',
+        'count_from_one','ar_development_hash','final_holdout_hash',
+        'historical_parameter_hash_correction','hash_definition','files','sources',
+        'private_aggregates','allow_list'
+    )
+    Assert-ExactUniqueSet @($manifest.PSObject.Properties.Name) $expectedManifestProperties `
+        'MANIFEST_PROPERTIES'
+    $actualNames = @(Get-ChildItem -LiteralPath $Output -File | ForEach-Object Name | Sort-Object)
+    $expectedNames = @($allowList | Sort-Object)
+    if (($actualNames -join "`n") -ne ($expectedNames -join "`n")) {
+        throw 'TRACKED_ALLOW_LIST_MISMATCH'
+    }
+    if ((@($manifest.allow_list | Sort-Object) -join "`n") -ne ($expectedNames -join "`n")) {
+        throw 'MANIFEST_ALLOW_LIST_MISMATCH'
+    }
+    $expectedHashedFiles = @($allowList | Where-Object {$_ -ne 'manifest.json'})
+    $expectedSources = @(
+        'host_tests/attention_minimal_cause_lib.h',
+        'host_tests/attention_minimal_cause.cpp',
+        'scripts/run_l19_attention_minimal_cause.ps1',
+        'scripts/export_public_qnn_l19_attention_minimal_cause.ps1'
+    )
+    $expectedPrivateAggregates = @(
+        'cycle-001/measurement-audit.csv',
+        'cycle-001/evaluation-interventions.csv',
+        'cycle-002/training-results-cycle2.csv',
+        'cycle-003/training-results-cycle3.csv'
+    )
+    Assert-ExactUniqueSet @($manifest.files.path) $expectedHashedFiles 'MANIFEST_FILE_HASH_ENTRIES'
+    Assert-ExactUniqueSet @($manifest.sources.path) $expectedSources 'MANIFEST_SOURCE_HASH_ENTRIES'
+    Assert-ExactUniqueSet @($manifest.private_aggregates.aggregate) $expectedPrivateAggregates 'MANIFEST_PRIVATE_HASH_ENTRIES'
+    foreach ($entry in $manifest.files) {
+        $path = Join-Path $Output $entry.path
+        if ((Get-NormalizedSha256 $path) -ne $entry.sha256_normalized_lf) {
+            throw "TRACKED_FILE_HASH_MISMATCH:$($entry.path)"
+        }
+    }
+    foreach ($entry in $manifest.sources) {
+        $path = Join-Path $repoRoot $entry.path
+        if ((Get-NormalizedSha256 $path) -ne $entry.sha256_normalized_lf) {
+            throw "PRODUCTION_SOURCE_HASH_MISMATCH:$($entry.path)"
+        }
+    }
+    foreach ($entry in $manifest.private_aggregates) {
+        if ($entry.sha256_normalized_lf -notmatch '^[0-9a-f]{64}$') {
+            throw "PRIVATE_AGGREGATE_HASH_INVALID:$($entry.aggregate)"
+        }
+    }
+
+    foreach ($file in Get-ChildItem -LiteralPath $Output -File) {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        if ($text -match '[A-Za-z]:[\\/]' -or $text -match 'build[\\/]private-diagnostics') {
+            throw "PRIVATE_DATA_SCAN:$($file.Name)"
+        }
+    }
+
+    $expectedConfigurations = @('L18_SEED_2_CONTROL','L19_SEED_1','L19_SEED_2','L19_SEED_4')
+    $expectedEvaluationInterventions = @(
+        'EVAL_ATTENTION_ALPHA_0','EVAL_ATTENTION_ALPHA_0.25','EVAL_ATTENTION_ALPHA_0.5',
+        'EVAL_FFN_W2_ZERO_CONTROL','EVAL_FIXED_PREVIOUS','EVAL_FIXED_SELF',
+        'EVAL_FIXED_UNIFORM_CAUSAL','LEARNED_ALPHA_1_NOOP'
+    )
+    $expectedTrainingInterventions = @(
+        'FREEZE_QK_INITIAL','FREEZE_VO_INITIAL','TRAIN_FIXED_PREVIOUS',
+        'TRAIN_FIXED_SELF','TRAIN_FIXED_UNIFORM_CAUSAL'
+    )
+    $evaluation = @(Import-Csv (Join-Path $Output 'evaluation-interventions.csv'))
+    $training = @(Import-Csv (Join-Path $Output 'training-results.csv'))
+    if ($evaluation.Count -ne 32) { throw 'EVALUATION_ROW_COUNT_MISMATCH' }
+    if ($training.Count -ne 20) { throw 'TRAINING_ROW_COUNT_MISMATCH' }
+    if ((@($evaluation.configuration_id | Sort-Object -Unique) -join ',') -ne
+        ($expectedConfigurations -join ',')) { throw 'EVALUATION_CONFIGURATION_MISMATCH' }
+    if ((@($training.configuration_id | Sort-Object -Unique) -join ',') -ne
+        ($expectedConfigurations -join ',')) { throw 'TRAINING_CONFIGURATION_MISMATCH' }
+    Assert-ExactUniqueSet @($evaluation | ForEach-Object {"$($_.configuration_id)|$($_.intervention)"}) `
+        @($expectedConfigurations | ForEach-Object {$configuration = $_; $expectedEvaluationInterventions | ForEach-Object {"$configuration|$_"}}) `
+        'EVALUATION_CASE_INTERVENTIONS'
+    Assert-ExactUniqueSet @($training | ForEach-Object {"$($_.configuration_id)|$($_.intervention)"}) `
+        @($expectedConfigurations | ForEach-Object {$configuration = $_; $expectedTrainingInterventions | ForEach-Object {"$configuration|$_"}}) `
+        'TRAINING_CASE_INTERVENTIONS'
+    if (@($evaluation | Where-Object {$_.intervention -eq 'LEARNED_ALPHA_1_NOOP'}).Count -ne 4) {
+        throw 'ALPHA_ONE_CONTROL_MISSING'
+    }
+    if (@($evaluation | Where-Object {$_.intervention -eq 'EVAL_FFN_W2_ZERO_CONTROL'}).Count -ne 4) {
+        throw 'FFN_NEGATIVE_CONTROL_MISSING'
+    }
+    $selfRows = @($training | Where-Object {$_.intervention -eq 'TRAIN_FIXED_SELF'})
+    if ($selfRows.Count -ne 4 -or @($selfRows | Where-Object {
+        $_.free_token_exact -ne '144' -or $_.free_sequence_exact -ne '24'
+    }).Count -ne 0) { throw 'FIXED_SELF_CONTROL_MISMATCH' }
+    foreach ($intervention in @('TRAIN_FIXED_PREVIOUS','TRAIN_FIXED_UNIFORM_CAUSAL','FREEZE_QK_INITIAL','FREEZE_VO_INITIAL')) {
+        if (@($training | Where-Object {$_.intervention -eq $intervention}).Count -ne 4) {
+            throw "TRAINING_INTERVENTION_MISSING:$intervention"
+        }
+    }
+    if (@($evaluation | Where-Object {$_.all_finite -ne 'true'}).Count -ne 0 -or
+        @($training | Where-Object {$_.all_finite -ne 'true' -or $_.train_finite -ne 'true'}).Count -ne 0) {
+        throw 'NONFINITE_PUBLIC_RESULT'
+    }
+    if (@($evaluation | Where-Object {$_.checkpoint_preserved -ne 'true'}).Count -ne 0) {
+        throw 'CHECKPOINT_PRESERVATION_MISMATCH'
+    }
+    if (@($training | Where-Object {$_.frozen_scope_pass -ne 'true'}).Count -ne 0) {
+        throw 'FROZEN_SCOPE_MISMATCH'
+    }
+    $expectedAlphaOne = @{L19_SEED_1=30; L19_SEED_2=63; L19_SEED_4=46; L18_SEED_2_CONTROL=65}
+    $expectedAlphaOneSequences = @{L19_SEED_1=2; L19_SEED_2=6; L19_SEED_4=6; L18_SEED_2_CONTROL=8}
+    $expectedFfnZero = @{L19_SEED_1=20; L19_SEED_2=13; L19_SEED_4=9; L18_SEED_2_CONTROL=19}
+    foreach ($row in @($evaluation | Where-Object {$_.intervention -eq 'LEARNED_ALPHA_1_NOOP'})) {
+        if ([int]$row.free_token_exact -ne $expectedAlphaOne[$row.configuration_id] -or
+            [int]$row.free_token_total -ne 144 -or
+            [int]$row.free_sequence_exact -ne $expectedAlphaOneSequences[$row.configuration_id] -or
+            [int]$row.free_sequence_total -ne 24) {
+            throw "ALPHA_ONE_OUTCOME_MISMATCH:$($row.configuration_id)"
+        }
+    }
+    foreach ($row in @($evaluation | Where-Object {$_.intervention -eq 'EVAL_FFN_W2_ZERO_CONTROL'})) {
+        if ([int]$row.free_token_exact -ne $expectedFfnZero[$row.configuration_id] -or
+            [int]$row.free_token_total -ne 144 -or [int]$row.free_sequence_exact -ne 0 -or
+            [int]$row.free_sequence_total -ne 24) {
+            throw "FFN_NEGATIVE_OUTCOME_MISMATCH:$($row.configuration_id)"
+        }
+    }
+    if ([int]$manifest.schema_version -ne 1 -or $manifest.protocol -ne 'ATTENTION_MINIMAL_CAUSE_V1' -or
+        $manifest.result_classification -ne 'BROAD_DISTRACTOR_MIXING_PLUS_VO_REST_COADAPTATION' -or
+        $manifest.claim_strength -ne 'MAJOR_FACTOR' -or
+        [int]$manifest.major_cycles -ne 3 -or [int]$manifest.cpu_trajectory_regenerations -ne 4 -or
+        [int]$manifest.short_training_runs -ne 0 -or [int]$manifest.full_training_runs -ne 24 -or
+        [int]$manifest.parameter_state_interventions -ne 20 -or
+        [int]$manifest.internal_state_interventions -ne 28 -or [int]$manifest.additional_probes -ne 0 -or
+        [int]$manifest.final_holdout_opens -ne 0 -or [int]$manifest.device_runs -ne 0 -or
+        [int]$manifest.htp_runs -ne 0 -or [int]$manifest.adb_operations -ne 0 -or
+        [int]$manifest.ui_operations -ne 0 -or [int]$manifest.count_from_one -ne 0) {
+        throw 'MANIFEST_SCIENTIFIC_CONTRACT_MISMATCH'
+    }
+    return $manifest
+}
+
 function Export-Bundle([string]$Private, [string]$Output, [string]$Commit) {
     Assert-PrivateInputs $Private
     New-Item -ItemType Directory -Force -Path $Output | Out-Null
@@ -225,22 +391,26 @@ function Export-Bundle([string]$Private, [string]$Output, [string]$Commit) {
 $resolvedPrivate = Join-Path $repoRoot $PrivateRoot
 $resolvedOutput = Join-Path $repoRoot $OutputRoot
 if ($SelfTest) {
-    $trackedManifest = Get-Content -Raw (Join-Path $resolvedOutput 'manifest.json') | ConvertFrom-Json
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("phonelm-attention-minimal-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Force -Path $temp | Out-Null
-    try {
-        Copy-Item -LiteralPath (Join-Path $resolvedOutput 'README.md') -Destination (Join-Path $temp 'README.md')
-        Export-Bundle $resolvedPrivate $temp $trackedManifest.source_commit
-        foreach ($name in $allowList) {
-            if ((Get-NormalizedSha256 (Join-Path $temp $name)) -ne
-                (Get-NormalizedSha256 (Join-Path $resolvedOutput $name))) {
-                throw "DETERMINISTIC_EXPORT_MISMATCH:$name"
+    $trackedManifest = Assert-TrackedBundle $resolvedOutput
+    if (Test-PrivateInputs $resolvedPrivate) {
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("phonelm-attention-minimal-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $temp | Out-Null
+        try {
+            Copy-Item -LiteralPath (Join-Path $resolvedOutput 'README.md') -Destination (Join-Path $temp 'README.md')
+            Export-Bundle $resolvedPrivate $temp $trackedManifest.source_commit
+            foreach ($name in $allowList) {
+                if ((Get-NormalizedSha256 (Join-Path $temp $name)) -ne
+                    (Get-NormalizedSha256 (Join-Path $resolvedOutput $name))) {
+                    throw "DETERMINISTIC_EXPORT_MISMATCH:$name"
+                }
             }
+        } finally {
+            Remove-Item -LiteralPath $temp -Recurse -Force
         }
-        Write-Host 'ATTENTION_MINIMAL_CAUSE_EXPORT_SELF_TEST_PASS'
-    } finally {
-        Remove-Item -LiteralPath $temp -Recurse -Force
+    } else {
+        Write-Host 'ATTENTION_MINIMAL_CAUSE_PRIVATE_REGEN_SKIPPED: tracked hashes, source hashes, schemas, controls, and safety contract verified'
     }
+    Write-Host 'ATTENTION_MINIMAL_CAUSE_EXPORT_SELF_TEST_PASS'
 } else {
     Export-Bundle $resolvedPrivate $resolvedOutput $SourceCommit
     Write-Host 'ATTENTION_MINIMAL_CAUSE_EXPORT_PASS'

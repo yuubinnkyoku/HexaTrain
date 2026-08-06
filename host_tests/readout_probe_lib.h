@@ -482,7 +482,6 @@ inline ProbeTrainResult trainProbe(const LayerSet& set, int rep,
   for (int step = 1; step <= kProbeSteps; ++step) {
     std::fill(gradW.begin(), gradW.end(), 0.0);
     std::fill(gradB.begin(), gradB.end(), 0.0);
-    double loss = 0.0;
     const double invN = 1.0 / static_cast<double>(trainEnd - trainBegin);
     for (std::size_t r = trainBegin; r < trainEnd; ++r) {
       probeForward(result.probe, stats, f.data() + r * set.dim, logits.data());
@@ -494,8 +493,6 @@ inline ProbeTrainResult trainProbe(const LayerSet& set, int rep,
           return result;
         }
       const auto p = softmaxRow(logits.data(), result.probe.classes);
-      loss += ceFromLogits(logits.data(), result.probe.classes,
-                           rowsTruth(trainRows, r));
       for (int c = 0; c < result.probe.classes; ++c) {
         const double delta = p[static_cast<std::size_t>(c)] -
                              (c == static_cast<int>(rowsTruth(trainRows, r)) ? 1.0 : 0.0);
