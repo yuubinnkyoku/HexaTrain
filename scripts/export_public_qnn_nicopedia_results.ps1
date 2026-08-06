@@ -513,8 +513,9 @@ $tokenizerConfiguration = @([pscustomobject]@{ selected = $corpus.selected_token
     unknown_rate = 0; training_required = "false"; selection_time = "before model outcomes"; reason = $corpus.selected_tokenizer_reason })
 $modelRows = foreach ($model in $protocol.models) {
     [pscustomobject]@{ model = $model.name; layers = $model.layers; context = $protocol.context_tokens; vocabulary = 256
-        dimension = $model.dimension; ffn = $model.ffn; heads = $model.heads; parameters = $model.parameters
-        optimizer = "Adam"; learning_rate = $protocol.optimizer.learning_rate; steps = $protocol.steps; batch_chunks = $protocol.batch_chunks }
+        dimension = $model.dimension; ffn = $model.ffn; heads = $model.heads; parameters = $model.parameters; normalization_epsilon = 1e-5
+        optimizer = "Adam"; learning_rate = $protocol.optimizer.learning_rate; steps = $protocol.steps; batch_chunks = $protocol.batch_chunks
+        checkpoint_interval = $protocol.checkpoint_interval; training_order_seed = $protocol.training_order_seed }
 }
 $runtimeRows = @()
 foreach ($benchmark in $benchmarks) {
@@ -660,7 +661,7 @@ $manifest = [ordered]@{
     cleaning_protocol_hash = "sha256:$((Get-StringSha256 'unicode=NFKC;newlines=LF;control=C0-except-LF-TAB;html=text;drop=script,style,noscript;block-boundaries=LF;entities=decode;min-bytes=96;max-bytes=1048576'))"
     split_protocol_hash = "sha256:$((Get-StringSha256 'article-stable-sha256-v1;train=9000;validation=500;development=400;final=100;exact-clean-text-dedupe-before-split'))"
     tokenizer_protocol_hash = ($corpus.tokenizer_candidates | Where-Object candidate -eq "utf8_byte").protocol_hash
-    model_config_hash = "sha256:$((Get-StringSha256 'v=256;t=32;d=16;ffn=32;heads=2;layers=6,19;adam=0.003,0.9,0.999,1e-8;steps=1000;batch=8'))"
+    model_config_hash = "sha256:$((Get-StringSha256 'v=256;t=32;d=16;ffn=32;heads=2;layers=6,19;normalization-epsilon=1e-5;adam=0.003,0.9,0.999,1e-8;steps=1000;batch=8;checkpoint-interval=100;training-order-seed=20260806;validation-chunks=256;development-chunks=512'))"
     pilot_train_articles = ($corpus.cache_identities.train_pilot.articles); pilot_train_clean_utf8_bytes = ($corpus.cache_identities.train_pilot.clean_utf8_bytes)
     pilot_train_target_tokens = ($corpus.cache_identities.train_pilot.target_tokens); seeds = @(1, 2, 4)
     smoke_runs = 2; formal_training_runs = 6; additional_control_runs = 0; source_full_scans = 2
