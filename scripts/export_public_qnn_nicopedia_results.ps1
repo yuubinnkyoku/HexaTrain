@@ -219,7 +219,7 @@ $hypotheses = Get-Content -LiteralPath (Join-Path $resolvedReports "decisions/de
 $benchmarks = @()
 $benchmarks += Import-Csv (Join-Path $resolvedReports "smoke/benchmark-l6.csv")
 $benchmarks += Import-Csv (Join-Path $resolvedReports "smoke/benchmark-l19.csv")
-if ($benchmarks.Count -ne 2 -or (($benchmarks | ForEach-Object layers | Sort-Object) -join ',') -ne '6,19') {
+if ($benchmarks.Count -ne 2 -or (($benchmarks | Sort-Object { [int]$_.layers } | ForEach-Object layers) -join ',') -ne '6,19') {
     throw "Smoke benchmark identity mismatch"
 }
 foreach ($benchmark in $benchmarks) {
