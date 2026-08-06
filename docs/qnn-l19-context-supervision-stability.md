@@ -2,6 +2,11 @@
 
 ## 結論
 
+> **実テキストでの境界:** 後続の
+> [ニコニコ大百科実テキストpilot](qnn-nicopedia-real-text-pilot.md)では、held-out NLLの
+> 同程度のseed不安定性は再現しなかった。以下の因果結論は、current tokenだけでtargetが
+> 決まる均質な人工TRAINに対するものであり、自然な日本語へ無条件に一般化しない。
+
 均質なphase-0 batchだけを反復するTRAINは、L19のmixed-context seed不安定性を
 生む上流のデータ条件だった。通常のlearned causal Attentionを変えず、320 stepの
 うち80 batch（25%）だけをtarget不変のmixed prefixへ置換すると、L19 seed 1/2/4は

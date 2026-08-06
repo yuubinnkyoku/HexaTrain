@@ -3,7 +3,6 @@
 PhoneLMで再現・検証した研究結果の公開用indexです。生ログ、端末識別情報、ローカルパス、APK、QAIRT配布バイナリは含みません。
 
 - [QNN HTP generic Transformer depth/head envelope (2026-07)](qnn-htp-generic-depth-head-2026-07/README.md) — generic layer/head graph、5 formal構成25/25 finite、L6/H8 combined、L18→L19およびFFN371→372数値境界、bitwise再現性、exclusive性能、実UI結果。
-- [QNN HTP generic depth-quality diagnosis (2026-08)](qnn-htp-generic-depth-quality-2026-08/README.md) — L18/L19 phase-1 trajectory、明示的stability候補3種、finite/QNN return監査、および採用stabilizerなしの結果。
 - [QNN HTP full training-step result (2026-07)](qnn-htp-full-training-step-2026-07/README.md) — 2層ReLU MLPのforward、MSE loss、backward、SGD updateを単一QNN HTP graphで実行したcorrectness・5 seed収束・性能結果。
 - [QNN HTP tiny language model stability result (2026-07)](qnn-htp-tiny-language-model-stability-2026-07/README.md) — 同期checkpointと2×2経路分離によるAdam反復更新の診断、global-norm clipping後の5 seed収束、および4規則列autoregressive inferenceの未達結果。
 - [QNN HTP tiny language model autoregressive-gap result (2026-07)](qnn-htp-tiny-language-model-generation-2026-07/README.md) — same-prefix parity、pattern-balanced phase sampling、oracle/free-running分離、および5 seed exact rolloutの部分成功結果。
@@ -21,3 +20,4 @@ PhoneLMで再現・検証した研究結果の公開用indexです。生ログ�
 - [QNN L19 seed-instability root-cause investigation (2026-08)](qnn-l19-seed-instability-root-cause-2026-08/README.md) — Attention-zeroがL19 seed 1/2/4とL18 seed 2 controlを全てmixed 144/144へ回復させ、FFN-zeroは23--39/144へ悪化する因果対照から、homogeneous-only training、Attentionが媒介するmixed-context感度、free-running増幅の複合原因を判定。context shortcutは詳細機構候補とし、旧TRAIN probe row、cross-seed swap、contribution集計の不具合も訂正。
 - [QNN L19 Attention minimal-cause investigation (2026-08)](qnn-l19-attention-minimal-cause-2026-08/README.md) — fixed self/previous/uniformとQ/K・V/O freezeでAttention-zeroを分解し、内容依存Q/K学習ではなく、広域distractor混合とV/O・残りのモデルのseed依存共同適応を主要因として支持。旧parameter content hashのzero-support-mask実装も訂正。
 - [QNN L19 context-supervision stability study (2026-08)](qnn-l19-context-supervision-stability-2026-08/README.md) — 通常Attentionを維持し、target不変mixed prefix 80/320 batchでL19 seed 1/2/4を安定化。histogram-matched homogeneous対照、same-multiset curriculum、12.5%/6.25% dose負例から、homogeneous-only TRAINがmixed-prefix挙動を未拘束にする上流条件だと支持。不変性機構は一部支持。
+- [Nicopedia real-text seed-stability pilot (2026-08)](qnn-nicopedia-real-text-pilot-2026-08/README.md) — 記事単位split、TRAIN限定byte tokenizer、L6/L19 seed 1/2/4のhost-only CPU pilot。held-out NLLの大きなseed不安定性は非再現、free-running生成のseed差は一部再現。本文・タイトル・識別子・tokenizer・checkpointは非公開。

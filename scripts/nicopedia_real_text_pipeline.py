@@ -31,6 +31,9 @@ SPLIT_SALT = b"PhoneLM/Nicopedia/split/v1\0"
 ORDER_SALT = b"PhoneLM/Nicopedia/subset/v1\0"
 EXPECTED_HEADER = ["pg_id", "pg_title", "pg_view_title", "pg_yomi", "pg_category", "pg_created"]
 EXPECTED_BODY = ["pg_id", "txt_text", "pg_rev_created"]
+VALID_CATEGORIES = {"a", "i", "l", "o", "v"}
+FNV_OFFSET = 1469598103934665603
+FNV_PRIME = 1099511628211
 BLOCK_TAGS = {
     "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
     "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -260,14 +263,15 @@ def write_byte_cache(path: Path, articles: list[tuple[int, int, str]], context: 
                     continue
                 handle.write(struct.pack(">Q", article_hash))
                 handle.write(window)
-    digest = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
+    evidence = cache_content_identity(path)
     return {
         "path": str(path.resolve()),
         "articles": len(articles),
         "clean_utf8_bytes": sum(len(item[2].encode("utf-8")) for item in articles),
         "chunks": chunk_count,
         "target_tokens": chunk_count * context,
-        "sha256": "sha256:" + digest,
+        "sha256": evidence["sha256"],
+        "fnv1a64": evidence["fnv1a64"],
     }
 
 
@@ -284,6 +288,8 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
         try:
             for _, row in iter_csv(path, EXPECTED_HEADER):
                 article_id, category = row[0], row[4]
+                if category not in VALID_CATEGORIES:
+                    raise ValueError("UNKNOWN_ARTICLE_CATEGORY")
                 if article_id in header_types:
                     raise ValueError("DUPLICATE_HEADER_ID")
                 header_types[article_id] = category
@@ -456,7 +462,7 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
         "clean_utf8_bytes": sum(clean_lengths),
         "raw_length_bytes": {"min": min(raw_lengths), "p50": percentile(raw_lengths, .5), "p95": percentile(raw_lengths, .95), "max": max(raw_lengths)},
         "clean_length_bytes": {"min": min(clean_lengths), "p50": percentile(clean_lengths, .5), "p95": percentile(clean_lengths, .95), "max": max(clean_lengths)},
-        "empty_body_rate": 0.0,
+        "empty_body_rate": exclusions["empty_or_markup_only"] / max(1, body_records),
         "newline_record_count": newline_records,
         "raw_newline_count": raw_newlines,
         "markup_record_count": markup_records,
@@ -502,7 +508,127 @@ def read_cache(path: Path) -> tuple[int, int, int, list[tuple[int, bytes]]]:
             records.append((article_hash, window))
         if handle.read(1):
             raise ValueError("CACHE_TRAILING_BYTES")
-    return context, vocabulary, count, records
+        return context, vocabulary, count, records
+
+
+def fnv_update(value: int, payload: bytes) -> int:
+    for byte in payload:
+        value = ((value ^ byte) * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+    return value
+
+
+def split_mix(value: int) -> int:
+    value = (value + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return value ^ (value >> 31)
+
+
+def training_order_identity(record_count: int, steps: int, batch_size: int, seed: int) -> str:
+    if record_count <= 0:
+        raise ValueError("TRAIN_CACHE_EMPTY")
+    byte_order = "little" if sys.byteorder == "little" else "big"
+    value = FNV_OFFSET
+    state = seed
+    for index in range(steps * batch_size):
+        state = split_mix((state + index) & 0xFFFFFFFFFFFFFFFF)
+        selected = state % record_count
+        value = fnv_update(value, selected.to_bytes(8, byte_order))
+    return f"fnv1a64:{value:016x}"
+
+
+def cache_content_identity(path: Path) -> dict[str, object]:
+    digest = hashlib.sha256()
+    with path.open("rb") as raw:
+        while block := raw.read(1024 * 1024):
+            digest.update(block)
+    with path.open("rb") as handle:
+        if handle.read(11) != b"NPRTBYTEV1\n":
+            raise ValueError("CACHE_MAGIC")
+        header = handle.read(16)
+        if len(header) != 16:
+            raise ValueError("CACHE_TRUNCATED_HEADER")
+        context, vocabulary, count = struct.unpack(">IIQ", header)
+        if context < 8 or context > 256 or vocabulary != 256 or count > 10_000_000:
+            raise ValueError("CACHE_HEADER_INVALID")
+        byte_order = "little" if sys.byteorder == "little" else "big"
+        value = FNV_OFFSET
+        value = fnv_update(value, context.to_bytes(4, byte_order))
+        value = fnv_update(value, vocabulary.to_bytes(4, byte_order))
+        value = fnv_update(value, count.to_bytes(8, byte_order))
+        for _ in range(count):
+            article_bytes = handle.read(8)
+            window = handle.read(context + 1)
+            if len(article_bytes) != 8 or len(window) != context + 1:
+                raise ValueError("CACHE_RECORD_TRUNCATED")
+            article_hash = int.from_bytes(article_bytes, "big")
+            value = fnv_update(value, article_hash.to_bytes(8, byte_order))
+            value = fnv_update(value, window)
+        if handle.read(1):
+            raise ValueError("CACHE_TRAILING_BYTES")
+    return {
+        "sha256": "sha256:" + digest.hexdigest(),
+        "fnv1a64": f"fnv1a64:{value:016x}",
+        "context": context,
+        "vocabulary": vocabulary,
+        "chunks": count,
+    }
+
+
+def build_private_evidence(private_root: Path) -> dict[str, object]:
+    source_manifest_path = private_root / "source-manifest.json"
+    corpus_report_path = private_root / "reports" / "public-corpus-aggregate.json"
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    corpus = json.loads(corpus_report_path.read_text(encoding="utf-8"))
+    if source_manifest.get("dataset_name") != "Nicopedia data" or source_manifest.get("dataset_version") != "2024-11-25":
+        raise ValueError("SOURCE_MANIFEST_IDENTITY")
+    if corpus.get("dataset_name") != "Nicopedia data" or corpus.get("dataset_version") != "2024-11-25":
+        raise ValueError("CORPUS_REPORT_IDENTITY")
+    cache_evidence: dict[str, object] = {}
+    for name in ("train_pilot", "validation", "development"):
+        identity = cache_content_identity(private_root / "caches" / f"{name}.bin")
+        expected = corpus["cache_identities"][name]
+        if identity["sha256"] != expected["sha256"] or identity["chunks"] != expected["chunks"]:
+            raise ValueError("CACHE_REPORT_IDENTITY_MISMATCH")
+        if identity["context"] != corpus["context_tokens"] or identity["vocabulary"] != 256:
+            raise ValueError("CACHE_PROTOCOL_MISMATCH")
+        cache_evidence[name] = identity
+    if any((private_root / "caches").glob("*final*")):
+        raise ValueError("FINAL_TEST_CACHE_PRESENT")
+    evidence = {
+        "schema": "NICOPEDIA_REAL_TEXT_PRIVATE_EVIDENCE_V1",
+        "dataset_name": "Nicopedia data",
+        "dataset_version": "2024-11-25",
+        "source_file_aggregate_sha256": source_manifest["aggregate_sha256"],
+        "corpus_aggregate_hash": corpus["aggregate_hash"],
+        "corpus_report_sha256": "sha256:" + hashlib.file_digest(corpus_report_path.open("rb"), "sha256").hexdigest(),
+        "cache_identities": cache_evidence,
+        "training_order": {
+            "seed": 20260806,
+            "steps": 1000,
+            "batch_chunks": 8,
+            "fnv1a64": training_order_identity(int(cache_evidence["train_pilot"]["chunks"]), 1000, 8, 20260806),
+        },
+        "final_test_cache_present": False,
+    }
+    evidence["binding_sha256"] = normalized_json_hash(evidence)
+    return evidence
+
+
+def audit_private_evidence(private_root: Path) -> dict[str, object]:
+    evidence = build_private_evidence(private_root)
+    write_json(private_root / "reports" / "evidence-provenance.json", evidence)
+    print("private_evidence_audit=PASS caches=3 final_test_cache=0")
+    return evidence
+
+
+def verify_private_evidence(private_root: Path) -> None:
+    evidence_path = private_root / "reports" / "evidence-provenance.json"
+    recorded = json.loads(evidence_path.read_text(encoding="utf-8"))
+    expected = build_private_evidence(private_root)
+    if recorded != expected:
+        raise ValueError("PRIVATE_EVIDENCE_BINDING_MISMATCH")
+    print("private_evidence_verification=PASS caches=3 final_test_cache=0")
 
 
 def self_test() -> None:
@@ -561,12 +687,24 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--inventory", action="store_true")
     parser.add_argument("--prepare", action="store_true")
+    parser.add_argument("--audit-evidence", action="store_true")
+    parser.add_argument("--verify-evidence", action="store_true")
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--private-root", type=Path)
     parser.add_argument("--context", type=int, default=32)
     args = parser.parse_args()
     if args.self_test:
         self_test()
+        return 0
+    if args.audit_evidence or args.verify_evidence:
+        if args.inventory or args.prepare or not args.private_root or args.source_root:
+            parser.error("evidence modes require only --private-root")
+        if args.audit_evidence and args.verify_evidence:
+            parser.error("select exactly one evidence mode")
+        if args.audit_evidence:
+            audit_private_evidence(args.private_root.resolve())
+        else:
+            verify_private_evidence(args.private_root.resolve())
         return 0
     if not args.source_root or not args.private_root:
         parser.error("--source-root and --private-root are required")

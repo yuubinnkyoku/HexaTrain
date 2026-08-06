@@ -569,7 +569,7 @@ void runTraining(const fs::path& trainPath, const fs::path& validationPath, cons
   const std::string fixedOrderHash = orderHash(order);
   fs::create_directories(outputDirectory);
   std::ofstream trajectory(outputDirectory / "training-trajectory.csv", std::ios::trunc);
-  trajectory << "seed,layers,step,train_nll,validation_nll,validation_perplexity,validation_top1,validation_top5,validation_mean_rank,validation_margin,finite,parameter_hash\n";
+  trajectory << "seed,layers,step,train_nll,validation_nll,validation_perplexity,validation_top1,validation_top5,validation_mean_rank,validation_margin,validation_tokens,finite,parameter_hash\n";
   double bestNll = std::numeric_limits<double>::infinity();
   std::uint32_t bestStep = 0;
   Parameters bestParameters;
@@ -677,14 +677,21 @@ void runCompare(const fs::path& trainPath, const fs::path& developmentPath,
   std::vector<Checkpoint> checkpoints;
   for (const auto& path : checkpointPaths) checkpoints.push_back(loadCheckpoint(path));
   const lm::Config config = checkpoints.front().config;
-  for (const auto& checkpoint : checkpoints) {
+  const std::array<std::uint32_t, 3> expectedSeeds{1, 2, 4};
+  for (std::size_t checkpointIndex = 0; checkpointIndex < checkpoints.size(); ++checkpointIndex) {
+    const auto& checkpoint = checkpoints[checkpointIndex];
     if (checkpoint.config.vocabularySize != config.vocabularySize || checkpoint.config.tokens != config.tokens ||
         checkpoint.config.dimension != config.dimension ||
         checkpoint.config.feedForwardDimension != config.feedForwardDimension ||
         checkpoint.config.numLayers != config.numLayers || checkpoint.config.numHeads != config.numHeads ||
         checkpoint.config.epsilon != config.epsilon) throw std::runtime_error("COMPARE_CONFIG_MISMATCH");
+    if (checkpoint.seed != expectedSeeds[checkpointIndex]) throw std::runtime_error("COMPARE_SEED_ORDER_MISMATCH");
   }
-  if (config.tokens != development.context || config.vocabularySize != development.vocabulary) {
+  if (config.vocabularySize != 256 || config.tokens != 32 || config.dimension != 16 ||
+      config.feedForwardDimension != 32 || config.numHeads != 2 ||
+      (config.numLayers != 6 && config.numLayers != 19)) throw std::runtime_error("COMPARE_FORMAL_CONFIG_MISMATCH");
+  if (config.tokens != train.context || config.vocabularySize != train.vocabulary ||
+      config.tokens != development.context || config.vocabularySize != development.vocabulary) {
     throw std::runtime_error("COMPARE_CACHE_CONFIG_MISMATCH");
   }
   fs::create_directories(outputDirectory);
@@ -693,6 +700,11 @@ void runCompare(const fs::path& trainPath, const fs::path& developmentPath,
   std::vector<Metrics> seedMetrics;
   for (const auto& checkpoint : checkpoints) {
     const Metrics metrics = evaluate(development, config, checkpoint.parameters, 512);
+    if (!metrics.finite || !std::isfinite(metrics.nll) || !std::isfinite(metrics.perplexity) ||
+        !std::isfinite(metrics.top1) || !std::isfinite(metrics.top5) ||
+        !std::isfinite(metrics.meanRank) || !std::isfinite(metrics.meanMargin)) {
+      throw std::runtime_error("DEVELOPMENT_EVALUATION_NONFINITE");
+    }
     seedMetrics.push_back(metrics);
     teacher << checkpoint.seed << ',' << config.numLayers << ',' << checkpoint.step << ',';
     writeMetrics(teacher, metrics);
@@ -827,6 +839,10 @@ void runCompare(const fs::path& trainPath, const fs::path& developmentPath,
   const auto nllValues = std::array<double, 3>{seedMetrics[0].nll, seedMetrics[1].nll, seedMetrics[2].nll};
   const double nllMinimum = *std::min_element(nllValues.begin(), nllValues.end());
   const double nllMaximum = *std::max_element(nllValues.begin(), nllValues.end());
+  for (double value : {nllMinimum, nllMaximum, teacherAgreement, teacherJs, freeAgreement, freeJs,
+                       firstDivergenceSum, repeatCount, loopCount, invalidUtf8}) {
+    if (!std::isfinite(value)) throw std::runtime_error("COMPARE_AGGREGATE_NONFINITE");
+  }
   stability << "layers,seeds,development_nll_min,development_nll_max,development_nll_range,teacher_argmax_agreement,teacher_pairwise_js,free_argmax_agreement,free_pairwise_js,mean_first_divergence_position,repeat_rate,short_loop_rate,invalid_utf8_generation_rate,generation_completion_rate,aligned_teacher_tokens,free_positions,final_test_used\n";
   stability << config.numLayers << ",1;2;4," << nllMinimum << ',' << nllMaximum << ',' << nllMaximum - nllMinimum << ','
             << teacherAgreement / std::max<std::uint64_t>(1, alignedTokens) << ',' << teacherJs / std::max<std::uint64_t>(1, alignedTokens) << ','
@@ -847,6 +863,29 @@ void runCompare(const fs::path& trainPath, const fs::path& developmentPath,
   }
   std::cout << "compare_status=PASS layers=" << config.numLayers << " development_nll_range=" << nllMaximum - nllMinimum
             << " paired_prefix_pairs_per_seed=" << pairedMetrics.front().count << '\n';
+}
+
+void runCheckpointAudit(const fs::path& outputPath, const std::vector<fs::path>& checkpointPaths) {
+  if (checkpointPaths.size() != 3) throw std::runtime_error("CHECKPOINT_AUDIT_REQUIRES_THREE");
+  const std::array<std::uint32_t, 3> expectedSeeds{1, 2, 4};
+  std::ofstream output(outputPath, std::ios::trunc);
+  if (!output) throw std::runtime_error("CHECKPOINT_AUDIT_OUTPUT_OPEN_FAILED");
+  output << "seed,layers,step,parameter_hash,finite\n";
+  std::uint32_t expectedLayers = 0;
+  for (std::size_t index = 0; index < checkpointPaths.size(); ++index) {
+    const Checkpoint checkpoint = loadCheckpoint(checkpointPaths[index]);
+    if (checkpoint.seed != expectedSeeds[index]) throw std::runtime_error("CHECKPOINT_AUDIT_SEED_ORDER");
+    if (!expectedLayers) expectedLayers = checkpoint.config.numLayers;
+    if (checkpoint.config.vocabularySize != 256 || checkpoint.config.tokens != 32 ||
+        checkpoint.config.dimension != 16 || checkpoint.config.feedForwardDimension != 32 ||
+        checkpoint.config.numHeads != 2 || checkpoint.config.numLayers != expectedLayers ||
+        (expectedLayers != 6 && expectedLayers != 19) || !parametersFinite(checkpoint.parameters)) {
+      throw std::runtime_error("CHECKPOINT_AUDIT_CONFIG_OR_FINITE");
+    }
+    output << checkpoint.seed << ',' << checkpoint.config.numLayers << ',' << checkpoint.step << ','
+           << parameterHash(checkpoint.parameters) << ",true\n";
+  }
+  std::cout << "checkpoint_audit=PASS layers=" << expectedLayers << " checkpoints=3\n";
 }
 
 void writeFixtureCache(const fs::path& path, std::uint32_t context) {
@@ -930,9 +969,14 @@ int main(int argc, char** argv) {
       runCompare(argv[2], argv[3], argv[4], {argv[5], argv[6], argv[7]});
       return 0;
     }
+    if (argc == 6 && std::string(argv[1]) == "--checkpoint-audit") {
+      runCheckpointAudit(argv[2], {argv[3], argv[4], argv[5]});
+      return 0;
+    }
     std::cerr << "usage: --self-test | --benchmark CACHE OUT LAYERS STEPS | "
                  "--train TRAIN VALIDATION OUT SEED LAYERS STEPS BATCH INTERVAL | "
-                 "--compare TRAIN DEVELOPMENT OUT CHECKPOINT1 CHECKPOINT2 CHECKPOINT4\n";
+                 "--compare TRAIN DEVELOPMENT OUT CHECKPOINT1 CHECKPOINT2 CHECKPOINT4 | "
+                 "--checkpoint-audit OUT CHECKPOINT1 CHECKPOINT2 CHECKPOINT4\n";
     return 2;
   } catch (const std::exception& error) {
     std::cerr << "nicopedia_real_text_pilot_error=" << error.what() << '\n';

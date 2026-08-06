@@ -2,6 +2,7 @@ param(
     [switch]$SelfTest,
     [switch]$Inventory,
     [switch]$Prepare,
+    [switch]$AuditEvidence,
     [switch]$Benchmark,
     [switch]$Train,
     [switch]$Compare,
@@ -34,6 +35,12 @@ function Resolve-UnderBuild([string]$RelativeOrAbsolute, [string]$Label) {
     if (-not $resolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) {
         throw "$Label must resolve below the repository build directory"
     }
+    $cursor = Get-Item -LiteralPath $resolved -ErrorAction SilentlyContinue
+    if (-not $cursor) { $cursor = Get-Item -LiteralPath (Split-Path -Parent $resolved) -ErrorAction SilentlyContinue }
+    while ($cursor -and $cursor.FullName.StartsWith($allowed.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+        if ($cursor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$Label contains a reparse point" }
+        $cursor = $cursor.Parent
+    }
     return $resolved
 }
 
@@ -59,10 +66,10 @@ function Build-Runner {
     if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_REAL_TEXT_COMPILE_FAILED" }
 }
 
-$selectedModes = @($SelfTest, $Inventory, $Prepare, $Benchmark, $Train, $Compare) |
+$selectedModes = @($SelfTest, $Inventory, $Prepare, $AuditEvidence, $Benchmark, $Train, $Compare) |
     Where-Object { $_ }
 if ($selectedModes.Count -ne 1) {
-    throw "Select exactly one mode: -SelfTest, -Inventory, -Prepare, -Benchmark, -Train, or -Compare"
+    throw "Select exactly one mode: -SelfTest, -Inventory, -Prepare, -AuditEvidence, -Benchmark, -Train, or -Compare"
 }
 
 $private = Resolve-UnderBuild $PrivateRoot "PrivateRoot"
@@ -76,6 +83,24 @@ if ($SelfTest) {
     Build-Runner
     & $executable --self-test
     if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_TRAINER_SELF_TEST_FAILED" }
+    exit 0
+}
+
+if ($AuditEvidence) {
+    & $python.Source $pythonScript --audit-evidence --private-root $private
+    if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_PRIVATE_EVIDENCE_AUDIT_FAILED" }
+    Build-Runner
+    foreach ($auditLayers in @(6, 19)) {
+        $auditOutput = Join-Path $reports "formal/l$auditLayers/comparison/checkpoint-provenance.csv"
+        $auditCheckpoints = @(1, 2, 4) | ForEach-Object {
+            Join-Path $reports "formal/l$auditLayers/seed-$_/selected-private.ckpt"
+        }
+        foreach ($checkpoint in $auditCheckpoints) {
+            if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf)) { throw "CANONICAL_CHECKPOINT_MISSING" }
+        }
+        & $executable --checkpoint-audit $auditOutput @auditCheckpoints
+        if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_CHECKPOINT_EVIDENCE_AUDIT_FAILED" }
+    }
     exit 0
 }
 
@@ -104,13 +129,22 @@ if ($Benchmark) {
 } elseif ($Train) {
     if ($Seed -notin @(1, 2, 4)) { throw "FORMAL_SEED_MUST_BE_1_2_OR_4" }
     if ($Layers -notin @(6, 19)) { throw "FORMAL_LAYERS_MUST_BE_6_OR_19" }
+    if ($Context -ne 32 -or $Steps -ne 1000 -or $BatchSize -ne 8 -or $CheckpointInterval -ne 100) {
+        throw "FORMAL_PROTOCOL_MUST_BE_T32_STEPS1000_BATCH8_INTERVAL100"
+    }
     $output = Join-Path $reports "formal/l$Layers/seed-$Seed"
     & $executable --train $trainCache $validationCache $output $Seed $Layers $Steps $BatchSize $CheckpointInterval
 } elseif ($Compare) {
-    foreach ($checkpoint in @($Checkpoint1, $Checkpoint2, $Checkpoint4)) {
+    $suppliedCheckpoints = @($Checkpoint1, $Checkpoint2, $Checkpoint4)
+    $canonicalCheckpoints = @(1, 2, 4) | ForEach-Object {
+        [IO.Path]::GetFullPath((Join-Path $reports "formal/l$Layers/seed-$_/selected-private.ckpt"))
+    }
+    for ($checkpointIndex = 0; $checkpointIndex -lt $suppliedCheckpoints.Count; ++$checkpointIndex) {
+        $checkpoint = $suppliedCheckpoints[$checkpointIndex]
         if (-not $checkpoint) { throw "Compare requires Checkpoint1, Checkpoint2, and Checkpoint4" }
         $resolved = Resolve-UnderBuild $checkpoint "Checkpoint"
         if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { throw "CHECKPOINT_NOT_FOUND" }
+        if ($resolved -ne $canonicalCheckpoints[$checkpointIndex]) { throw "COMPARE_REQUIRES_CANONICAL_CHECKPOINTS" }
     }
     $output = Join-Path $reports "formal/l$Layers/comparison"
     & $executable --compare $trainCache $developmentCache $output `
