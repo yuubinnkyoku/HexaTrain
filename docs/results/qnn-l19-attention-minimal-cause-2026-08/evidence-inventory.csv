@@ -1,0 +1,8 @@
+"evidence","status","result","identity"
+"prior_attention_zero","REUSED","all four configurations 144/144 tokens and 24/24 sequences","same model seeds dataset and 320-step recipe"
+"prior_ffn_zero","NEGATIVE_CONTROL","26/39/27/23 tokens","parameter-count matched branch"
+"cycle1_evaluation_only","NEW","alpha0 42/38/78 and L18 16","checkpoint preserved"
+"cycle2_fixed_self_previous","NEW","self all 144; previous 140/144/134","QK zero and moments zero"
+"cycle3_uniform_qk_vo","NEW","uniform 31/24/78; QK freeze 40/75/84; VO freeze 132/110/134","frozen subgroup exact"
+"canonical_parameter_state","PASS","independent parameter m v bitwise parity","registry shape float-byte hash"
+"historical_param_content_hash","INVALID_FOR_CONTENT_IDENTITY","zero/nonzero support-mask only","quality aggregates unaffected"

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "source_commit": "6cede349e697008c306d33b2df7bf94952bd22ef",
+  "protocol": "ATTENTION_MINIMAL_CAUSE_V1",
+  "result_classification": "BROAD_DISTRACTOR_MIXING_PLUS_VO_REST_COADAPTATION",
+  "claim_strength": "MAJOR_FACTOR",
+  "major_cycles": 3,
+  "cpu_trajectory_regenerations": 4,
+  "short_training_runs": 0,
+  "full_training_runs": 24,
+  "parameter_state_interventions": 20,
+  "internal_state_interventions": 28,
+  "additional_probes": 0,
+  "final_holdout_opens": 0,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "adb_operations": 0,
+  "ui_operations": 0,
+  "count_from_one": 0,
+  "ar_development_hash": "fnv1a64:bd464d2a6e192d36",
+  "final_holdout_hash": "fnv1a64:aa5081e6df658b4a",
+  "historical_parameter_hash_correction": "fnv1aParams is zero-support-mask only",
+  "hash_definition": "SHA-256 over UTF-8 text after CRLF/CR normalization to LF",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256_normalized_lf": "388ced4dc933c6d5be8b03904bf463eca6e53309bf485bc396acaeb834396e9d"
+    },
+    {
+      "path": "configuration.csv",
+      "sha256_normalized_lf": "0b79bcb18ee43fbdce8cb9e022cdc7da819fb707de15cd57599d1a7add36227a"
+    },
+    {
+      "path": "evidence-inventory.csv",
+      "sha256_normalized_lf": "f9e8ed8c51b6a7b370b7d98e93c6b86ae7e7494b8a1e420aa6a27cc78e43f4f1"
+    },
+    {
+      "path": "hypothesis-registry.csv",
+      "sha256_normalized_lf": "0c000dc387a4730cec1b31bf2f866eb60444796d14ee0afc60d265ac0c25b4c3"
+    },
+    {
+      "path": "decision-log.csv",
+      "sha256_normalized_lf": "4c5819969d92950780eb3b50cb13b62294393d76940ad079d3a8209cd6a98a37"
+    },
+    {
+      "path": "intervention-protocols.csv",
+      "sha256_normalized_lf": "7b7db004f677c9576286e81ef5796a1d18b049c9873d6d8448482c490966487a"
+    },
+    {
+      "path": "evaluation-interventions.csv",
+      "sha256_normalized_lf": "2bd57d346227a87d32c17eba0ba271e5762dcc6eb9136eb1fa4215361c4126de"
+    },
+    {
+      "path": "training-results.csv",
+      "sha256_normalized_lf": "74bfd18dc829a936f46e3b4ec48cfd40dec3b76a8dc6483024d2950f6003afb6"
+    },
+    {
+      "path": "negative-controls.csv",
+      "sha256_normalized_lf": "cec557d744eb8b8efbbf6bed29ad757ac25f86ffacc97ffc9225feedda3092de"
+    },
+    {
+      "path": "seed-comparison.csv",
+      "sha256_normalized_lf": "2b9ad4410262bba0b48e36f3e507629726ef0094a49bd1be7d93c14ae2f6df84"
+    },
+    {
+      "path": "depth-control.csv",
+      "sha256_normalized_lf": "b4df52221ddbdf92375a8c6915f8839fa0350f081cf6720d8c2a91be249e188f"
+    },
+    {
+      "path": "hypothesis-outcomes.csv",
+      "sha256_normalized_lf": "5258e9f16996e927effa59173c13c65f4e7e68de25192c4df25b285733a4f6b2"
+    },
+    {
+      "path": "causal-evidence.csv",
+      "sha256_normalized_lf": "bfee9eeb40de4656ca1e23b23d47b42c1c5b33181143a089b1a2245ff29c4a77"
+    },
+    {
+      "path": "diagnosis.csv",
+      "sha256_normalized_lf": "69b4adad182cbe4ea1402457d2e527a7a7df373de1648863c0a1d0aa39a8511a"
+    },
+    {
+      "path": "remaining-uncertainties.csv",
+      "sha256_normalized_lf": "9641bde1d4b2a9dcc2475175c808bda69ef1f0903ec7ffbfa259895eadb9bf6d"
+    },
+    {
+      "path": "next-step-candidates.csv",
+      "sha256_normalized_lf": "d4ca6166e050f47bf66f8f3a0cb946c7f0ef882a8c3d1bd5abf3997abd58f88d"
+    }
+  ],
+  "sources": [
+    {
+      "path": "host_tests/attention_minimal_cause_lib.h",
+      "sha256_normalized_lf": "2a07587f1f0c3f6f438a3d0c239a50365715273244ec911edbd82e61f9a181f1"
+    },
+    {
+      "path": "host_tests/attention_minimal_cause.cpp",
+      "sha256_normalized_lf": "b5c9137be5e93a9f3604b8daa2c92635beb038a6dc3a8aca78c28982287d269c"
+    },
+    {
+      "path": "scripts/run_l19_attention_minimal_cause.ps1",
+      "sha256_normalized_lf": "cfaa481b058d17ebbba8c211ea734564c86a5c896847762b69e567eab31e4c86"
+    },
+    {
+      "path": "scripts/export_public_qnn_l19_attention_minimal_cause.ps1",
+      "sha256_normalized_lf": "21ab2b54f8b3eb581e538e85df372053e9f915fdf6d03cdcc2cc415d2107c347"
+    }
+  ],
+  "private_aggregates": [
+    {
+      "aggregate": "cycle-001/measurement-audit.csv",
+      "sha256_normalized_lf": "5d42b2669248becb79a995120b387c9e2bbafb48189e7acc4d5338d25b7af2b7"
+    },
+    {
+      "aggregate": "cycle-001/evaluation-interventions.csv",
+      "sha256_normalized_lf": "01c9ef9791222bc8d7277e97a8b6b302b7e7f2de1eed676c79a215e2606757f3"
+    },
+    {
+      "aggregate": "cycle-002/training-results-cycle2.csv",
+      "sha256_normalized_lf": "9fee585882dcfb6ecb4e71d8cbc1b970b46c0aeaad181430d25b4a92beadc50d"
+    },
+    {
+      "aggregate": "cycle-003/training-results-cycle3.csv",
+      "sha256_normalized_lf": "f8907bd307246c7c36e7d2d1b1c784ba0f2005ecde5ed6ed34db25743da683ad"
+    }
+  ],
+  "allow_list": [
+    "README.md",
+    "configuration.csv",
+    "evidence-inventory.csv",
+    "hypothesis-registry.csv",
+    "decision-log.csv",
+    "intervention-protocols.csv",
+    "evaluation-interventions.csv",
+    "training-results.csv",
+    "negative-controls.csv",
+    "seed-comparison.csv",
+    "depth-control.csv",
+    "hypothesis-outcomes.csv",
+    "causal-evidence.csv",
+    "diagnosis.csv",
+    "remaining-uncertainties.csv",
+    "next-step-candidates.csv",
+    "manifest.json"
+  ]
+}

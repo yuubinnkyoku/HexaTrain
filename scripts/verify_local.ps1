@@ -213,6 +213,12 @@ try {
         "deterministic rerun, intervention scope, corrected TRAIN contract, and negative branch control fixtures PASS"
     }
 
+    Invoke-Step "attention-minimal-cause-self-test" {
+        Invoke-PwshScript "attention minimal-cause self-test" `
+            (Join-Path $Root "scripts\run_l19_attention_minimal_cause.ps1") @("-SelfTest")
+        "no-op parity, fixed patterns, branch scale, freeze scope, group identity, and deterministic training fixture PASS"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -261,6 +267,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "seed-instability root-cause public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_seed_instability_results.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "attention minimal-cause public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_attention_minimal_cause.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }

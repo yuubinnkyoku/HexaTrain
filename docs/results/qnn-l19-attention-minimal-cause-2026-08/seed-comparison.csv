@@ -1,0 +1,4 @@
+"configuration_id","baseline_tokens","fixed_self_tokens","fixed_previous_tokens","uniform_tokens","qk_freeze_tokens","vo_freeze_tokens","fixed_self_sequences","uniform_sequences","vo_freeze_sequences"
+"L19_SEED_1","30","144","140","31","40","132","24","2","22"
+"L19_SEED_2","63","144","144","24","75","110","24","0","17"
+"L19_SEED_4","46","144","134","78","84","134","24","12","22"

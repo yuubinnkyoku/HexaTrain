@@ -1,0 +1,4 @@
+"uncertainty","reason","impact"
+"initial V O versus non-Attention initialization contribution","factorial not run after 24 full-run budget reached","cannot assign seed source to one initial group"
+"residual L19 error under VO freeze","LayerNorm and non-Attention updates not separately frozen","VO is major amplifier not sole root"
+"final holdout performance","holdout unopened","diagnosis is not a production selection result"

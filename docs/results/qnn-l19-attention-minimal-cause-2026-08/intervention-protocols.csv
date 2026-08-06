@@ -1,0 +1,7 @@
+"intervention","stage","forward","trained_groups","fixed_state"
+"EVAL_ATTENTION_ALPHA","evaluation only","scale every Wo","none","checkpoint parameter and Adam state unchanged"
+"FIXED_SELF","all training and evaluation","P[row,row]=1","V O LN1 LN2 FFN embedding head","Q K params and moments zero"
+"FIXED_PREVIOUS","all training and evaluation","P[0,0]=1; P[row,row-1]=1","V O LN1 LN2 FFN embedding head","Q K params and moments zero"
+"FIXED_UNIFORM_CAUSAL","all training and evaluation","P[row,col]=1/(row+1) for col<=row","V O LN1 LN2 FFN embedding head","Q K params and moments zero"
+"FREEZE_QK_INITIAL","all training","normal learned Attention with initial Q K","V O and all non-QK","Q K params initial and moments zero"
+"FREEZE_VO_INITIAL","all training","normal learned Attention with initial V O","Q K and all non-VO","V O params initial and moments zero"

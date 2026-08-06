@@ -1,0 +1,4 @@
+"priority","candidate","purpose","condition"
+"1","3x3 L19 Attention versus non-Attention initialization factorial","separate initial group contribution","new explicit full-run budget"
+"2","freeze V and O separately","separate representation mixing from residual projection","only if finer mechanism is required"
+"3","LayerNorm and V O reciprocal state intervention","localize residual co-adaptation","diagnostic only"

@@ -1,0 +1,7 @@
+"claim","strength","evidence","scope"
+"training trajectory required","CAUSAL_SUPPORT","eval-only off fails; training-time fixed self succeeds","L19 seeds 1 2 4 and L18 seed2"
+"cross-token mixing contributes","CAUSAL_SUPPORT","self complete; previous incomplete for L19 seeds1 and4","seed-specific residual"
+"broad distractor mixing is harmful","MAJOR_FACTOR","uniform much worse than previous for every L19 seed","all tested seeds and L18"
+"learned QK not necessary","CAUSAL_SUPPORT","uniform QK zero and QK freeze both fail","all tested seeds"
+"VO updates amplify","CAUSAL_SUPPORT","VO freeze large recovery versus QK freeze","all tested seeds; incomplete for L19"
+"broad mixing plus VO/rest coadaptation","MAJOR_FACTOR","combined pattern and subgroup interventions","all L19 seeds with L18 control"

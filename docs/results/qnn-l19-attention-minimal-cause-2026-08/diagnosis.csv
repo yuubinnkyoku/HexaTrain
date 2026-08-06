@@ -1,0 +1,2 @@
+"diagnosis","strength","qk_learning_required","final_forward_alone_sufficient","production_change"
+"Broad irrelevant-token context mixing plus seed-dependent V/O and rest-model co-adaptation formed during training; free-running argmax amplifies the remaining ranking differences.","MAJOR_FACTOR","false","false","none"

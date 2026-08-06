@@ -1,0 +1,7 @@
+"control","status","result","purpose"
+"alpha1 no-op","PASS","parameter and forward unchanged","intervention wrapper identity"
+"independent canonical loop","PASS","parameter m v bitwise equal for four configurations","deterministic rerun"
+"independent evaluator","PASS","case exact sequence and first-error equal","metric validity"
+"FFN zero","PASS_NEGATIVE","does not recover","capacity-matched branch control"
+"L18 seed2","PASS_SCOPE","same qualitative pattern; VO freeze fully recovers","depth control"
+"final holdout","PASS","0 opens","selection safety"

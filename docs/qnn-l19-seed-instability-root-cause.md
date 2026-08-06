@@ -1,5 +1,15 @@
 # L19 seed依存生成品質の根本原因再監査
 
+> **2026-08 Attention最小原因の追補:** 後続の固定pattern・subgroup freeze監査により、
+> Attention全体より小さい機構まで分解した。自己位置限定学習は全seedを完全回復させる一方、
+> 一様因果混合はQ/K学習なしでも大きな失敗を再現した。Q/K更新は必要条件ではなく、広域の
+> distractor混合とV/O・残りのモデルの共同適応が主要因である。詳細は
+> [Attention最小原因監査](qnn-l19-attention-minimal-cause.md)を参照。
+>
+> また、本書と旧bundleで`parameter content hash`と呼んだ`fnv1aParams`はfloat内容ではなく
+> zero/nonzero support maskのhashだった。品質集計は変わらないが、exact checkpoint identityの
+> 証拠としては使用しない。
+
 ## 結論
 
 L19 Transformerのseed差は、一つの数値不具合や出力headの後半driftではなく、

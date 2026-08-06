@@ -300,6 +300,14 @@ Assert-PrivateAggregates
 $readme = @'
 # L19 seed-instability root-cause investigation, August 2026
 
+> **Correction / follow-up (2026-08):** A later minimal-mechanism audit found
+> that broad distractor-token mixing plus V/O/rest co-adaptation, not learned Q/K
+> selection by itself, is the smaller causal mechanism. See
+> `../qnn-l19-attention-minimal-cause-2026-08/README.md`. Historical
+> `param_content_hash` fields were produced by `fnv1aParams`, which hashes only
+> zero/nonzero support rather than float contents. Quality aggregates are
+> unchanged, but those fields are not exact checkpoint-content identities.
+
 This host-only investigation re-audits the finite seed-dependent generation
 quality of T8/D16/FFN32/L19/H2 without opening AR_FINAL_HOLDOUT_V3. The causal
 result is a compound root cause: the target rule is a deterministic
