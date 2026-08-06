@@ -280,6 +280,9 @@ try {
         Invoke-PwshScript "context supervision stability public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_context_supervision_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "Nicopedia real-text public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_nicopedia_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 
