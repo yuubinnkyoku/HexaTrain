@@ -52,7 +52,7 @@
     },
     {
       "name": "scripts\\export_public_qnn_l19_seed_instability_results.ps1",
-      "sha256": "e0f2a6787de57b61e4f27121f34f48d83e12ae057a68d554df31d46ea4a4c23b"
+      "sha256": "556fc6ba6260f3d2cca773fcf6b42538b21311eb7951950bbe0790ee90d466e1"
     },
     {
       "name": "docs\\results\\qnn-l19-critical-margin-stabilization-2026-08\\gradient-attribution.csv",
@@ -94,7 +94,7 @@
   "files": [
     {
       "name": "README.md",
-      "sha256": "143674fef339c28dc915796912838c72c7affc96403da4a867aee06d92d50167"
+      "sha256": "c8c8923258da17778500f1bfe6ab5348ba27909be2f970c810391e62fe24fcc1"
     },
     {
       "name": "configuration.csv",
