@@ -1,5 +1,13 @@
 # L19 Attention経路の最小原因監査
 
+> **2026-08 context supervision追補:** 本書の「広域distractor混合とV/O・残りの
+> モデルの共同適応」は、canonical homogeneous-only TRAINでの失敗機構として維持される。
+> 後続のdata介入では、通常Attentionのまま
+> target不変mixed prefixを80/320 batch学習すると全L19 seedが安定し、matched
+> homogeneous controlは失敗した。V/O固定は不要だったが、この介入だけでV/O機構を
+> 一意に再同定したわけではない。詳細は
+> [context supervision監査](qnn-l19-context-supervision-stability.md)を参照。
+
 ## 結論
 
 L19のseed不安定性を生むAttention側の主要因は、内容依存のQ/K学習そのものではない。

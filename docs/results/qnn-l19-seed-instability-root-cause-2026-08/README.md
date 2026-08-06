@@ -1,5 +1,10 @@
 # L19 seed-instability root-cause investigation, August 2026
 
+> **Follow-up (2026-08):** Ordinary learned Attention becomes stable across
+> L19 seeds 1/2/4 when 80 of 320 batches use target-invariant mixed prefixes;
+> a histogram-matched homogeneous control does not. See
+> `../qnn-l19-context-supervision-stability-2026-08/README.md`.
+
 > **Correction / follow-up (2026-08):** A later minimal-mechanism audit found
 > that broad distractor-token mixing plus V/O/rest co-adaptation, not learned Q/K
 > selection by itself, is the smaller causal mechanism. See
@@ -12,8 +17,10 @@ This host-only investigation re-audits the finite seed-dependent generation
 quality of T8/D16/FFN32/L19/H2 without opening AR_FINAL_HOLDOUT_V3. The causal
 result is a compound root cause: the target rule is a deterministic
 current-token successor, training repeats only homogeneous phase-0 contexts,
-and the deep Attention path is causally required for the seed-dependent
-failures on mixed distractor prefixes. Argmax feedback then amplifies local
+and, under that canonical homogeneous-only training distribution, the deep
+Attention path causally mediates the seed-dependent failures on mixed distractor
+prefixes. This is not an unconditional necessity or sufficiency claim about
+Attention across training distributions. Argmax feedback then amplifies local
 ranking differences into sequence-exact differences. A learned context
 shortcut is the leading mechanism candidate, but branch removal also changes
 gradient competition and normalization, so that finer mechanism is not proven.

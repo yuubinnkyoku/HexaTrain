@@ -1,0 +1,8 @@
+"configuration_id","check","status","observed","expected"
+"ALL","train_hash","PASS","fnv1a64:5a64ca2d1aa7f29f","fnv1a64:5a64ca2d1aa7f29f"
+"ALL","validation_hash","PASS","fnv1a64:aad785bd4dc88dc9","fnv1a64:aad785bd4dc88dc9"
+"ALL","development_hash","PASS","fnv1a64:bd464d2a6e192d36","fnv1a64:bd464d2a6e192d36"
+"ALL","final_hash_only","PASS","fnv1a64:aa5081e6df658b4a","fnv1a64:aa5081e6df658b4a"
+"ALL","final_holdout_evaluations","PASS","0","0"
+"ALL","development_case_count","PASS","24","24"
+"ALL","development_teacher_rows","PASS","144","144"

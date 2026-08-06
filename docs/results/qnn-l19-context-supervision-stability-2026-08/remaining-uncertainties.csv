@@ -1,0 +1,6 @@
+"uncertainty","reason","impact"
+"true useful-context learning effect","official target is uniquely determined by current token","cannot measure a positive information-theoretic benefit without changing the objective"
+"dose below 25 percent with another schedule","dose search capped at 25 12.5 and 6.25 percent","25 percent is minimum tested not a global mathematical minimum"
+"generalization beyond seeds and L18 control","three L19 seeds and one L18 seed tested once","scope is bounded"
+"invariance versus co-occurrence regularization","matched aggregate histograms do not preserve row-level position co-occurrence or gradient geometry","upstream data intervention is causal but its internal explanation is not unique"
+"final holdout performance","holdout unopened","not a production selection result"

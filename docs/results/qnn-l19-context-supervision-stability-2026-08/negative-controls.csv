@@ -1,0 +1,7 @@
+"control","status","result"
+"canonical bitwise reproduction","PASS","all four parameter and exact anchors"
+"matched homogeneous","PASS_NEGATIVE","does not stabilize all L19 seeds"
+"same-multiset curriculum","PASS","first and last both stable at 25 percent"
+"ordinary Attention","PASS","Q K V O updates nonzero and mean non-self mass above 0.05"
+"L18 seed2","PASS_SCOPE","25 percent first and last both 144/144"
+"final holdout","PASS","0 evaluations"

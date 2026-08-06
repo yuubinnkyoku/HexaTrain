@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "source_commit": "859d44a9864defd2ce6f6d80da459f7def08a666",
+  "protocol": "CONTEXT_SUPERVISION_STABILITY_V1",
+  "result_classification": "TARGET_INVARIANT_MIXED_PREFIX_SUPERVISION",
+  "claim_strength": "PRIMARY_CAUSAL_FACTOR",
+  "major_cycles": 3,
+  "cpu_trajectory_regenerations": 4,
+  "short_training_runs": 0,
+  "full_training_runs": 28,
+  "dataset_intervention_conditions": 5,
+  "curriculum_conditions": 2,
+  "parameter_state_interventions": 0,
+  "internal_state_interventions": 0,
+  "additional_probes": 0,
+  "final_holdout_opens": 0,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "adb_operations": 0,
+  "ui_operations": 0,
+  "count_from_one": 0,
+  "train_hash": "fnv1a64:5a64ca2d1aa7f29f",
+  "ar_validation_hash": "fnv1a64:aad785bd4dc88dc9",
+  "ar_development_hash": "fnv1a64:bd464d2a6e192d36",
+  "final_holdout_hash": "fnv1a64:aa5081e6df658b4a",
+  "minimum_tested_effective_dose_percent": 25,
+  "minimum_tested_effective_mixed_batches": 80,
+  "hash_definition": "SHA-256 over UTF-8 text after CRLF/CR normalization to LF",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256_normalized_lf": "3237f3a0d32290918412e018a04469366aff71c58430328286f3b3eb07206519"
+    },
+    {
+      "path": "configuration.csv",
+      "sha256_normalized_lf": "c2bfa8712156915f83ef0458c4260ffa6fc309aede24209e6eed573442ca2f61"
+    },
+    {
+      "path": "evidence-inventory.csv",
+      "sha256_normalized_lf": "7c345e1b209439085d6157428871ebe4f6fc2ee3f5ad75dd9eea6ef37eff7723"
+    },
+    {
+      "path": "measurement-audit.csv",
+      "sha256_normalized_lf": "4e7685c6400b12b6b042d551651a0a8d098aff7f940103cf5b781b08dfdaaf62"
+    },
+    {
+      "path": "hypothesis-registry.csv",
+      "sha256_normalized_lf": "8f44ecbe819481cde2e3e7e62953c52c78b92d49f66ceb090d796e2ad2275a7c"
+    },
+    {
+      "path": "decision-log.csv",
+      "sha256_normalized_lf": "cd18a02f69733f4f6706c9988a7067b1530b437ba1e06d4a82f06cbdd45f16a2"
+    },
+    {
+      "path": "dataset-interventions.csv",
+      "sha256_normalized_lf": "57f83c4ddfd6f288e7919883e8b1bb715b3ea261ff0b7eaff7ccef0b9cc42786"
+    },
+    {
+      "path": "matched-controls.csv",
+      "sha256_normalized_lf": "dbc1500feb3d69bfac908a5aae925a9fa18455c4e6a6d5ea19fb35c3e91317e3"
+    },
+    {
+      "path": "curriculum-protocols.csv",
+      "sha256_normalized_lf": "82de368677573b2b891262df908da5b84434c0042eba66fcd2777b8bf6f8a52b"
+    },
+    {
+      "path": "training-results.csv",
+      "sha256_normalized_lf": "4ef267220d27e442c502b5ac74b283a50a013a0261dfc5b8ffdfb5ec21d8f69c"
+    },
+    {
+      "path": "teacher-forced-vs-free-running.csv",
+      "sha256_normalized_lf": "2a2f800aac17cbc010028ececb6853a21208ab80a0d0e177136ed57fd7bf19d3"
+    },
+    {
+      "path": "seed-variance.csv",
+      "sha256_normalized_lf": "d8294944593f4063940d37fda351f3bc362a06cfa83ee52489b647b410d599ae"
+    },
+    {
+      "path": "attention-behavior-summary.csv",
+      "sha256_normalized_lf": "eaf0b2e0a5a032e5252997d664f820044a251703a00e8971bcc3316663f7aad4"
+    },
+    {
+      "path": "gradient-update-summary.csv",
+      "sha256_normalized_lf": "57d19ec1746132d42ba371dcd1f8f8c0bf4ba686fe46d418a7fe1fd24d7426a1"
+    },
+    {
+      "path": "negative-controls.csv",
+      "sha256_normalized_lf": "33b208f87e122c85b4eed29899008e1fa55344d3ee60b43aacc9d0b5193fc880"
+    },
+    {
+      "path": "depth-control.csv",
+      "sha256_normalized_lf": "10db8e74e2a24a299346423d79fcbe2742818d9ebe01afd2d51e38a2da41c786"
+    },
+    {
+      "path": "hypothesis-outcomes.csv",
+      "sha256_normalized_lf": "86aaf8b358d40cc9c9de1d44d8ffd6d8be9aa139adad771bbb6ed245ac50419a"
+    },
+    {
+      "path": "causal-evidence.csv",
+      "sha256_normalized_lf": "d98f644d34940e3a635d7dac4a80b599f91356bd00e7bf6dae2016936e6d1dac"
+    },
+    {
+      "path": "diagnosis.csv",
+      "sha256_normalized_lf": "6220a9af9d398e6bebc26894a021706b964ae5105f640f290e893ce8ef20766c"
+    },
+    {
+      "path": "remaining-uncertainties.csv",
+      "sha256_normalized_lf": "4059110c6e8c9111ee92b7eeda534e85b9c838a2f31da8b3c775f5c8656729dc"
+    },
+    {
+      "path": "next-step-candidates.csv",
+      "sha256_normalized_lf": "4463b2497f7cecf92827c72c61326d897e304452c3adf026859b6287cde5ad23"
+    }
+  ],
+  "sources": [
+    {
+      "path": "host_tests/context_supervision_stability_lib.h",
+      "sha256_normalized_lf": "a9e655b374bcb3cd4a1b461b4c5e66850561b32a8db03ad9a2cb2b88c0dfc521"
+    },
+    {
+      "path": "host_tests/context_supervision_stability.cpp",
+      "sha256_normalized_lf": "23240045c58408920be5d4b5d46f94e254b1eaf0316b2e176e41a968ed87896e"
+    },
+    {
+      "path": "scripts/run_l19_context_supervision_stability.ps1",
+      "sha256_normalized_lf": "582c14df33ac9ee7c5d2e7d7e8ed9fe81b4f9e3bfbdc7581ce10d2aa8584bde5"
+    },
+    {
+      "path": "scripts/export_public_qnn_l19_context_supervision_results.ps1",
+      "sha256_normalized_lf": "ef45912614116ae306b41a40ccc9870ac1884869fc78f784dacbf20c2d41e943"
+    }
+  ],
+  "private_aggregates": [
+    {
+      "aggregate": "cycle-001/measurement-audit.csv",
+      "sha256_normalized_lf": "bd04d7116cd7b03ab09da425503b03eb749cfca73a5b1e85f2486992841560c7"
+    },
+    {
+      "aggregate": "cycle-001/schedule-audit.csv",
+      "sha256_normalized_lf": "576be9d63c6577a260fcf5f10a2a34f50e693b93b4cb5f882ff9aac1a8d60536"
+    },
+    {
+      "aggregate": "cycle-001/training-results.csv",
+      "sha256_normalized_lf": "245a2d0637eea5dd4631b8dde5dfa802269505487e45f3c2993d4a36589a7f6b"
+    },
+    {
+      "aggregate": "cycle-002/schedule-audit.csv",
+      "sha256_normalized_lf": "7b92646fda8a360ed8f39a65d907ceebb9ba09111724313f36072f3a6f2ca1e5"
+    },
+    {
+      "aggregate": "cycle-002/training-results.csv",
+      "sha256_normalized_lf": "5a7ba552405a165e50468b7aecf0c2c55754136c9be20818d9d93fb8ddf8ab24"
+    },
+    {
+      "aggregate": "cycle-003/schedule-audit.csv",
+      "sha256_normalized_lf": "76a36d71cdc1a0ff6cf064e3f6ec7d3130921e5d872622e1c83e004af0578629"
+    },
+    {
+      "aggregate": "cycle-003/training-results.csv",
+      "sha256_normalized_lf": "cf62299a6eef067589ac3bebe8c797388b42367fa36d559a6e212571e7876918"
+    }
+  ],
+  "allow_list": [
+    "README.md",
+    "configuration.csv",
+    "evidence-inventory.csv",
+    "measurement-audit.csv",
+    "hypothesis-registry.csv",
+    "decision-log.csv",
+    "dataset-interventions.csv",
+    "matched-controls.csv",
+    "curriculum-protocols.csv",
+    "training-results.csv",
+    "teacher-forced-vs-free-running.csv",
+    "seed-variance.csv",
+    "attention-behavior-summary.csv",
+    "gradient-update-summary.csv",
+    "negative-controls.csv",
+    "depth-control.csv",
+    "hypothesis-outcomes.csv",
+    "causal-evidence.csv",
+    "diagnosis.csv",
+    "remaining-uncertainties.csv",
+    "next-step-candidates.csv",
+    "manifest.json"
+  ]
+}

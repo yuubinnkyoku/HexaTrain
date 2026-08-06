@@ -1,0 +1,8 @@
+"evidence","status","result","role"
+"canonical anchors","PASS","30/63/46 L19 and 65 L18 free-running tokens","bitwise no-intervention reproduction"
+"matched homogeneous","NEGATIVE_CONTROL","65/105/45 L19","same steps rows histogram family exposure and cadence"
+"25 percent interleaved mixed","PARTIAL","144/136/144 L19","target-invariant context diversity"
+"25 percent same-multiset curricula","PASS","mixed-first 144/141/144; mixed-last 144/144/144","order necessity"
+"smaller doses","REJECTED","12.5 percent 112/111/114; 6.25 percent 51/38/61","minimum tested dose"
+"ordinary Attention activity","PASS","Q K V O updated; output norm and non-self mass nonzero","exclude Attention disablement"
+"final holdout","HASH_ONLY","0 evaluations","selection safety"

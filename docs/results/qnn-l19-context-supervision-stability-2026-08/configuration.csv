@@ -1,0 +1,5 @@
+"configuration_id","depth","seed","tokens","dimension","ffn_dimension","heads","steps","optimizer","evaluation","final_holdout"
+"L19_SEED_1","19","1","8","16","32","2","320","Adam lr 0.003 beta1 0.9 beta2 0.999 epsilon 1e-8","AR_DEVELOPMENT_V3","HASH_ONLY"
+"L19_SEED_2","19","2","8","16","32","2","320","Adam lr 0.003 beta1 0.9 beta2 0.999 epsilon 1e-8","AR_DEVELOPMENT_V3","HASH_ONLY"
+"L19_SEED_4","19","4","8","16","32","2","320","Adam lr 0.003 beta1 0.9 beta2 0.999 epsilon 1e-8","AR_DEVELOPMENT_V3","HASH_ONLY"
+"L18_SEED_2_CONTROL","18","2","8","16","32","2","320","Adam lr 0.003 beta1 0.9 beta2 0.999 epsilon 1e-8","AR_DEVELOPMENT_V3","HASH_ONLY"

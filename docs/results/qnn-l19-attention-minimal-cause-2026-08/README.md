@@ -1,5 +1,11 @@
 # L19 Attention minimal-cause investigation, August 2026
 
+> **Follow-up (2026-08):** A later data intervention preserves ordinary
+> learned Attention and stabilizes all target L19 seeds with 25% target-invariant
+> mixed-prefix supervision. The matched homogeneous control fails, and V/O
+> freezing is unnecessary. See
+> `../qnn-l19-context-supervision-stability-2026-08/README.md`.
+
 This host-only bundle decomposes the earlier whole-Attention-zero result.
 The strongest supported mechanism is a combination: broad mixing of irrelevant
 distractor tokens is harmful during training, and learned V/O plus the rest of

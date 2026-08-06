@@ -1,0 +1,4 @@
+"curriculum","mixed_batches","homogeneous_batches","multiset","l19_free_tokens","gate"
+"INTERLEAVED","80","240","MIXED_25_V1","144/136/144","PARTIAL"
+"MIXED_FIRST","80","240","MIXED_25_V1","144/141/144","PASS"
+"MIXED_LAST","80","240","MIXED_25_V1","144/144/144","PASS"

@@ -1,0 +1,4 @@
+"priority","candidate","purpose","condition"
+"1","separate production adoption review","decide whether to adopt diagnostic data intervention","new milestone and final holdout policy"
+"2","additional preregistered L19 seeds","expand scope","only if broader confidence is needed"
+"3","synthetic repeated-current-token context-use task","identify useful-context capacity separately","must be labeled as a different objective"

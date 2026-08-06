@@ -1,0 +1,6 @@
+"condition","mixed_batches","homogeneous_batches","dose_percent","target_contract","attention"
+"CANONICAL_HOMOGENEOUS","0","320","0","successor current token","ordinary learned"
+"MATCHED_HOMOGENEOUS","0","320","25","successor current token","ordinary learned"
+"MIXED_INVARIANCE","80","240","25","successor current token","ordinary learned"
+"CURRICULUM_MIXED_LAST","40","280","12.5","successor current token","ordinary learned"
+"CURRICULUM_MIXED_LAST","20","300","6.25","successor current token","ordinary learned"

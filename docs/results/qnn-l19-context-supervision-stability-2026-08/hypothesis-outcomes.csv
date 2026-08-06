@@ -1,0 +1,8 @@
+"hypothesis","outcome","evidence"
+"homogeneous-only upstream cause","SUPPORTED","mixed stabilizes; histogram-matched homogeneous does not"
+"irrelevant-prefix invariance deficit","PARTIALLY_SUPPORTED","target-invariant mixed supervision rescues, but paired-prefix invariance was not measured"
+"useful context signal required","NOT_REQUIRED","no context-dependent target was added"
+"data amount alone","REJECTED_AS_SUFFICIENT","same steps rows and aggregate histogram control fails"
+"a specific curriculum direction is required","REJECTED_AT_25_PERCENT","mixed-first and mixed-last both pass; interleaved retains a residual seed-2 failure"
+"V O initialization independent of data","NOT_SUPPORTED_AS_INDEPENDENT_REQUIREMENT","ordinary Attention with learned V O stabilizes without freeze"
+"Attention effectively disabled","REJECTED","nonzero Q K V O updates output norm and broad non-self mass"

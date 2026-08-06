@@ -1,5 +1,11 @@
 # L19 seed依存生成品質の根本原因再監査
 
+> **2026-08 context supervision追補:** 通常のlearned Attentionを維持したまま、
+> target不変のmixed prefixを80/320 batch学習させると、L19 seed 1/2/4は
+> 事前登録した安定性gateを通過した。同量・同histogramのhomogeneous controlは
+> 全seedを安定化しなかった。従ってhomogeneous-only TRAINは上流原因として支持され、
+> 詳細は[context supervision監査](qnn-l19-context-supervision-stability.md)を正本とする。
+
 > **2026-08 Attention最小原因の追補:** 後続の固定pattern・subgroup freeze監査により、
 > Attention全体より小さい機構まで分解した。自己位置限定学習は全seedを完全回復させる一方、
 > 一様因果混合はQ/K学習なしでも大きな失敗を再現した。Q/K更新は必要条件ではなく、広域の
@@ -17,7 +23,8 @@ L19 Transformerのseed差は、一つの数値不具合や出力headの後半dri
 
 1. 正解規則は現在tokenだけで一意に決まる。
 2. 320 stepの学習はhomogeneous phase-0 contextだけを反復する。
-3. Attention経路の存在はmixed prefixでのseed依存失敗に因果的に必要である。
+3. canonical homogeneous-only TRAINでは、Attention経路がmixed prefixでの
+   seed依存失敗を媒介する。
    文脈shortcutが最有力の詳細機構だが、branch間のgradient競合や正規化状態まで
    分離した証拠ではない。
 4. seedが変える入力は初期parameterだけであり、その差は決定的な学習軌道を経て
@@ -29,8 +36,10 @@ Attention branchを全学習期間で構造的に0とする診断介入では、
 1/2/4とL18 seed 2 controlの全てがmixed developmentでteacher-forced、
 free-runningとも144/144 token、24/24 sequenceへ到達した。同じ幅のFFN
 branchを0とする負の対照は全構成を23--39/144へ悪化させた。このため、
-Attention経路の存在がmixed-context不安定性の主要因であることは、複数seedと
-深度scope controlで因果支持される。文脈shortcutそのものは機構候補に留める。
+canonical homogeneous-only TRAINでAttention経路がmixed-context不安定性を
+媒介することは、複数seedと深度scope controlで因果支持される。Attentionの存在が
+training distributionに依存せず失敗へ十分または必要という主張ではない。文脈shortcut
+そのものは機構候補に留める。
 
 これはAttention実装の誤り、Attentionを除くproduction変更、L19だけの深度境界、
 あるいはAdam moment単独の原因を意味しない。L18 controlも同じ介入で回復したため、

@@ -1,0 +1,3 @@
+"control","steps","supervised_rows","special_steps","aggregate_input_target_histogram_matched","l19_free_tokens","interpretation"
+"MATCHED_HOMOGENEOUS","320","2560","80","true","65/105/45","data amount and phase diversity insufficient"
+"CANONICAL_HOMOGENEOUS","320","2560","0","not_applicable","30/63/46","canonical anchor"

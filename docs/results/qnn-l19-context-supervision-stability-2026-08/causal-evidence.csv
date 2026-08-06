@@ -1,0 +1,7 @@
+"claim","strength","evidence","scope"
+"target-invariant mixed-prefix supervision is sufficient","PRIMARY_CAUSAL_FACTOR","25 percent first and last curricula pass every L19 seed; matched homogeneous fails","L19 seeds 1 2 4 and L18 seed2"
+"useful past-token supervision is not required for the observed rescue","CAUSAL_SUPPORT","all intervention labels remain successor of current token","its independent benefit is not identifiable in the official current-token-successor objective"
+"training amount alone is insufficient","CAUSAL_SUPPORT","same 320 steps 2560 rows and matched histogram control does not stabilize","tested control"
+"curriculum order is not required at effective dose","CAUSAL_SUPPORT","same multiset mixed-first and mixed-last both pass","25 percent dose"
+"ordinary Attention is retained","MECHANISM_GUARD","Q K V O update norms nonzero; non-self mass 0.63 to 0.68 in passing runs","aggregate behavior"
+"25 percent is minimum tested effective dose","BOUNDED_DOSE_RESULT","12.5 and 6.25 percent fail","three preregistered doses only"
