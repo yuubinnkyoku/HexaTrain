@@ -30,7 +30,11 @@ $cpuSource = Join-Path $repoRoot "app/src/main/cpp/tiny_language_model_cpu.cpp"
 $executable = Join-Path $buildRoot "nicopedia_real_text_pilot.exe"
 
 function Resolve-UnderBuild([string]$RelativeOrAbsolute, [string]$Label) {
-    $resolved = [IO.Path]::GetFullPath((Join-Path $repoRoot $RelativeOrAbsolute))
+    $resolved = if ([IO.Path]::IsPathRooted($RelativeOrAbsolute)) {
+        [IO.Path]::GetFullPath($RelativeOrAbsolute)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $repoRoot $RelativeOrAbsolute))
+    }
     $allowed = [IO.Path]::GetFullPath((Join-Path $repoRoot "build")) + [IO.Path]::DirectorySeparatorChar
     if (-not $resolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) {
         throw "$Label must resolve below the repository build directory"
@@ -83,6 +87,10 @@ $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) { throw "PYTHON_NOT_FOUND" }
 
 if ($SelfTest) {
+    $absoluteProbe = [IO.Path]::GetFullPath((Join-Path $repoRoot "build/path-resolution-selftest/probe.bin"))
+    if ((Resolve-UnderBuild $absoluteProbe "AbsolutePathProbe") -ne $absoluteProbe) {
+        throw "ABSOLUTE_BUILD_PATH_RESOLUTION_FAILED"
+    }
     & $python.Source $pythonScript --self-test
     if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_PIPELINE_SELF_TEST_FAILED" }
     Build-Runner
