@@ -278,6 +278,18 @@ def write_byte_cache(path: Path, articles: list[tuple[int, int, str]], context: 
 def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, object]:
     header_files, body_files = source_files(source_root)
     files = header_files + body_files
+    source_manifest_path = private_root / "source-manifest.json"
+    if not source_manifest_path.is_file():
+        raise RuntimeError("SOURCE_MANIFEST_REQUIRED_BEFORE_PREPARE")
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    if Path(source_manifest.get("source_root", "")).resolve() != source_root.resolve():
+        raise RuntimeError("PREPARE_SOURCE_ROOT_DOES_NOT_MATCH_INVENTORY")
+    manifest_files = {entry["relative_path"]: entry for entry in source_manifest.get("files", [])}
+    current_files = {path.relative_to(source_root).as_posix(): path for path in files}
+    if set(manifest_files) != set(current_files):
+        raise RuntimeError("PREPARE_SOURCE_FILE_SET_DOES_NOT_MATCH_INVENTORY")
+    if any(path.stat().st_size != int(manifest_files[name]["bytes"]) for name, path in current_files.items()):
+        raise RuntimeError("PREPARE_SOURCE_SIZE_DOES_NOT_MATCH_INVENTORY")
     before = file_snapshot(files)
     started = time.perf_counter()
     header_types: dict[str, str] = {}
@@ -449,6 +461,7 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
         "status": "PASS",
         "dataset_name": "Nicopedia data",
         "dataset_version": "2024-11-25",
+        "source_file_aggregate_sha256": source_manifest["aggregate_sha256"],
         "header_records": header_records,
         "body_records": body_records,
         "body_with_text_records": body_records,
@@ -584,6 +597,8 @@ def build_private_evidence(private_root: Path) -> dict[str, object]:
         raise ValueError("SOURCE_MANIFEST_IDENTITY")
     if corpus.get("dataset_name") != "Nicopedia data" or corpus.get("dataset_version") != "2024-11-25":
         raise ValueError("CORPUS_REPORT_IDENTITY")
+    if corpus.get("source_file_aggregate_sha256") != source_manifest.get("aggregate_sha256"):
+        raise ValueError("CORPUS_SOURCE_BINDING_MISMATCH")
     cache_evidence: dict[str, object] = {}
     for name in ("train_pilot", "validation", "development"):
         identity = cache_content_identity(private_root / "caches" / f"{name}.bin")

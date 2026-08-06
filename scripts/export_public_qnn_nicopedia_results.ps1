@@ -301,12 +301,13 @@ if ($decision.classification -ne 'PERFORMANCE_INSTABILITY_NOT_REPRODUCED_GENERAT
 if ($remediation.schema -ne 'NICOPEDIA_REAL_TEXT_REVIEW_REMEDIATION_V1' -or
     $remediation.status -ne 'LOCKED_BEFORE_PUBLICATION' -or [bool]$remediation.training_rerun -or
     [bool]$remediation.evaluation_rerun -or [bool]$remediation.numerical_path_changed -or
-    [int]$remediation.formal_training_runs_added -ne 0 -or [int]$remediation.source_full_scans_added -ne 0 -or
+    [int]$remediation.formal_training_runs_added -ne 0 -or [int]$remediation.source_full_scans_added -ne 1 -or
     [bool]$remediation.final_test_evaluation -or [bool]$remediation.synthetic_final_holdout_evaluation) {
     throw "Review remediation provenance mismatch"
 }
 if ($evidence.schema -ne 'NICOPEDIA_REAL_TEXT_PRIVATE_EVIDENCE_V1' -or
     $evidence.source_file_aggregate_sha256 -ne $sourceManifest.aggregate_sha256 -or
+    $corpus.source_file_aggregate_sha256 -ne $sourceManifest.aggregate_sha256 -or
     $evidence.corpus_aggregate_hash -ne $corpus.aggregate_hash -or
     [bool]$evidence.final_test_cache_present) {
     throw "Source/corpus evidence binding mismatch"
@@ -679,7 +680,7 @@ $manifest = [ordered]@{
     model_config_hash = "sha256:$((Get-StringSha256 'v=256;t=32;d=16;ffn=32;heads=2;layers=6,19;normalization-epsilon=1e-5;adam=0.003,0.9,0.999,1e-8;steps=1000;batch=8;checkpoint-interval=100;training-order-seed=20260806;validation-chunks=256;development-chunks=512'))"
     pilot_train_articles = ($corpus.cache_identities.train_pilot.articles); pilot_train_clean_utf8_bytes = ($corpus.cache_identities.train_pilot.clean_utf8_bytes)
     pilot_train_target_tokens = ($corpus.cache_identities.train_pilot.target_tokens); seeds = @(1, 2, 4)
-    smoke_runs = 2; formal_training_runs = 6; additional_control_runs = 0; source_full_scans = 2
+    smoke_runs = 2; formal_training_runs = 6; additional_control_runs = 0; source_full_scans = 3
     final_test_opened = $false; synthetic_final_holdout_opened = $false; device_runs = 0; htp_runs = 0; adb_operations = 0; ui_operations = 0; count_from_one = 0
     classification = $decision.classification; evidence_strength = $decision.evidence_strength
     conclusion = "Large held-out NLL seed instability was not reproduced; greedy generation variation was partially reproduced, with stronger divergence at L19."

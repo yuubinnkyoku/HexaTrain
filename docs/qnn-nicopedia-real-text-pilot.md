@@ -53,8 +53,9 @@ checkpoint、parameter、logit、hidden state、Attention、ローカルpathを�
 
 総record 291,055件のうち、空またはmarkup-only 247件、短すぎる本文2,163件、
 完全重複428件を除き、288,217記事を利用可能とした。raw本文は2,390,169,831 byte、
-cleaning後は1,204,368,332 byteだった。元コーパスの完走scanはinventoryとprepareの2回で、
-以後はhashで保護したprivate cacheを再利用した。
+cleaning後は1,204,368,332 byteだった。元コーパスの完走scanはinventory、prepare、
+Reviewer修正後のsource-bound prepareの3回で上限へ達した。3回目に再生成したcacheの
+SHA-256/FNVはformal run記録と一致し、以後はhashで保護したprivate cacheだけを利用した。
 
 ## split、subset、tokenizer
 
@@ -124,8 +125,9 @@ argmax flip率はL6 0.141--0.250、L19 0.141--0.219で、identity controlのlogi
 writer側も修正した。さらにsource/corpus/cacheのSHA-256、runnerが記録したcacheとtraining
 orderのFNV、seed順、formal config、trajectoryからのcheckpoint再選択、development/生成/
 paired-prefixのfinite・範囲、final-test cache不在をexport時に相互検証するようにした。
-これらは妥当な入力でのmodel数値演算を変更しないguardであり、formal trainingや評価を
-追加実行していない。
+これらは妥当な入力でのmodel数値演算を変更しないguardである。inventoryとprepareの
+source rootを結合するため3回目の許容全走査でcacheだけを再生成したが、identityはformal
+run記録と一致した。formal trainingやdevelopment評価は追加実行していない。
 
 ## 中心的な問いへの回答
 
