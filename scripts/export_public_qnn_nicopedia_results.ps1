@@ -191,11 +191,15 @@ if (-not $SourceCommit) {
 }
 if ($SourceCommit -notmatch '^[0-9a-f]{40}$') { throw "SourceCommit must be a full Git SHA" }
 $currentHead = (git rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $SourceCommit -ne $currentHead) { throw "SourceCommit must equal the current HEAD" }
+if ($LASTEXITCODE -ne 0) { throw "Unable to resolve current HEAD" }
+git merge-base --is-ancestor $SourceCommit $currentHead
+if ($LASTEXITCODE -ne 0) { throw "SourceCommit must be an ancestor of the current HEAD" }
 git diff --quiet HEAD --
 if ($LASTEXITCODE -ne 0) { throw "Tracked worktree must be clean before public export" }
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) { throw "Index must be clean before public export" }
+& git diff --quiet $SourceCommit $currentHead -- @sourceFiles
+if ($LASTEXITCODE -ne 0) { throw "A manifest source changed after SourceCommit" }
 foreach ($relative in $sourceFiles) {
     git ls-files --error-unmatch -- $relative 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "A manifest source is not tracked" }
