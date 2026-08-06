@@ -214,3 +214,19 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "seed-instability diagnostics self-test failed"
 }
+
+$AttentionMinimalCauseExecutable = Join-Path $OutputDirectory "attention_minimal_cause_test.exe"
+& g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "host_tests\attention_minimal_cause.cpp") `
+    -o $AttentionMinimalCauseExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "attention-minimal-cause diagnostics compilation failed"
+}
+
+& $AttentionMinimalCauseExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "attention-minimal-cause diagnostics self-test failed"
+}
