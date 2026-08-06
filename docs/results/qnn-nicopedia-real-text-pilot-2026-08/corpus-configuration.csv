@@ -1,0 +1,2 @@
+"dataset","version","snapshot","format","article_types","normalization","markup","min_clean_utf8_bytes","max_clean_utf8_bytes","split","dedupe","final_test_opened"
+"Nicopedia data","2024-11-25","articles displayed at the end of 2024-01","UTF-8 MySQL CSV with backslash escape and embedded LF","a;i;l;o;v","NFKC","HTML text extraction; block boundaries preserved; script/style dropped","96","1048576","article-level stable SHA-256: train 90%, validation 5%, development 4%, final test 1%","exact SHA-256 of cleaned text before split","false"

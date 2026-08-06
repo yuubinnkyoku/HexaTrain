@@ -1,0 +1,5 @@
+"question","finding","strength"
+"seed performance stability","large held-out NLL instability was not reproduced","observation"
+"generation behavior","seed-dependent greedy divergence was partially reproduced and stronger at L19","observation"
+"synthetic homogeneous-TRAIN mechanism","not reproduced as a causal claim on natural text","not supported"
+"most supported explanation","small ranking differences amplified by free-running feedback","mechanism candidate"

@@ -1,0 +1,2 @@
+"selected","vocabulary","context_tokens","unknown_rate","training_required","selection_time","reason"
+"utf8_byte","256","32","0","false","before model outcomes","zero unknown tokens, exact byte round-trip, and 8x lower dense output vocabulary than the TRAIN-only codepoint candidate"

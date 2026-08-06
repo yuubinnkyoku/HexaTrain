@@ -1,0 +1,5 @@
+"operation","excluded_articles","purpose","information_loss_risk"
+"duplicate","428","prevent exact normalized-text leakage","one canonical copy retained"
+"empty_or_markup_only","247","remove records with no usable text","content excluded by preregistered boundary"
+"too_long","0","bound pathological records","content excluded by preregistered boundary"
+"too_short","2163","remove insufficient text after markup extraction","content excluded by preregistered boundary"

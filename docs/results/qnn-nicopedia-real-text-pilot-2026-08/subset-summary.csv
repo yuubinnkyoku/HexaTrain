@@ -1,0 +1,6 @@
+"subset","articles","cleaned_utf8_bytes","chunks","target_tokens"
+"development","508","2102683","65442","2094144"
+"train_medium","6163","26214508","816045","26113440"
+"train_pilot","1995","8418135","262035","8385120"
+"train_smoke","299","1057476","32887","1052384"
+"validation","500","2287095","71211","2278752"

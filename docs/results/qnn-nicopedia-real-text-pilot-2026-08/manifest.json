@@ -1,0 +1,218 @@
+{
+  "schema": "NICOPEDIA_REAL_TEXT_PUBLIC_BUNDLE_V1",
+  "schema_version": 1,
+  "source_commit": "beaaa3ad984b4838058852eaac51009f38a163eb",
+  "dataset_name": "Nicopedia data",
+  "dataset_version": "2024-11-25",
+  "article_types": [
+    "a",
+    "i",
+    "l",
+    "o",
+    "v"
+  ],
+  "source_file_aggregate_sha256": "sha256:b3185ea689ffa64c71f5ea8fe25f3779dbf1f0cd0d103b6e2fe05792e635bf86",
+  "cleaning_protocol_hash": "sha256:b83563aa8b6770f3126106a517205808b2af47db1b620b35fe2a9614adf27b9c",
+  "split_protocol_hash": "sha256:7240f57282160b81c9cb27d9c2a87214cb58fed4c07ae95cf200441238fb055d",
+  "tokenizer_protocol_hash": "sha256:ef0e2f779b6a736f9478decf52868ceae0f634f873930db68ae7266bd20bb09f",
+  "model_config_hash": "sha256:69a58f83b3b556b5171c8f65d66fbae79d3e782359cd67996d1470822f4a9b76",
+  "pilot_train_articles": 1995,
+  "pilot_train_clean_utf8_bytes": 8418135,
+  "pilot_train_target_tokens": 8385120,
+  "seeds": [
+    1,
+    2,
+    4
+  ],
+  "smoke_runs": 2,
+  "formal_training_runs": 6,
+  "additional_control_runs": 0,
+  "source_full_scans": 3,
+  "final_test_opened": false,
+  "synthetic_final_holdout_opened": false,
+  "device_runs": 0,
+  "htp_runs": 0,
+  "adb_operations": 0,
+  "ui_operations": 0,
+  "count_from_one": 0,
+  "classification": "PERFORMANCE_INSTABILITY_NOT_REPRODUCED_GENERATION_VARIATION_PARTIALLY_REPRODUCED",
+  "evidence_strength": "OBSERVATION_WITH_MECHANISM_CANDIDATE",
+  "conclusion": "Large held-out NLL seed instability was not reproduced; greedy generation variation was partially reproduced, with stronger divergence at L19.",
+  "publication": {
+    "raw_text": false,
+    "titles": false,
+    "article_ids": false,
+    "raw_token_sequences": false,
+    "tokenizer_model_or_vocabulary": false,
+    "checkpoints": false,
+    "logits_or_attention": false,
+    "local_paths": false
+  },
+  "hash_definition": "SHA-256 over UTF-8 text after CRLF and CR normalization to LF; source-file aggregate uses raw per-file SHA-256 bound to POSIX relative names and sizes",
+  "private_evidence_aggregate_sha256": "3094476750d2d57f8e14f79d8655c0e05405f99901ed1b8d7109cb7b72da6f75",
+  "sources": [
+    {
+      "path": "host_tests/nicopedia_real_text_pilot.cpp",
+      "sha256_normalized_lf": "9b8ab6d8af1e40edff90f7306562caf0ce53279e00eba7c60c936d826900b493"
+    },
+    {
+      "path": "scripts/nicopedia_real_text_pipeline.py",
+      "sha256_normalized_lf": "7fd3040e7534e0087f70d6c952c9e61df60efff8b65bb04a07b6733eb25bfc19"
+    },
+    {
+      "path": "scripts/run_nicopedia_real_text_pilot.ps1",
+      "sha256_normalized_lf": "6bc69d41ec84923564a8eecdb1aa01b357ff00a77259fb8e7952717c376bd7e7"
+    },
+    {
+      "path": "scripts/export_public_qnn_nicopedia_results.ps1",
+      "sha256_normalized_lf": "8931c231b83e54b1101e333d859ca756439d5f44c5b987c4d3427b6d2a2643b7"
+    },
+    {
+      "path": "scripts/run_host_tests.ps1",
+      "sha256_normalized_lf": "e5a3d2611fbffffee4cf5ff8f55ade337f5e7b11925418f98bcf6445ad4b57ef"
+    },
+    {
+      "path": "scripts/verify_local.ps1",
+      "sha256_normalized_lf": "f89ed4b09f1a1d99b6137ea7f4f233e11cf953929a05870f2a09515b8b332b94"
+    },
+    {
+      "path": "app/src/main/cpp/tiny_language_model_cpu.cpp",
+      "sha256_normalized_lf": "376f73180ba3f2236addb6afe3e198491c1c0f9fa4b51e70bb61745685cde109"
+    },
+    {
+      "path": "app/src/main/cpp/tiny_language_model_cpu.h",
+      "sha256_normalized_lf": "e9adb31a651e0fe4f1523222e942cbcc32ad2b90df83114fbffd2c50313b06c1"
+    },
+    {
+      "path": "app/src/main/cpp/qnn/qnn_runtime.h",
+      "sha256_normalized_lf": "d549b8a3fc75d717d8ad28199193528531014d43780f4fb36d307b4734a022cb"
+    },
+    {
+      "path": "app/src/main/cpp/transformer_resource_estimator.h",
+      "sha256_normalized_lf": "685d547705d4a2bbfcfa11f7cf0e35b4ad80555192448f5dbce158bd27fc804b"
+    },
+    {
+      "path": "docs/qnn-nicopedia-real-text-pilot.md",
+      "sha256_normalized_lf": "dd8e0f803ee71cbae8cff6b5e79932d03e99a85fdf08e9fb52735aa2ed0e26f7"
+    },
+    {
+      "path": "docs/results/README.md",
+      "sha256_normalized_lf": "a2e26571b3d9e1320f412cd7c493887d5ea0283ef7a1451e03395b7064a1d959"
+    }
+  ],
+  "files": [
+    {
+      "path": "checkpoint-selection.csv",
+      "sha256_normalized_lf": "90e8478c271c9d617af3068b7902a8022f4b196b7964b71e140e511408062222"
+    },
+    {
+      "path": "cleaning-summary.csv",
+      "sha256_normalized_lf": "ad1938200ef46f006a39b3f2971eb35a5284fa6161082cb8ec5e4185fc23126a"
+    },
+    {
+      "path": "corpus-configuration.csv",
+      "sha256_normalized_lf": "7aab475f306e32100b70cb3b0cdf02a6efad0525f97048c4f81c885e7b386546"
+    },
+    {
+      "path": "corpus-inventory.csv",
+      "sha256_normalized_lf": "5919cc9eff065a4bb61501af5ae0f65a3e5a9b636b49426706334adfe81ba41a"
+    },
+    {
+      "path": "dedup-summary.csv",
+      "sha256_normalized_lf": "e7e0e42e303a610f2973ad6e875088f601d5fac57a80557127948a4c1d7fb9cd"
+    },
+    {
+      "path": "depth-control.csv",
+      "sha256_normalized_lf": "513db0dd6c3e3297c14db270d07f99fb5923a7f0e156002ed085ef4e30370c9f"
+    },
+    {
+      "path": "diagnosis.csv",
+      "sha256_normalized_lf": "dad836f2337e546401c1aa2231811b7c8ed133090e79dc114b76dfe7beb546d6"
+    },
+    {
+      "path": "free-running-summary.csv",
+      "sha256_normalized_lf": "448845232ff4fde11dd52474df0e3d20f36a9d35f5b9a675c02929639f53b7aa"
+    },
+    {
+      "path": "hypothesis-outcomes.csv",
+      "sha256_normalized_lf": "1074ef0eac50a0e60e564566705b7bfa49eeb40c9da13d8829e0d3f136536063"
+    },
+    {
+      "path": "limitations.csv",
+      "sha256_normalized_lf": "33c7a2a02277039d69da54b241c2ef1e22882e7e54296679b57f33d59a98dd77"
+    },
+    {
+      "path": "model-configurations.csv",
+      "sha256_normalized_lf": "71d02f96bb966ad018d4c5b64d2cb07afc75809c0bafd3d3ba6ae988e70d433e"
+    },
+    {
+      "path": "next-step-candidates.csv",
+      "sha256_normalized_lf": "8fa6b2d8e913f7f6dff5016df042dfd4d68eb1e461d036e6195a51916429da95"
+    },
+    {
+      "path": "paired-prefix-summary.csv",
+      "sha256_normalized_lf": "7d67c768741b5eb566abbf707b02a3adef10b08834667791427aa4f52eb584fc"
+    },
+    {
+      "path": "README.md",
+      "sha256_normalized_lf": "783d29a22ec1405b004b43439964401ef2b755570400cde834e23e421e2189cc"
+    },
+    {
+      "path": "runtime-budget.csv",
+      "sha256_normalized_lf": "d682480f6ad6e6c295a58b8cb97fa83ba15b4de50fced37b83ba6fbaf6e47ba4"
+    },
+    {
+      "path": "seed-stability.csv",
+      "sha256_normalized_lf": "51a6914c84ebfc61b40e40228c369f602f796fa86eb974979c762894fd844c51"
+    },
+    {
+      "path": "split-summary.csv",
+      "sha256_normalized_lf": "3b0aa279057238e9d977ec806bc8e4700f43ad22a162495d6d0bcd78385ba10c"
+    },
+    {
+      "path": "subset-summary.csv",
+      "sha256_normalized_lf": "382d13c907020bb3727c23a91eaad301e0c1bdbe77b656cee3d095ad1a94d336"
+    },
+    {
+      "path": "teacher-forced-summary.csv",
+      "sha256_normalized_lf": "f5912ff9490ce0d45d7f4347a00354fbb3ead5ea4e3e80416653f41e70bc2580"
+    },
+    {
+      "path": "tokenizer-candidates.csv",
+      "sha256_normalized_lf": "8162c68dc319f009b65c974a7690399b227b9f473ecccdad6765fb6e335704d6"
+    },
+    {
+      "path": "tokenizer-configuration.csv",
+      "sha256_normalized_lf": "2454f4ed5afc16ea80ff145e5f44f702dd1f1d12f49610c75becd321c7b71807"
+    },
+    {
+      "path": "training-summary.csv",
+      "sha256_normalized_lf": "10b2102bc6caa05269f68cc487a6d3b1984b3228afc5d04de7d742c55d82c9f3"
+    }
+  ],
+  "allow_list": [
+    "README.md",
+    "manifest.json",
+    "corpus-configuration.csv",
+    "corpus-inventory.csv",
+    "cleaning-summary.csv",
+    "split-summary.csv",
+    "dedup-summary.csv",
+    "subset-summary.csv",
+    "tokenizer-candidates.csv",
+    "tokenizer-configuration.csv",
+    "model-configurations.csv",
+    "runtime-budget.csv",
+    "training-summary.csv",
+    "checkpoint-selection.csv",
+    "seed-stability.csv",
+    "teacher-forced-summary.csv",
+    "free-running-summary.csv",
+    "paired-prefix-summary.csv",
+    "depth-control.csv",
+    "hypothesis-outcomes.csv",
+    "diagnosis.csv",
+    "limitations.csv",
+    "next-step-candidates.csv"
+  ]
+}

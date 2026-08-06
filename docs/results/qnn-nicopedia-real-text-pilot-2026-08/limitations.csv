@@ -1,0 +1,8 @@
+"limitation","impact"
+"three seeds","pilot observation, not population inference"
+"fixed evaluation prefixes","validation uses 256 cached chunks per checkpoint; development uses the first 512 cached chunks, 16 free-running prompts, and up to 128 eligible pairs per seed"
+"byte tokenizer","about 12.6 characters of mean effective context and invalid UTF-8 greedy outputs"
+"training boundary","all runs selected step 1000; convergence plateau not established"
+"paired prefix","eight-byte suffix does not prove semantic target invariance; exploratory only"
+"model size","L6 and L19 parameter counts differ; depth and capacity are not fully factorized"
+"final test","unopened, so no final performance claim"

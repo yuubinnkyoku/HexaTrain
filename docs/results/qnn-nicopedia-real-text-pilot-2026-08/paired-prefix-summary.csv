@@ -1,0 +1,7 @@
+"seed","layers","suffix_bytes","pairs","train_suffix_min_count","train_target_concentration","mean_absolute_logit_difference","argmax_flip_rate","mean_absolute_nll_difference","mean_far_attention_mass_difference","identity_maximum_logit_difference","interpretation"
+"1","6","8","128","4","0.95","0.725829","0.140625","0.279219","0.100118","0","exploratory_semantic_invariance_not_assumed"
+"2","6","8","128","4","0.95","0.650814","0.179688","0.272264","0.079778","0","exploratory_semantic_invariance_not_assumed"
+"4","6","8","128","4","0.95","0.552849","0.25","0.312372","0.0973956","0","exploratory_semantic_invariance_not_assumed"
+"1","19","8","128","4","0.95","0.487233","0.140625","0.232466","0.0620312","0","exploratory_semantic_invariance_not_assumed"
+"2","19","8","128","4","0.95","0.568692","0.21875","0.249607","0.0498022","0","exploratory_semantic_invariance_not_assumed"
+"4","19","8","128","4","0.95","0.454638","0.140625","0.22492","0.0811217","0","exploratory_semantic_invariance_not_assumed"

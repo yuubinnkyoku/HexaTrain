@@ -1,0 +1,3 @@
+"layers","seeds","validation_nll_range","development_nll_min","development_nll_max","development_nll_range","teacher_argmax_agreement","teacher_pairwise_js","free_argmax_agreement","free_pairwise_js","final_test_used"
+"6","1;2;4","0.020415059","2.61872","2.63966","0.0209409","0.586914","0.0368629","0.601562","0.133","false"
+"19","1;2;4","0.037552276","2.58124","2.61721","0.0359641","0.607422","0.0332851","0.378906","0.189051","false"

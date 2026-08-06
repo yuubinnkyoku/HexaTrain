@@ -1,0 +1,4 @@
+"rank","candidate","purpose","requires_new_protocol"
+"1","TRAIN-only reversible subword or byte-fallback tokenizer","increase effective Japanese context while preserving zero unknowns","true"
+"2","longer validation-selected training with plateau criterion","separate undertraining from seed spread","true"
+"3","T64 matched-token depth comparison","test context truncation without opening final test","true"

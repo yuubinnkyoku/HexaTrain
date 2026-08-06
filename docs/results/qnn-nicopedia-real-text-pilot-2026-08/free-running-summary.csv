@@ -1,0 +1,3 @@
+"layers","seeds","prompts","generation_steps","argmax_agreement","pairwise_js","mean_first_divergence_position","repeat_rate","short_loop_rate","invalid_utf8_generation_rate","generation_completion_rate","generated_text_published"
+"6","1;2;4","16","16","0.601562","0.133","6.4375","0.371094","0.354167","0.604167","1","false"
+"19","1;2;4","16","16","0.378906","0.189051","2.125","0.257812","0.238281","0.666667","1","false"

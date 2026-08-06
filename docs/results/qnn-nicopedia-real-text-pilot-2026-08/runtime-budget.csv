@@ -1,0 +1,4 @@
+"phase","layers","measured_steps","step_seconds_batch1","estimated_100_steps_seconds","estimated_320_steps_seconds","peak_working_set_bytes","checkpoint_write_seconds"
+"smoke","6","5","0.00355376","0.355376","1.1372","32448512","0.0011115"
+"smoke","19","5","0.00862792","0.862792","2.76093","33734656","0.0013315"
+"corpus_prepare","n/a","n/a","n/a","n/a","n/a","not captured","n/a"

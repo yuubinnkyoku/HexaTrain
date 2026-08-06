@@ -1,0 +1,5 @@
+"split","articles","cleaned_utf8_bytes","selection_use"
+"train","259420","1084337901","training and tokenizer comparison"
+"validation","14312","58946789","checkpoint selection only"
+"development","11554","48318069","one locked evaluation"
+"final_test","2931","12765573","cleaning/dedupe/split aggregates only; no token cache or model evaluation"

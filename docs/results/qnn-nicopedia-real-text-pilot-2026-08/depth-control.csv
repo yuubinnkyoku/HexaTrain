@@ -1,0 +1,2 @@
+"comparison","l6_parameters","l19_parameters","l6_development_nll_range","l19_development_nll_range","l6_free_argmax_agreement","l19_free_argmax_agreement","finding"
+"L6_vs_L19","20864","48320","0.020940884","0.035964074","0.601562","0.378906","L19 slightly improves teacher-forced NLL but amplifies greedy generation divergence"
