@@ -517,6 +517,7 @@ lm::Config makeConfig(std::uint32_t context, std::uint32_t layers) {
 
 void runBenchmark(const fs::path& cachePath, const fs::path& outputPath, std::uint32_t layers,
                   std::uint32_t measuredSteps) {
+  if (!measuredSteps) throw std::runtime_error("BENCHMARK_STEPS_MUST_BE_POSITIVE");
   const Cache cache = loadCache(cachePath);
   const lm::Config config = makeConfig(cache.context, layers);
   Parameters parameters = lm::initialParameters(config, 1);

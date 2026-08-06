@@ -46,9 +46,14 @@ function Resolve-UnderBuild([string]$RelativeOrAbsolute, [string]$Label) {
 
 function Build-Runner {
     New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
-    if ((Test-Path -LiteralPath $executable -PathType Leaf) -and
-        (Get-Item -LiteralPath $executable).LastWriteTimeUtc -ge (Get-Item -LiteralPath $sourceFile).LastWriteTimeUtc -and
-        (Get-Item -LiteralPath $executable).LastWriteTimeUtc -ge (Get-Item -LiteralPath $cpuSource).LastWriteTimeUtc) {
+    $compileInputs = @(
+        $sourceFile, $cpuSource,
+        (Join-Path $repoRoot "app/src/main/cpp/tiny_language_model_cpu.h"),
+        (Join-Path $repoRoot "app/src/main/cpp/qnn/qnn_runtime.h"),
+        (Join-Path $repoRoot "app/src/main/cpp/transformer_resource_estimator.h")
+    )
+    $executableTime = if (Test-Path -LiteralPath $executable -PathType Leaf) { (Get-Item -LiteralPath $executable).LastWriteTimeUtc } else { $null }
+    if ($executableTime -and -not @($compileInputs | Where-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc -gt $executableTime }).Count) {
         return
     }
     $compiler = Get-Command clang++ -ErrorAction SilentlyContinue
@@ -123,6 +128,9 @@ foreach ($required in @($trainCache, $validationCache, $developmentCache)) {
 }
 
 if ($Benchmark) {
+    if ($Layers -notin @(6, 19) -or $MeasuredSteps -lt 1 -or $MeasuredSteps -gt 100) {
+        throw "BENCHMARK_REQUIRES_L6_OR_L19_AND_STEPS_1_TO_100"
+    }
     $output = Join-Path $reports "smoke/benchmark-l$Layers.csv"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $output) | Out-Null
     & $executable --benchmark $trainCache $output $Layers $MeasuredSteps

@@ -219,6 +219,21 @@ $hypotheses = Get-Content -LiteralPath (Join-Path $resolvedReports "decisions/de
 $benchmarks = @()
 $benchmarks += Import-Csv (Join-Path $resolvedReports "smoke/benchmark-l6.csv")
 $benchmarks += Import-Csv (Join-Path $resolvedReports "smoke/benchmark-l19.csv")
+if ($benchmarks.Count -ne 2 -or (($benchmarks | ForEach-Object layers | Sort-Object) -join ',') -ne '6,19') {
+    throw "Smoke benchmark identity mismatch"
+}
+foreach ($benchmark in $benchmarks) {
+    $expectedParameters = if ([int]$benchmark.layers -eq 6) { 20864 } else { 48320 }
+    if ([int]$benchmark.context -ne 32 -or [int]$benchmark.vocabulary -ne 256 -or
+        [int]$benchmark.dimension -ne 16 -or [int]$benchmark.ffn -ne 32 -or [int]$benchmark.heads -ne 2 -or
+        [int]$benchmark.parameter_count -ne $expectedParameters -or [int]$benchmark.measured_steps -ne 5) {
+        throw "Smoke benchmark configuration mismatch"
+    }
+    foreach ($property in @('seconds','step_seconds','estimated_100_steps_seconds','estimated_320_steps_seconds',
+                             'peak_working_set_bytes','cache_bytes','checkpoint_write_seconds')) {
+        Assert-Range $benchmark.$property 0 ([double]::MaxValue) "smoke benchmark metric"
+    }
+}
 $runSummaries = @()
 $trajectories = @()
 $teacher = @()
