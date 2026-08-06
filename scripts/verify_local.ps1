@@ -219,6 +219,12 @@ try {
         "no-op parity, fixed patterns, branch scale, freeze scope, group identity, and deterministic training fixture PASS"
     }
 
+    Invoke-Step "context-supervision-stability-self-test" {
+        Invoke-PwshScript "context supervision stability self-test" `
+            (Join-Path $Root "scripts\run_l19_context_supervision_stability.ps1") @("-SelfTest")
+        "dataset determinism, matched histogram, target contract, canonical no-op, ordinary Attention, and curriculum multiset fixtures PASS"
+    }
+
     Invoke-Step "public-exporter-self-test" {
         Invoke-PwshScript "post-fix public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
@@ -270,6 +276,9 @@ try {
                 "-SelfTest")
         Invoke-PwshScript "attention minimal-cause public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_l19_attention_minimal_cause.ps1") @(
+                "-SelfTest")
+        Invoke-PwshScript "context supervision stability public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_l19_context_supervision_results.ps1") @(
                 "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }

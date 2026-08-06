@@ -230,3 +230,19 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "attention-minimal-cause diagnostics self-test failed"
 }
+
+$ContextSupervisionExecutable = Join-Path $OutputDirectory "context_supervision_stability_test.exe"
+& g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    -I (Join-Path $Root "host_tests") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "host_tests\context_supervision_stability.cpp") `
+    -o $ContextSupervisionExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "context-supervision stability compilation failed"
+}
+
+& $ContextSupervisionExecutable --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "context-supervision stability self-test failed"
+}
