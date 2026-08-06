@@ -1,7 +1,7 @@
 {
   "schema": "NICOPEDIA_REAL_TEXT_PUBLIC_BUNDLE_V1",
   "schema_version": 1,
-  "source_commit": "641532e8e0047d126e3243bd3e5bf7e81b4874d2",
+  "source_commit": "b1858db283a5b42e8cd0d55ce119ae88ff7973e3",
   "dataset_name": "Nicopedia data",
   "dataset_version": "2024-11-25",
   "article_types": [
@@ -61,7 +61,7 @@
     },
     {
       "path": "scripts/run_nicopedia_real_text_pilot.ps1",
-      "sha256_normalized_lf": "6bc69d41ec84923564a8eecdb1aa01b357ff00a77259fb8e7952717c376bd7e7"
+      "sha256_normalized_lf": "7a7c417a1337bab9fc67d5b3ece79a0b3dedff3b8a0268fb47fef2d1e6574b44"
     },
     {
       "path": "scripts/export_public_qnn_nicopedia_results.ps1",
