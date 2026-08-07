@@ -58,4 +58,16 @@ object NativeBridge {
         repeatCount: Int,
         tapSet: Int,
     ): String
+
+    external fun nativeRunNicopediaGenerate(
+        checkpointPath: String,
+        promptPath: String,
+        seed: Long,
+        layers: Int,
+        maxNewBytes: Int,
+        generateMode: String,
+        temperature: Float,
+        topK: Int,
+        samplingSeed: Long,
+    ): String
 }

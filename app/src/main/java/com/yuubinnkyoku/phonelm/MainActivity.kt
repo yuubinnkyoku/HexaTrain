@@ -105,6 +105,76 @@ class MainActivity : Activity() {
     private fun runDebugIntentIfRequested() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         val requested = intent.getStringExtra("phonelm.mode") ?: return
+        if (requested == "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE") {
+            val dir = intent.getStringExtra("phonelm.checkpoint_dump_dir")
+                ?: "nicopedia-generation"
+            val checkpointDir = filesDir.toPath().resolve("checkpoints").resolve(dir)
+                .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
+            if (checkpointDir == null) {
+                Log.e("PhoneLMDeviceTest",
+                    "DEVICE_TEST_REJECTED error=phonelm.checkpoint_dir must resolve under the app files dir")
+                return
+            }
+            checkpointDir.mkdirs()
+            val seed = intent.getStringExtra("phonelm.seed")?.toLongOrNull() ?: 1L
+            val layers = intent.getIntExtra("phonelm.layers", 6)
+            val checkpointStep = intent.getIntExtra("phonelm.checkpoint_step", 320)
+            val maxNewBytes = intent.getIntExtra("phonelm.max_new_bytes", 64)
+            val generateMode = intent.getStringExtra("phonelm.generate_mode") ?: "greedy"
+            val temperature = intent.getStringExtra("phonelm.temperature")?.toFloatOrNull() ?: 1.0f
+            val topK = intent.getIntExtra("phonelm.top_k", 256)
+            val samplingSeed = intent.getStringExtra("phonelm.sampling_seed")?.toLongOrNull() ?: 0L
+            val checkpointFile = File(checkpointDir,
+                "htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt")
+            val promptFile = File(checkpointDir, "prompt.bin")
+            val validationError = when {
+                layers != 6 && layers != 19 -> "phonelm.layers must be 6 or 19"
+                seed < 1L || seed > 99999L -> "phonelm.seed must be in 1..99999"
+                checkpointStep !in 1..100000 -> "phonelm.checkpoint_step must be in 1..100000"
+                maxNewBytes !in 1..2048 -> "phonelm.max_new_bytes must be in 1..2048"
+                generateMode != "greedy" && generateMode != "sample" ->
+                    "phonelm.generate_mode must be greedy or sample"
+                generateMode == "sample" &&
+                    (!temperature.isFinite() || temperature <= 0.0f) ->
+                    "phonelm.temperature must be positive and finite"
+                generateMode == "sample" && (topK < 1 || topK > 256) ->
+                    "phonelm.top_k must be in 1..256"
+                !checkpointFile.isFile ->
+                    "checkpoint file missing: ${checkpointFile.name}"
+                !promptFile.isFile -> "prompt file missing: prompt.bin"
+                else -> null
+            }
+            val preReport = if (validationError != null) {
+                "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n" +
+                    "failure_classification=APP_CONFIGURATION_VALIDATION\n" +
+                    "error=$validationError\n"
+            } else {
+                null
+            }
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
+            Thread({
+                val report = if (preReport != null) {
+                    preReport
+                } else {
+                    NativeBridge.nativeRunNicopediaGenerate(
+                        checkpointPath = checkpointFile.absolutePath,
+                        promptPath = promptFile.absolutePath,
+                        seed = seed,
+                        layers = layers,
+                        maxNewBytes = maxNewBytes,
+                        generateMode = generateMode,
+                        temperature = temperature,
+                        topK = topK,
+                        samplingSeed = samplingSeed,
+                    )
+                }
+                openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
+                    it.write(report)
+                }
+                Log.i("PhoneLMDeviceTest", "DEVICE_TEST_COMPLETE mode=$requested")
+            }, "PhoneLM-nicopedia-generate").start()
+            return
+        }
         if (requested == "QNN_HTP_FIRST_NONFINITE_REPLAY") {
             val repeatCount = intent.getIntExtra("phonelm.replay_count", 3)
             val tapSet = intent.getIntExtra("phonelm.tap_set", 0)
