@@ -2,7 +2,7 @@
   "schema_version": 1,
   "bundle": "qnn-nicopedia-htp-training-2026-08",
   "generated": "2026-08-07",
-  "source_commit": "ee0d54ea910ef505bb42ecabe7ba3e58de2d8fbc",
+  "source_commit": "9abc12b5d11517214965a9697aab91c11c0c4ff4",
   "summary": "Nicopedia real-text QNN HTP training milestone: L6 (seeds 1/2/4) and L19 (seed 1) ran 320 training steps on the HTP backend with CPU-comparable quality.",
   "files": {
     "configuration.csv": {
@@ -42,7 +42,7 @@
       "bytes": 513
     },
     "manifest.json": {
-      "sha256": "2954cdc718c2d11e138b05d015c2b3c8afabe2f9d4f680d4915ded666175c9c9",
+      "sha256": "02ec92c8e08f442f621c2c12ab589eafb76dc7d5a90c27ebeb655ba852f0bdf2",
       "bytes": 3050
     },
     "memory-summary.csv": {
