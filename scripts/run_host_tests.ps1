@@ -262,3 +262,17 @@ $pwshExe = $pwshCandidates[0]
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia real-text pipeline self-tests failed"
 }
+
+$NicopediaGenerationExecutable = Join-Path $OutputDirectory "nicopedia_htp_generation_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "host_tests\nicopedia_htp_generation_test.cpp") `
+    -o $NicopediaGenerationExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia HTP generation host test compilation failed"
+}
+
+& $NicopediaGenerationExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia HTP generation host tests failed"
+}
