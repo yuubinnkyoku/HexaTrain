@@ -131,6 +131,18 @@ try {
         "pinned arguments, root selection, core/advisory classification ok (temp-only)"
     }
 
+    Invoke-Step "nicopedia-generation-self-test" {
+        Invoke-PwshScript "Nicopedia HTP generation runner self-test" `
+            (Join-Path $Root "scripts\run_nicopedia_htp_generate.ps1") @(
+                "-SelfTest",
+                "-QairtSdkRoot", "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702",
+                "-ExpectedBuildId", "2.48.40.260702151143")
+        Invoke-PwshScript "Nicopedia HTP generation public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_generation_results.ps1") @(
+                "-SelfTest")
+        "runner allow-list/display self-tests and exporter leak guards PASS (temp-only; no device required)"
+    }
+
     Invoke-Step "margin-decomposition-probe" {
         Invoke-PwshScript "l19 first-error/margin decomposition probe" `
             (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
