@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "bundle": "qnn-nicopedia-htp-generation-2026-08",
+  "generated": "2026-08-07",
+  "source_commit": "4266e3b485149252ccd078977eb4328375677411",
+  "summary": "Nicopedia byte-level generation on the QNN HTP graph from HTP-trained checkpoints (L6 seeds 1/2/4, L19 seed 1): fixed-prefix CPU/HTP parity, 8-step AR parity, then greedy/sampled generation. Aggregate results only.",
+  "files": {
+    "generation-ar.csv": {
+      "sha256": "cd6cd9450ee51ee280a4b3619f927962d3aa874c201b9c5e80d620ed9c35f0c3",
+      "bytes": 2954
+    },
+    "generation-config.csv": {
+      "sha256": "488aa48880508604ec6c2c79bcb6ea25283c9db02f6256bd6303017962d17212",
+      "bytes": 767
+    },
+    "generation-parity.csv": {
+      "sha256": "8820cd96af317521dca31be44052b06e6d17a4ff406c030f255f222512f9e8ab",
+      "bytes": 1693
+    },
+    "generation-performance.csv": {
+      "sha256": "492d5f8304b6cf147d68594658e6efb09420611452d4c5b3fff9afd2b55fb185",
+      "bytes": 607
+    },
+    "generation-summary.csv": {
+      "sha256": "aee93a366b95f1f02ba2d69d80613b8dd01e0472247129d9c6ebf188d8b3f798",
+      "bytes": 745
+    },
+    "generation-thermal.csv": {
+      "sha256": "05e51754d46a8d5245e4c2385f2672991cac4fee1320a72c522e60e91e65f9b9",
+      "bytes": 304
+    },
+    "limitations.csv": {
+      "sha256": "4c3ef972ef3682b615ac40b9b1e43fd3937b593052709d5d23e56e78af9a9ac9",
+      "bytes": 737
+    },
+    "runtime-identity.csv": {
+      "sha256": "63f4ed78574ceeab8d885a7a4b7696a5cffb65f7a789df68ebe55118c3155c86",
+      "bytes": 861
+    }
+  }
+}

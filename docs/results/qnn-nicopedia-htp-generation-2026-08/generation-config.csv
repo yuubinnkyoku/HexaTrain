@@ -1,0 +1,7 @@
+model,seed,layers,checkpoint_step,checkpoint_parameter_elements,checkpoint_file_bytes,checkpoint_finite,vocabulary,tokens,dimension,feedforward,heads,registry_count,prompt_truncated,context_used_bytes,context_padding_bytes,generate_mode,temperature,top_k,sampling_seed,max_new_bytes
+L19,1,19,320,48320,198741,true,256,32,16,32,2,192,true,32,0,greedy,1,256,0,32
+L19,1,19,320,48320,198741,true,256,32,16,32,2,192,false,32,11,greedy,1,256,0,64
+L19,1,19,320,48320,198741,true,256,32,16,32,2,192,false,32,11,sample,0.8500000238,64,42,64
+L6,1,6,320,20864,85251,true,256,32,16,32,2,62,false,32,11,greedy,1,256,0,64
+L6,2,6,320,20864,85251,true,256,32,16,32,2,62,false,32,11,greedy,1,256,0,64
+L6,4,6,320,20864,85251,true,256,32,16,32,2,62,false,32,11,greedy,1,256,0,64

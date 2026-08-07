@@ -1,0 +1,7 @@
+model,seed,layers,mode,temperature,top_k,sampling_seed,max_new_bytes,generated_byte_count,generated_valid_utf8_bytes,generated_invalid_utf8_bytes,parity_gate,ar_gate,generation_gate,ar_divergence_blocked,generation_ms_per_byte,cpu_fallback,nan_detected
+L19,1,19,greedy,1,256,0,32,32,32,0,true,true,true,false,40.15873859,false,false
+L19,1,19,greedy,1,256,0,64,64,63,1,true,true,true,false,39.2358382,false,false
+L19,1,19,sample,0.8500000238,64,42,64,64,49,15,true,true,true,false,67.82787839,false,false
+L6,1,6,greedy,1,256,0,64,64,63,1,true,true,true,false,27.54420816,false,false
+L6,2,6,greedy,1,256,0,64,64,63,1,true,true,true,false,32.68999591,false,false
+L6,4,6,greedy,1,256,0,64,64,63,1,true,true,true,false,21.00290853,false,false
