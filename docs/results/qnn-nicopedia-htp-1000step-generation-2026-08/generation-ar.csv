@@ -1,0 +1,2 @@
+file,step,max_abs_logits_error
+seed1-l19-greedy-step320-max64-result.txt,0,0.01110172272

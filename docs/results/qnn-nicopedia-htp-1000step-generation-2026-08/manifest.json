@@ -1,0 +1,38 @@
+{
+  "source_commit": null,
+  "created": "2026-08-08T03:53:37Z",
+  "files": {
+    "README.md": {
+      "sha256": "1a14613947772c98c55f24aed5148e8bc92000b3bf554cd0268358b6907fcf08",
+      "bytes": 2373
+    },
+    "manifest.json": {
+      "sha256": "d7a52219ded0701e460ad30df2ae0bb4c73a590c4a2e096ad7113f0968fac23a",
+      "bytes": 937
+    },
+    "generation-summary.csv": {
+      "sha256": "597ad9e2d360c7accfd133a0f611e7b794153a1b9fcb70ffdcb7caa9ac592f45",
+      "bytes": 527
+    },
+    "generation-parity.csv": {
+      "sha256": "c1fadc48d976cf68723de3cab40700a99c223d4f9e8bf41dcc07c1936b256ce7",
+      "bytes": 160
+    },
+    "generation-ar.csv": {
+      "sha256": "0b718ab1c586956ec1256a143785cfbace9842ed460cba9d75acd211259800b1",
+      "bytes": 91
+    },
+    "training-status.csv": {
+      "sha256": "6b59deab24ada8be0056223dfe5c311959e0a0a2ea2d8fd2b9a65998d55c71ac",
+      "bytes": 114
+    },
+    "cpu-anchor.csv": {
+      "sha256": "5553e698f695aaf1fd70e8119432eb4c3ccf3ee6819804731e263ab0fcd39088",
+      "bytes": 92
+    },
+    "limitations.csv": {
+      "sha256": "ba957c64e993190823b0fa1b60756c34d33779957eaa0199bb4333a5c57b6941",
+      "bytes": 311
+    }
+  }
+}

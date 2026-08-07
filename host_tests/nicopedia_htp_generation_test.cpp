@@ -269,6 +269,57 @@ void testAutoregressiveLoopWithSyntheticProvider() {
   }
 }
 
+void testGenerationAggregates() {
+  // ASCII + repeated byte runs.
+  {
+    const std::vector<uint8_t> bytes = {'a', 'b', 'b', 'b', 'c'};
+    const auto ag = ngen::generationAggregates(bytes);
+    require(ag.totalBytes == 5, "total bytes");
+    require(ag.validUtf8Bytes == 5 && ag.invalidUtf8Bytes == 0,
+            "ASCII all valid");
+    require(ag.validScalars == 5, "five ASCII scalars");
+    require(ag.asciiBytes == 5, "five ASCII bytes");
+    require(ag.uniqueByteValues == 3, "a/b/c unique");
+    require(ag.maxSameByteRun == 3, "bbb run length 3");
+    require(ag.maxScalarRepeatRun == 3, "b scalar repeat 3");
+    require(ag.shortPeriodLoopFraction == 0.5,
+            "abbbc tail period-1 matches 2 of 4 comparisons");
+  }
+  // ののの (3-byte scalar repeated).
+  {
+    const std::vector<uint8_t> bytes = {
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAE),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAE),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAE)};
+    const auto ag = ngen::generationAggregates(bytes);
+    require(ag.validUtf8Bytes == 9 && ag.invalidUtf8Bytes == 0,
+            "three の all valid");
+    require(ag.validScalars == 3, "three scalars");
+    require(ag.asciiBytes == 0, "no ASCII bytes");
+    require(ag.uniqueByteValues == 3, "three byte values in の");
+    require(ag.maxSameByteRun == 1, "no adjacent identical bytes");
+    require(ag.maxScalarRepeatRun == 3, "の repeated 3 times");
+    require(ag.shortPeriodLoopFraction == 1.0,
+            "ののの is a period-3 loop");
+  }
+  // Mixed invalid bytes.
+  {
+    const std::vector<uint8_t> bytes = {uint8_t(0xE3), uint8_t(0x81), 0x61};
+    const auto ag = ngen::generationAggregates(bytes);
+    require(ag.validUtf8Bytes == 1 && ag.invalidUtf8Bytes == 2,
+            "truncated lead then ascii");
+    require(ag.validScalars == 1, "one valid scalar");
+    require(ag.uniqueByteValues == 3, "three distinct byte values");
+  }
+  // Empty input.
+  {
+    const auto ag = ngen::generationAggregates({});
+    require(ag.totalBytes == 0 && ag.validScalars == 0,
+            "empty aggregates zero");
+    require(ag.shortPeriodLoopFraction == 0.0, "empty loop fraction zero");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -281,6 +332,7 @@ int main() {
     testWindowAppend();
     testParityPrefixes();
     testAutoregressiveLoopWithSyntheticProvider();
+    testGenerationAggregates();
     std::printf("nicopedia_htp_generation_test=PASS\n");
     return 0;
   } catch (const std::exception &exception) {

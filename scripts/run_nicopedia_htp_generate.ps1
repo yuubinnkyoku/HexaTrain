@@ -27,11 +27,13 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [int]$PollLimit = 600,
+    [int]$CheckpointStep = 320,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
+. (Join-Path $PSScriptRoot 'nicopedia_generation_aggregates.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -110,6 +112,47 @@ function Invoke-SelfTest {
     $empty = Get-SafeUtf8Display -Bytes ([byte[]]@())
     if ($empty -ne '') { throw 'SELFTEST_DISPLAY_EMPTY' }
 
+    # CheckpointStep file-name resolution mirrors the device-side
+    # nprtParseCheckpointStep contract (htp-seed<S>-l<L>-step<N>.ckpt).
+    $ckRoot = Join-Path $env:TEMP ("nicopedia-gen-selftest-" + [guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($ckRoot) | Out-Null
+    try {
+        $step320Ckpt = Join-Path $ckRoot 'htp-seed1-l19-step320.ckpt'
+        $step1000Ckpt = Join-Path $ckRoot 'htp-seed1-l19-step1000.ckpt'
+        [IO.File]::WriteAllText($step320Ckpt, 'selftest-320')
+        [IO.File]::WriteAllText($step1000Ckpt, 'selftest-1000')
+        $anchor320 = Join-Path $ckRoot 'seed1-l19-steps320-result.txt'
+        $anchor1000 = Join-Path $ckRoot 'seed1-l19-steps1000-result.txt'
+        [IO.File]::WriteAllText($anchor320, "final_parameter_hash=fnv1a64:0123456789abcdef`n")
+        [IO.File]::WriteAllText($anchor1000, "final_parameter_hash=fnv1a64:fedcba9876543210`n")
+        # Resolve-* helpers must pick the step-driven file names.
+        $checkpoint = Join-Path $ckRoot "htp-seed1-l19-step320.ckpt"
+        $anchorFile = Join-Path $ckRoot "seed1-l19-steps320-result.txt"
+        if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) {
+            throw 'SELFTEST_CHECKPOINT_STEP_320'
+        }
+        $checkpoint1000 = Join-Path $ckRoot "htp-seed1-l19-step1000.ckpt"
+        if (-not (Test-Path -LiteralPath $checkpoint1000 -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $anchor1000 -PathType Leaf)) {
+            throw 'SELFTEST_CHECKPOINT_STEP_1000'
+        }
+        # A missing step-N file must fail closed.
+        foreach ($missing in @(
+                (Join-Path $ckRoot 'htp-seed1-l19-step999999.ckpt'),
+                (Join-Path $ckRoot 'htp-seed1-l19-step0.ckpt'))) {
+            if (Test-Path -LiteralPath $missing -PathType Leaf) {
+                throw 'SELFTEST_CHECKPOINT_STEP_LEAK'
+            }
+        }
+    } finally {
+        [IO.Directory]::Delete($ckRoot, $true)
+    }
+
+    # Aggregate metrics mirror nicopedia_generation.h GenerationAggregates;
+    # the shared helper owns both the implementation and its self-test.
+    Test-GenerationAggregateSelfTest
+
     # SHA-256 fingerprint plumbing.
     $temp = Join-Path $env:TEMP ("nicopedia-gen-selftest-" + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($temp) | Out-Null
@@ -122,6 +165,13 @@ function Invoke-SelfTest {
     } finally {
         [IO.Directory]::Delete($temp, $true)
     }
+
+    # CheckpointStep range gate (mirrors the parameter validation).
+    foreach ($bad in @(0, -1, 1000000, 9999999)) {
+        if ($bad -ge 1 -and $bad -le 999999) { throw "SELFTEST_CHECKPOINT_STEP_RANGE: $bad" }
+    }
+    if (-not (320 -ge 1 -and 320 -le 999999)) { throw 'SELFTEST_CHECKPOINT_STEP_320_RANGE' }
+    if (-not (1000 -ge 1 -and 1000 -le 999999)) { throw 'SELFTEST_CHECKPOINT_STEP_1000_RANGE' }
     Write-Host 'run_nicopedia_htp_generate_self_test=PASS'
     exit 0
 }
@@ -131,6 +181,9 @@ if ($SelfTest) { Invoke-SelfTest }
 if ($Model -ne 'L6' -and $Model -ne 'L19') { throw "MODEL_INVALID: Model must be L6 or L19 (got '$Model')" }
 $layers = if ($Model -eq 'L19') { 19 } else { 6 }
 if ($Seed -lt 1 -or $Seed -gt 99999) { throw 'SEED_INVALID: Seed must be in 1..99999' }
+if ($CheckpointStep -lt 1 -or $CheckpointStep -gt 999999) {
+    throw 'CHECKPOINT_STEP_INVALID: CheckpointStep must be in 1..999999'
+}
 if ($MaxNewBytes -lt 1 -or $MaxNewBytes -gt 1024) { throw 'MAX_NEW_BYTES_INVALID: MaxNewBytes must be in 1..1024' }
 if ($Mode -ne 'Greedy' -and $Mode -ne 'Sample') { throw 'MODE_INVALID: Mode must be Greedy or Sample' }
 if ($Mode -eq 'Sample') {
@@ -152,8 +205,11 @@ if ($promptBytes.Length -gt 32) {
 }
 
 # Checkpoint + approved anchor (fail-closed before any device work).
-$checkpoint = Join-Path $trainingRoot "htp-seed$Seed-l$layers-step320.ckpt"
-$anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers-steps320-result.txt"
+# The checkpoint file name embeds the step (htp-seed<S>-l<L>-step<N>.ckpt);
+# the device re-validates the step from the file name and the expected
+# checkpoint_step intent, so a stale or mismatched file cannot pass.
+$checkpoint = Join-Path $trainingRoot "htp-seed$Seed-l$layers-step$CheckpointStep.ckpt"
+$anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers-steps$CheckpointStep-result.txt"
 if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf)) { throw "CHECKPOINT_MISSING: $checkpoint" }
 if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
 $anchorText = Get-Content -LiteralPath $anchorFile -Raw
@@ -166,7 +222,8 @@ $checkpointSha256 = Get-Sha256Hex $checkpoint
 $promptSha256Bytes = [System.Security.Cryptography.SHA256]::Create()
 $promptSha256 = [System.BitConverter]::ToString($promptSha256Bytes.ComputeHash($promptBytes)).Replace('-', '').ToLowerInvariant()
 Write-Event 'host-staged' @{
-    model = $Model; seed = $Seed; prompt_byte_count = $promptBytes.Length
+    model = $Model; seed = $Seed; checkpoint_step = $CheckpointStep
+    prompt_byte_count = $promptBytes.Length
     prompt_truncated = ($promptBytes.Length -gt 32); prompt_sha256 = $promptSha256
     checkpoint_sha256 = $checkpointSha256; anchor_hash = $anchorHash
 }
@@ -222,7 +279,7 @@ try {
 } finally {
     Remove-Item -LiteralPath $localPrompt -Force -ErrorAction SilentlyContinue
 }
-Adb @('shell', 'run-as', $package, 'cp', $tmpCheckpoint, "$remoteDir/htp-seed$Seed-l$layers-step320.ckpt") | Out-Null
+Adb @('shell', 'run-as', $package, 'cp', $tmpCheckpoint, "$remoteDir/htp-seed$Seed-l$layers-step$CheckpointStep.ckpt") | Out-Null
 Adb @('shell', 'run-as', $package, 'cp', $tmpPrompt, "$remoteDir/prompt.bin") | Out-Null
 Adb @('shell', 'rm', '-f', $tmpCheckpoint, $tmpPrompt) | Out-Null
 
@@ -235,7 +292,7 @@ $startArgs = @(
     '--es', 'phonelm.checkpoint_dump_dir', 'nicopedia-generation',
     '--es', 'phonelm.seed', [string]$Seed,
     '--ei', 'phonelm.layers', $layers,
-    '--ei', 'phonelm.checkpoint_step', 320,
+    '--ei', 'phonelm.checkpoint_step', $CheckpointStep,
     '--ei', 'phonelm.max_new_bytes', $MaxNewBytes,
     '--es', 'phonelm.generate_mode', $Mode.ToLowerInvariant(),
     '--es', 'phonelm.temperature', $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture),
@@ -263,6 +320,14 @@ $deviceHashMatch = [regex]::Match($result, '(?m)^checkpoint_parameter_hash=(fnv1
 if (-not $deviceHashMatch.Success) { throw 'DEVICE_PARAMETER_HASH_MISSING' }
 if ($deviceHashMatch.Groups[1].Value -ne $anchorHash) {
     throw "CHECKPOINT_IDENTITY_MISMATCH: device=$($deviceHashMatch.Groups[1].Value) anchor=$anchorHash"
+}
+# The device re-validates the expected step (nprtParseCheckpointStep +
+# loaded.step != expectedStep).  Mirror that contract on the host so a
+# mismatched checkpoint_step intent cannot slip through a stale report.
+$headerStepMatch = [regex]::Match($result, '(?m)^checkpoint_header_step=(\d+)$')
+if (-not $headerStepMatch.Success) { throw 'DEVICE_HEADER_STEP_MISSING' }
+if ([int]$headerStepMatch.Groups[1].Value -ne $CheckpointStep) {
+    throw "CHECKPOINT_STEP_MISMATCH: header=$($headerStepMatch.Groups[1].Value) expected=$CheckpointStep"
 }
 $parityGate = [regex]::Match($result, '(?m)^parity_gate=(true|false)$').Groups[1].Value
 $arGate = [regex]::Match($result, '(?m)^ar_gate=(true|false)$').Groups[1].Value
@@ -306,7 +371,7 @@ $annotated = $result.TrimEnd() + "`n" +
     "battery_temperature_c_after=$([int]$batteryTempAfter / 10.0)`n" +
     "compile_time_qairt_build_id=$ExpectedBuildId`n" +
     "private_serial_recorded_for_identity_only=true`n"
-$reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-max$MaxNewBytes-result.txt"
+$reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
 $annotated | Set-Content -LiteralPath $reportFile -Encoding utf8
 $annotated | Add-Content -LiteralPath (Join-Path $reportRoot 'device-identity-private.txt') -Encoding utf8
 
@@ -324,6 +389,7 @@ $state = [ordered]@{
     updated_utc = [DateTimeOffset]::UtcNow.ToString('o')
     last_run = [ordered]@{
         model = $Model; seed = $Seed; layers = $layers
+        checkpoint_step = $CheckpointStep
         mode = $Mode.ToLowerInvariant(); temperature = $Temperature
         top_k = $TopK; sampling_seed = $SamplingSeed
         max_new_bytes = $MaxNewBytes
@@ -341,7 +407,7 @@ Write-Host "== Nicopedia HTP generation ($Model seed=$Seed) =="
 Write-Host "prompt (lossless): $Prompt"
 if ($PromptFile -ne '') { Write-Host "prompt file: $PromptFile" }
 Write-Host "prompt bytes: $($promptBytes.Length) (context: last 32, device-validated)"
-Write-Host "mode=$Mode temp=$Temperature topK=$TopK samplingSeed=$SamplingSeed maxNewBytes=$MaxNewBytes"
+Write-Host "mode=$Mode temp=$Temperature topK=$TopK samplingSeed=$SamplingSeed maxNewBytes=$MaxNewBytes checkpointStep=$CheckpointStep"
 Write-Host "parity_gate=$parityGate ar_gate=$arGate generation_gate=$generationGate"
 Write-Host "generated bytes: $($generatedBytes.Length)"
 Write-Host "generated (lossless display): $generatedStats"

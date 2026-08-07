@@ -1,0 +1,3 @@
+item,status,note
+HTP step-1000 generation,BLOCKED by parity gate,CPU/HTP logit absolute error exceeds the fixed 2e-2 gate after 1000 steps; CPU-generated step-1000 text is provided for quality comparison.
+raw bytes,EXCLUDED,Only aggregate byte/UTF-8 statistics are published; generated text is not included.

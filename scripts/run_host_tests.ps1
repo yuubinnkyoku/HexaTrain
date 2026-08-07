@@ -276,3 +276,35 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia HTP generation host tests failed"
 }
+
+$NicopediaCpuGenerateExecutable = Join-Path $OutputDirectory "nicopedia_cpu_generate.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_cpu_generate.cpp") `
+    -o $NicopediaCpuGenerateExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia CPU generation compilation failed"
+}
+# Self-test against the checked-in L19 seed-1 step-320 checkpoint with the
+# same prompts used by the HTP generation milestone.
+$selfTestCkpt = Join-Path $Root "build\reports\nicopedia-htp-training\htp-seed1-l19-step320.ckpt"
+if (Test-Path -LiteralPath $selfTestCkpt) {
+    $selfTestGreedy = & $NicopediaCpuGenerateExecutable $selfTestCkpt "e4babae5b7a5e79fa5e883bde381a8e381af" "greedy" "64"
+    if ($LASTEXITCODE -ne 0) { throw "Nicopedia CPU generation greedy self-test failed" }
+    $selfTestSample = & $NicopediaCpuGenerateExecutable $selfTestCkpt "e3838be382b3e3838be382b3e381a8e381af" "sample" "128" "0.6" "16" "42"
+    if ($LASTEXITCODE -ne 0) { throw "Nicopedia CPU generation sample self-test failed" }
+    $mapG = @{}
+    $selfTestGreedy | Where-Object { $_ -match '^([A-Za-z0-9_]+)=(.*)$' } | ForEach-Object { $mapG[$Matches[1]] = $Matches[2] }
+    $mapS = @{}
+    $selfTestSample | Where-Object { $_ -match '^([A-Za-z0-9_]+)=(.*)$' } | ForEach-Object { $mapS[$Matches[1]] = $Matches[2] }
+    if ($mapG['status'] -ne 'SUCCESS' -or $mapG['generate_mode'] -ne 'greedy' -or $mapG['generated_byte_count'] -ne '64') {
+        throw "Nicopedia CPU generation greedy self-test output mismatch"
+    }
+    if ($mapS['status'] -ne 'SUCCESS' -or $mapS['generate_mode'] -ne 'sample' -or $mapS['generated_byte_count'] -ne '128') {
+        throw "Nicopedia CPU generation sample self-test output mismatch"
+    }
+    Write-Host "nicopedia_cpu_generate_self_test=PASS"
+} else {
+    Write-Host "nicopedia_cpu_generate_self_test=SKIP (checkpoint not present)"
+}

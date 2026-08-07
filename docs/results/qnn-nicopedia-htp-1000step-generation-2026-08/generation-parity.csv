@@ -1,0 +1,2 @@
+file,prefix_index,logits_max_abs_error,logits_cosine_similarity,last_argmax_match
+seed1-l19-greedy-step320-max64-result.txt,0,0.01110172272,0.9999997766,true

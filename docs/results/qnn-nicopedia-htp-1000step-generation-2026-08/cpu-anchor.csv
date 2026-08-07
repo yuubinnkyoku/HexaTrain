@@ -1,0 +1,2 @@
+seed,layers,selected_step,selected_validation_nll,source
+1,19,1000,2.510798771,cpu-anchor

@@ -140,6 +140,9 @@ try {
         Invoke-PwshScript "Nicopedia HTP generation public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_generation_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "Nicopedia HTP 1000-step generation public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_1000step_results.ps1") @(
+                "-SelfTest")
         "runner allow-list/display self-tests and exporter leak guards PASS (temp-only; no device required)"
     }
 

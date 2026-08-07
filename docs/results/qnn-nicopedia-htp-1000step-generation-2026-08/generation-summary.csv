@@ -1,0 +1,2 @@
+status,model,layers,seed,checkpoint_step,generate_mode,max_new_bytes,generated_byte_count,generated_valid_utf8_bytes,generated_invalid_utf8_bytes,unique_byte_values,ascii_bytes,max_same_byte_run,max_scalar_repeat_run,short_period_loop_fraction,finite,parity_gate,ar_gate,generation_gate,parity_0_logits_max_abs_error,parity_0_logits_cosine_similarity,parity_0_last_argmax_match,ar_step_0_max_abs_logits_error
+SUCCESS,L19,19,1,320,greedy,64,64,63,1,3,0,1,21,1,true,true,true,true,0.01110172272,0.9999997766,true,0.01110172272

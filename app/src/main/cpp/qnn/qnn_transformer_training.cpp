@@ -5266,14 +5266,109 @@ double nprtLastRowMargin(const std::vector<float> &logits, uint32_t rows,
   return double(first) - double(second);
 }
 
+// Statistics of the last-token logits row (the row used for generation).
+// These are recorded for parity auditing: they let the host distinguish an
+// absolute-error growth caused by logit-scale inflation from a genuine HTP
+// numerical degradation.
+struct NprtLastRowStats {
+  double cpuMin = 0, cpuMax = 0, cpuRms = 0, cpuStd = 0;
+  double htpMin = 0, htpMax = 0, htpRms = 0, htpStd = 0;
+};
+
+NprtLastRowStats nprtLastRowLogitStats(const std::vector<float> &cpuLogits,
+                                       const std::vector<float> &htpLogits,
+                                       uint32_t tokens, uint32_t vocab) {
+  NprtLastRowStats stats;
+  const size_t base = size_t(tokens - 1) * vocab;
+  auto rowStats = [&](const std::vector<float> &row, double &minV,
+                      double &maxV, double &rms, double &stdv) {
+    minV = maxV = row[base];
+    double sum = 0.0, sumSq = 0.0;
+    for (uint32_t i = 0; i < vocab; ++i) {
+      const double v = row[base + i];
+      minV = std::min(minV, v);
+      maxV = std::max(maxV, v);
+      sum += v;
+      sumSq += v * v;
+    }
+    rms = std::sqrt(sumSq / std::max(1u, vocab));
+    const double mean = sum / std::max(1u, vocab);
+    double var = 0.0;
+    for (uint32_t i = 0; i < vocab; ++i) {
+      const double d = row[base + i] - mean;
+      var += d * d;
+    }
+    stdv = std::sqrt(var / std::max(1u, vocab));
+  };
+  rowStats(cpuLogits, stats.cpuMin, stats.cpuMax, stats.cpuRms, stats.cpuStd);
+  rowStats(htpLogits, stats.htpMin, stats.htpMax, stats.htpRms, stats.htpStd);
+  return stats;
+}
+
+// Top-K index-set overlap (Jaccard-style count / K) on the last logits row.
+uint32_t nprtLastRowTopKOverlap(const std::vector<float> &cpuLogits,
+                                const std::vector<float> &htpLogits,
+                                uint32_t tokens, uint32_t vocab, uint32_t k) {
+  const size_t base = size_t(tokens - 1) * vocab;
+  std::vector<uint32_t> cpuIdx(vocab), htpIdx(vocab);
+  for (uint32_t i = 0; i < vocab; ++i) {
+    cpuIdx[i] = i;
+    htpIdx[i] = i;
+  }
+  auto byLogitDesc = [&](const std::vector<float> &row) {
+    return [&row, base](uint32_t a, uint32_t b) {
+      return row[base + a] > row[base + b] ||
+             (row[base + a] == row[base + b] && a < b);
+    };
+  };
+  std::sort(cpuIdx.begin(), cpuIdx.end(), byLogitDesc(cpuLogits));
+  std::sort(htpIdx.begin(), htpIdx.end(), byLogitDesc(htpLogits));
+  const uint32_t kk = std::min(k, vocab);
+  std::vector<uint32_t> cpuTop(cpuIdx.begin(), cpuIdx.begin() + kk);
+  std::vector<uint32_t> htpTop(htpIdx.begin(), htpIdx.begin() + kk);
+  std::sort(cpuTop.begin(), cpuTop.end());
+  std::sort(htpTop.begin(), htpTop.end());
+  std::vector<uint32_t> intersection;
+  std::set_intersection(cpuTop.begin(), cpuTop.end(), htpTop.begin(),
+                        htpTop.end(), std::back_inserter(intersection));
+  return static_cast<uint32_t>(intersection.size());
+}
+
+// Margin between the top logit and the K-th ranked logit on the last row.
+double nprtLastRowMarginAtK(const std::vector<float> &logits, uint32_t tokens,
+                            uint32_t vocab, uint32_t rank) {
+  const size_t base = size_t(tokens - 1) * vocab;
+  std::vector<uint32_t> idx(vocab);
+  for (uint32_t i = 0; i < vocab; ++i) idx[i] = i;
+  std::sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) {
+    return logits[base + a] > logits[base + b] ||
+           (logits[base + a] == logits[base + b] && a < b);
+  });
+  const uint32_t r = std::min(rank, vocab - 1);
+  return double(logits[base + idx[0]]) - double(logits[base + idx[r]]);
+}
+
 struct NprtParityRow {
   std::string label;
   uint32_t contextBytes = 0;
   uint32_t padBytes = 0;
   double logitsMaxAbs = 0;
+  double logitsMeanAbs = 0;
+  double logitsL2 = 0;
+  double logitsMaxRelative = 0;
+  double logitsCosine = 1.0;
+  double logitsCpuMin = 0, logitsCpuMax = 0;
+  double logitsCpuRms = 0, logitsCpuStd = 0;
+  double logitsHtpMin = 0, logitsHtpMax = 0;
+  double logitsHtpRms = 0, logitsHtpStd = 0;
   double probabilityMaxAbs = 0;
+  double probabilityMeanAbs = 0;
   uint32_t lastArgmaxCpu = 0, lastArgmaxHtp = 0;
   bool lastArgmaxMatch = true;
+  double top1MarginCpu = 0, top1MarginHtp = 0;
+  double top2MarginCpu = 0, top2MarginHtp = 0;
+  uint32_t topkSetOverlap = 0;
+  uint32_t topkSetSize = 5;
   bool finite = true;
 };
 
@@ -5283,7 +5378,20 @@ struct NprtArRow {
   bool match = true;
   bool contextAligned = true;
   double maxAbsLogits = -1;
+  double logitsMeanAbs = 0;
+  double logitsL2 = 0;
+  double logitsMaxRelative = 0;
+  double logitsCosine = 1.0;
+  double logitsCpuMin = 0, logitsCpuMax = 0;
+  double logitsCpuRms = 0, logitsCpuStd = 0;
+  double logitsHtpMin = 0, logitsHtpMax = 0;
+  double logitsHtpRms = 0, logitsHtpStd = 0;
+  double probabilityMeanAbs = 0;
   double marginCpu = 0, marginHtp = 0;
+  double top1MarginCpu = 0, top1MarginHtp = 0;
+  double top2MarginCpu = 0, top2MarginHtp = 0;
+  uint32_t topkSetOverlap = 0;
+  uint32_t topkSetSize = 5;
   bool finite = true;
 };
 
@@ -5409,13 +5517,39 @@ std::string nicopediaHtpGeneration(
     row.contextBytes = static_cast<uint32_t>(prefixContext.size());
     row.padBytes = pad;
     row.logitsMaxAbs = logitsError.maxAbs;
+    row.logitsMeanAbs = logitsError.meanAbs;
+    row.logitsL2 = logitsError.l2;
+    row.logitsMaxRelative = logitsError.maxRelative;
+    row.logitsCosine = logitsError.cosine;
     row.probabilityMaxAbs = probabilityError.maxAbs;
+    row.probabilityMeanAbs = probabilityError.meanAbs;
     const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
     row.lastArgmaxCpu = nicopedia_gen::greedyArgmax(
         cpuStep.logits.data() + lastBase, config.vocabularySize);
     row.lastArgmaxHtp = nicopedia_gen::greedyArgmax(
         htpStep.logits.data() + lastBase, config.vocabularySize);
     row.lastArgmaxMatch = row.lastArgmaxCpu == row.lastArgmaxHtp;
+    const auto lastStats = nprtLastRowLogitStats(
+        cpuStep.logits, htpStep.logits, config.tokens, config.vocabularySize);
+    row.logitsCpuMin = lastStats.cpuMin;
+    row.logitsCpuMax = lastStats.cpuMax;
+    row.logitsCpuRms = lastStats.cpuRms;
+    row.logitsCpuStd = lastStats.cpuStd;
+    row.logitsHtpMin = lastStats.htpMin;
+    row.logitsHtpMax = lastStats.htpMax;
+    row.logitsHtpRms = lastStats.htpRms;
+    row.logitsHtpStd = lastStats.htpStd;
+    row.top1MarginCpu = nprtLastRowMarginAtK(
+        cpuStep.logits, config.tokens, config.vocabularySize, 1);
+    row.top1MarginHtp = nprtLastRowMarginAtK(
+        htpStep.logits, config.tokens, config.vocabularySize, 1);
+    row.top2MarginCpu = nprtLastRowMarginAtK(
+        cpuStep.logits, config.tokens, config.vocabularySize, 2);
+    row.top2MarginHtp = nprtLastRowMarginAtK(
+        htpStep.logits, config.tokens, config.vocabularySize, 2);
+    row.topkSetOverlap = nprtLastRowTopKOverlap(
+        cpuStep.logits, htpStep.logits, config.tokens, config.vocabularySize,
+        row.topkSetSize);
     row.finite = logitsError.nonfinite == 0 && probabilityError.nonfinite == 0;
     // Fixed one-step tolerances established by the HTP training milestone.
     const bool ok = row.finite && row.logitsMaxAbs < 2e-2 &&
@@ -5461,6 +5595,12 @@ std::string nicopediaHtpGeneration(
         nprtLastRowMargin(cpuStep.logits, config.tokens, config.vocabularySize);
     row.marginHtp =
         nprtLastRowMargin(htpStep.logits, config.tokens, config.vocabularySize);
+    row.top1MarginCpu = row.marginCpu;
+    row.top1MarginHtp = row.marginHtp;
+    row.top2MarginCpu = nprtLastRowMarginAtK(
+        cpuStep.logits, config.tokens, config.vocabularySize, 2);
+    row.top2MarginHtp = nprtLastRowMarginAtK(
+        htpStep.logits, config.tokens, config.vocabularySize, 2);
     row.contextAligned = contextsAligned;
     row.match = contextsAligned && row.argmaxCpu == row.argmaxHtp;
     if (contextsAligned) {
@@ -5468,6 +5608,24 @@ std::string nicopediaHtpGeneration(
       const auto probabilityError =
           compareNprt(cpuStep.probabilities, htpStep.probabilities);
       row.maxAbsLogits = logitsError.maxAbs;
+      row.logitsMeanAbs = logitsError.meanAbs;
+      row.logitsL2 = logitsError.l2;
+      row.logitsMaxRelative = logitsError.maxRelative;
+      row.logitsCosine = logitsError.cosine;
+      row.probabilityMeanAbs = probabilityError.meanAbs;
+      const auto lastStats = nprtLastRowLogitStats(
+          cpuStep.logits, htpStep.logits, config.tokens, config.vocabularySize);
+      row.logitsCpuMin = lastStats.cpuMin;
+      row.logitsCpuMax = lastStats.cpuMax;
+      row.logitsCpuRms = lastStats.cpuRms;
+      row.logitsCpuStd = lastStats.cpuStd;
+      row.logitsHtpMin = lastStats.htpMin;
+      row.logitsHtpMax = lastStats.htpMax;
+      row.logitsHtpRms = lastStats.htpRms;
+      row.logitsHtpStd = lastStats.htpStd;
+      row.topkSetOverlap = nprtLastRowTopKOverlap(
+          cpuStep.logits, htpStep.logits, config.tokens, config.vocabularySize,
+          row.topkSetSize);
       row.finite = logitsError.nonfinite == 0 && probabilityError.nonfinite == 0;
       const bool withinTolerance =
           row.finite && row.maxAbsLogits < 2e-2 &&
@@ -5542,6 +5700,8 @@ std::string nicopediaHtpGeneration(
   }
   const nicopedia_gen::Utf8Stats generatedStats =
       nicopedia_gen::utf8StatsOf(generated);
+  const nicopedia_gen::GenerationAggregates ag =
+      nicopedia_gen::generationAggregates(generated);
   // Row-level logit finiteness is enforced fail-closed inside the generation
   // loop (any non-finite logit aborts with EXECUTION_NONFINITE before the
   // report is produced), so on SUCCESS these flags can only reflect a
@@ -5585,6 +5745,11 @@ std::string nicopediaHtpGeneration(
          << "\ngenerated_byte_count=" << generated.size()
          << "\ngenerated_valid_utf8_bytes=" << generatedStats.validBytes
          << "\ngenerated_invalid_utf8_bytes=" << generatedStats.invalidBytes
+         << "\nunique_byte_values=" << ag.uniqueByteValues
+         << "\nascii_bytes=" << ag.asciiBytes
+         << "\nmax_same_byte_run=" << ag.maxSameByteRun
+         << "\nmax_scalar_repeat_run=" << ag.maxScalarRepeatRun
+         << "\nshort_period_loop_fraction=" << ag.shortPeriodLoopFraction
          << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
          << "\nparity_prefix_count=" << parityRows.size()
          << "\nparity_gate=" << (parityGate ? "true" : "false")
@@ -5601,12 +5766,31 @@ std::string nicopediaHtpGeneration(
            << "\nparity_" << i << "_context_bytes=" << row.contextBytes
            << "\nparity_" << i << "_pad_bytes=" << row.padBytes
            << "\nparity_" << i << "_logits_max_abs_error=" << row.logitsMaxAbs
+           << "\nparity_" << i << "_logits_mean_abs_error=" << row.logitsMeanAbs
+           << "\nparity_" << i << "_logits_rms_error=" << row.logitsL2
+           << "\nparity_" << i << "_logits_max_relative_error=" << row.logitsMaxRelative
+           << "\nparity_" << i << "_logits_cosine_similarity=" << row.logitsCosine
+           << "\nparity_" << i << "_logits_cpu_min=" << row.logitsCpuMin
+           << "\nparity_" << i << "_logits_cpu_max=" << row.logitsCpuMax
+           << "\nparity_" << i << "_logits_cpu_rms=" << row.logitsCpuRms
+           << "\nparity_" << i << "_logits_cpu_std=" << row.logitsCpuStd
+           << "\nparity_" << i << "_logits_htp_min=" << row.logitsHtpMin
+           << "\nparity_" << i << "_logits_htp_max=" << row.logitsHtpMax
+           << "\nparity_" << i << "_logits_htp_rms=" << row.logitsHtpRms
+           << "\nparity_" << i << "_logits_htp_std=" << row.logitsHtpStd
            << "\nparity_" << i << "_probability_max_abs_error="
            << row.probabilityMaxAbs
+           << "\nparity_" << i << "_probability_mean_abs_error=" << row.probabilityMeanAbs
            << "\nparity_" << i << "_last_argmax_cpu=" << row.lastArgmaxCpu
            << "\nparity_" << i << "_last_argmax_htp=" << row.lastArgmaxHtp
            << "\nparity_" << i << "_last_argmax_match="
            << (row.lastArgmaxMatch ? "true" : "false")
+           << "\nparity_" << i << "_top1_margin_cpu=" << row.top1MarginCpu
+           << "\nparity_" << i << "_top1_margin_htp=" << row.top1MarginHtp
+           << "\nparity_" << i << "_top2_margin_cpu=" << row.top2MarginCpu
+           << "\nparity_" << i << "_top2_margin_htp=" << row.top2MarginHtp
+           << "\nparity_" << i << "_topk_set_overlap=" << row.topkSetOverlap
+           << "\nparity_" << i << "_topk_set_size=" << row.topkSetSize
            << "\nparity_" << i << "_finite=" << (row.finite ? "true" : "false");
   }
   for (size_t i = 0; i < arRows.size(); ++i) {
@@ -5619,8 +5803,29 @@ std::string nicopediaHtpGeneration(
            << (row.contextAligned ? "true" : "false")
            << "\nar_step_" << row.step << "_max_abs_logits_error="
            << row.maxAbsLogits << "\nar_step_" << row.step
-           << "_margin_cpu=" << row.marginCpu << "\nar_step_" << row.step
-           << "_margin_htp=" << row.marginHtp << "\nar_step_" << row.step
+           << "_logits_mean_abs_error=" << row.logitsMeanAbs << "\nar_step_"
+           << row.step << "_logits_rms_error=" << row.logitsL2 << "\nar_step_"
+           << row.step << "_logits_max_relative_error=" << row.logitsMaxRelative
+           << "\nar_step_" << row.step << "_logits_cosine_similarity="
+           << row.logitsCosine << "\nar_step_" << row.step
+           << "_logits_cpu_min=" << row.logitsCpuMin << "\nar_step_" << row.step
+           << "_logits_cpu_max=" << row.logitsCpuMax << "\nar_step_" << row.step
+           << "_logits_cpu_rms=" << row.logitsCpuRms << "\nar_step_" << row.step
+           << "_logits_cpu_std=" << row.logitsCpuStd << "\nar_step_" << row.step
+           << "_logits_htp_min=" << row.logitsHtpMin << "\nar_step_" << row.step
+           << "_logits_htp_max=" << row.logitsHtpMax << "\nar_step_" << row.step
+           << "_logits_htp_rms=" << row.logitsHtpRms << "\nar_step_" << row.step
+           << "_logits_htp_std=" << row.logitsHtpStd << "\nar_step_" << row.step
+           << "_probability_mean_abs_error=" << row.probabilityMeanAbs
+           << "\nar_step_" << row.step << "_margin_cpu=" << row.marginCpu
+           << "\nar_step_" << row.step << "_margin_htp=" << row.marginHtp
+           << "\nar_step_" << row.step << "_top1_margin_cpu=" << row.top1MarginCpu
+           << "\nar_step_" << row.step << "_top1_margin_htp=" << row.top1MarginHtp
+           << "\nar_step_" << row.step << "_top2_margin_cpu=" << row.top2MarginCpu
+           << "\nar_step_" << row.step << "_top2_margin_htp=" << row.top2MarginHtp
+           << "\nar_step_" << row.step << "_topk_set_overlap=" << row.topkSetOverlap
+           << "\nar_step_" << row.step << "_topk_set_size=" << row.topkSetSize
+           << "\nar_step_" << row.step
            << "_finite=" << (row.finite ? "true" : "false");
   }
   report << "\nhtp_initialize_us=" << initializeUs

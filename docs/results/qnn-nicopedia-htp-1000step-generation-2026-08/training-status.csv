@@ -1,0 +1,2 @@
+file,seed,layers,steps,batch_size,learning_rate,status
+seed1-l19-steps1000-result.txt,1,19,1000,8,0.003,SUCCESS
