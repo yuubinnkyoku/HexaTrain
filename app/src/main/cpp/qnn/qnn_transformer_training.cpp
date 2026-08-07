@@ -5542,11 +5542,13 @@ std::string nicopediaHtpGeneration(
   }
   const nicopedia_gen::Utf8Stats generatedStats =
       nicopedia_gen::utf8StatsOf(generated);
-  // Per-step row finiteness is already fail-closed above (EXECUTION_NONFINITE
-  // aborts the run), so at report time a generated non-finite logit cannot
-  // reach here; validBytes must never drive nan_detected (greedy bytes are
-  // often invalid UTF-8 by design and that is not a numerical failure).
+  // Row-level logit finiteness is enforced fail-closed inside the generation
+  // loop (any non-finite logit aborts with EXECUTION_NONFINITE before the
+  // report is produced), so on SUCCESS these flags can only reflect a
+  // non-finite host-side timing measurement.  They are published as
+  // final-gate booleans, not per-step diagnostics.
   const bool nanDetected = !std::isfinite(generateSeconds);
+  const bool infDetected = !std::isfinite(generateSeconds);
   const std::string status = generationGate ? "SUCCESS" : "FAILED";
 
   std::ostringstream report;
@@ -5632,7 +5634,7 @@ std::string nicopediaHtpGeneration(
          << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
          << "\ncpu_fallback=false"
          << "\nnan_detected=" << (nanDetected ? "true" : "false")
-         << "\ninf_detected=" << (nanDetected ? "true" : "false") << '\n'
+         << "\ninf_detected=" << (infDetected ? "true" : "false") << '\n'
          << runtime.apiTraceSummary() << runtime.diagnostics();
   return report.str();
 }

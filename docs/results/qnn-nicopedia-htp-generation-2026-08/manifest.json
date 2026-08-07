@@ -2,7 +2,7 @@
   "schema_version": 1,
   "bundle": "qnn-nicopedia-htp-generation-2026-08",
   "generated": "2026-08-07",
-  "source_commit": "4266e3b485149252ccd078977eb4328375677411",
+  "source_commit": "357513a68f506cd988dea75a19eab100c63d1107",
   "summary": "Nicopedia byte-level generation on the QNN HTP graph from HTP-trained checkpoints (L6 seeds 1/2/4, L19 seed 1): fixed-prefix CPU/HTP parity, 8-step AR parity, then greedy/sampled generation. Aggregate results only.",
   "files": {
     "generation-ar.csv": {
@@ -33,9 +33,17 @@
       "sha256": "4c3ef972ef3682b615ac40b9b1e43fd3937b593052709d5d23e56e78af9a9ac9",
       "bytes": 737
     },
+    "manifest.json": {
+      "sha256": "7dd2bd6e995a5dfd7da5b2766f9e6aeaccf243dea329f1e776e1c552be22aa3e",
+      "bytes": 1584
+    },
+    "README.md": {
+      "sha256": "edac7b9bf9cdd6846a0001e3866d8f4535844e4a01b4f39c62298b4d6af08401",
+      "bytes": 1601
+    },
     "runtime-identity.csv": {
-      "sha256": "63f4ed78574ceeab8d885a7a4b7696a5cffb65f7a789df68ebe55118c3155c86",
-      "bytes": 861
+      "sha256": "c465d5a82d0c0baea88bd08adf5b6364adc9f7dcd56629524335930f23c3cf5f",
+      "bytes": 652
     }
   }
 }

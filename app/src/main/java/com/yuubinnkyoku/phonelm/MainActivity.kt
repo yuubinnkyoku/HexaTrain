@@ -131,7 +131,7 @@ class MainActivity : Activity() {
                 layers != 6 && layers != 19 -> "phonelm.layers must be 6 or 19"
                 seed < 1L || seed > 99999L -> "phonelm.seed must be in 1..99999"
                 checkpointStep !in 1..100000 -> "phonelm.checkpoint_step must be in 1..100000"
-                maxNewBytes !in 1..2048 -> "phonelm.max_new_bytes must be in 1..2048"
+                maxNewBytes !in 1..1024 -> "phonelm.max_new_bytes must be in 1..1024"
                 generateMode != "greedy" && generateMode != "sample" ->
                     "phonelm.generate_mode must be greedy or sample"
                 generateMode == "sample" &&
