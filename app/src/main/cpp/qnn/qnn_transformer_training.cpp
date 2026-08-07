@@ -5066,6 +5066,577 @@ bool nprtSaveCheckpoint(const std::string &path, const tiny_lm::Config &config,
   return static_cast<bool>(output);
 }
 
+// ---------------------------------------------------------------------------
+// Nicopedia byte-level generation on the HTP graph.
+//
+// The checkpoint is the NPRTCKPTV1 private checkpoint written by the HTP
+// training milestone.  Identity is validated fail-closed on the device
+// (header config/seed/step, canonical registry order and element counts,
+// finiteness) and the returned registry hash is compared by the host against
+// the approved anchor from the training milestone's device report.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr std::uint64_t kNprtMaxCheckpointBytes = 64u * 1024u * 1024u;
+
+std::vector<std::uint8_t> nprtReadFileBytes(const std::string &path,
+                                            std::uint64_t maxBytes) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("FILE_OPEN_FAILED");
+  input.seekg(0, std::ios::end);
+  const std::streamoff size = input.tellg();
+  input.seekg(0, std::ios::beg);
+  if (size < 0 || static_cast<std::uint64_t>(size) > maxBytes)
+    throw std::runtime_error("FILE_SIZE_INVALID");
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+  if (size > 0)
+    input.read(reinterpret_cast<char *>(bytes.data()), size);
+  if (!input && size > 0) throw std::runtime_error("FILE_READ_TRUNCATED");
+  return bytes;
+}
+
+void nprtAssignRegistryMember(Params &target, uint32_t layers,
+                              const std::string &name,
+                              std::vector<float> &&values) {
+  if (name == "token_embedding") {
+    target.tokenEmbedding = std::move(values);
+    return;
+  }
+  if (name == "output_projection") {
+    target.outputProjection = std::move(values);
+    return;
+  }
+  if (name.rfind("layer_", 0) != 0)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  const size_t dot = name.find('.');
+  if (dot == std::string::npos || dot < 7)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  const std::string indexText = name.substr(6, dot - 6);
+  if (indexText.empty() || indexText.size() > 3)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  char *end = nullptr;
+  const long index = std::strtol(indexText.c_str(), &end, 10);
+  if (!end || *end != '\0' || index < 0 ||
+      static_cast<uint32_t>(index) >= layers)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  const std::string suffix = name.substr(dot + 1);
+  TinyTransformerLayerParameters *layer =
+      index == 0 ? static_cast<TinyTransformerLayerParameters *>(&target)
+                 : &target.layers[static_cast<std::size_t>(index) - 1];
+  if (suffix == "norm1_gamma") layer->gamma1 = std::move(values);
+  else if (suffix == "norm1_beta") layer->beta1 = std::move(values);
+  else if (suffix == "wq") layer->wq = std::move(values);
+  else if (suffix == "wk") layer->wk = std::move(values);
+  else if (suffix == "wv") layer->wv = std::move(values);
+  else if (suffix == "wo") layer->wo = std::move(values);
+  else if (suffix == "norm2_gamma") layer->gamma2 = std::move(values);
+  else if (suffix == "norm2_beta") layer->beta2 = std::move(values);
+  else if (suffix == "ffn_w1") layer->w1 = std::move(values);
+  else if (suffix == "ffn_w2") layer->w2 = std::move(values);
+  else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+}
+
+bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
+                             uint32_t expectedLayers, uint32_t *step) {
+  const std::string base = path.substr(path.find_last_of('/') + 1);
+  const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
+                             std::to_string(expectedLayers) + "-step";
+  if (base.size() <= prefix.size() + 5 ||
+      base.compare(0, prefix.size(), prefix) != 0 ||
+      base.compare(base.size() - 5, 5, ".ckpt") != 0)
+    return false;
+  const std::string digits =
+      base.substr(prefix.size(), base.size() - prefix.size() - 5);
+  if (digits.empty() || digits.size() > 6) return false;
+  for (char digit : digits)
+    if (digit < '0' || digit > '9') return false;
+  char *end = nullptr;
+  const long value = std::strtol(digits.c_str(), &end, 10);
+  if (!end || *end != '\0' || value <= 0 || value >= 1000000) return false;
+  *step = static_cast<uint32_t>(value);
+  return true;
+}
+
+struct LoadedNprtCheckpoint {
+  uint32_t vocabulary = 0, tokens = 0, dimension = 0, feedForward = 0;
+  uint32_t layers = 0, heads = 0, seed = 0, step = 0;
+  uint32_t registryCount = 0;
+  std::uint64_t fileBytes = 0;
+  std::uint64_t parameterElements = 0;
+  bool finite = true;
+  Params parameters;
+  std::string parameterHash;
+};
+
+LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
+    const std::string &path, const tiny_lm::Config &expected,
+    uint32_t expectedSeed) {
+  LoadedNprtCheckpoint result;
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("NPRT_CKPT_OPEN_FAILED");
+  input.seekg(0, std::ios::end);
+  const std::streamoff size = input.tellg();
+  input.seekg(0, std::ios::beg);
+  if (size < 0 || static_cast<std::uint64_t>(size) > kNprtMaxCheckpointBytes)
+    throw std::runtime_error("NPRT_CKPT_SIZE_INVALID");
+  result.fileBytes = static_cast<std::uint64_t>(size);
+  std::string magic(11, '\0');
+  input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+  if (magic != "NPRTCKPTV1\n") throw std::runtime_error("NPRT_CKPT_MAGIC");
+  result.vocabulary = nprtReadU32(input);
+  result.tokens = nprtReadU32(input);
+  result.dimension = nprtReadU32(input);
+  result.feedForward = nprtReadU32(input);
+  result.layers = nprtReadU32(input);
+  result.heads = nprtReadU32(input);
+  result.seed = nprtReadU32(input);
+  result.step = nprtReadU32(input);
+  result.registryCount = nprtReadU32(input);
+  if (result.vocabulary != expected.vocabularySize ||
+      result.tokens != expected.tokens ||
+      result.dimension != expected.dimension ||
+      result.feedForward != expected.feedForwardDimension ||
+      result.layers != expected.numLayers || result.heads != expected.numHeads)
+    throw std::runtime_error("NPRT_CKPT_CONFIG_MISMATCH");
+  if (result.seed != expectedSeed)
+    throw std::runtime_error("NPRT_CKPT_SEED_MISMATCH");
+  if (result.step == 0 || result.step >= 1000000)
+    throw std::runtime_error("NPRT_CKPT_STEP_INVALID");
+  // The trained checkpoint stores registry counts derived from fully-shaped
+  // parameters (vocab*dimension embedding, dimension^2 projections, ...).
+  // Reference only the shapes (values are discarded) so element counts match
+  // whatever the training milestone wrote.
+  const Params shape = tiny_lm::initialParameters(expected, 1);
+  const auto registry = tiny_lm::parameterRegistry(shape);
+  if (registry.size() != result.registryCount)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_COUNT_MISMATCH");
+  Params parameters;
+  parameters.layers.resize(result.layers > 0 ? result.layers - 1 : 0);
+  std::uint64_t elements = 0;
+  for (size_t i = 0; i < registry.size(); ++i) {
+    const uint32_t nameLength = nprtReadU32(input);
+    if (nameLength == 0 || nameLength > 256)
+      throw std::runtime_error("NPRT_CKPT_NAME_LENGTH");
+    std::string name(nameLength, '\0');
+    input.read(name.data(), static_cast<std::streamsize>(name.size()));
+    if (!input) throw std::runtime_error("NPRT_CKPT_NAME_TRUNCATED");
+    const std::uint64_t count = nprtReadU64(input);
+    if (name != registry[i].name)
+      throw std::runtime_error("NPRT_CKPT_REGISTRY_ORDER_MISMATCH");
+    const std::uint64_t expectedCount = registry[i].values->size();
+    if (count != expectedCount || count > 100000000ull)
+      throw std::runtime_error("NPRT_CKPT_ELEMENT_COUNT_MISMATCH");
+    std::vector<float> values(static_cast<std::size_t>(count));
+    input.read(reinterpret_cast<char *>(values.data()),
+               static_cast<std::streamsize>(count * sizeof(float)));
+    if (!input) throw std::runtime_error("NPRT_CKPT_VALUES_TRUNCATED");
+    for (float value : values)
+      if (!std::isfinite(value)) result.finite = false;
+    nprtAssignRegistryMember(parameters, result.layers, name,
+                             std::move(values));
+    elements += count;
+  }
+  char tail = 0;
+  if (input.read(&tail, 1))
+    throw std::runtime_error("NPRT_CKPT_TRAILING_BYTES");
+  result.parameterElements = elements;
+  result.parameters = std::move(parameters);
+  result.parameterHash = nprtParameterHash(result.parameters);
+  return result;
+}
+
+double nprtLastRowMargin(const std::vector<float> &logits, uint32_t rows,
+                         uint32_t vocab) {
+  if (rows == 0 || vocab == 0 || logits.size() < size_t(rows) * vocab)
+    return std::numeric_limits<double>::quiet_NaN();
+  const size_t base = size_t(rows - 1) * vocab;
+  float first = -std::numeric_limits<float>::infinity();
+  float second = -std::numeric_limits<float>::infinity();
+  for (uint32_t j = 0; j < vocab; ++j) {
+    const float value = logits[base + j];
+    if (value > first) {
+      second = first;
+      first = value;
+    } else if (value > second) {
+      second = value;
+    }
+  }
+  if (!std::isfinite(first) || !std::isfinite(second))
+    return std::numeric_limits<double>::quiet_NaN();
+  return double(first) - double(second);
+}
+
+struct NprtParityRow {
+  std::string label;
+  uint32_t contextBytes = 0;
+  uint32_t padBytes = 0;
+  double logitsMaxAbs = 0;
+  double probabilityMaxAbs = 0;
+  uint32_t lastArgmaxCpu = 0, lastArgmaxHtp = 0;
+  bool lastArgmaxMatch = true;
+  bool finite = true;
+};
+
+struct NprtArRow {
+  uint32_t step = 0;
+  uint32_t argmaxCpu = 0, argmaxHtp = 0;
+  bool match = true;
+  bool contextAligned = true;
+  double maxAbsLogits = -1;
+  double marginCpu = 0, marginHtp = 0;
+  bool finite = true;
+};
+
+}  // namespace
+
+std::string nicopediaHtpGeneration(
+    const tiny_lm::Config &config, const std::string &checkpointPath,
+    const std::string &promptPath, const TrainingConfig &trainingConfig,
+    const nicopedia_gen::GenerateConfig &generateConfig,
+    const LogSink &progress) {
+  const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
+                       ? static_cast<int>(trainingConfig.seed)
+                       : 1;
+  const uint32_t layers = config.numLayers;
+  const uint32_t heads = config.numHeads;
+  if (layers == 0 || heads == 0)
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=layers_heads_must_be_positive\n";
+  if (generateConfig.maxNewBytes == 0 || generateConfig.maxNewBytes > 1024)
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=max_new_bytes_must_be_1_1024\n";
+  if (!generateConfig.greedy &&
+      (!(generateConfig.temperature > 0.0f) ||
+       !std::isfinite(generateConfig.temperature) ||
+       generateConfig.topK == 0 || generateConfig.topK > 256))
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=temperature_or_top_k_invalid\n";
+  uint32_t expectedStep = 0;
+  if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
+                               layers, &expectedStep))
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_FILENAME\n"
+           "error=checkpoint filename must be htp-seed<seed>-l<layers>-step<step>.ckpt\n";
+  LoadedNprtCheckpoint loaded;
+  try {
+    loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
+                                             static_cast<uint32_t>(seed));
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                       "failure_classification=CHECKPOINT_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
+  if (loaded.step != expectedStep)
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_IDENTITY\n"
+           "error=checkpoint step does not match filename\n";
+  if (!loaded.finite)
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_NONFINITE\n"
+           "error=checkpoint contains non-finite values\n";
+
+  std::vector<std::uint8_t> prompt;
+  try {
+    prompt = nprtReadFileBytes(promptPath, 16u * 1024u * 1024u);
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                       "failure_classification=PROMPT_READ\nerror=") +
+           exception.what() + '\n';
+  }
+  if (prompt.empty())
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=PROMPT_EMPTY\n"
+           "error=prompt file is empty\n";
+  const bool promptTruncated = prompt.size() > config.tokens;
+  uint32_t contextPad = 0;
+  std::vector<std::uint8_t> context =
+      nicopedia_gen::buildGenerationContext(prompt, config.tokens, &contextPad);
+
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  const auto initStarted = std::chrono::steady_clock::now();
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, layers, heads))
+    return failure("nicopedia_generate_prepare", error, runtime);
+  const double initializeUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - initStarted)
+          .count();
+  const double graphCreateUs = runtime.metrics().graphCreateUs;
+  const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+
+  // Inference-only forward: zero target (logits are target-independent).
+  const std::vector<float> zeros(
+      size_t(config.tokens) * config.vocabularySize, 0.0f);
+  const auto windowInput = [&](const std::vector<std::uint8_t> &window) {
+    std::vector<uint32_t> tokens;
+    tokens.reserve(window.size());
+    for (uint8_t byte : window) tokens.push_back(byte);
+    return tiny_lm::oneHot(tokens, config.vocabularySize);
+  };
+
+  // Fixed-prefix CPU/HTP parity on the shared deterministic prefixes.
+  std::vector<NprtParityRow> parityRows;
+  const auto &prefixes = nicopedia_gen::parityPrefixes();
+  bool parityGate = true;
+  for (const auto &prefix : prefixes) {
+    uint32_t pad = 0;
+    const auto prefixContext =
+        nicopedia_gen::buildGenerationContext(prefix.bytes, config.tokens, &pad);
+    const auto cpuStep = tiny_lm::forwardBackwardGeneralized(
+        config, windowInput(prefixContext), zeros, loaded.parameters, 0.0f);
+    TinyTransformerTrainingOutputs htpStep;
+    if (!runtime.executeTinyTransformerTraining(
+            windowInput(prefixContext), zeros, loaded.parameters, 0.0f,
+            htpStep, error))
+      return failure("nicopedia_generate_parity", error, runtime);
+    const auto logitsError = compareNprt(cpuStep.logits, htpStep.logits);
+    const auto probabilityError =
+        compareNprt(cpuStep.probabilities, htpStep.probabilities);
+    NprtParityRow row;
+    row.label = prefix.label;
+    row.contextBytes = static_cast<uint32_t>(prefixContext.size());
+    row.padBytes = pad;
+    row.logitsMaxAbs = logitsError.maxAbs;
+    row.probabilityMaxAbs = probabilityError.maxAbs;
+    const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
+    row.lastArgmaxCpu = nicopedia_gen::greedyArgmax(
+        cpuStep.logits.data() + lastBase, config.vocabularySize);
+    row.lastArgmaxHtp = nicopedia_gen::greedyArgmax(
+        htpStep.logits.data() + lastBase, config.vocabularySize);
+    row.lastArgmaxMatch = row.lastArgmaxCpu == row.lastArgmaxHtp;
+    row.finite = logitsError.nonfinite == 0 && probabilityError.nonfinite == 0;
+    // Fixed one-step tolerances established by the HTP training milestone.
+    const bool ok = row.finite && row.logitsMaxAbs < 2e-2 &&
+                    row.probabilityMaxAbs < 5e-3;
+    parityGate = parityGate && ok;
+    parityRows.push_back(row);
+  }
+
+  // Autoregressive CPU/HTP parity: 8 greedy bytes from the first prefix
+  // context.  A byte-level divergence inside the fixed tolerance and with a
+  // decisive margin is the "large mismatch" the host runner must not pass;
+  // a divergence under a low CPU margin is numerical noise, recorded only.
+  const uint32_t kArSteps = 8;
+  std::vector<NprtArRow> arRows;
+  std::vector<std::uint8_t> cpuContext, htpContext;
+  {
+    uint32_t pad = 0;
+    cpuContext =
+        nicopedia_gen::buildGenerationContext(prefixes[0].bytes, config.tokens, &pad);
+    htpContext = cpuContext;
+  }
+  bool contextsAligned = true;
+  bool hasDivergence = false;
+  uint32_t divergenceStep = 0;
+  double divergenceMarginCpu = 0;
+  bool arGate = true;
+  for (uint32_t step = 0; step < kArSteps; ++step) {
+    const auto cpuStep = tiny_lm::forwardBackwardGeneralized(
+        config, windowInput(cpuContext), zeros, loaded.parameters, 0.0f);
+    TinyTransformerTrainingOutputs htpStep;
+    if (!runtime.executeTinyTransformerTraining(
+            windowInput(htpContext), zeros, loaded.parameters, 0.0f, htpStep,
+            error))
+      return failure("nicopedia_generate_ar", error, runtime);
+    NprtArRow row;
+    row.step = step;
+    const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
+    row.argmaxCpu = nicopedia_gen::greedyArgmax(
+        cpuStep.logits.data() + lastBase, config.vocabularySize);
+    row.argmaxHtp = nicopedia_gen::greedyArgmax(
+        htpStep.logits.data() + lastBase, config.vocabularySize);
+    row.marginCpu =
+        nprtLastRowMargin(cpuStep.logits, config.tokens, config.vocabularySize);
+    row.marginHtp =
+        nprtLastRowMargin(htpStep.logits, config.tokens, config.vocabularySize);
+    row.contextAligned = contextsAligned;
+    row.match = contextsAligned && row.argmaxCpu == row.argmaxHtp;
+    if (contextsAligned) {
+      const auto logitsError = compareNprt(cpuStep.logits, htpStep.logits);
+      const auto probabilityError =
+          compareNprt(cpuStep.probabilities, htpStep.probabilities);
+      row.maxAbsLogits = logitsError.maxAbs;
+      row.finite = logitsError.nonfinite == 0 && probabilityError.nonfinite == 0;
+      const bool withinTolerance =
+          row.finite && row.maxAbsLogits < 2e-2 &&
+          probabilityError.maxAbs < 5e-3;
+      arGate = arGate && withinTolerance;
+      if (row.argmaxCpu != row.argmaxHtp) {
+        hasDivergence = true;
+        divergenceStep = step;
+        divergenceMarginCpu = row.marginCpu;
+        contextsAligned = false;
+      }
+    } else {
+      row.maxAbsLogits = -1;
+      row.finite = true;
+    }
+    arRows.push_back(row);
+    nicopedia_gen::appendByteWindow(cpuContext,
+                                    static_cast<uint8_t>(row.argmaxCpu));
+    nicopedia_gen::appendByteWindow(htpContext,
+                                    static_cast<uint8_t>(row.argmaxHtp));
+  }
+  const bool divergenceBlocked =
+      hasDivergence && divergenceMarginCpu > 1e-2;
+  arGate = arGate && !divergenceBlocked;
+  const bool generationGate = parityGate && arGate;
+
+  // User-prompt generation (only when both gates pass).
+  std::vector<std::uint8_t> generated;
+  double generateSeconds = 0;
+  if (generationGate) {
+    const auto generateStarted = std::chrono::steady_clock::now();
+    auto generateContext = context;
+    for (uint32_t step = 0; step < generateConfig.maxNewBytes; ++step) {
+      TinyTransformerTrainingOutputs htpStep;
+      if (!runtime.executeTinyTransformerTraining(
+              windowInput(generateContext), zeros, loaded.parameters, 0.0f,
+              htpStep, error))
+        return failure("nicopedia_generate_step", error, runtime);
+      const size_t lastBase =
+          size_t(config.tokens - 1) * config.vocabularySize;
+      const float *row = htpStep.logits.data() + lastBase;
+      bool rowFinite = true;
+      for (uint32_t j = 0; j < config.vocabularySize; ++j)
+        rowFinite = rowFinite && std::isfinite(row[j]);
+      if (!rowFinite)
+        return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+               "failure_classification=EXECUTION_NONFINITE\n"
+               "error=generation step produced non-finite logits\n" +
+               runtime.apiTraceSummary() + runtime.diagnostics();
+      const uint8_t byte =
+          generateConfig.greedy
+              ? nicopedia_gen::greedyArgmax(row, config.vocabularySize)
+              : nicopedia_gen::sampleTopK(row, config.vocabularySize,
+                                          generateConfig.temperature,
+                                          generateConfig.topK,
+                                          generateConfig.samplingSeed, step);
+      generated.push_back(byte);
+      nicopedia_gen::appendByteWindow(generateContext, byte);
+      if (progress &&
+          (step == 0 || (step + 1) % 16 == 0 ||
+           step + 1 == generateConfig.maxNewBytes)) {
+        std::ostringstream update;
+        update << "phase=generate\nbyte=" << (step + 1) << "/"
+               << generateConfig.maxNewBytes;
+        progress(update.str());
+      }
+    }
+    generateSeconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                      generateStarted)
+            .count();
+  }
+  const nicopedia_gen::Utf8Stats generatedStats =
+      nicopedia_gen::utf8StatsOf(generated);
+  // Per-step row finiteness is already fail-closed above (EXECUTION_NONFINITE
+  // aborts the run), so at report time a generated non-finite logit cannot
+  // reach here; validBytes must never drive nan_detected (greedy bytes are
+  // often invalid UTF-8 by design and that is not a numerical failure).
+  const bool nanDetected = !std::isfinite(generateSeconds);
+  const std::string status = generationGate ? "SUCCESS" : "FAILED";
+
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "NICOPEDIA_HTP_GENERATION\ntest=nicopedia_htp_generation\nstatus="
+         << status
+         << (generationGate
+                 ? ""
+                 : "\nfailure_classification=PARITY_GATE_REJECTED")
+         << "\nmodel=L" << layers << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
+         << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
+         << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
+         << "\ncheckpoint_file_bytes=" << loaded.fileBytes
+         << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
+         << "\ncheckpoint_header_vocabulary=" << loaded.vocabulary
+         << "\ncheckpoint_header_tokens=" << loaded.tokens
+         << "\ncheckpoint_header_dimension=" << loaded.dimension
+         << "\ncheckpoint_header_feedforward=" << loaded.feedForward
+         << "\ncheckpoint_header_layers=" << loaded.layers
+         << "\ncheckpoint_header_heads=" << loaded.heads
+         << "\ncheckpoint_header_seed=" << loaded.seed
+         << "\ncheckpoint_header_step=" << loaded.step
+         << "\ncheckpoint_header_registry_count=" << loaded.registryCount
+         << "\nprompt_byte_count=" << prompt.size()
+         << "\nprompt_truncated=" << (promptTruncated ? "true" : "false")
+         << "\ncontext_used_bytes=" << context.size()
+         << "\ncontext_padding_bytes=" << contextPad
+         << "\ngenerate_mode=" << (generateConfig.greedy ? "greedy" : "sample")
+         << "\ntemperature=" << generateConfig.temperature
+         << "\ntop_k=" << generateConfig.topK
+         << "\nsampling_seed=" << generateConfig.samplingSeed
+         << "\nmax_new_bytes=" << generateConfig.maxNewBytes
+         << "\ngenerated_byte_count=" << generated.size()
+         << "\ngenerated_valid_utf8_bytes=" << generatedStats.validBytes
+         << "\ngenerated_invalid_utf8_bytes=" << generatedStats.invalidBytes
+         << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
+         << "\nparity_prefix_count=" << parityRows.size()
+         << "\nparity_gate=" << (parityGate ? "true" : "false")
+         << "\nar_steps=" << kArSteps
+         << "\nar_gate=" << (arGate ? "true" : "false")
+         << "\nar_divergence_step="
+         << (hasDivergence ? static_cast<int>(divergenceStep) : 0)
+         << "\nar_divergence_margin_cpu=" << divergenceMarginCpu
+         << "\nar_divergence_blocked=" << (divergenceBlocked ? "true" : "false")
+         << "\ngeneration_gate=" << (generationGate ? "true" : "false");
+  for (size_t i = 0; i < parityRows.size(); ++i) {
+    const auto &row = parityRows[i];
+    report << "\nparity_" << i << "_label=" << row.label
+           << "\nparity_" << i << "_context_bytes=" << row.contextBytes
+           << "\nparity_" << i << "_pad_bytes=" << row.padBytes
+           << "\nparity_" << i << "_logits_max_abs_error=" << row.logitsMaxAbs
+           << "\nparity_" << i << "_probability_max_abs_error="
+           << row.probabilityMaxAbs
+           << "\nparity_" << i << "_last_argmax_cpu=" << row.lastArgmaxCpu
+           << "\nparity_" << i << "_last_argmax_htp=" << row.lastArgmaxHtp
+           << "\nparity_" << i << "_last_argmax_match="
+           << (row.lastArgmaxMatch ? "true" : "false")
+           << "\nparity_" << i << "_finite=" << (row.finite ? "true" : "false");
+  }
+  for (size_t i = 0; i < arRows.size(); ++i) {
+    const auto &row = arRows[i];
+    report << "\nar_step_" << row.step << "_argmax_cpu=" << row.argmaxCpu
+           << "\nar_step_" << row.step << "_argmax_htp=" << row.argmaxHtp
+           << "\nar_step_" << row.step << "_match="
+           << (row.match ? "true" : "false")
+           << "\nar_step_" << row.step << "_context_aligned="
+           << (row.contextAligned ? "true" : "false")
+           << "\nar_step_" << row.step << "_max_abs_logits_error="
+           << row.maxAbsLogits << "\nar_step_" << row.step
+           << "_margin_cpu=" << row.marginCpu << "\nar_step_" << row.step
+           << "_margin_htp=" << row.marginHtp << "\nar_step_" << row.step
+           << "_finite=" << (row.finite ? "true" : "false");
+  }
+  report << "\nhtp_initialize_us=" << initializeUs
+         << "\ngraph_create_us=" << graphCreateUs
+         << "\ngraph_finalize_us=" << graphFinalizeUs
+         << "\ngeneration_total_seconds=" << generateSeconds
+         << "\ngeneration_ms_per_byte="
+         << (generated.empty()
+                 ? 0.0
+                 : generateSeconds / generated.size() * 1000.0)
+         << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\ncpu_fallback=false"
+         << "\nnan_detected=" << (nanDetected ? "true" : "false")
+         << "\ninf_detected=" << (nanDetected ? "true" : "false") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+
 std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const TrainingConfig &trainingConfig,
                                  const LogSink &progress) {
@@ -5474,6 +6045,45 @@ std::string runTinyTransformerTrainingExperiment(
              "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=" +
              error + '\n';
     return nicopediaHtpTraining(config, trainingConfig, progress);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE) {
+    tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = 32;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    config.numLayers =
+        static_cast<uint32_t>(trainingConfig.epochs > 0 ? trainingConfig.epochs : 6);
+    config.numHeads = 2;
+    std::string error;
+    if (!tiny_lm::validateConfig(config, &error))
+      return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=" +
+             error + '\n';
+    const std::string dir = trainingConfig.diagnosticCheckpointDir;
+    if (dir.empty())
+      return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=checkpoint_dir_required\n";
+    const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
+                         ? static_cast<int>(trainingConfig.seed)
+                         : 1;
+    // The dedicated JNI path supplies exact paths; this mode-level fallback
+    // only exists for the UI path and pins the step-320 anchor filename.
+    const std::string checkpointPath =
+        dir + "/htp-seed" + std::to_string(seed) + "-l" +
+        std::to_string(config.numLayers) + "-step320.ckpt";
+    const std::string promptPath = dir + "/prompt.bin";
+    nicopedia_gen::GenerateConfig generate;
+    generate.maxNewBytes =
+        static_cast<uint32_t>(trainingConfig.steps > 0 ? trainingConfig.steps : 64);
+    if (generate.maxNewBytes > 1024) generate.maxNewBytes = 1024;
+    generate.greedy = true;
+    generate.temperature = 1.0f;
+    generate.topK = 32;
+    generate.samplingSeed = static_cast<uint64_t>(trainingConfig.seed);
+    return nicopediaHtpGeneration(config, checkpointPath, promptPath,
+                                  trainingConfig, generate, progress);
   }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);
@@ -6136,5 +6746,14 @@ std::string replayFirstNonfiniteCheckpoint(
          << (deterministic ? "true" : "false") << '\n'
          << runtime.apiTraceSummary() << runtime.diagnostics();
   return report.str();
+}
+
+std::string runNicopediaHtpGeneration(
+    const tiny_lm::Config &config, const std::string &checkpointPath,
+    const std::string &promptPath, const TrainingConfig &trainingConfig,
+    const nicopedia_gen::GenerateConfig &generateConfig,
+    const LogSink &progress) {
+  return nicopediaHtpGeneration(config, checkpointPath, promptPath,
+                                trainingConfig, generateConfig, progress);
 }
 } // namespace phonelm::qnn

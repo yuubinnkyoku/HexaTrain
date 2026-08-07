@@ -267,6 +267,95 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jstring checkpointPath,
+    jstring promptPath,
+    jlong seed,
+    jint layers,
+    jint maxNewBytes,
+    jstring generateMode,
+    jfloat temperature,
+    jint topK,
+    jlong samplingSeed) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    gStopRequested.store(false, std::memory_order_release);
+
+    std::string checkpoint, prompt, modeString;
+    if (checkpointPath) {
+        const char* chars = env->GetStringUTFChars(checkpointPath, nullptr);
+        if (chars) { checkpoint = chars; env->ReleaseStringUTFChars(checkpointPath, chars); }
+    }
+    if (promptPath) {
+        const char* chars = env->GetStringUTFChars(promptPath, nullptr);
+        if (chars) { prompt = chars; env->ReleaseStringUTFChars(promptPath, chars); }
+    }
+    if (generateMode) {
+        const char* chars = env->GetStringUTFChars(generateMode, nullptr);
+        if (chars) { modeString = chars; env->ReleaseStringUTFChars(generateMode, chars); }
+    }
+    if (checkpoint.empty()) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+            "failure_classification=CHECKPOINT_UNAVAILABLE\n"
+            "error=checkpoint_path_required\n");
+    }
+    if (prompt.empty()) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+            "failure_classification=PROMPT_EMPTY\n"
+            "error=prompt_path_required\n");
+    }
+
+    phonelm::tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = 32;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
+    config.numHeads = 2;
+    phonelm::TrainingConfig trainingConfig;
+    trainingConfig.seed = static_cast<std::uint64_t>(seed);
+    trainingConfig.epochs = static_cast<int>(config.numLayers);
+    trainingConfig.measuredSteps = 2;
+    trainingConfig.steps = maxNewBytes > 0 ? maxNewBytes : 64;
+    phonelm::nicopedia_gen::GenerateConfig generateConfig;
+    generateConfig.maxNewBytes =
+        static_cast<uint32_t>(maxNewBytes > 0 ? maxNewBytes : 64);
+    generateConfig.greedy = modeString != "sample";
+    generateConfig.temperature = temperature;
+    generateConfig.topK = static_cast<uint32_t>(topK);
+    generateConfig.samplingSeed = static_cast<std::uint64_t>(samplingSeed);
+
+    auto sink = [&](const std::string& message) { logcat(message); };
+    try {
+        const auto report = phonelm::qnn::runNicopediaHtpGeneration(
+            config, checkpoint, prompt, trainingConfig, generateConfig, sink);
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeReplayFirstNonfiniteCheckpoint(
     JNIEnv* env,
     jobject /* receiver */,
