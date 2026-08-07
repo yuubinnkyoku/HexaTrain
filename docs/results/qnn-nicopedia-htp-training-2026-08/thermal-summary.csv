@@ -1,0 +1,5 @@
+seed,layers,android_thermal_status_before,android_thermal_status_after,battery_level_before,battery_level_after,battery_temperature_c_before,battery_temperature_c_after
+1,19,0,0,90,90,37,37
+1,6,0,0,90,90,35,35
+2,6,0,0,90,90,35,36
+4,6,0,0,90,90,36,37

@@ -4812,9 +4812,669 @@ std::string runLateNonfiniteExperiment(bool diagnostic) {
 }
 
 } // namespace
+// Nicopedia real-text HTP training.  The private tokenized pilot cache
+// (NPRTBYTEV1, written by scripts/nicopedia_real_text_pipeline.py) is the
+// single data source; the same records feed the CPU reference and the QNN
+// graph with identical input/target identity.  The device path reads the
+// cache from the app-private files directory (pushed by the host runner);
+// no article text, token sequence, or checkpoint is published.
+namespace {
+constexpr std::uint64_t kNprtFnvOffset = 1469598103934665603ull;
+constexpr std::uint64_t kNprtFnvPrime = 1099511628211ull;
+
+std::uint64_t nprtFnvBytes(const void *data, std::size_t bytes,
+                           std::uint64_t hash = kNprtFnvOffset) {
+  const auto *input = static_cast<const std::uint8_t *>(data);
+  for (std::size_t i = 0; i < bytes; ++i) {
+    hash ^= input[i];
+    hash *= kNprtFnvPrime;
+  }
+  return hash;
+}
+
+std::string nprtHex64(std::uint64_t value) {
+  std::ostringstream stream;
+  stream << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0')
+         << value;
+  return stream.str();
+}
+
+uint32_t nprtReadU32(std::istream &input) {
+  std::array<std::uint8_t, 4> bytes{};
+  input.read(reinterpret_cast<char *>(bytes.data()),
+             static_cast<std::streamsize>(bytes.size()));
+  if (!input) throw std::runtime_error("NPRT_CACHE_TRUNCATED_U32");
+  return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
+         (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
+}
+
+std::uint64_t nprtReadU64(std::istream &input) {
+  std::array<std::uint8_t, 8> bytes{};
+  input.read(reinterpret_cast<char *>(bytes.data()),
+             static_cast<std::streamsize>(bytes.size()));
+  if (!input) throw std::runtime_error("NPRT_CACHE_TRUNCATED_U64");
+  std::uint64_t value = 0;
+  for (std::uint8_t byte : bytes) value = (value << 8) | byte;
+  return value;
+}
+
+struct NprtRecord {
+  std::uint64_t articleHash = 0;
+  std::vector<std::uint8_t> window;
+};
+
+struct NprtCache {
+  uint32_t context = 0;
+  uint32_t vocabulary = 0;
+  std::vector<NprtRecord> records;
+  std::string contentHash;
+};
+
+// Byte-for-byte compatible with host_tests/nicopedia_real_text_pilot.cpp
+// loadCache (NPRTBYTEV1).  The device and host runners share this contract so
+// a batch selected on the host has the same identity on the device.
+NprtCache loadNprtCache(const std::string &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("NPRT_CACHE_OPEN_FAILED");
+  std::string magic(11, '\0');
+  input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+  if (magic != "NPRTBYTEV1\n") throw std::runtime_error("NPRT_CACHE_MAGIC");
+  NprtCache cache;
+  cache.context = nprtReadU32(input);
+  cache.vocabulary = nprtReadU32(input);
+  const std::uint64_t count = nprtReadU64(input);
+  if (cache.context < 8 || cache.context > 256 || cache.vocabulary != 256 ||
+      count > 10000000)
+    throw std::runtime_error("NPRT_CACHE_HEADER_INVALID");
+  cache.records.reserve(static_cast<std::size_t>(count));
+  std::uint64_t hash = kNprtFnvOffset;
+  hash = nprtFnvBytes(&cache.context, sizeof(cache.context), hash);
+  hash = nprtFnvBytes(&cache.vocabulary, sizeof(cache.vocabulary), hash);
+  hash = nprtFnvBytes(&count, sizeof(count), hash);
+  for (std::uint64_t i = 0; i < count; ++i) {
+    NprtRecord record;
+    record.articleHash = nprtReadU64(input);
+    record.window.resize(cache.context + 1);
+    input.read(reinterpret_cast<char *>(record.window.data()),
+               static_cast<std::streamsize>(record.window.size()));
+    if (!input) throw std::runtime_error("NPRT_CACHE_RECORD_TRUNCATED");
+    hash = nprtFnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
+    hash = nprtFnvBytes(record.window.data(), record.window.size(), hash);
+    cache.records.push_back(std::move(record));
+  }
+  if (input.get() != std::char_traits<char>::eof())
+    throw std::runtime_error("NPRT_CACHE_TRAILING_BYTES");
+  cache.contentHash = nprtHex64(hash);
+  if (cache.records.empty()) throw std::runtime_error("NPRT_CACHE_EMPTY");
+  return cache;
+}
+
+std::uint64_t nprtSplitMix(std::uint64_t value) {
+  value += 0x9e3779b97f4a7c15ull;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
+  return value ^ (value >> 31);
+}
+
+// Identical to the CPU pilot trainingOrder(recordCount, steps, batch, 20260806).
+std::vector<std::size_t> nprtTrainingOrder(std::size_t recordCount,
+                                           uint32_t steps,
+                                           uint32_t batchSize) {
+  if (!recordCount) throw std::runtime_error("NPRT_TRAIN_CACHE_EMPTY");
+  std::vector<std::size_t> order;
+  order.reserve(std::size_t(steps) * batchSize);
+  std::uint64_t state = 20260806;
+  for (std::size_t i = 0; i < std::size_t(steps) * batchSize; ++i) {
+    state = nprtSplitMix(state + i);
+    order.push_back(static_cast<std::size_t>(state % recordCount));
+  }
+  return order;
+}
+
+std::string nprtOrderHash(const std::vector<std::size_t> &order) {
+  std::uint64_t hash = kNprtFnvOffset;
+  for (std::size_t index : order) {
+    const std::uint64_t value = index;
+    hash = nprtFnvBytes(&value, sizeof(value), hash);
+  }
+  return nprtHex64(hash);
+}
+
+struct NprtBatch {
+  std::vector<float> input;
+  std::vector<float> target;
+  std::uint64_t articleHash = 0;
+};
+
+NprtBatch nprtBatch(const tiny_lm::Config &config, const NprtCache &cache,
+                    std::size_t recordIndex) {
+  const auto &record = cache.records.at(recordIndex);
+  std::vector<uint32_t> input(config.tokens), target(config.tokens);
+  for (uint32_t i = 0; i < config.tokens; ++i) {
+    input[i] = record.window[i];
+    target[i] = record.window[i + 1];
+  }
+  NprtBatch batch;
+  batch.input = tiny_lm::oneHot(input, config.vocabularySize);
+  batch.target = tiny_lm::oneHot(target, config.vocabularySize);
+  batch.articleHash = record.articleHash;
+  return batch;
+}
+
+struct NprtComparison {
+  double maxAbs = 0, meanAbs = 0, maxRelative = 0, l2 = 0;
+  size_t nonfinite = 0;
+  double cosine = 1.0, htpNormOverCpuNorm = 1.0;
+};
+
+NprtComparison compareNprt(const std::vector<float> &cpu,
+                           const std::vector<float> &htp) {
+  NprtComparison result;
+  if (cpu.size() != htp.size()) {
+    result.maxAbs = result.meanAbs = result.maxRelative = result.l2 =
+        std::numeric_limits<double>::infinity();
+    return result;
+  }
+  double cpuL2 = 0, htpL2 = 0, dot = 0;
+  for (size_t i = 0; i < cpu.size(); ++i) {
+    if (!std::isfinite(cpu[i]) || !std::isfinite(htp[i])) {
+      ++result.nonfinite;
+      continue;
+    }
+    const double e = std::abs(double(cpu[i]) - htp[i]);
+    result.maxAbs = std::max(result.maxAbs, e);
+    result.meanAbs += e;
+    result.maxRelative = std::max(
+        result.maxRelative, e / std::max(1.0e-12, std::abs(double(cpu[i]))));
+    result.l2 += e * e;
+    cpuL2 += double(cpu[i]) * cpu[i];
+    htpL2 += double(htp[i]) * htp[i];
+    dot += double(cpu[i]) * htp[i];
+  }
+  if (!cpu.empty()) result.meanAbs /= cpu.size();
+  result.l2 = std::sqrt(result.l2);
+  result.cosine = cpuL2 && htpL2 ? dot / std::sqrt(cpuL2 * htpL2) : 1.0;
+  result.htpNormOverCpuNorm = cpuL2 ? std::sqrt(htpL2 / cpuL2) : 1.0;
+  return result;
+}
+
+double nprtMaxParamError(const Params &cpu, const Params &htp) {
+  const auto cpuRegistry = tiny_lm::parameterRegistry(cpu);
+  const auto htpRegistry = tiny_lm::parameterRegistry(htp);
+  double worst = 0;
+  if (cpuRegistry.size() != htpRegistry.size())
+    return std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < cpuRegistry.size(); ++i) {
+    if (cpuRegistry[i].name != htpRegistry[i].name)
+      return std::numeric_limits<double>::infinity();
+    worst = std::max(worst,
+                     compareNprt(*cpuRegistry[i].values, *htpRegistry[i].values)
+                         .maxAbs);
+  }
+  return worst;
+}
+
+std::string nprtParameterHash(const Params &parameters) {
+  std::uint64_t hash = kNprtFnvOffset;
+  for (const auto &info : tiny_lm::parameterRegistry(parameters)) {
+    hash = nprtFnvBytes(info.name.data(), info.name.size(), hash);
+    const std::uint64_t count = info.values->size();
+    hash = nprtFnvBytes(&count, sizeof(count), hash);
+    hash = nprtFnvBytes(info.values->data(),
+                        info.values->size() * sizeof(float), hash);
+  }
+  return nprtHex64(hash);
+}
+
+void nprtWriteU32(std::ostream &output, uint32_t value) {
+  for (int shift = 24; shift >= 0; shift -= 8)
+    output.put(static_cast<char>((value >> shift) & 0xffu));
+}
+
+void nprtWriteU64(std::ostream &output, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8)
+    output.put(static_cast<char>((value >> shift) & 0xffu));
+}
+
+// NPRTCKPTV1-compatible private checkpoint writer (identical layout to
+// host_tests/nicopedia_real_text_pilot.cpp saveCheckpoint).  The host pulls
+// this file and evaluates it with the CPU pilot evaluation path; it never
+// leaves the app-private directory and never enters public artifacts.
+bool nprtSaveCheckpoint(const std::string &path, const tiny_lm::Config &config,
+                        uint32_t seed, uint32_t step,
+                        const Params &parameters) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output) return false;
+  output.write("NPRTCKPTV1\n", 11);
+  nprtWriteU32(output, config.vocabularySize);
+  nprtWriteU32(output, config.tokens);
+  nprtWriteU32(output, config.dimension);
+  nprtWriteU32(output, config.feedForwardDimension);
+  nprtWriteU32(output, config.numLayers);
+  nprtWriteU32(output, config.numHeads);
+  nprtWriteU32(output, seed);
+  nprtWriteU32(output, step);
+  const auto registry = tiny_lm::parameterRegistry(parameters);
+  nprtWriteU32(output, static_cast<uint32_t>(registry.size()));
+  for (const auto &info : registry) {
+    nprtWriteU32(output, static_cast<uint32_t>(info.name.size()));
+    output.write(info.name.data(), static_cast<std::streamsize>(info.name.size()));
+    nprtWriteU64(output, info.values->size());
+    output.write(reinterpret_cast<const char *>(info.values->data()),
+                 static_cast<std::streamsize>(info.values->size() * sizeof(float)));
+  }
+  return static_cast<bool>(output);
+}
+
+std::string nicopediaHtpTraining(const tiny_lm::Config &config,
+                                 const TrainingConfig &trainingConfig,
+                                 const LogSink &progress) {
+  // Cache path: app-private file pushed by the host runner.  The parameter is
+  // carried in diagnosticCheckpointDir to avoid extending the JNI ABI; the
+  // Kotlin side validates it to stay below the app files directory.
+  const std::string cachePath = trainingConfig.diagnosticCheckpointDir;
+  if (cachePath.empty())
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=cache_path_required\n";
+  NprtCache cache;
+  try {
+    cache = loadNprtCache(cachePath + "/train_pilot.bin");
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP\nstatus=FAILED\n"
+                       "failure_classification=CACHE_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
+  if (cache.context != config.tokens || cache.vocabulary != config.vocabularySize)
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=cache_config_mismatch\n";
+  const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
+                       ? static_cast<int>(trainingConfig.seed)
+                       : 1;
+  const int layers = static_cast<int>(config.numLayers);
+  const int heads = static_cast<int>(config.numHeads);
+  const uint32_t steps = static_cast<uint32_t>(trainingConfig.steps);
+  const uint32_t batchSize = static_cast<uint32_t>(trainingConfig.batchSize);
+  if (steps == 0 || batchSize == 0 || layers <= 0 || heads <= 0)
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=steps_batch_layers_heads_must_be_positive\n";
+  const float lr = trainingConfig.learningRate > 0.0f
+                       ? trainingConfig.learningRate
+                       : 0.003f;
+  const auto order = nprtTrainingOrder(cache.records.size(), steps, batchSize);
+  const std::string orderHashValue = nprtOrderHash(order);
+  const Params shape = tiny_lm::initialParameters(config, 1);
+  const auto flattenedShape = flattenLanguageParameters(shape);
+  if (flattenedShape.empty() ||
+      flattenedShape.size() > std::numeric_limits<uint32_t>::max())
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_RESOURCE_ESTIMATOR\n"
+           "error=parameter registry exceeds uint32 range\n";
+  const uint32_t optimizerElements =
+      static_cast<uint32_t>(flattenedShape.size());
+  const uint32_t optimizerGraphElements =
+      static_cast<uint32_t>(std::min<std::uint64_t>(
+          optimizerElements,
+          phonelm::transformer::kMaximumAdamChunkElements));
+  const uint32_t optimizerChunkCount =
+      static_cast<uint32_t>((std::uint64_t{optimizerElements} +
+                             optimizerGraphElements - 1) /
+                            optimizerGraphElements);
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  const auto initStarted = std::chrono::steady_clock::now();
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          config.numHeads) ||
+      !runtime.prepareAdamOptimizer(optimizerGraphElements, error))
+    return failure("nicopedia_prepare", error, runtime);
+  const double initializeUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - initStarted)
+          .count();
+  const double graphCreateUs = runtime.metrics().graphCreateUs;
+  const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+
+  Params htp = tiny_lm::initialParameters(config, seed);
+  Params cpu = htp;
+  Params htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
+  Params cpuFirst = htpFirst, cpuSecond = htpFirst;
+  const std::string initialParameterHash = nprtParameterHash(htp);
+
+  // Step 0: same-batch CPU/HTP one-step comparison before any update.
+  const auto firstBatch = nprtBatch(config, cache, order[0]);
+  const auto cpuStep0 = tiny_lm::forwardBackwardGeneralized(
+      config, firstBatch.input, firstBatch.target, cpu, 0.0f);
+  TinyTransformerTrainingOutputs htpStep0;
+  const auto executeStarted = std::chrono::steady_clock::now();
+  if (!runtime.executeTinyTransformerTraining(
+          firstBatch.input, firstBatch.target, htp, 0.0f, htpStep0, error))
+    return failure("nicopedia_step0", error, runtime);
+  const double firstExecuteUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - executeStarted)
+          .count();
+  const auto logits0 = compareNprt(cpuStep0.logits, htpStep0.logits);
+  const auto probs0 = compareNprt(cpuStep0.probabilities, htpStep0.probabilities);
+  const auto dlogits0 = compareNprt(cpuStep0.dLogits, htpStep0.dLogits);
+  const double gradient0 = nprtMaxParamError(cpuStep0.gradients, htpStep0.gradients);
+  const bool step0Finite =
+      std::isfinite(cpuStep0.loss) && std::isfinite(htpStep0.loss) &&
+      logits0.nonfinite == 0 && probs0.nonfinite == 0 &&
+      dlogits0.nonfinite == 0 && std::isfinite(gradient0);
+  // Tolerances are fixed before results are interpreted (numerical evidence
+  // policy): logits/probability/dlogits use the established tiny-LM one-step
+  // bounds; the gradient uses the established diagnostic 0.03 bound.
+  const bool step0Ok =
+      step0Finite && logits0.maxAbs < 2e-2 && probs0.maxAbs < 5e-3 &&
+      dlogits0.maxAbs < 5e-3 && gradient0 < 3e-2;
+
+  // Short trajectory: 2, 4, 8 steps of CPU and HTP training from the same
+  // initial parameters and the same batch order, comparing loss and parameter
+  // drift at each anchor.
+  struct TrajectoryAnchor {
+    int step = 0;
+    float cpuLoss = 0, htpLoss = 0;
+    double parameterMaxAbs = 0, firstMomentMaxAbs = 0, secondMomentMaxAbs = 0;
+    bool finite = true;
+  };
+  std::vector<TrajectoryAnchor> anchors;
+  auto runTrajectory = [&](uint32_t trajectorySteps) {
+    Params tCpu = cpu, tHtp = htp, tCpuFirst = cpuFirst, tCpuSecond = cpuSecond,
+          tHtpFirst = htpFirst, tHtpSecond = htpSecond;
+    for (uint32_t step = 1; step <= trajectorySteps; ++step) {
+      Params cpuGradientAccum = zeroLanguageParameters(tCpu);
+      Params htpGradientAccum = zeroLanguageParameters(tHtp);
+      double cpuLossSum = 0, htpLossSum = 0;
+      for (uint32_t batch = 0; batch < batchSize; ++batch) {
+        const auto batchData = nprtBatch(
+            config, cache, order[std::size_t(step - 1) * batchSize + batch]);
+        const auto cpuGradient = tiny_lm::forwardBackwardGeneralized(
+            config, batchData.input, batchData.target, tCpu, 0.0f);
+        TinyTransformerTrainingOutputs htpGradient;
+        if (!runtime.executeTinyTransformerTraining(
+                batchData.input, batchData.target, tHtp, 0.0f, htpGradient,
+                error))
+          return false;
+        cpuLossSum += cpuGradient.loss;
+        htpLossSum += htpGradient.loss;
+        const auto cpuRegistry = tiny_lm::parameterRegistry(cpuGradientAccum);
+        const auto cpuGradRegistry =
+            tiny_lm::parameterRegistry(cpuGradient.gradients);
+        const auto htpRegistry = tiny_lm::parameterRegistry(htpGradientAccum);
+        const auto htpGradRegistry =
+            tiny_lm::parameterRegistry(htpGradient.gradients);
+        if (cpuRegistry.size() != cpuGradRegistry.size() ||
+            htpRegistry.size() != htpGradRegistry.size())
+          return false;
+        for (size_t i = 0; i < cpuRegistry.size(); ++i) {
+          auto &cpuAccum = *const_cast<std::vector<float> *>(cpuRegistry[i].values);
+          auto &htpAccum = *const_cast<std::vector<float> *>(htpRegistry[i].values);
+          const auto &cpuValues = *cpuGradRegistry[i].values;
+          const auto &htpValues = *htpGradRegistry[i].values;
+          for (size_t j = 0; j < cpuAccum.size(); ++j) {
+            cpuAccum[j] += cpuValues[j] * (1.0f / float(batchSize));
+            htpAccum[j] += htpValues[j] * (1.0f / float(batchSize));
+          }
+        }
+      }
+      const float cpuMeanLoss = float(cpuLossSum / batchSize);
+      const float htpMeanLoss = float(htpLossSum / batchSize);
+      const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
+      const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+      const auto cpuUpdate = tiny_lm::adamUpdate(
+          tCpu, cpuGradientAccum, tCpuFirst, tCpuSecond, lr, .9f, .999f,
+          1e-8f, c1, c2);
+      Params htpNext, htpFirstNext, htpSecondNext;
+      AdamOptimizerOutputs raw;
+      if (!executeLanguageAdam(runtime, tHtp, htpGradientAccum, tHtpFirst,
+                               tHtpSecond, lr, int(step), 1.0f, htpNext,
+                               htpFirstNext, htpSecondNext, &raw, error,
+                               optimizerGraphElements))
+        return false;
+      tCpu = cpuUpdate.next;
+      tCpuFirst = cpuUpdate.firstMoment;
+      tCpuSecond = cpuUpdate.secondMoment;
+      tHtp = std::move(htpNext);
+      tHtpFirst = std::move(htpFirstNext);
+      tHtpSecond = std::move(htpSecondNext);
+      if (step == 2 || step == 4 || step == 8) {
+        TrajectoryAnchor anchor;
+        anchor.step = int(step);
+        anchor.cpuLoss = cpuMeanLoss;
+        anchor.htpLoss = htpMeanLoss;
+        anchor.parameterMaxAbs = nprtMaxParamError(tCpu, tHtp);
+        anchor.firstMomentMaxAbs = nprtMaxParamError(tCpuFirst, tHtpFirst);
+        anchor.secondMomentMaxAbs = nprtMaxParamError(tCpuSecond, tHtpSecond);
+        anchor.finite =
+            std::isfinite(cpuMeanLoss) && std::isfinite(htpMeanLoss) &&
+            std::isfinite(anchor.parameterMaxAbs) &&
+            std::isfinite(anchor.firstMomentMaxAbs) &&
+            std::isfinite(anchor.secondMomentMaxAbs);
+        anchors.push_back(anchor);
+      }
+      if (!std::isfinite(htpMeanLoss) || !std::isfinite(cpuMeanLoss))
+        return false;
+    }
+    return true;
+  };
+  if (!runTrajectory(8)) return failure("nicopedia_short_trajectory", error, runtime);
+
+  // Full training loop: HTP forward/backward and HTP Adam for every step.
+  // The CPU reference runs in lockstep so the final state and the trajectory
+  // remain comparable.
+  Params current = cpu, currentFirst = cpuFirst, currentSecond = cpuSecond;
+  float firstLoss = 0, lastLoss = 0;
+  bool allFinite = true;
+  uint32_t completedSteps = 0;
+  const auto trainingStarted = std::chrono::steady_clock::now();
+  for (uint32_t step = 1; step <= steps; ++step) {
+    Params gradientAccum = zeroLanguageParameters(current);
+    double lossSum = 0;
+    bool stepFinite = true;
+    for (uint32_t batch = 0; batch < batchSize; ++batch) {
+      const auto batchData =
+          nprtBatch(config, cache, order[std::size_t(step - 1) * batchSize + batch]);
+      TinyTransformerTrainingOutputs htpGradient;
+      if (!runtime.executeTinyTransformerTraining(
+              batchData.input, batchData.target, current, 0.0f, htpGradient,
+              error))
+        return failure("nicopedia_train_gradient", error, runtime);
+      lossSum += htpGradient.loss;
+      stepFinite = stepFinite && std::isfinite(htpGradient.loss);
+      const auto registry = tiny_lm::parameterRegistry(gradientAccum);
+      const auto gradientRegistry = tiny_lm::parameterRegistry(htpGradient.gradients);
+      if (registry.size() != gradientRegistry.size()) {
+        return "NICOPEDIA_HTP\nstatus=FAILED\n"
+               "failure_classification=APP_PARAMETER_SCHEMA\n"
+               "error=gradient registry mismatch\n";
+      }
+      for (size_t i = 0; i < registry.size(); ++i) {
+        auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
+        const auto &values = *gradientRegistry[i].values;
+        for (size_t j = 0; j < accum.size(); ++j)
+          accum[j] += values[j] * (1.0f / float(batchSize));
+      }
+    }
+    const float meanLoss = float(lossSum / batchSize);
+    Params next, firstNext, secondNext;
+    AdamOptimizerOutputs raw;
+    if (!executeLanguageAdam(runtime, current, gradientAccum, currentFirst,
+                             currentSecond, lr, int(step), 1.0f, next,
+                             firstNext, secondNext, &raw, error,
+                             optimizerGraphElements))
+      return failure("nicopedia_train_adam", error, runtime);
+    current = std::move(next);
+    currentFirst = std::move(firstNext);
+    currentSecond = std::move(secondNext);
+    stepFinite = stepFinite && finiteParams(current) &&
+                 finiteParams(currentFirst) && finiteParams(currentSecond);
+    allFinite = allFinite && stepFinite;
+    if (!stepFinite) break;
+    ++completedSteps;
+    if (step == 1) firstLoss = meanLoss;
+    lastLoss = meanLoss;
+    if (progress && (step == 1 || step % 32 == 0 || step == steps)) {
+      std::ostringstream update;
+      update << std::setprecision(10) << "phase=training\nseed=" << seed
+             << "\nstep=" << step << "\nsteps=" << steps << "\nloss=" << meanLoss;
+      progress(update.str());
+    }
+  }
+  const double trainingSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - trainingStarted)
+          .count();
+  const double stepMs = completedSteps ? trainingSeconds / completedSteps * 1000.0
+                                       : 0.0;
+  // Final state comparison.
+  Params cpuFinal = cpu, cpuFinalFirst = cpuFirst, cpuFinalSecond = cpuSecond;
+  for (uint32_t step = 1; step <= completedSteps; ++step) {
+    Params gradientAccum = zeroLanguageParameters(cpuFinal);
+    for (uint32_t batch = 0; batch < batchSize; ++batch) {
+      const auto batchData =
+          nprtBatch(config, cache, order[std::size_t(step - 1) * batchSize + batch]);
+      const auto cpuGradient = tiny_lm::forwardBackwardGeneralized(
+          config, batchData.input, batchData.target, cpuFinal, 0.0f);
+      const auto registry = tiny_lm::parameterRegistry(gradientAccum);
+      const auto gradientRegistry = tiny_lm::parameterRegistry(cpuGradient.gradients);
+      for (size_t i = 0; i < registry.size(); ++i) {
+        auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
+        const auto &values = *gradientRegistry[i].values;
+        for (size_t j = 0; j < accum.size(); ++j)
+          accum[j] += values[j] * (1.0f / float(batchSize));
+      }
+    }
+    const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
+    const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+    const auto cpuUpdate = tiny_lm::adamUpdate(
+        cpuFinal, gradientAccum, cpuFinalFirst, cpuFinalSecond, lr, .9f, .999f,
+        1e-8f, c1, c2);
+    cpuFinal = cpuUpdate.next;
+    cpuFinalFirst = cpuUpdate.firstMoment;
+    cpuFinalSecond = cpuUpdate.secondMoment;
+  }
+  const double finalParameterError = nprtMaxParamError(cpuFinal, current);
+  const double finalFirstError = nprtMaxParamError(cpuFinalFirst, currentFirst);
+  const double finalSecondError = nprtMaxParamError(cpuFinalSecond, currentSecond);
+  const bool finalFinite =
+      finiteParams(current) && finiteParams(currentFirst) &&
+      finiteParams(currentSecond) && finiteParams(cpuFinal);
+  const bool lossDecreased = std::isfinite(firstLoss) && std::isfinite(lastLoss) &&
+                             lastLoss < firstLoss;
+  const bool ok = step0Ok && allFinite && finalFinite && lossDecreased &&
+                  completedSteps == steps;
+  // Private checkpoint: NPRTCKPTV1 in the app files directory.  The host
+  // runner pulls it and evaluates validation/development with the CPU pilot
+  // evaluation path.  It never enters public artifacts.
+  const std::string checkpointPath =
+      cachePath + "/htp-seed" + std::to_string(seed) + "-l" +
+      std::to_string(layers) + "-step" + std::to_string(completedSteps) +
+      ".ckpt";
+  const bool checkpointWritten =
+      nprtSaveCheckpoint(checkpointPath, config, uint32_t(seed),
+                         completedSteps, current);
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "NICOPEDIA_HTP\ntest=nicopedia_real_text_htp_training\nstatus="
+         << (ok ? "SUCCESS" : "FAILED")
+         << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nsteps=" << steps << "\nbatch_size=" << batchSize
+         << "\nlearning_rate=" << lr
+         << "\ncache_context=" << cache.context
+         << "\ncache_vocabulary=" << cache.vocabulary
+         << "\ncache_record_count=" << cache.records.size()
+         << "\ncache_content_hash=" << cache.contentHash
+         << "\ntraining_order_hash=" << orderHashValue
+         << "\ninitial_parameter_hash=" << initialParameterHash
+         << "\nparameter_element_count=" << optimizerElements
+         << "\noptimizer_chunk_count=" << optimizerChunkCount
+         << "\nstep0_loss_cpu=" << cpuStep0.loss << "\nstep0_loss_htp="
+         << htpStep0.loss << "\nstep0_logits_max_abs_error=" << logits0.maxAbs
+         << "\nstep0_logits_mean_abs_error=" << logits0.meanAbs
+         << "\nstep0_logits_max_relative_error=" << logits0.maxRelative
+         << "\nstep0_logits_l2_error=" << logits0.l2
+         << "\nstep0_logits_cosine_similarity=" << logits0.cosine
+         << "\nstep0_probability_max_abs_error=" << probs0.maxAbs
+         << "\nstep0_dlogits_max_abs_error=" << dlogits0.maxAbs
+         << "\nstep0_gradient_max_abs_error=" << gradient0
+         << "\nstep0_finite=" << (step0Finite ? "true" : "false")
+         << "\nstep0_ok=" << (step0Ok ? "true" : "false")
+         << "\nstep0_tolerance_logits=2e-2\nstep0_tolerance_probability=5e-3"
+         << "\nstep0_tolerance_dlogits=5e-3\nstep0_tolerance_gradient=3e-2";
+  for (const auto &anchor : anchors) {
+    report << "\ntrajectory_step_" << anchor.step << "_cpu_loss="
+           << anchor.cpuLoss << "\ntrajectory_step_" << anchor.step
+           << "_htp_loss=" << anchor.htpLoss << "\ntrajectory_step_"
+           << anchor.step << "_parameter_max_abs_error="
+           << anchor.parameterMaxAbs << "\ntrajectory_step_" << anchor.step
+           << "_first_moment_max_abs_error=" << anchor.firstMomentMaxAbs
+           << "\ntrajectory_step_" << anchor.step
+           << "_second_moment_max_abs_error=" << anchor.secondMomentMaxAbs
+           << "\ntrajectory_step_" << anchor.step << "_finite="
+           << (anchor.finite ? "true" : "false");
+  }
+  report << "\nfirst_loss=" << firstLoss << "\nlast_loss=" << lastLoss
+         << "\nloss_decreased=" << (lossDecreased ? "true" : "false")
+         << "\ncompleted_steps=" << completedSteps
+         << "\nall_steps_finite=" << (allFinite ? "true" : "false")
+         << "\nfinal_parameter_max_abs_error=" << finalParameterError
+         << "\nfinal_first_moment_max_abs_error=" << finalFirstError
+         << "\nfinal_second_moment_max_abs_error=" << finalSecondError
+         << "\nfinal_parameter_canonical_hash="
+         << canonicalFloatSha256(flattenLanguageParameters(current))
+         << "\nfinal_cpu_parameter_canonical_hash="
+         << canonicalFloatSha256(flattenLanguageParameters(cpuFinal))
+         << "\nfinal_parameter_hash=" << nprtParameterHash(current)
+         << "\nfinal_finite=" << (finalFinite ? "true" : "false")
+         << "\ncheckpoint_written=" << (checkpointWritten ? "true" : "false")
+         << "\nhtp_initialize_us=" << initializeUs
+         << "\ngraph_create_us=" << graphCreateUs
+         << "\ngraph_finalize_us=" << graphFinalizeUs
+         << "\nfirst_execute_us=" << firstExecuteUs
+         << "\ntraining_total_seconds=" << trainingSeconds
+         << "\ntraining_step_ms=" << stepMs
+         << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nexecute_count_per_training_step=" << (1 + optimizerChunkCount)
+         << "\nbias_correction_scalar_responsibility=CPU"
+         << "\noptimizer_math_responsibility=HTP"
+         << "\ncpu_fallback=false\nnan_detected=" << (allFinite ? "false" : "true")
+         << "\ninf_detected=" << (allFinite ? "false" : "true") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+}  // namespace
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
     const LogSink& progress) {
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA) {
+    tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = 32;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    config.numLayers =
+        static_cast<uint32_t>(trainingConfig.epochs > 0 ? trainingConfig.epochs : 6);
+    config.numHeads =
+        static_cast<uint32_t>(trainingConfig.measuredSteps > 0
+                                  ? trainingConfig.measuredSteps
+                                  : 2);
+    std::string error;
+    if (!tiny_lm::validateConfig(config, &error))
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=" +
+             error + '\n';
+    return nicopediaHtpTraining(config, trainingConfig, progress);
+  }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);
   if (mode ==

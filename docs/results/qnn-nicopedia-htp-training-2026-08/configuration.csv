@@ -1,0 +1,5 @@
+seed,layers,heads,steps,batch_size,learning_rate,cache_context,cache_vocabulary,cache_record_count,cache_content_hash,training_order_hash,initial_parameter_hash,parameter_element_count,optimizer_chunk_count
+1,19,2,320,8,0.003000000026,32,256,262035,fnv1a64:9d09bf7cb1b4c9ea,fnv1a64:1066c23615faf1b3,fnv1a64:1ec170f417b2e3bb,48320,2
+1,6,2,320,8,0.003000000026,32,256,262035,fnv1a64:9d09bf7cb1b4c9ea,fnv1a64:1066c23615faf1b3,fnv1a64:1f233ccd2ce2c764,20864,1
+2,6,2,320,8,0.003000000026,32,256,262035,fnv1a64:9d09bf7cb1b4c9ea,fnv1a64:1066c23615faf1b3,fnv1a64:617eee7f467b7829,20864,1
+4,6,2,320,8,0.003000000026,32,256,262035,fnv1a64:9d09bf7cb1b4c9ea,fnv1a64:1066c23615faf1b3,fnv1a64:1ee2685b5e2dadad,20864,1

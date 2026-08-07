@@ -113,6 +113,10 @@ enum class ExecutionMode : int {
     // hiddenDimension=FFN, epochs=L, measuredSteps=H,
     // correctnessInterval=seed count, steps=Adam updates.
     QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC = 99,
+    // Nicopedia real-text HTP training: reads the private NPRTBYTEV1 token
+    // cache from the app files directory (path via diagnosticCheckpointDir)
+    // and runs CPU/HTP same-identity training on the fixed V256/T32 config.
+    QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA = 100,
 };
 
 const char* executionModeName(ExecutionMode mode);

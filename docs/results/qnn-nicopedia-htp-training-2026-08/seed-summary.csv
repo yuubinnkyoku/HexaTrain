@@ -1,0 +1,5 @@
+seed,layers,first_loss,last_loss,loss_decreased,completed_steps,all_steps_finite,final_parameter_max_abs_error,checkpoint_written
+1,19,5.545779228,2.524898291,true,320,true,0.5415093303,true
+1,6,5.548038006,2.549289942,true,320,true,0.6082625012,true
+2,6,5.552581787,2.622229576,true,320,true,0.7256092131,true
+4,6,5.548125744,2.495304108,true,320,true,0.5568314791,true

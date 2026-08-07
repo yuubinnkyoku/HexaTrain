@@ -160,9 +160,17 @@ class MainActivity : Activity() {
             runCatching { CheckpointSelectionMode.valueOf(it) }.getOrNull()
         } ?: CheckpointSelectionMode.FINAL_STEP
         val diagnosticTrajectory = intent.getBooleanExtra("phonelm.diagnostic_trajectory", false)
-        val checkpointDir = intent.getStringExtra("phonelm.checkpoint_dump_dir")?.let { requestedDir ->
+        // The NICOPEDIA mode reads the private tokenized pilot cache pushed by
+        // the host runner into files/nicopedia-cache/.  The path is resolved
+        // through the same fail-closed app-files check as checkpoints.
+        val requestedDir = when (mode) {
+            ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA ->
+                intent.getStringExtra("phonelm.checkpoint_dump_dir") ?: "nicopedia-cache"
+            else -> intent.getStringExtra("phonelm.checkpoint_dump_dir")
+        }
+        val checkpointDir = requestedDir?.let { dir ->
             // Fail closed: private checkpoints never leave the app files dir.
-            filesDir.toPath().resolve("checkpoints").resolve(requestedDir)
+            filesDir.toPath().resolve("checkpoints").resolve(dir)
                 .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
         }
         if (checkpointDir != null) checkpointDir.mkdirs()

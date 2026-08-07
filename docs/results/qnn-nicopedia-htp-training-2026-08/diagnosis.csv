@@ -1,0 +1,4 @@
+diagnosis,evidence
+L6 HTP training is finite for 320 steps across seeds 1/2/4 with CPU-comparable quality.,seed-summary.csv,l6-quality-summary.csv
+Short-trajectory CPU/HTP parameter drift grows monotonically (0.006->0.024 at step 8) as expected from FP16 intermediates.,trajectory-parity.csv
+HTP step time (L6 ~185 ms, L19 ~483 ms at batch 8) is dominated by per-execute HTP overhead for this small model.,performance.csv

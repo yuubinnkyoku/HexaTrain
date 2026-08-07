@@ -1,0 +1,5 @@
+seed,layers,steps,all_steps_finite,nan_detected,inf_detected,final_finite,graph_execute_attempt,graph_execute_success,graph_execute_failure,cpu_fallback
+1,19,320,true,false,false,true,3281,3281,0,false
+1,6,320,true,false,false,true,2953,2953,0,false
+2,6,320,true,false,false,true,2953,2953,0,false
+4,6,320,true,false,false,true,2953,2953,0,false

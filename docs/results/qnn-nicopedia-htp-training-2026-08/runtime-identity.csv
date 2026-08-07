@@ -1,0 +1,2 @@
+device_model,device_soc,compile_time_qairt_build_id,compile_time_qnn_api_version,runtime_backend_build_id,backend_build_id_match,qairt_sdk_root,expected_build_id,device_serial_published
+NX741J,SM8850,2.48.40.260702151143,2.37.0,v2.48.40.260702151143,true,C:\Qualcomm\AIStack\QAIRT\2.48.40.260702,2.48.40.260702151143,false

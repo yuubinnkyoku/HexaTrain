@@ -281,6 +281,33 @@ void testGraphShapeValidator() {
     requireTopology(3, 4);
     requireTopology(4, 4);
     requireTopology(3, 8);
+    // Nicopedia real-text configuration: V=256, T=32, D=16, FFN=32, H=2.
+    {
+      TransformerTopologyConfig nicopedia{32, 16, 32, 6, 2, 256};
+      nicopedia.parameterElements =
+          6 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 256 * 16;
+      nicopedia.optimizerElements = 2 * nicopedia.parameterElements;
+      std::vector<TransformerLayerTopology> topology;
+      for (std::size_t i = 0; i < 6; ++i)
+        topology.push_back(makeLayer(i, 32, 16, 2));
+      require(validateTransformerTopology(nicopedia, topology).ok,
+              "shape validator rejected Nicopedia V256/T32/L6/H2 topology");
+      TransformerTopologyConfig nicopediaL19 = nicopedia;
+      nicopediaL19.numLayers = 19;
+      nicopediaL19.parameterElements =
+          19 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 256 * 16;
+      nicopediaL19.optimizerElements = 2 * nicopediaL19.parameterElements;
+      std::vector<TransformerLayerTopology> topology19;
+      for (std::size_t i = 0; i < 19; ++i)
+        topology19.push_back(makeLayer(i, 32, 16, 2));
+      require(validateTransformerTopology(nicopediaL19, topology19).ok,
+              "shape validator rejected Nicopedia V256/T32/L19/H2 topology");
+      // V256/T32 parameter element contract for L6.
+      require(nicopedia.parameterElements == 20864,
+              "Nicopedia L6 parameter element count is not 20864");
+      require(nicopediaL19.parameterElements == 48320,
+              "Nicopedia L19 parameter element count is not 48320");
+    }
     auto twoByTwo = requireTopology(2, 2);
     TransformerTopologyConfig twoByTwoConfig{8, 16, 32, 2, 2, 32};
     twoByTwoConfig.parameterElements = 2 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 32 * 16;

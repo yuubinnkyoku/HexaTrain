@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "bundle": "qnn-nicopedia-htp-training-2026-08",
+  "generated": "2026-08-07",
+  "source_commit": "ee0d54ea910ef505bb42ecabe7ba3e58de2d8fbc",
+  "summary": "Nicopedia real-text QNN HTP training milestone: L6 (seeds 1/2/4) and L19 (seed 1) ran 320 training steps on the HTP backend with CPU-comparable quality.",
+  "files": {
+    "configuration.csv": {
+      "sha256": "ee5c8846823cd5c1fe9c7b24b45af68aa5e32fadfe5fe478a7a7dd90c2a38f79",
+      "bytes": 709
+    },
+    "cpu-vs-htp.csv": {
+      "sha256": "6294046a41ef78b52960b696f3aaeb5d0d1cc9543bf16a7d558d08106e8a99f3",
+      "bytes": 592
+    },
+    "diagnosis.csv": {
+      "sha256": "8de4d3bcff0af7e695771dae94ff2da0acf3b9ae5e9860f288c2166fdc51dbf3",
+      "bytes": 426
+    },
+    "finite-summary.csv": {
+      "sha256": "bbaf2a8bbb69ef96da3f486c36344e2e72bdfb4226cc8e081adca6027b8bc4fa",
+      "bytes": 351
+    },
+    "graph-shapes.csv": {
+      "sha256": "a3f127bc93505dd070bf24c928ace3a8f71a581a756089a7e4de36b351596531",
+      "bytes": 449
+    },
+    "l19-summary.csv": {
+      "sha256": "58bd3d3976c8195f4f8986d192ef80b4e97ae046690c6efe611fc4fa26cf82b8",
+      "bytes": 4180
+    },
+    "l6-quality-summary.csv": {
+      "sha256": "6294046a41ef78b52960b696f3aaeb5d0d1cc9543bf16a7d558d08106e8a99f3",
+      "bytes": 592
+    },
+    "l6-training-summary.csv": {
+      "sha256": "bb33e97db6640493fbbc14c1dbda26cf99dd970e2bea46db026d15640b9b4e6c",
+      "bytes": 6357
+    },
+    "limitations.csv": {
+      "sha256": "7537b68029225fc7d6fe5249068d96c39ae89cdb09ac09ad14a471cf6647c182",
+      "bytes": 513
+    },
+    "manifest.json": {
+      "sha256": "2954cdc718c2d11e138b05d015c2b3c8afabe2f9d4f680d4915ded666175c9c9",
+      "bytes": 3050
+    },
+    "memory-summary.csv": {
+      "sha256": "a3f127bc93505dd070bf24c928ace3a8f71a581a756089a7e4de36b351596531",
+      "bytes": 449
+    },
+    "next-step-candidates.csv": {
+      "sha256": "42774a0485f87f2c00d93888c030911b2e341976bdfe9af96af0f6487a29fd50",
+      "bytes": 261
+    },
+    "one-step-parity.csv": {
+      "sha256": "703174bbb47055e40bfed44077d7ea504408b687408ce94eb09518dddd8c7c76",
+      "bytes": 599
+    },
+    "performance.csv": {
+      "sha256": "312a5d49375476a7590d0e03dbf17f0b5e58d97317af49b0bc8c7a10fc2abc50",
+      "bytes": 503
+    },
+    "README.md": {
+      "sha256": "84c1b6aa3bf91c6e90de07d17c9cfbb4d8542a23e42abb99a148d1c1322d4a55",
+      "bytes": 2023
+    },
+    "runtime-identity.csv": {
+      "sha256": "090eee06c9038f587f9de1d576d07007b16eea60c1d4a7e2bbe1ba529bf8e5b3",
+      "bytes": 325
+    },
+    "seed-summary.csv": {
+      "sha256": "7a32c64553825ce5cf2f1f43f3b947c35818eb1c9cbf8a677350891d751160c0",
+      "bytes": 376
+    },
+    "thermal-summary.csv": {
+      "sha256": "445d0553f502e5bc198e49a72232bcfdf3bbd7f7e0970390c547ac7e6f07f3ad",
+      "bytes": 255
+    },
+    "trajectory-parity.csv": {
+      "sha256": "f6b5c9b87a452bc09809543ef08dc71128e416c2bf9caef6b1b1fa8aa9b14d75",
+      "bytes": 1080
+    }
+  }
+}

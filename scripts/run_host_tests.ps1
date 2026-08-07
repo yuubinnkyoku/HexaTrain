@@ -249,7 +249,15 @@ if ($LASTEXITCODE -ne 0) {
 
 # CI uses a deterministic synthetic Japanese fixture; the licensed corpus and
 # all private token/checkpoint artifacts remain outside the repository.
-$pwshExe = Join-Path $PSHOME "pwsh.exe"
+# Resolve pwsh explicitly: $PSHOME may point at Windows PowerShell when this
+# script runs under a different shell.
+$pwshCandidates = @(
+    (Join-Path $PSHOME "pwsh.exe"),
+    (Join-Path (Split-Path -Parent $PSHOME) "PowerShell\7\pwsh.exe"),
+    (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+if (-not $pwshCandidates) { throw "PWSH_NOT_FOUND" }
+$pwshExe = $pwshCandidates[0]
 & $pwshExe -NoProfile -File (Join-Path $Root "scripts\run_nicopedia_real_text_pilot.ps1") -SelfTest
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia real-text pipeline self-tests failed"

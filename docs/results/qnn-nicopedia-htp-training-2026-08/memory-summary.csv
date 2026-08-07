@@ -1,0 +1,3 @@
+scope,graph,tensor_create_count,node_count,parameter_registry_count,app_read_registry_count,parameter_elements,parameter_bytes,forward_activation_bytes,backward_activation_bytes,attention_bytes,peak_application_tensor_bytes,adam_chunk_count
+L6_H2,L19H2_EXPLICIT_FORWARD_BACKWARD,2912,2384,192,254,48320,193280,2183936,3173760,311296,7967872,2
+L19_H2,L19H2_EXPLICIT_FORWARD_BACKWARD,2912,2384,192,254,48320,193280,2183936,3173760,311296,7967872,2

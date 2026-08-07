@@ -1,0 +1,4 @@
+candidate,priority
+Increase training steps toward the CPU pilot's 1000 steps for a converged comparison.,high
+Evaluate free-running generation quality on HTP checkpoints.,medium
+Profile graphExecute vs host-side copy cost to reduce per-step latency.,medium

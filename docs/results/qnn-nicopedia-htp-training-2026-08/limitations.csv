@@ -1,0 +1,6 @@
+limitation,scope
+HTP internal precision is not asserted to be FP32; CPU/HTP differences accumulate over steps.,all
+Only 320 training steps were used; the CPU pilot used 1000 steps. Loss is not converged.,all
+HTP device runs used the private pilot token cache; article text is never published.,data
+L19 validation NLL is ~0.09 higher than the CPU anchor; top-1 agreement is unchanged.,L19
+Device performance numbers reflect one physical device (SM8850, HTP V81) and are not population estimates.,performance
