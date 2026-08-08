@@ -70,6 +70,11 @@ object NativeBridge {
         topK: Int,
         samplingSeed: Long,
         gatePolicy: String,
+        htpGraphPrecisionMode: Int,
+        htpGraphPrecisionCompensation: Int,
+        htpGraphWeightsPacking: Int,
+        htpGraphAdvancedActivationFusion: Int,
+        htpNativeTensorFp16: Boolean,
     ): String
 
     external fun nativeRunNicopediaDivergenceLocalization(

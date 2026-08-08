@@ -33,8 +33,15 @@ bool Runtime::prepareLayerNorm(uint32_t batch, uint32_t tokens,
   g.beta.v1.clientBuf = {g.betaData.data(),
                          uint32_t(g.betaData.size() * sizeof(float))};
   g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_layer_norm",
-                                       nullptr, &g.graph);
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error =
@@ -126,9 +133,16 @@ bool Runtime::prepareElementwiseSquare(uint32_t elements, std::string &error) {
          g.dims, QNN_DATATYPE_FLOAT_32, 1);
   tensor(g.output, "diagnostic_square_output", QNN_TENSOR_TYPE_APP_READ,
          g.dims, QNN_DATATYPE_FLOAT_32, 1);
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(
-      impl_->context, "phonelm_diagnostic_elementwise_square", nullptr,
-      &g.graph);
+      impl_->context, "phonelm_diagnostic_elementwise_square",
+      htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "elementwise square graphCreate=" +
@@ -315,8 +329,15 @@ bool Runtime::prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
       &g.inverseDimensionData, uint32_t(sizeof(g.inverseDimensionData))};
   g.centeredScale.v1.clientBuf = {
       &g.centeredScaleData, uint32_t(sizeof(g.centeredScaleData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(
-      impl_->context, "phonelm_layernorm_backward", nullptr, &g.graph);
+      impl_->context, "phonelm_layernorm_backward", htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "LayerNorm backward graphCreate=" +
@@ -550,8 +571,15 @@ bool Runtime::prepareSoftmax(uint32_t rows, uint32_t columns,
          g.dims);
   tensor(g.output, "transformer_softmax_output", QNN_TENSOR_TYPE_APP_READ,
          g.dims);
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_softmax",
-                                       nullptr, &g.graph);
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "Softmax graphCreate=" + std::to_string(QNN_GET_ERROR_CODE(status));
@@ -652,8 +680,15 @@ bool Runtime::prepareSoftmaxBackward(uint32_t rows, uint32_t columns,
   tensor(g.axes, "softmax_backward_axes", QNN_TENSOR_TYPE_STATIC, g.axesDims,
          QNN_DATATYPE_UINT_32, 1);
   g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(
-      impl_->context, "phonelm_softmax_backward", nullptr, &g.graph);
+      impl_->context, "phonelm_softmax_backward", htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "Softmax backward graphCreate=" +
@@ -786,8 +821,15 @@ bool Runtime::prepareMomentumOptimizer(uint32_t elements, std::string &error) {
   tensor(g.weightNext, "momentum_weight_next", QNN_TENSOR_TYPE_APP_READ,
          g.dims);
   auto started = Clock::now();
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_momentum_optimizer",
-                                       nullptr, &g.graph);
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   metrics_.graphCreateUs += elapsedUs(started);
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
@@ -934,7 +976,15 @@ bool Runtime::prepareAdamOptimizer(uint32_t elements, std::string &error) {
   tensor(g.scaledUpdate, "adam_scaled_update", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.weightNext, "adam_weight_next", QNN_TENSOR_TYPE_APP_READ, g.dims);
   auto started = Clock::now();
-  auto status = impl_->api.graphCreate(impl_->context, "phonelm_adam_optimizer", nullptr, &g.graph);
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
+  auto status = impl_->api.graphCreate(impl_->context, "phonelm_adam_optimizer",
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   metrics_.graphCreateUs += elapsedUs(started);
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
@@ -1187,8 +1237,15 @@ bool Runtime::prepareCrossEntropyGradient(uint32_t rows, uint32_t columns,
   tensor(g.dLogits, "cross_entropy_dlogits", QNN_TENSOR_TYPE_APP_READ, g.dims);
   tensor(g.scale, "cross_entropy_scale", QNN_TENSOR_TYPE_STATIC, g.scalarDims);
   g.scale.v1.clientBuf = {&g.scaleData, sizeof(float)};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_cross_entropy_gradient",
-                                       nullptr, &g.graph);
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   if (status != QNN_SUCCESS) {
     error = "cross entropy graphCreate=" +
             std::to_string(QNN_GET_ERROR_CODE(status));
@@ -1315,8 +1372,15 @@ bool Runtime::prepareAttention(uint32_t tokens, uint32_t headDimension,
          g.activationDims);
   tensor(g.scale, "attention_scale", QNN_TENSOR_TYPE_STATIC, g.scalarDims);
   g.scale.v1.clientBuf = {&g.scaleData, uint32_t(sizeof(g.scaleData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(impl_->context, "phonelm_attention",
-                                       nullptr, &g.graph);
+                                       htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error =
@@ -1491,8 +1555,15 @@ bool Runtime::prepareAttentionBackward(uint32_t tokens,
   tensor(g.axes, "attention_backward_axes", QNN_TENSOR_TYPE_STATIC,
          g.axesDims, QNN_DATATYPE_UINT_32, 1);
   g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(
-      impl_->context, "phonelm_attention_backward", nullptr, &g.graph);
+      impl_->context, "phonelm_attention_backward", htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "Attention backward graphCreate=" +
@@ -1809,8 +1880,15 @@ bool Runtime::prepareTinyTransformer(uint32_t tokens, uint32_t dimension,
   tensor(g.axes, "tiny_ln_axes", QNN_TENSOR_TYPE_STATIC, g.axesDims,
          QNN_DATATYPE_UINT_32, 1);
   g.axes.v1.clientBuf = {g.axesData, uint32_t(sizeof(g.axesData))};
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto status = impl_->api.graphCreate(
-      impl_->context, "phonelm_tiny_transformer", nullptr, &g.graph);
+      impl_->context, "phonelm_tiny_transformer", htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   ++metrics_.graphCreateCount;
   if (status != QNN_SUCCESS) {
     error = "Tiny graphCreate=" + std::to_string(QNN_GET_ERROR_CODE(status));

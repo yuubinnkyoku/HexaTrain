@@ -31,6 +31,11 @@ param(
     [string]$GatePolicy = 'legacy',   # legacy | candidate (protocol F)
     [switch]$CandidatePolicyApproved, # required to run -GatePolicy candidate
     [switch]$AuditOnly,               # accept a FAILED gate report (audit runs)
+    [int]$HtpGraphPrecisionMode = 0,  # private diagnostics: 0 unset, 1 fp16, 2 fp32
+    [int]$HtpGraphPrecisionCompensation = 0,  # private diagnostics: 0 unset, 1 false, 2 true
+    [int]$HtpGraphWeightsPacking = 0,  # private diagnostics: 0 unset, 1 false, 2 true
+    [int]$HtpGraphAdvancedActivationFusion = 0,  # private diagnostics: 0 unset, 1 false, 2 true
+    [switch]$HtpNativeTensorFp16,  # private diagnostics: declare NATIVE tensors FP16
     [switch]$SelfTest
 )
 
@@ -175,6 +180,28 @@ function Invoke-SelfTest {
     }
     if (-not (320 -ge 1 -and 320 -le 999999)) { throw 'SELFTEST_CHECKPOINT_STEP_320_RANGE' }
     if (-not (1000 -ge 1 -and 1000 -le 999999)) { throw 'SELFTEST_CHECKPOINT_STEP_1000_RANGE' }
+
+    # HTP graph precision diagnostic switch range gate (0=unset, 1=fp16, 2=fp32).
+    foreach ($bad in @(-1, 3, 99)) {
+        if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_GRAPH_PRECISION_RANGE: $bad" }
+    }
+    foreach ($bad in @(-1, 3, 99)) {
+        if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_GRAPH_PRECISION_COMPENSATION_RANGE: $bad" }
+    }
+    foreach ($bad in @(-1, 3, 99)) {
+        if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_GRAPH_WEIGHTS_PACKING_RANGE: $bad" }
+    }
+    foreach ($bad in @(-1, 3, 99)) {
+        if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_GRAPH_ACTIVATION_FUSION_RANGE: $bad" }
+    }
+    if (-not (0 -ge 0 -and 0 -le 2) -or -not (2 -ge 0 -and 2 -le 2)) {
+        throw 'SELFTEST_HTP_GRAPH_PRECISION_VALID_VALUES'
+    }
+    $fp16Expected = 'false'
+    if ($HtpNativeTensorFp16) { $fp16Expected = 'true' }
+    if ($fp16Expected -notin @('true', 'false')) {
+        throw 'SELFTEST_HTP_NATIVE_TENSOR_FP16_BOOL'
+    }
     Write-Host 'run_nicopedia_htp_generate_self_test=PASS'
     exit 0
 }
@@ -192,6 +219,18 @@ if ($Mode -ne 'Greedy' -and $Mode -ne 'Sample') { throw 'MODE_INVALID: Mode must
 if ($GatePolicy -ne 'legacy' -and $GatePolicy -ne 'candidate') { throw 'GATE_POLICY_INVALID: GatePolicy must be legacy or candidate' }
 if ($GatePolicy -eq 'candidate' -and -not $CandidatePolicyApproved) {
     throw 'CANDIDATE_POLICY_NOT_APPROVED: -GatePolicy candidate requires -CandidatePolicyApproved (independent Reviewer PASS + explicit instruction)'
+}
+if ($HtpGraphPrecisionMode -lt 0 -or $HtpGraphPrecisionMode -gt 2) {
+    throw 'HTP_GRAPH_PRECISION_MODE_INVALID: must be 0, 1 or 2'
+}
+if ($HtpGraphPrecisionCompensation -lt 0 -or $HtpGraphPrecisionCompensation -gt 2) {
+    throw 'HTP_GRAPH_PRECISION_COMPENSATION_INVALID: must be 0, 1 or 2'
+}
+if ($HtpGraphWeightsPacking -lt 0 -or $HtpGraphWeightsPacking -gt 2) {
+    throw 'HTP_GRAPH_WEIGHTS_PACKING_INVALID: must be 0, 1 or 2'
+}
+if ($HtpGraphAdvancedActivationFusion -lt 0 -or $HtpGraphAdvancedActivationFusion -gt 2) {
+    throw 'HTP_GRAPH_ACTIVATION_FUSION_INVALID: must be 0, 1 or 2'
 }
 if ($Mode -eq 'Sample') {
     if (-not [double]::IsFinite($Temperature) -or $Temperature -le 0.0) { throw 'TEMPERATURE_INVALID' }
@@ -305,7 +344,12 @@ $startArgs = @(
     '--es', 'phonelm.temperature', $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture),
     '--ei', 'phonelm.top_k', $TopK,
     '--es', 'phonelm.sampling_seed', [string]$SamplingSeed,
-    '--es', 'phonelm.gate_policy', $GatePolicy
+    '--es', 'phonelm.gate_policy', $GatePolicy,
+    '--ei', 'phonelm.htp_graph_precision_mode', $HtpGraphPrecisionMode,
+    '--ei', 'phonelm.htp_graph_precision_compensation', $HtpGraphPrecisionCompensation,
+    '--ei', 'phonelm.htp_graph_weights_packing', $HtpGraphWeightsPacking,
+    '--ei', 'phonelm.htp_graph_activation_fusion', $HtpGraphAdvancedActivationFusion,
+    '--ez', 'phonelm.htp_native_tensor_fp16', $HtpNativeTensorFp16
 )
 $startOutput = & $adb -s $device @startArgs 2>&1
 if ($LASTEXITCODE -ne 0) { throw "am start failed (endpoint redacted): $($startArgs -join ' ')`n$startOutput" }
@@ -348,6 +392,24 @@ $arGateCandidate = [regex]::Match($result, '(?m)^ar_gate_candidate=(true|false)$
 $gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate)$').Groups[1].Value
 if ($gatePolicyReported -ne $GatePolicy) {
     throw "GATE_POLICY_MISMATCH: device=$gatePolicyReported requested=$GatePolicy"
+}
+$precisionModeReported = [regex]::Match($result, '(?m)^htp_graph_precision_mode=(\d+)$').Groups[1].Value
+$precisionCompensationReported = [regex]::Match($result, '(?m)^htp_graph_precision_compensation=(\d+)$').Groups[1].Value
+$weightsPackingReported = [regex]::Match($result, '(?m)^htp_graph_weights_packing=(\d+)$').Groups[1].Value
+$fusionReported = [regex]::Match($result, '(?m)^htp_graph_activation_fusion=(\d+)$').Groups[1].Value
+$nativeFp16Reported = [regex]::Match($result, '(?m)^htp_native_tensor_fp16=(true|false)$').Groups[1].Value
+if ($precisionModeReported -eq '' -or $precisionCompensationReported -eq '' -or
+    $weightsPackingReported -eq '' -or $fusionReported -eq '' -or $nativeFp16Reported -eq '') {
+    throw 'HTP_GRAPH_PRECISION_FIELDS_MISSING: report lacks htp_graph_precision fields'
+}
+$nativeFp16Expected = 'false'
+if ($HtpNativeTensorFp16) { $nativeFp16Expected = 'true' }
+if ([int]$precisionModeReported -ne $HtpGraphPrecisionMode -or
+    [int]$precisionCompensationReported -ne $HtpGraphPrecisionCompensation -or
+    [int]$weightsPackingReported -ne $HtpGraphWeightsPacking -or
+    [int]$fusionReported -ne $HtpGraphAdvancedActivationFusion -or
+    $nativeFp16Reported -ne $nativeFp16Expected) {
+    throw "HTP_GRAPH_PRECISION_MISMATCH: device=($precisionModeReported,$precisionCompensationReported,$weightsPackingReported,$fusionReported,$nativeFp16Reported) requested=($HtpGraphPrecisionMode,$HtpGraphPrecisionCompensation,$HtpGraphWeightsPacking,$HtpGraphAdvancedActivationFusion,$nativeFp16Expected)"
 }
 if ($parityGateCandidate -eq '' -or $arGateCandidate -eq '') {
     throw 'CANDIDATE_GATE_FIELDS_MISSING: report lacks parity_gate_candidate/ar_gate_candidate'
@@ -395,6 +457,11 @@ $annotated = $result.TrimEnd() + "`n" +
     "battery_temperature_c_before=$([int]$batteryTemp / 10.0)`n" +
     "battery_temperature_c_after=$([int]$batteryTempAfter / 10.0)`n" +
     "compile_time_qairt_build_id=$ExpectedBuildId`n" +
+    "host_htp_graph_precision_mode=$HtpGraphPrecisionMode`n" +
+    "host_htp_graph_precision_compensation=$HtpGraphPrecisionCompensation`n" +
+    "host_htp_graph_weights_packing=$HtpGraphWeightsPacking`n" +
+    "host_htp_graph_activation_fusion=$HtpGraphAdvancedActivationFusion`n" +
+    "host_htp_native_tensor_fp16=$nativeFp16Expected`n" +
     "private_serial_recorded_for_identity_only=true`n"
 $reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
 $annotated | Set-Content -LiteralPath $reportFile -Encoding utf8

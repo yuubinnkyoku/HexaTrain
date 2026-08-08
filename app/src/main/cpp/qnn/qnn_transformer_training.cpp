@@ -5525,6 +5525,16 @@ std::string nicopediaHtpGeneration(
   RuntimeOptions options;
   options.captureQnnCallback = false;
   options.qnnLogLevel = 2;
+  // Private precision-mitigation diagnostics: numeric-path-only HTP graph
+  // config (QAIRT QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION).  The parity gate,
+  // checkpoint, CPU reference, and graph math are unchanged.
+  options.htpGraphPrecisionMode = generateConfig.htpGraphPrecisionMode;
+  options.htpGraphPrecisionCompensation =
+      generateConfig.htpGraphPrecisionCompensation;
+  options.htpGraphWeightsPacking = generateConfig.htpGraphWeightsPacking;
+  options.htpGraphAdvancedActivationFusion =
+      generateConfig.htpGraphAdvancedActivationFusion;
+  options.htpNativeTensorFp16 = generateConfig.htpNativeTensorFp16;
   runtime.setOptions(options);
   std::string error;
   const auto initStarted = std::chrono::steady_clock::now();
@@ -5840,6 +5850,14 @@ std::string nicopediaHtpGeneration(
          << "\nar_gate=" << (arGate ? "true" : "false")
          << "\nar_gate_candidate=" << (arGateCandidate ? "true" : "false")
          << "\ngate_policy=" << generateConfig.gatePolicy
+         << "\nhtp_graph_precision_mode=" << generateConfig.htpGraphPrecisionMode
+         << "\nhtp_graph_precision_compensation="
+         << generateConfig.htpGraphPrecisionCompensation
+         << "\nhtp_graph_weights_packing=" << generateConfig.htpGraphWeightsPacking
+         << "\nhtp_graph_activation_fusion="
+         << generateConfig.htpGraphAdvancedActivationFusion
+         << "\nhtp_native_tensor_fp16="
+         << (generateConfig.htpNativeTensorFp16 ? "true" : "false")
          << "\nar_divergence_step="
          << (hasDivergence ? static_cast<int>(divergenceStep) : 0)
          << "\nar_divergence_margin_cpu=" << divergenceMarginCpu

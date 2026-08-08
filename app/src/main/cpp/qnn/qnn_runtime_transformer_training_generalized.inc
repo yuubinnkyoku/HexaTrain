@@ -126,6 +126,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       registryShapeValid = false;
       return std::numeric_limits<uint32_t>::max();
     }
+    // Private diagnostic: when requested, NATIVE float tensors are declared
+    // FP16 to probe whether the HTP backend executes FP32-declared graphs in
+    // FP16 anyway.  APP_* and STATIC tensors keep FP32 because their host
+    // buffers are FP32.
+    if (options_.htpNativeTensorFp16 && type == QNN_TENSOR_TYPE_NATIVE &&
+        dataType == QNN_DATATYPE_FLOAT_32) {
+      dataType = QNN_DATATYPE_FLOAT_16;
+    }
     const uint32_t id = uint32_t(g.tensors.size());
     g.tensors.push_back(QNN_TENSOR_INIT);
     g.names.push_back(name);
@@ -700,8 +708,15 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const std::string topologyName =
       "l" + std::to_string(numLayers) + "h" + std::to_string(numHeads);
   auto started = Clock::now();
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    return fail("graphCreate: invalid htp graph precision option");
+  }
   auto status = impl_->api.graphCreate(impl_->context,
-      ("phonelm_tiny_transformer_training_" + topologyName).c_str(), nullptr, &g.graph);
+      ("phonelm_tiny_transformer_training_" + topologyName).c_str(),
+      htpConfigs.array, &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   apiTrace_.fullStepGraphCreateCalled = true;
   apiTrace_.fullStepGraphCreateResult = QNN_GET_ERROR_CODE(status);
   apiTrace_.fullStepGraphHandleNonnull = g.graph != nullptr;
@@ -710,6 +725,17 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   if (status != QNN_SUCCESS) {
     return fail("generalized graphCreate=" +
                 std::to_string(QNN_GET_ERROR_CODE(status)));
+  }
+  // Some backend revisions only honor custom configs delivered through
+  // QnnGraph_setConfig; re-deliver the same array after creation so the
+  // precision options cannot be silently dropped at create time.
+  if (htpConfigs.array != nullptr && impl_->api.graphSetConfig) {
+    const auto setConfigStatus =
+        impl_->api.graphSetConfig(g.graph, htpConfigs.array);
+    if (setConfigStatus != QNN_SUCCESS) {
+      return fail("generalized graphSetConfig=" +
+                  std::to_string(QNN_GET_ERROR_CODE(setConfigStatus)));
+    }
   }
   // Second pass: graph tensor creation and node emission. Do not fall through
   // to the L1 graph: that would silently collapse the requested layer count.

@@ -592,8 +592,16 @@ bool Runtime::prepareTinyTransformerTraining(
   g.tensors[G::ZERO_FF].v1.clientBuf = {
       g.zeroFfData.data(), uint32_t(g.zeroFfData.size() * sizeof(float))};
   auto started = Clock::now();
+  const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+  if (htpConfigs.failClosedInvalid) {
+    error = "graphCreate: invalid htp graph precision option";
+    return false;
+  }
   auto st = impl_->api.graphCreate(
-      impl_->context, "phonelm_tiny_transformer_training", nullptr, &g.graph);
+      impl_->context, "phonelm_tiny_transformer_training", htpConfigs.array,
+      &g.graph);
+  if (!htpConfigs.description.empty())
+    diagnostics_ += htpConfigs.description + "\n";
   apiTrace_.fullStepGraphCreateCalled = true;
   apiTrace_.fullStepGraphCreateResult = QNN_GET_ERROR_CODE(st);
   apiTrace_.fullStepGraphHandleNonnull = g.graph != nullptr;

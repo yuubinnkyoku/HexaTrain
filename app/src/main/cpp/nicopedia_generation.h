@@ -48,6 +48,23 @@ struct GenerateConfig {
   // are private diagnostics only: they never change parity-gate semantics.
   std::string diagnosticTapScope = "NONE";
   uint32_t diagnosticLayerIndex = 0xffffffffu;
+  // HTP graph precision control (private diagnostics; numeric-path-only).
+  // 0 = unset (backend default, established behavior), 1 = FLOAT16,
+  // 2 = FLOAT32.  Mirrors RuntimeOptions::htpGraphPrecisionMode.
+  uint32_t htpGraphPrecisionMode = 0;
+  // QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION_COMPENSATION. 0 = unset,
+  // 1 = false, 2 = true.
+  uint32_t htpGraphPrecisionCompensation = 0;
+  // QNN_HTP_GRAPH_CONFIG_OPTION_WEIGHTS_PACKING. 0 = unset, 1 = false,
+  // 2 = true.
+  uint32_t htpGraphWeightsPacking = 0;
+  // QNN_HTP_GRAPH_CONFIG_OPTION_ADVANCED_ACTIVATION_FUSION. 0 = unset,
+  // 1 = false, 2 = true.
+  uint32_t htpGraphAdvancedActivationFusion = 0;
+  // Private diagnostic: declare NATIVE float tensors as FP16 (probe whether
+  // the backend already executes FP32-declared graphs in FP16).  False by
+  // default (established behavior).
+  bool htpNativeTensorFp16 = false;
 };
 
 // Per-tensor CPU-vs-HTP comparison result for divergence localization.

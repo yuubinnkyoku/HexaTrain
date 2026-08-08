@@ -6,6 +6,7 @@
 #include <QnnOpDef.h>
 #include <QnnSdkBuildId.h>
 #include <HTP/QnnHtpDevice.h>
+#include <HTP/QnnHtpGraph.h>
 #include <android/log.h>
 #include <dlfcn.h>
 
@@ -813,6 +814,94 @@ static void tensor(Qnn_Tensor_t& t, const char* name, Qnn_TensorType_t type,
     t.v1.memType = QNN_TENSORMEMTYPE_RAW;
 }
 
+// Builds the HTP graph custom-config array from RuntimeOptions.  Only
+// numeric-path switches of the QAIRT 2.48.40.260702 HTP backend are emitted
+// (when explicitly requested); none changes graph math.  The caller keeps
+// the storage alive across graphCreate.  Returns the config pointer array
+// (nullptr when no option is requested) and the number of entries.
+struct HtpGraphConfigs {
+    QnnHtpGraph_CustomConfig_t precisionConfig = QNN_HTP_GRAPH_CUSTOM_CONFIG_INIT;
+    QnnHtpGraph_CustomConfig_t compensationConfig = QNN_HTP_GRAPH_CUSTOM_CONFIG_INIT;
+    QnnHtpGraph_CustomConfig_t weightsPackingConfig = QNN_HTP_GRAPH_CUSTOM_CONFIG_INIT;
+    QnnHtpGraph_CustomConfig_t fusionConfig = QNN_HTP_GRAPH_CUSTOM_CONFIG_INIT;
+    QnnGraph_Config_t graphConfigs[4] = {};
+    QnnGraph_Config_t* graphConfigPtrs[5] = {};
+    std::uint32_t count = 0;
+    const QnnGraph_Config_t** array = nullptr;
+    std::string description;
+    bool failClosedInvalid = false;
+};
+
+HtpGraphConfigs buildHtpGraphConfigs(const RuntimeOptions& options) {
+    HtpGraphConfigs configs;
+    const std::uint32_t requested =
+        options.htpGraphPrecisionMode + options.htpGraphPrecisionCompensation +
+        options.htpGraphWeightsPacking + options.htpGraphAdvancedActivationFusion;
+    if (requested == 0) return configs;
+    const auto inRange = [](std::uint32_t value) { return value <= 2; };
+    if (!inRange(options.htpGraphPrecisionMode) ||
+        !inRange(options.htpGraphPrecisionCompensation) ||
+        !inRange(options.htpGraphWeightsPacking) ||
+        !inRange(options.htpGraphAdvancedActivationFusion)) {
+        configs.failClosedInvalid = true;
+        return configs;
+    }
+    const char* parts[4] = {nullptr, nullptr, nullptr, nullptr};
+    const auto emit = [&](QnnHtpGraph_CustomConfig_t* custom,
+                          QnnHtpGraph_ConfigOption_t option) {
+        custom->option = option;
+        configs.graphConfigs[configs.count].option = QNN_GRAPH_CONFIG_OPTION_CUSTOM;
+        configs.graphConfigs[configs.count].customConfig = custom;
+        configs.graphConfigPtrs[configs.count] = &configs.graphConfigs[configs.count];
+        ++configs.count;
+    };
+    if (options.htpGraphPrecisionMode != 0) {
+        configs.precisionConfig.precision =
+            options.htpGraphPrecisionMode == 2 ? QNN_PRECISION_FLOAT32
+                                               : QNN_PRECISION_FLOAT16;
+        emit(&configs.precisionConfig, QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION);
+        parts[0] = options.htpGraphPrecisionMode == 2 ? "float32" : "float16";
+    }
+    if (options.htpGraphPrecisionCompensation != 0) {
+        configs.compensationConfig.precisionCompensation =
+            options.htpGraphPrecisionCompensation == 2;
+        emit(&configs.compensationConfig,
+             QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION_COMPENSATION);
+        parts[1] = options.htpGraphPrecisionCompensation == 2
+                       ? "compensation=true"
+                       : "compensation=false";
+    }
+    if (options.htpGraphWeightsPacking != 0) {
+        configs.weightsPackingConfig.weightsPacking =
+            options.htpGraphWeightsPacking == 2;
+        emit(&configs.weightsPackingConfig,
+             QNN_HTP_GRAPH_CONFIG_OPTION_WEIGHTS_PACKING);
+        parts[2] = options.htpGraphWeightsPacking == 2 ? "weights_packing=true"
+                                                       : "weights_packing=false";
+    }
+    if (options.htpGraphAdvancedActivationFusion != 0) {
+        configs.fusionConfig.advancedActivationFusion =
+            options.htpGraphAdvancedActivationFusion == 2;
+        emit(&configs.fusionConfig,
+             QNN_HTP_GRAPH_CONFIG_OPTION_ADVANCED_ACTIVATION_FUSION);
+        parts[3] = options.htpGraphAdvancedActivationFusion == 2
+                       ? "fusion=true"
+                       : "fusion=false";
+    }
+    configs.graphConfigPtrs[configs.count] = nullptr;
+    configs.array = const_cast<const QnnGraph_Config_t**>(configs.graphConfigPtrs);
+    std::ostringstream description;
+    description << "htp_graph_precision=" << (parts[0] ? parts[0] : "unset")
+                << ",htp_graph_precision_compensation="
+                << (parts[1] ? parts[1] : "unset")
+                << ",htp_graph_weights_packing="
+                << (parts[2] ? parts[2] : "unset")
+                << ",htp_graph_activation_fusion="
+                << (parts[3] ? parts[3] : "unset");
+    configs.description = description.str();
+    return configs;
+}
+
 bool Runtime::recreateContext(std::string& error) {
     if (!impl_ || !impl_->backend || !impl_->device || !impl_->context) {
         error = "context recreation requires initialized backend, device, and context";
@@ -921,8 +1010,16 @@ bool Runtime::prepareMatMul(uint32_t m, uint32_t k, uint32_t n, bool trans0, std
     auto started = Clock::now();
     impl_->matmulGraphNames.push_back(
         "phonelm_matmul_" + std::to_string(impl_->matmulGraphSerial++));
+    const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+    if (htpConfigs.failClosedInvalid) {
+        error = "graphCreate: invalid htp graph precision option";
+        return false;
+    }
     auto status = impl_->api.graphCreate(
-        impl_->context, impl_->matmulGraphNames.back().c_str(), nullptr, &impl_->graph);
+        impl_->context, impl_->matmulGraphNames.back().c_str(),
+        htpConfigs.array, &impl_->graph);
+    if (!htpConfigs.description.empty())
+        diagnostics_ += htpConfigs.description + "\n";
     metrics_.graphCreateUs = elapsedUs(started);
     ++metrics_.graphCreateCount;
     if (status != QNN_SUCCESS) { error = "graphCreate=" + std::to_string(status); return false; }
@@ -977,8 +1074,15 @@ bool Runtime::prepareDWeightMatMul(uint32_t batchSize, uint32_t inputDimension,
            impl_->dWeightODims);
 
     auto started = Clock::now();
-    auto status = impl_->api.graphCreate(impl_->context, "phonelm_dw_matmul", nullptr,
-                                         &impl_->dWeightGraph);
+    const HtpGraphConfigs htpConfigs = buildHtpGraphConfigs(options_);
+    if (htpConfigs.failClosedInvalid) {
+        error = "graphCreate: invalid htp graph precision option";
+        return false;
+    }
+    auto status = impl_->api.graphCreate(impl_->context, "phonelm_dw_matmul",
+                                         htpConfigs.array, &impl_->dWeightGraph);
+    if (!htpConfigs.description.empty())
+        diagnostics_ += htpConfigs.description + "\n";
     metrics_.dWeightGraphCreateUs = elapsedUs(started);
     ++metrics_.graphCreateCount;
     ++metrics_.dWeightGraphCreateCount;

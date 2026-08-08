@@ -179,6 +179,15 @@ class MainActivity : Activity() {
             val topK = intent.getIntExtra("phonelm.top_k", 256)
             val samplingSeed = intent.getStringExtra("phonelm.sampling_seed")?.toLongOrNull() ?: 0L
             val gatePolicy = intent.getStringExtra("phonelm.gate_policy") ?: "legacy"
+            val htpGraphPrecisionMode = intent.getIntExtra("phonelm.htp_graph_precision_mode", 0)
+            val htpGraphPrecisionCompensation =
+                intent.getIntExtra("phonelm.htp_graph_precision_compensation", 0)
+            val htpGraphWeightsPacking =
+                intent.getIntExtra("phonelm.htp_graph_weights_packing", 0)
+            val htpGraphAdvancedActivationFusion =
+                intent.getIntExtra("phonelm.htp_graph_activation_fusion", 0)
+            val htpNativeTensorFp16 =
+                intent.getBooleanExtra("phonelm.htp_native_tensor_fp16", false)
             val checkpointFile = File(checkpointDir,
                 "htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt")
             val promptFile = File(checkpointDir, "prompt.bin")
@@ -196,6 +205,14 @@ class MainActivity : Activity() {
                     "phonelm.top_k must be in 1..256"
                 gatePolicy != "legacy" && gatePolicy != "candidate" ->
                     "phonelm.gate_policy must be legacy or candidate"
+                htpGraphPrecisionMode !in 0..2 ->
+                    "phonelm.htp_graph_precision_mode must be 0, 1 or 2"
+                htpGraphPrecisionCompensation !in 0..2 ->
+                    "phonelm.htp_graph_precision_compensation must be 0, 1 or 2"
+                htpGraphWeightsPacking !in 0..2 ->
+                    "phonelm.htp_graph_weights_packing must be 0, 1 or 2"
+                htpGraphAdvancedActivationFusion !in 0..2 ->
+                    "phonelm.htp_graph_activation_fusion must be 0, 1 or 2"
                 !checkpointFile.isFile ->
                     "checkpoint file missing: ${checkpointFile.name}"
                 !promptFile.isFile -> "prompt file missing: prompt.bin"
@@ -224,6 +241,11 @@ class MainActivity : Activity() {
                         topK = topK,
                         samplingSeed = samplingSeed,
                         gatePolicy = gatePolicy,
+                        htpGraphPrecisionMode = htpGraphPrecisionMode,
+                        htpGraphPrecisionCompensation = htpGraphPrecisionCompensation,
+                        htpGraphWeightsPacking = htpGraphWeightsPacking,
+                        htpGraphAdvancedActivationFusion = htpGraphAdvancedActivationFusion,
+                        htpNativeTensorFp16 = htpNativeTensorFp16,
                     )
                 }
                 openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {

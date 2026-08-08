@@ -348,7 +348,12 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jfloat temperature,
     jint topK,
     jlong samplingSeed,
-    jstring gatePolicy) {
+    jstring gatePolicy,
+    jint htpGraphPrecisionMode,
+    jint htpGraphPrecisionCompensation,
+    jint htpGraphWeightsPacking,
+    jint htpGraphAdvancedActivationFusion,
+    jboolean htpNativeTensorFp16) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return toJavaString(env, failedReport("a benchmark is already running"));
@@ -409,6 +414,22 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     generateConfig.topK = static_cast<uint32_t>(topK);
     generateConfig.samplingSeed = static_cast<std::uint64_t>(samplingSeed);
     generateConfig.gatePolicy = policyString;
+    generateConfig.htpGraphPrecisionMode =
+        htpGraphPrecisionMode > 0 ? static_cast<uint32_t>(htpGraphPrecisionMode)
+                                  : 0;
+    generateConfig.htpGraphPrecisionCompensation =
+        htpGraphPrecisionCompensation > 0
+            ? static_cast<uint32_t>(htpGraphPrecisionCompensation)
+            : 0;
+    generateConfig.htpGraphWeightsPacking =
+        htpGraphWeightsPacking > 0
+            ? static_cast<uint32_t>(htpGraphWeightsPacking)
+            : 0;
+    generateConfig.htpGraphAdvancedActivationFusion =
+        htpGraphAdvancedActivationFusion > 0
+            ? static_cast<uint32_t>(htpGraphAdvancedActivationFusion)
+            : 0;
+    generateConfig.htpNativeTensorFp16 = htpNativeTensorFp16 == JNI_TRUE;
 
     auto sink = [&](const std::string& message) { logcat(message); };
     try {

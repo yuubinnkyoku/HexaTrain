@@ -136,6 +136,29 @@ struct RuntimeOptions {
     // rsqrt(s^2*(variance+epsilon))*s = rsqrt(variance+epsilon).
     float tinyTransformerCenteredScale = 1.0f;
     std::uint32_t diagnosticLayerIndex = 0xffffffffu;
+    // HTP graph precision control (QAIRT 2.48.40.260702 QnnHtpGraph
+    // QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION). 0 = unset (backend default,
+    // preserves established behavior), 1 = QNN_PRECISION_FLOAT16,
+    // 2 = QNN_PRECISION_FLOAT32.  Numeric-path-only switch: no graph math,
+    // checkpoint, or gate change.
+    std::uint32_t htpGraphPrecisionMode = 0;
+    // QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION_COMPENSATION (bool). 0 = unset,
+    // 1 = false, 2 = true.
+    std::uint32_t htpGraphPrecisionCompensation = 0;
+    // QNN_HTP_GRAPH_CONFIG_OPTION_WEIGHTS_PACKING (bool). 0 = unset,
+    // 1 = false, 2 = true.  Weight packing can round weights to a
+    // lower-precision storage; disabling it is a numeric-path probe.
+    std::uint32_t htpGraphWeightsPacking = 0;
+    // QNN_HTP_GRAPH_CONFIG_OPTION_ADVANCED_ACTIVATION_FUSION (bool).
+    // 0 = unset, 1 = false, 2 = true.  Fusion can change intermediate
+    // rounding; disabling it is a numeric-path probe.
+    std::uint32_t htpGraphAdvancedActivationFusion = 0;
+    // Diagnostic: declare NATIVE (internal) float tensors as FP16 instead of
+    // FP32.  APP_READ/APP_WRITE/STATIC tensors stay FP32 because the host
+    // buffers are FP32.  Used to probe whether the HTP backend already
+    // executes FP32-declared graphs in FP16.  Default false = established
+    // behavior.  Private diagnostics only; no gate/math/checkpoint change.
+    bool htpNativeTensorFp16 = false;
 };
 
 struct LayerNormBackwardOutputs {
