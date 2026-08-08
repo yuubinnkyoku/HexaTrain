@@ -1,0 +1,6 @@
+candidate,description,name
+L,device gate: full-matrix raw logits max abs < 2e-2 AND prob max abs < 5e-3 per prefix; AR same,legacy
+P,"last-row: prob max abs < 5e-3, prob L1 < 2e-2, JS < 5e-3",prob
+C,"P plus centered max abs < 2e-2, centered RMS < 5e-3, logsoftmax max abs < 1e-1, logsoftmax RMS < 5e-2, scale_ratio in [0.995,1.005], raw < 5e-1",P+shape
+D,P plus decision rule: argmax mismatch allowed only when CPU top1-top2 margin <= 2*raw; degenerate rows FAIL,P+decision
+F,C AND D (strictest candidate),P+shape+decision (full)

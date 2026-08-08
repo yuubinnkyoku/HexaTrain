@@ -1,0 +1,47 @@
+{
+  "title": "Nicopedia HTP parity gate audit (protocol qnn-nicopedia-htp-parity-policy)",
+  "generated_at": "2026-08-08T20:04:24.4356720+09:00",
+  "canonical_commit": "0dc9116",
+  "files": {
+    "limitations.csv": {
+      "size_bytes": 570,
+      "sha256": "c93cf610175b130e30496414876e24e2646bf410154d1397b423571673370f50"
+    },
+    "probability-parity.csv": {
+      "size_bytes": 7002,
+      "sha256": "a5bb909551c07813ec84c0e35aa40b38a5074830a076d88f443cc660ef985b7b"
+    },
+    "step-parity-summary.csv": {
+      "size_bytes": 28623,
+      "sha256": "0824d1da662812f230ea70a7446570d8324b2bc8e687dabe0e839874298b4b72"
+    },
+    "policy-candidates.csv": {
+      "size_bytes": 536,
+      "sha256": "51d516825fcb6760310ad471c600d125d1803f097ca462a168988ae754ca8c62"
+    },
+    "decision-margin-summary.csv": {
+      "size_bytes": 9250,
+      "sha256": "f5e05cdaf126d3269c987614c2ca8d663a90a36d6e944867528efecbb5d1995a"
+    },
+    "synthetic-fault-results.csv": {
+      "size_bytes": 2181,
+      "sha256": "e8e3bd7c70bb8c589769b44e047a24b124533cdd55522d6310d287a1fb564816"
+    },
+    "generation-comparison.csv": {
+      "size_bytes": 1028,
+      "sha256": "3025d296187dc08120d543c9319905f72dbe7c05e1a41a80696751219ebd6760"
+    },
+    "README.md": {
+      "size_bytes": 705,
+      "sha256": "7d06231175e43736eac599efa26f4f9d656afc3dc7f35e89843fe311204381d0"
+    },
+    "scale-analysis.csv": {
+      "size_bytes": 6858,
+      "sha256": "1d82efc82138dd6dc5487db03e671e8d10f4851c299ebd7dec485808470553b2"
+    },
+    "policy-decision.csv": {
+      "size_bytes": 838,
+      "sha256": "7fc240c562ea2e55aaa407e8a55945c73fd667bfa8b29c159e64affde783b29a"
+    }
+  }
+}

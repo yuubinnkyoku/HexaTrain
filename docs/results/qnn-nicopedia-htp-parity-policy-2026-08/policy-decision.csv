@@ -1,0 +1,11 @@
+criterion,label,result,note
+1,step320 audit passes candidate F,FAIL,parity_gate_candidate=false ar_gate_candidate=true
+2,step1000 audit passes candidate F,FAIL,parity_gate_candidate=false ar_gate_candidate=true
+3,determinism: repeated step1000 gates equal,PASS,run2 vs run3 gate fields
+4,synthetic fault battery 15 rows,PASS,rows=15
+5,NaN/Inf rows rejected by F,PASS,f12-f15 must FAIL
+6,decisive-margin argmax flip rejected by F,PASS,f5 must FAIL (f6 ambiguous passes)
+7,probability distortion rejected by F,PASS,f10/f11 must FAIL
+8,no regression gate weakened (legacy fields still reported),PASS,parity_gate + raw keys present in all reports
+9,independent Reviewer PASS,PASS,read-only review required
+RESULT,adoption decision,KEEP_LEGACY_BLOCKED,adopt F only if criteria 1-9 all PASS; else keep L and generation stays BLOCKED

@@ -1,0 +1,5 @@
+limitation
+parity candidate metrics are computed on the last teacher-forced row per prefix; the device legacy gate still uses the full 32-row matrix (reported separately)
+device values are HTP qnn-context logits; CPU reference is the same-checkpoint CPU forward pass on the same device (private)
+determinism claim is limited to the two repeated step1000 audits (gate fields + per-prefix metrics identical)
+candidate adoption requires all policy-decision criteria PASS plus independent Reviewer PASS; otherwise active gate stays L and step1000 generation is BLOCKED

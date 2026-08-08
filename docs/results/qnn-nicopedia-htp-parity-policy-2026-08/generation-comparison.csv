@@ -1,0 +1,8 @@
+origin,report,checkpoint_step,generate_mode,top_k,sampling_seed,max_new_bytes,generated_byte_count,generated_valid_utf8_bytes,generated_invalid_utf8_bytes,unique_byte_values,ascii_bytes,max_same_byte_run,max_scalar_repeat_run,short_period_loop_fraction,generation_gate,parity_gate,ar_gate,status
+HTP-device,seed1-l19-greedy-step1000-max64-result.txt,1000,greedy,256,0,64,0,0,0,0,0,0,0,0,false,false,false,FAILED
+HTP-device,seed1-l19-greedy-step1000-max64-run2-result.txt,1000,greedy,256,0,64,0,0,0,0,0,0,0,0,false,false,false,FAILED
+HTP-device,seed1-l19-greedy-step320-max64-result.txt,320,greedy,256,0,64,0,0,0,0,0,0,0,0,false,false,true,FAILED
+CPU,cpu-gen-step1000-greedy.txt,1000,greedy,256,0,64,64,63,1,5,0,1,17,1,,,,SUCCESS
+CPU,cpu-gen-step1000-sample.txt,1000,sample,16,42,128,128,120,8,28,3,3,3,0.41379310344827586,,,,SUCCESS
+CPU,cpu-gen-step320-greedy.txt,320,greedy,256,0,64,64,63,1,3,0,1,21,1,,,,SUCCESS
+CPU,cpu-gen-step320-sample.txt,320,sample,16,42,128,128,107,21,29,65,26,26,0.29032258064516131,,,,SUCCESS
