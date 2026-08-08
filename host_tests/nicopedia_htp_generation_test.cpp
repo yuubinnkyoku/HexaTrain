@@ -217,14 +217,18 @@ void testWindowAppend() {
 
 void testParityPrefixes() {
   const auto &prefixes = ngen::parityPrefixes();
-  require(prefixes.size() == 4, "four fixed parity prefixes");
+  require(prefixes.size() == 20, "twenty fixed parity prefixes");
   std::vector<std::string> labels;
   for (const auto &prefix : prefixes) {
-    require(prefix.bytes.size() <= 32, "prefix fits the 32-byte window");
     require(prefix.label && *prefix.label, "prefix label present");
     labels.emplace_back(prefix.label);
+    // Prefixes may exceed the 32-byte generation window; the context builder
+    // must clip them to the trailing window in every case.
+    const std::vector<uint8_t> context =
+        ngen::buildGenerationContext(prefix.bytes, 32, nullptr);
+    require(context.size() <= 32, "context window <= 32");
   }
-  require(labels.size() == 4, "four labels");
+  require(labels.size() == 20, "twenty labels");
   for (size_t i = 0; i < labels.size(); ++i)
     for (size_t j = i + 1; j < labels.size(); ++j)
       require(labels[i] != labels[j], "labels unique");
@@ -239,8 +243,9 @@ void testParityPrefixes() {
   require(sawHigh, "byte-edge prefix covers 0xFF");
   require(sawAscii, "ASCII prefix present");
   bool truncated = false;
-  for (uint8_t byte : prefixes.back().bytes)
-    if (byte == 0xE3) truncated = true;
+  for (const auto &prefix : prefixes)
+    for (uint8_t byte : prefix.bytes)
+      if (byte == 0xE3) truncated = true;
   require(truncated, "truncated UTF-8 prefix exercises the lead byte");
 }
 

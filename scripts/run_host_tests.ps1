@@ -277,6 +277,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia HTP generation host tests failed"
 }
 
+$ParityPolicyExecutable = Join-Path $OutputDirectory "nicopedia_parity_policy_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "host_tests\nicopedia_parity_policy_test.cpp") `
+    -o $ParityPolicyExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia parity policy host test compilation failed"
+}
+
+$parityReportDir = Join-Path $Root "build\reports\nicopedia-parity-policy"
+[IO.Directory]::CreateDirectory($parityReportDir) | Out-Null
+& $ParityPolicyExecutable (Join-Path $parityReportDir 'synthetic-fault-results.csv')
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia parity policy host tests failed"
+}
+
 $NicopediaCpuGenerateExecutable = Join-Path $OutputDirectory "nicopedia_cpu_generate.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `

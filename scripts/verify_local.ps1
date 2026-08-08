@@ -143,6 +143,9 @@ try {
         Invoke-PwshScript "Nicopedia HTP 1000-step generation public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_1000step_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "Nicopedia HTP parity policy public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_parity_policy.ps1") @(
+                "-SelfTest")
         "runner allow-list/display self-tests and exporter leak guards PASS (temp-only; no device required)"
     }
 
@@ -331,7 +334,19 @@ try {
             throw "g++ not found on PATH (required by scripts/run_host_tests.ps1)"
         }
         Invoke-PwshScript "run_host_tests" (Join-Path $Root "scripts\run_host_tests.ps1") @()
-        "C++ host tests ok (includes qnn_graph_shape_validator)"
+        "C++ host tests ok (includes qnn_graph_shape_validator and nicopedia parity policy fault battery)"
+    }
+
+    Invoke-Step "nicopedia-parity-policy-host-battery" {
+        $ParityHost = Join-Path $Root "build\host-tests\nicopedia_parity_policy_test.exe"
+        if (-not (Test-Path -LiteralPath $ParityHost)) {
+            throw "nicopedia_parity_policy_test.exe missing - run_host_tests must run first"
+        }
+        $FaultCsvDir = Join-Path $Root "build\reports\nicopedia-parity-policy"
+        New-Item -ItemType Directory -Force -Path $FaultCsvDir | Out-Null
+        & $ParityHost (Join-Path $FaultCsvDir "synthetic-fault-results.csv")
+        if ($LASTEXITCODE -ne 0) { throw "nicopedia parity policy fault battery failed" }
+        "nicopedia parity policy fault battery PASS (synthetic-fault-results.csv regenerated)"
     }
 
     if ($SkipAndroidBuild) {

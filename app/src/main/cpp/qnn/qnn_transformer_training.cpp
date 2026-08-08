@@ -5370,6 +5370,11 @@ struct NprtParityRow {
   uint32_t topkSetOverlap = 0;
   uint32_t topkSetSize = 5;
   bool finite = true;
+  // Parity re-audit (protocol docs/qnn-nicopedia-htp-parity-policy.md):
+  // candidate policy verdicts + row metrics in shadow mode on the same rows.
+  nicopedia_gen::ParityPolicies policies;
+  nicopedia_gen::ParityRowMetrics metrics;
+  bool candidateOk = true;
 };
 
 struct NprtArRow {
@@ -5393,6 +5398,10 @@ struct NprtArRow {
   uint32_t topkSetOverlap = 0;
   uint32_t topkSetSize = 5;
   bool finite = true;
+  // Parity re-audit shadow verdicts (protocol section 4).
+  nicopedia_gen::ParityPolicies policies;
+  nicopedia_gen::ParityRowMetrics metrics;
+  bool candidateOk = true;
 };
 
 }  // namespace
@@ -5422,6 +5431,10 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=temperature_or_top_k_invalid\n";
+  if (generateConfig.gatePolicy != "legacy" && generateConfig.gatePolicy != "candidate")
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=gate_policy must be legacy or candidate\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
                                layers, &expectedStep))
@@ -5497,7 +5510,8 @@ std::string nicopediaHtpGeneration(
   // Fixed-prefix CPU/HTP parity on the shared deterministic prefixes.
   std::vector<NprtParityRow> parityRows;
   const auto &prefixes = nicopedia_gen::parityPrefixes();
-  bool parityGate = true;
+  bool parityGate = true;          // legacy gate (unchanged semantics)
+  bool parityGateCandidate = true; // candidate full policy F (protocol)
   for (const auto &prefix : prefixes) {
     uint32_t pad = 0;
     const auto prefixContext =
@@ -5555,6 +5569,14 @@ std::string nicopediaHtpGeneration(
     const bool ok = row.finite && row.logitsMaxAbs < 2e-2 &&
                     row.probabilityMaxAbs < 5e-3;
     parityGate = parityGate && ok;
+    // Candidate policy F (shadow parity re-audit; protocol
+    // docs/qnn-nicopedia-htp-parity-policy.md section 4) on the same rows.
+    row.metrics = nicopedia_gen::computeParityRowMetrics(
+        cpuStep.logits.data() + lastBase,
+        htpStep.logits.data() + lastBase, config.vocabularySize);
+    row.policies = nicopedia_gen::evaluateParityPolicies(row.metrics);
+    row.candidateOk = row.policies.full;
+    parityGateCandidate = parityGateCandidate && row.candidateOk;
     parityRows.push_back(row);
   }
 
@@ -5576,6 +5598,7 @@ std::string nicopediaHtpGeneration(
   uint32_t divergenceStep = 0;
   double divergenceMarginCpu = 0;
   bool arGate = true;
+  bool arGateCandidate = true;
   for (uint32_t step = 0; step < kArSteps; ++step) {
     const auto cpuStep = tiny_lm::forwardBackwardGeneralized(
         config, windowInput(cpuContext), zeros, loaded.parameters, 0.0f);
@@ -5631,6 +5654,13 @@ std::string nicopediaHtpGeneration(
           row.finite && row.maxAbsLogits < 2e-2 &&
           probabilityError.maxAbs < 5e-3;
       arGate = arGate && withinTolerance;
+      // Candidate policy F per AR step (protocol section 4), shadow verdict.
+      row.metrics = nicopedia_gen::computeParityRowMetrics(
+          cpuStep.logits.data() + lastBase,
+          htpStep.logits.data() + lastBase, config.vocabularySize);
+      row.policies = nicopedia_gen::evaluateParityPolicies(row.metrics);
+      row.candidateOk = row.policies.full;
+      arGateCandidate = arGateCandidate && row.candidateOk;
       if (row.argmaxCpu != row.argmaxHtp) {
         hasDivergence = true;
         divergenceStep = step;
@@ -5640,6 +5670,10 @@ std::string nicopediaHtpGeneration(
     } else {
       row.maxAbsLogits = -1;
       row.finite = true;
+      row.policies.legacy = false;
+      row.policies.full = false;
+      row.candidateOk = false;
+      arGateCandidate = false;
     }
     arRows.push_back(row);
     nicopedia_gen::appendByteWindow(cpuContext,
@@ -5650,7 +5684,10 @@ std::string nicopediaHtpGeneration(
   const bool divergenceBlocked =
       hasDivergence && divergenceMarginCpu > 1e-2;
   arGate = arGate && !divergenceBlocked;
-  const bool generationGate = parityGate && arGate;
+  const bool legacyGate = parityGate && arGate;
+  const bool candidateGate = parityGateCandidate && arGateCandidate;
+  const bool generationGate =
+      (generateConfig.gatePolicy == "candidate") ? candidateGate : legacyGate;
 
   // User-prompt generation (only when both gates pass).
   std::vector<std::uint8_t> generated;
@@ -5753,8 +5790,11 @@ std::string nicopediaHtpGeneration(
          << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
          << "\nparity_prefix_count=" << parityRows.size()
          << "\nparity_gate=" << (parityGate ? "true" : "false")
+         << "\nparity_gate_candidate=" << (parityGateCandidate ? "true" : "false")
          << "\nar_steps=" << kArSteps
          << "\nar_gate=" << (arGate ? "true" : "false")
+         << "\nar_gate_candidate=" << (arGateCandidate ? "true" : "false")
+         << "\ngate_policy=" << generateConfig.gatePolicy
          << "\nar_divergence_step="
          << (hasDivergence ? static_cast<int>(divergenceStep) : 0)
          << "\nar_divergence_margin_cpu=" << divergenceMarginCpu
@@ -5791,7 +5831,35 @@ std::string nicopediaHtpGeneration(
            << "\nparity_" << i << "_top2_margin_htp=" << row.top2MarginHtp
            << "\nparity_" << i << "_topk_set_overlap=" << row.topkSetOverlap
            << "\nparity_" << i << "_topk_set_size=" << row.topkSetSize
-           << "\nparity_" << i << "_finite=" << (row.finite ? "true" : "false");
+           << "\nparity_" << i << "_finite=" << (row.finite ? "true" : "false")
+           << "\nparity_" << i << "_delta_mean=" << row.metrics.deltaMean
+           << "\nparity_" << i << "_delta_median=" << row.metrics.deltaMedian
+           << "\nparity_" << i << "_delta_std=" << row.metrics.deltaStd
+           << "\nparity_" << i << "_centered_max_abs=" << row.metrics.centeredMaxAbs
+           << "\nparity_" << i << "_centered_rms=" << row.metrics.centeredRms
+           << "\nparity_" << i << "_logsoftmax_max_abs=" << row.metrics.logSoftmaxMaxAbs
+           << "\nparity_" << i << "_logsoftmax_rms=" << row.metrics.logSoftmaxRms
+           << "\nparity_" << i << "_probability_l1_error=" << row.metrics.probL1
+           << "\nparity_" << i << "_probability_js_divergence=" << row.metrics.jsDivergence
+           << "\nparity_" << i << "_logits_cosine_centered=" << row.metrics.cosineCentered
+           << "\nparity_" << i << "_scale_ratio=" << row.metrics.scaleRatio
+           << "\nparity_" << i << "_relative_max_error=" << row.metrics.relMax
+           << "\nparity_" << i << "_decision_ambiguous="
+           << (row.metrics.decisionAmbiguous ? "true" : "false")
+           << "\nparity_" << i << "_row_degenerate="
+           << (row.metrics.rowDegenerate ? "true" : "false")
+           << "\nparity_" << i << "_topk_order_match="
+           << (row.metrics.topkOrderMatch ? "true" : "false")
+           << "\nparity_" << i << "_candidate_legacy="
+           << (row.policies.legacy ? "true" : "false")
+           << "\nparity_" << i << "_candidate_prob="
+           << (row.policies.prob ? "true" : "false")
+           << "\nparity_" << i << "_candidate_shape="
+           << (row.policies.shape ? "true" : "false")
+           << "\nparity_" << i << "_candidate_decision="
+           << (row.policies.decision ? "true" : "false")
+           << "\nparity_" << i << "_candidate_full="
+           << (row.policies.full ? "true" : "false");
   }
   for (size_t i = 0; i < arRows.size(); ++i) {
     const auto &row = arRows[i];
@@ -5826,7 +5894,11 @@ std::string nicopediaHtpGeneration(
            << "\nar_step_" << row.step << "_topk_set_overlap=" << row.topkSetOverlap
            << "\nar_step_" << row.step << "_topk_set_size=" << row.topkSetSize
            << "\nar_step_" << row.step
-           << "_finite=" << (row.finite ? "true" : "false");
+           << "_finite=" << (row.finite ? "true" : "false")
+           << "\nar_step_" << row.step << "_candidate_full="
+           << (row.policies.full ? "true" : "false")
+           << "\nar_step_" << row.step << "_candidate_decision="
+           << (row.policies.decision ? "true" : "false");
   }
   report << "\nhtp_initialize_us=" << initializeUs
          << "\ngraph_create_us=" << graphCreateUs

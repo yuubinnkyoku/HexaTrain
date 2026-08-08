@@ -278,7 +278,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jstring generateMode,
     jfloat temperature,
     jint topK,
-    jlong samplingSeed) {
+    jlong samplingSeed,
+    jstring gatePolicy) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return toJavaString(env, failedReport("a benchmark is already running"));
@@ -286,7 +287,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     RunningGuard guard;
     gStopRequested.store(false, std::memory_order_release);
 
-    std::string checkpoint, prompt, modeString;
+    std::string checkpoint, prompt, modeString, policyString;
     if (checkpointPath) {
         const char* chars = env->GetStringUTFChars(checkpointPath, nullptr);
         if (chars) { checkpoint = chars; env->ReleaseStringUTFChars(checkpointPath, chars); }
@@ -299,6 +300,11 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         const char* chars = env->GetStringUTFChars(generateMode, nullptr);
         if (chars) { modeString = chars; env->ReleaseStringUTFChars(generateMode, chars); }
     }
+    if (gatePolicy) {
+        const char* chars = env->GetStringUTFChars(gatePolicy, nullptr);
+        if (chars) { policyString = chars; env->ReleaseStringUTFChars(gatePolicy, chars); }
+    }
+    if (policyString.empty()) policyString = "legacy";
     if (checkpoint.empty()) {
         return toJavaString(
             env,
@@ -333,6 +339,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     generateConfig.temperature = temperature;
     generateConfig.topK = static_cast<uint32_t>(topK);
     generateConfig.samplingSeed = static_cast<std::uint64_t>(samplingSeed);
+    generateConfig.gatePolicy = policyString;
 
     auto sink = [&](const std::string& message) { logcat(message); };
     try {

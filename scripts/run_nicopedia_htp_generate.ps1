@@ -28,6 +28,9 @@ param(
     [switch]$SkipInstall,
     [int]$PollLimit = 600,
     [int]$CheckpointStep = 320,
+    [string]$GatePolicy = 'legacy',   # legacy | candidate (protocol F)
+    [switch]$CandidatePolicyApproved, # required to run -GatePolicy candidate
+    [switch]$AuditOnly,               # accept a FAILED gate report (audit runs)
     [switch]$SelfTest
 )
 
@@ -186,6 +189,10 @@ if ($CheckpointStep -lt 1 -or $CheckpointStep -gt 999999) {
 }
 if ($MaxNewBytes -lt 1 -or $MaxNewBytes -gt 1024) { throw 'MAX_NEW_BYTES_INVALID: MaxNewBytes must be in 1..1024' }
 if ($Mode -ne 'Greedy' -and $Mode -ne 'Sample') { throw 'MODE_INVALID: Mode must be Greedy or Sample' }
+if ($GatePolicy -ne 'legacy' -and $GatePolicy -ne 'candidate') { throw 'GATE_POLICY_INVALID: GatePolicy must be legacy or candidate' }
+if ($GatePolicy -eq 'candidate' -and -not $CandidatePolicyApproved) {
+    throw 'CANDIDATE_POLICY_NOT_APPROVED: -GatePolicy candidate requires -CandidatePolicyApproved (independent Reviewer PASS + explicit instruction)'
+}
 if ($Mode -eq 'Sample') {
     if (-not [double]::IsFinite($Temperature) -or $Temperature -le 0.0) { throw 'TEMPERATURE_INVALID' }
     if ($TopK -lt 1 -or $TopK -gt 256) { throw 'TOPK_INVALID' }
@@ -297,7 +304,8 @@ $startArgs = @(
     '--es', 'phonelm.generate_mode', $Mode.ToLowerInvariant(),
     '--es', 'phonelm.temperature', $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture),
     '--ei', 'phonelm.top_k', $TopK,
-    '--es', 'phonelm.sampling_seed', [string]$SamplingSeed
+    '--es', 'phonelm.sampling_seed', [string]$SamplingSeed,
+    '--es', 'phonelm.gate_policy', $GatePolicy
 )
 $startOutput = & $adb -s $device @startArgs 2>&1
 if ($LASTEXITCODE -ne 0) { throw "am start failed (endpoint redacted): $($startArgs -join ' ')`n$startOutput" }
@@ -313,7 +321,10 @@ for ($poll = 0; $poll -lt $PollLimit; $poll++) {
 }
 if ($result -eq '') { throw 'DEVICE_RESULT_TIMEOUT' }
 if ($result -notmatch '(?m)^status=SUCCESS$') {
-    throw "DEVICE_GENERATION_FAILED:`n$result"
+    if (-not $AuditOnly) {
+        throw "DEVICE_GENERATION_FAILED:`n$result"
+    }
+    Write-Host 'AUDIT_ONLY: device status != SUCCESS — parity metrics recorded'
 }
 if ($result -notmatch '(?m)^cpu_fallback=false$') { throw 'DEVICE_CPU_FALLBACK_DETECTED' }
 $deviceHashMatch = [regex]::Match($result, '(?m)^checkpoint_parameter_hash=(fnv1a64:[0-9a-f]{16})$')
@@ -332,8 +343,20 @@ if ([int]$headerStepMatch.Groups[1].Value -ne $CheckpointStep) {
 $parityGate = [regex]::Match($result, '(?m)^parity_gate=(true|false)$').Groups[1].Value
 $arGate = [regex]::Match($result, '(?m)^ar_gate=(true|false)$').Groups[1].Value
 $generationGate = [regex]::Match($result, '(?m)^generation_gate=(true|false)$').Groups[1].Value
+$parityGateCandidate = [regex]::Match($result, '(?m)^parity_gate_candidate=(true|false)$').Groups[1].Value
+$arGateCandidate = [regex]::Match($result, '(?m)^ar_gate_candidate=(true|false)$').Groups[1].Value
+$gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate)$').Groups[1].Value
+if ($gatePolicyReported -ne $GatePolicy) {
+    throw "GATE_POLICY_MISMATCH: device=$gatePolicyReported requested=$GatePolicy"
+}
+if ($parityGateCandidate -eq '' -or $arGateCandidate -eq '') {
+    throw 'CANDIDATE_GATE_FIELDS_MISSING: report lacks parity_gate_candidate/ar_gate_candidate'
+}
 if ($parityGate -ne 'true' -or $arGate -ne 'true' -or $generationGate -ne 'true') {
-    throw "GENERATION_GATE_REJECTED parity=$parityGate ar=$arGate generation=$generationGate`n$result"
+    if (-not $AuditOnly) {
+        throw "GENERATION_GATE_REJECTED parity=$parityGate ar=$arGate generation=$generationGate`n$result"
+    }
+    Write-Host "AUDIT_ONLY: gate rejected (parity=$parityGate ar=$arGate generation=$generationGate) — parity metrics recorded"
 }
 $generatedHex = [regex]::Match($result, '(?m)^generated_hex=([0-9a-f]*)$').Groups[1].Value
 $generatedBytes = [byte[]]@()
@@ -343,8 +366,10 @@ if ($generatedHex.Length -gt 0) {
         $generatedBytes[$i / 2] = [Convert]::ToByte($generatedHex.Substring($i, 2), 16)
     }
 }
-if ($generatedBytes.Length -ne $MaxNewBytes) {
-    throw "GENERATED_BYTE_COUNT_MISMATCH: expected=$MaxNewBytes actual=$($generatedBytes.Length)"
+if (-not $AuditOnly) {
+    if ($generatedBytes.Length -ne $MaxNewBytes) {
+        throw "GENERATED_BYTE_COUNT_MISMATCH: expected=$MaxNewBytes actual=$($generatedBytes.Length)"
+    }
 }
 $generatedSha256Bytes = [System.Security.Cryptography.SHA256]::Create()
 $generatedSha256 = [System.BitConverter]::ToString($generatedSha256Bytes.ComputeHash($generatedBytes)).Replace('-', '').ToLowerInvariant()
@@ -381,6 +406,8 @@ Write-Event 'device-generation-succeeded' @{
     max_new_bytes = $MaxNewBytes
     generated_byte_count = $generatedBytes.Length
     parity_gate = $parityGate; ar_gate = $arGate; generation_gate = $generationGate
+    parity_gate_candidate = $parityGateCandidate; ar_gate_candidate = $arGateCandidate
+    gate_policy = $gatePolicyReported
 }
 
 # Aggregate-only state (no prompt text, no generated bytes, no serials).
@@ -396,6 +423,8 @@ $state = [ordered]@{
         generated_byte_count = $generatedBytes.Length
         generated_invalid_utf8_bytes = ([regex]::Match($result, '(?m)^generated_invalid_utf8_bytes=(\d+)$').Groups[1].Value -as [int])
         parity_gate = $parityGate; ar_gate = $arGate; generation_gate = $generationGate
+        parity_gate_candidate = $parityGateCandidate; ar_gate_candidate = $arGateCandidate
+        gate_policy = $gatePolicyReported
     }
     run_count = (Get-Content -LiteralPath (Join-Path $stateDir 'events.jsonl') -ErrorAction SilentlyContinue | Measure-Object).Count
 }

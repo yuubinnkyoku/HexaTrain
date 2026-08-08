@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -38,6 +39,11 @@ struct GenerateConfig {
   // 1..256; values above the vocabulary are clamped to the vocabulary.
   uint32_t topK = 256;
   uint64_t samplingSeed = 0;
+  // Parity policy that gates generation ("legacy" | "candidate"; fixed by
+  // the parity re-audit protocol docs/qnn-nicopedia-htp-parity-policy.md).
+  // "candidate" is the full policy F and is only usable after independent
+  // review approval; the runner enforces this with -CandidatePolicyApproved.
+  std::string gatePolicy = "legacy";
 };
 
 struct Utf8Stats {
@@ -344,6 +350,103 @@ inline const std::vector<ParityPrefix>& parityPrefixes() {
         uint8_t(0x9E), uint8_t(0xE3), 'a', 'b', 'c', '1', '2', '3', '4', '5',
         '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8',
         '9'}},
+      // --- 16 additional prefixes added by the parity re-audit (2026-08).
+      // Deterministic byte vectors (generated once, fixed in code; no
+      // licensed corpus text).  Label = byte-count convention used by the
+      // parity re-audit protocol docs/qnn-nicopedia-htp-parity-policy.md.
+      {"ascii_short_5", {'A', 'b', 'C', 'd', '!'}},
+      {"japanese_13",
+       {uint8_t(0xE3), uint8_t(0x81), uint8_t(0x93), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0x93), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAB), uint8_t(0xC3), uint8_t(0xA9), uint8_t(0xC3),
+        uint8_t(0xA9)}},  // こんにéé (13B: 3+3+3+2+2)
+      {"japanese_32_exact",
+       {uint8_t(0xE3), uint8_t(0x81), uint8_t(0x93), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0x93), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAB), uint8_t(0xE3), uint8_t(0x81), uint8_t(0xA1),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAF), uint8_t(0xE3),
+        uint8_t(0x81), uint8_t(0x9B), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0x8B), uint8_t(0xE3), uint8_t(0x81), uint8_t(0x84),
+        '1', '2', '3', '4', '5', '6', '7', '8'}},  // こんにちはせかい + digits
+      {"japanese_long_48",
+       {uint8_t(0xE3), uint8_t(0x81), uint8_t(0x93), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0x93), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAB), uint8_t(0xE3), uint8_t(0x81), uint8_t(0xA1),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAF), uint8_t(0xE3),
+        uint8_t(0x81), uint8_t(0x9B), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0x8B), uint8_t(0xE3), uint8_t(0x81), uint8_t(0x84),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0x93), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0x8C), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAF), uint8_t(0xE3), uint8_t(0x81), uint8_t(0x9F),
+        uint8_t(0xE3), uint8_t(0x81), uint8_t(0x99), uint8_t(0xE3),
+        uint8_t(0x81), uint8_t(0xA6), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0x8D), uint8_t(0xE3), uint8_t(0x81), uint8_t(0xAA)}},
+      // こんにちはせかいこれはたすてきな (48B; context window keeps last 32)
+      {"mixed_13_punct",
+       {uint8_t(0xE3), uint8_t(0x81), uint8_t(0x93), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0x93), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAB), uint8_t(0xE3), uint8_t(0x81), uint8_t(0xA1),
+        '!'}},  // こんにち! (12B + 1B ASCII)
+      {"punctuation_24",
+       {uint8_t(0xE3), uint8_t(0x80), uint8_t(0x81), uint8_t(0xE3),
+        uint8_t(0x80), uint8_t(0x82), uint8_t(0xE3), uint8_t(0x80),
+        uint8_t(0x8D), uint8_t(0xEF), uint8_t(0xBC), uint8_t(0x81),
+        uint8_t(0xEF), uint8_t(0xBC), uint8_t(0x9F), uint8_t(0xE2),
+        uint8_t(0x80), uint8_t(0xA6), uint8_t(0xEF), uint8_t(0xBC),
+        uint8_t(0x88), uint8_t(0xEF), uint8_t(0xBC), uint8_t(0x89)}},
+      // 、。」！？…（）
+      {"control_whitespace_12",
+       {0x09, 0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x20, 0x1D, 0x7F, 0x1E, 0x1F,
+        0x0A}},
+      {"digits_punct_32",
+       {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '/', ',', ';', ':',
+        '!', '?', '#', '@', '$', '%', '&', '*', '(', ')', '-', '_', '=', '+',
+        '[', ']', '{', '}'}},
+      {"utf8_emoji_16",
+       {uint8_t(0xF0), uint8_t(0x9F), uint8_t(0x98), uint8_t(0x80),
+        uint8_t(0xF0), uint8_t(0x9F), uint8_t(0x98), uint8_t(0x81),
+        uint8_t(0xF0), uint8_t(0x9F), uint8_t(0x98), uint8_t(0x82),
+        uint8_t(0xF0), uint8_t(0x9F), uint8_t(0x98), uint8_t(0x83)}},  // 😀😁😂😃
+      {"katakana_12",
+       {uint8_t(0xE3), uint8_t(0x82), uint8_t(0xA2), uint8_t(0xE3),
+        uint8_t(0x82), uint8_t(0xA4), uint8_t(0xE3), uint8_t(0x82),
+        uint8_t(0xA6), uint8_t(0xE3), uint8_t(0x82), uint8_t(0xAB)}},  // アイウカ
+      {"halfwidth_16",
+       {uint8_t(0xEF), uint8_t(0xBD), uint8_t(0xB1), uint8_t(0xEF),
+        uint8_t(0xBD), uint8_t(0xB2), uint8_t(0xEF), uint8_t(0xBD),
+        uint8_t(0xB3), uint8_t(0xEF), uint8_t(0xBD), uint8_t(0xB4),
+        uint8_t(0xEF), uint8_t(0xBD), uint8_t(0xB5), 0x20}},  // ｱｲｳｴｵ + space
+      {"pseudo_random_32",
+       {uint8_t(0x5b), uint8_t(0x4f), uint8_t(0x19), uint8_t(0x16),
+        uint8_t(0x69), uint8_t(0x7c), uint8_t(0x8f), uint8_t(0xce),
+        uint8_t(0x83), uint8_t(0x96), uint8_t(0x1b), uint8_t(0x98),
+        uint8_t(0x26), uint8_t(0x11), uint8_t(0x68), uint8_t(0xb7),
+        uint8_t(0x45), uint8_t(0xbe), uint8_t(0x3a), uint8_t(0x1a),
+        uint8_t(0x1b), uint8_t(0x45), uint8_t(0x7e), uint8_t(0x26),
+        uint8_t(0xf1), uint8_t(0x85), uint8_t(0x4a), uint8_t(0x29),
+        uint8_t(0xab), uint8_t(0x48), uint8_t(0x04), uint8_t(0x90)}},
+      // splitmix64(0x3141592653589793) high bytes, first 32 outputs
+      {"hiragana_9",
+       {uint8_t(0xE3), uint8_t(0x81), uint8_t(0x82), uint8_t(0xE3),
+        uint8_t(0x81), uint8_t(0x84), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0x86)}},  // あいう
+      {"lowercase_31p",
+       {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+        'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1',
+        '2', '3', '4'}},  // 31B; context pads 1 NUL at front
+      {"invalid_utf8_34",
+       {uint8_t(0xFF), uint8_t(0xFE), uint8_t(0x80), uint8_t(0xC0),
+        uint8_t(0x80), uint8_t(0xC1), uint8_t(0xBF), uint8_t(0xE3),
+        uint8_t(0x81), uint8_t(0x93), uint8_t(0xED), uint8_t(0xA0),
+        uint8_t(0x80), uint8_t(0xE3), uint8_t(0x81), 'A', 'B', uint8_t(0xF0),
+        uint8_t(0x9F), uint8_t(0x98), uint8_t(0xF4), uint8_t(0x90),
+        uint8_t(0x80), uint8_t(0x80), uint8_t(0xE3), uint8_t(0x81),
+        uint8_t(0xAB), uint8_t(0xE3), uint8_t(0x81), uint8_t(0x82),
+        uint8_t(0xC2), 0x28, uint8_t(0x80), uint8_t(0xF5)}},
+      // overlong, surrogate half, truncated seqs, >U+10FFFF, stray cont.
+      {"leading_ff_8",
+       {uint8_t(0xFF), uint8_t(0xF4), uint8_t(0xF0), uint8_t(0xE0),
+        uint8_t(0xC2), uint8_t(0x80), uint8_t(0xFF), uint8_t(0xFF)}},
   };
   return kPrefixes;
 }
@@ -447,6 +550,260 @@ inline GenerationAggregates generationAggregates(
   }
   ag.shortPeriodLoopFraction = bestPeriodFraction;
   return ag;
+}
+
+}  // namespace phonelm::nicopedia_gen
+
+// ---------------------------------------------------------------------------
+// CPU/HTP parity metrics (parity re-audit, protocol:
+// docs/qnn-nicopedia-htp-parity-policy.md).  Header-only and dependency-free
+// so the device and the host fault-injection test share one implementation.
+// Thresholds below are FIXED by the protocol; changing them invalidates the
+// audit (they must not be tuned to device results).
+// ---------------------------------------------------------------------------
+
+namespace phonelm::nicopedia_gen {
+
+// Fixed thresholds from docs/qnn-nicopedia-htp-parity-policy.md section 4.
+constexpr double kParityRawLogitsMaxAbs = 2e-2;   // legacy gate
+constexpr double kParityProbMaxAbs = 5e-3;        // legacy + prob dimension
+constexpr double kParityProbL1 = 2e-2;            // TV <= 1e-2
+constexpr double kParityJsDivergence = 5e-3;
+constexpr double kParityCenteredMaxAbs = 2e-2;    // gauge-free shape bound
+constexpr double kParityCenteredRms = 5e-3;
+constexpr double kParityLogSoftmaxMaxAbs = 1e-1;
+constexpr double kParityLogSoftmaxRms = 5e-2;
+constexpr double kParityScaleRatioLo = 0.995;
+constexpr double kParityScaleRatioHi = 1.005;
+constexpr double kParityRawCatastrophic = 5e-1;   // common-offset overflow guard
+constexpr double kParityRowDegenerateCpuStd = 1e-6;
+
+struct ParityRowMetrics {
+  double deltaMean = 0;
+  double deltaMedian = 0;
+  double deltaStd = 0;
+  double rawMaxAbs = 0;
+  double rawRms = 0;
+  double centeredMaxAbs = 0;
+  double centeredRms = 0;
+  double logSoftmaxMaxAbs = 0;
+  double logSoftmaxRms = 0;
+  double probMaxAbs = 0;
+  double probMeanAbs = 0;
+  double probL1 = 0;
+  double jsDivergence = 0;
+  double cosineRaw = 1.0;
+  double cosineCentered = 1.0;
+  double cpuRms = 0;
+  double cpuStd = 0;
+  double htpRms = 0;
+  double htpStd = 0;
+  double scaleRatio = 1.0;   // htpStd / cpuStd (both mean-centered)
+  double relMax = 0;         // rawMaxAbs / cpuRms (reporting only)
+  uint32_t argmaxCpu = 0;
+  uint32_t argmaxHtp = 0;
+  double marginCpu = 0;      // top1 - top2 gap on CPU row
+  double marginHtp = 0;
+  uint32_t topkSetOverlap = 0;
+  uint32_t topkSetSize = 5;
+  bool topkOrderMatch = false;
+  bool finite = true;
+  bool rowDegenerate = false;    // cpuStd <= 1e-6 (constant row)
+  bool argmaxMatch = true;
+  bool decisionAmbiguous = false;  // argmax mismatch and margin <= 2*raw
+};
+
+struct ParityPolicies {
+  bool legacy = true;   // L: raw_max_abs < 2e-2 && prob_max_abs < 5e-3
+  bool prob = true;     // P: prob_max_abs < 5e-3 && prob_l1 < 2e-2 && js < 5e-3
+  bool shape = true;    // C: P && centered/logsoftmax/scale/raw-catastrophic
+  bool decision = true; // D: P && (argmax match or decision_ambiguous)
+  bool full = true;     // F: C && D (candidate ACTIVE policy)
+};
+
+// Compute the full metric set over one logits row (both sides already
+// extracted; `vocab` = number of elements).  CPU row is the reference.
+inline ParityRowMetrics computeParityRowMetrics(const float* cpuLogits,
+                                                const float* htpLogits,
+                                                uint32_t vocab) {
+  ParityRowMetrics m;
+  if (vocab == 0) return m;
+  std::vector<double> cpu(vocab), htp(vocab), delta(vocab);
+  bool cpuFinite = true, htpFinite = true;
+  double cpuSum = 0, htpSum = 0, cpuSq = 0, htpSq = 0, dSum = 0, dSq = 0;
+  double maxAbs = 0;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    const double c = static_cast<double>(cpuLogits[i]);
+    const double h = static_cast<double>(htpLogits[i]);
+    cpu[i] = c; htp[i] = h;
+    cpuFinite = cpuFinite && std::isfinite(c);
+    htpFinite = htpFinite && std::isfinite(h);
+    const double d = h - c;
+    delta[i] = d;
+    cpuSum += c; htpSum += h;
+    cpuSq += c * c; htpSq += h * h;
+    dSum += d; dSq += d * d;
+    maxAbs = std::max(maxAbs, std::abs(d));
+  }
+  m.finite = cpuFinite && htpFinite;
+  const double n = static_cast<double>(vocab);
+  const double cpuMean = cpuSum / n, htpMean = htpSum / n;
+  const double deltaMean = dSum / n;
+  m.deltaMean = deltaMean;
+  m.cpuRms = std::sqrt(cpuSq / n);
+  m.htpRms = std::sqrt(htpSq / n);
+  m.relMax = m.cpuRms > 0 ? maxAbs / m.cpuRms : 0;
+  m.rawMaxAbs = maxAbs;
+  m.rawRms = std::sqrt(dSq / n);
+  // CPU row spread (population std) and degeneracy check.
+  double cpuVar = 0;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    const double c = cpu[i] - cpuMean;
+    cpuVar += c * c;
+  }
+  m.cpuStd = std::sqrt(cpuVar / n);
+  m.rowDegenerate = m.cpuStd <= kParityRowDegenerateCpuStd;
+  // delta stats.
+  std::vector<double> sorted(delta);
+  std::sort(sorted.begin(), sorted.end());
+  m.deltaMedian = (vocab % 2 == 1)
+                      ? sorted[vocab / 2]
+                      : 0.5 * (sorted[vocab / 2 - 1] + sorted[vocab / 2]);
+  double dVar = 0;
+  double centeredMax = 0, centeredSq = 0;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    const double c = delta[i] - deltaMean;
+    dVar += c * c;
+    centeredSq += c * c;
+    centeredMax = std::max(centeredMax, std::abs(c));
+  }
+  m.deltaStd = std::sqrt(dVar / n);
+  m.centeredMaxAbs = centeredMax;
+  m.centeredRms = std::sqrt(centeredSq / n);
+  // htp std.
+  double htpVar = 0;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    const double h = htp[i] - htpMean;
+    htpVar += h * h;
+  }
+  m.htpStd = std::sqrt(htpVar / n);
+  m.scaleRatio = (m.cpuStd > 0) ? m.htpStd / m.cpuStd : 0;
+  // softmax rows (double precision) for probability metrics.
+  const auto softmax = [&](const std::vector<double>& row, double* lseOut) {
+    std::vector<double> p(vocab);
+    double maxV = row[0];
+    for (uint32_t i = 1; i < vocab; ++i) maxV = std::max(maxV, row[i]);
+    double sum = 0;
+    for (uint32_t i = 0; i < vocab; ++i) {
+      p[i] = std::exp(row[i] - maxV);
+      sum += p[i];
+    }
+    if (lseOut) *lseOut = std::log(sum) + maxV;
+    for (uint32_t i = 0; i < vocab; ++i) p[i] /= sum;
+    return p;
+  };
+  double lseCpu = 0, lseHtp = 0;
+  const std::vector<double> p = softmax(cpu, &lseCpu);
+  const std::vector<double> q = softmax(htp, &lseHtp);
+  double probMax = 0, probMean = 0, probL1 = 0, js = 0;
+  double logSmMax = 0, logSmSq = 0;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    const double dp = std::abs(p[i] - q[i]);
+    probMax = std::max(probMax, dp);
+    probMean += dp;
+    probL1 += dp;
+    const double lsCpu = cpu[i] - lseCpu;
+    const double lsHtp = htp[i] - lseHtp;
+    const double dl = std::abs(lsHtp - lsCpu);
+    logSmMax = std::max(logSmMax, dl);
+    logSmSq += dl * dl;
+    // JS: 0.5 * (KL(p||mid) + KL(q||mid)), mid = (p+q)/2, 1e-30 clamp.
+    const double pc = std::max(p[i], 1e-30);
+    const double qc = std::max(q[i], 1e-30);
+    if (pc > 0) js += pc * std::log(2.0 * pc / (pc + qc));
+    if (qc > 0) js += qc * std::log(2.0 * qc / (pc + qc));
+  }
+  m.probMaxAbs = probMax;
+  m.probMeanAbs = probMean / n;
+  m.probL1 = probL1;
+  m.jsDivergence = 0.5 * js;
+  m.logSoftmaxMaxAbs = logSmMax;
+  m.logSoftmaxRms = std::sqrt(logSmSq / n);
+  // cosines (raw and centered).
+  const auto cosine = [&](const std::vector<double>& a,
+                          const std::vector<double>& b, double am, double bm) {
+    double dot = 0, na = 0, nb = 0;
+    for (uint32_t i = 0; i < vocab; ++i) {
+      const double x = a[i] - am, y = b[i] - bm;
+      dot += x * y; na += x * x; nb += y * y;
+    }
+    return (na > 0 && nb > 0) ? dot / std::sqrt(na * nb) : 1.0;
+  };
+  m.cosineRaw = cosine(cpu, htp, 0.0, 0.0);
+  m.cosineCentered = cosine(cpu, htp, cpuMean, htpMean);
+  // decision info.
+  m.argmaxCpu = greedyArgmax(cpuLogits, vocab);
+  m.argmaxHtp = greedyArgmax(htpLogits, vocab);
+  m.argmaxMatch = m.argmaxCpu == m.argmaxHtp;
+  // margins: top1 - top2 gap per side (top1 - top(k+1) unused; k=0 only).
+  const auto topGap = [&](const float* row) {
+    double first = -std::numeric_limits<double>::infinity();
+    double second = -std::numeric_limits<double>::infinity();
+    for (uint32_t i = 0; i < vocab; ++i) {
+      const double v = static_cast<double>(row[i]);
+      if (v > first) { second = first; first = v; }
+      else if (v > second) { second = v; }
+    }
+    return first - second;
+  };
+  m.marginCpu = topGap(cpuLogits);
+  m.marginHtp = topGap(htpLogits);
+  m.decisionAmbiguous =
+      !m.argmaxMatch && m.marginCpu <= 2.0 * m.rawMaxAbs;
+  // top-k set overlap and order match (k = min(topkSetSize, vocab)).
+  const auto topkIndices = [&](const float* row, uint32_t k) {
+    std::vector<uint32_t> idx(vocab);
+    for (uint32_t i = 0; i < vocab; ++i) idx[i] = i;
+    std::sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) {
+      const float la = row[a], lb = row[b];
+      if (la != lb) return la > lb;
+      return a < b;
+    });
+    idx.resize(std::min<uint32_t>(k, vocab));
+    return idx;
+  };
+  const uint32_t k = std::min<uint32_t>(m.topkSetSize, vocab);
+  const std::vector<uint32_t> cpuTop = topkIndices(cpuLogits, k);
+  const std::vector<uint32_t> htpTop = topkIndices(htpLogits, k);
+  std::vector<uint32_t> inter;
+  for (uint32_t i : cpuTop)
+    if (std::find(htpTop.begin(), htpTop.end(), i) != htpTop.end())
+      inter.push_back(i);
+  m.topkSetOverlap = static_cast<uint32_t>(inter.size());
+  m.topkOrderMatch = cpuTop == htpTop;
+  return m;
+}
+
+// Evaluate all policies on one row.  Protocol section 4.
+inline ParityPolicies evaluateParityPolicies(const ParityRowMetrics& m) {
+  ParityPolicies v;
+  const bool probOk = m.finite && !m.rowDegenerate &&
+                      m.probMaxAbs < kParityProbMaxAbs &&
+                      m.probL1 < kParityProbL1 &&
+                      m.jsDivergence < kParityJsDivergence;
+  v.prob = probOk;
+  v.shape = probOk && m.centeredMaxAbs < kParityCenteredMaxAbs &&
+            m.centeredRms < kParityCenteredRms &&
+            m.logSoftmaxMaxAbs < kParityLogSoftmaxMaxAbs &&
+            m.logSoftmaxRms < kParityLogSoftmaxRms &&
+            m.scaleRatio >= kParityScaleRatioLo &&
+            m.scaleRatio <= kParityScaleRatioHi &&
+            m.rawMaxAbs < kParityRawCatastrophic;
+  v.decision = probOk && (m.argmaxMatch || m.decisionAmbiguous);
+  v.full = v.shape && v.decision;
+  v.legacy = m.finite && !m.rowDegenerate && m.rawMaxAbs < kParityRawLogitsMaxAbs &&
+             m.probMaxAbs < kParityProbMaxAbs;
+  return v;
 }
 
 }  // namespace phonelm::nicopedia_gen

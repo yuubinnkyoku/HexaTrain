@@ -69,5 +69,6 @@ object NativeBridge {
         temperature: Float,
         topK: Int,
         samplingSeed: Long,
+        gatePolicy: String,
     ): String
 }

@@ -124,6 +124,7 @@ class MainActivity : Activity() {
             val temperature = intent.getStringExtra("phonelm.temperature")?.toFloatOrNull() ?: 1.0f
             val topK = intent.getIntExtra("phonelm.top_k", 256)
             val samplingSeed = intent.getStringExtra("phonelm.sampling_seed")?.toLongOrNull() ?: 0L
+            val gatePolicy = intent.getStringExtra("phonelm.gate_policy") ?: "legacy"
             val checkpointFile = File(checkpointDir,
                 "htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt")
             val promptFile = File(checkpointDir, "prompt.bin")
@@ -139,6 +140,8 @@ class MainActivity : Activity() {
                     "phonelm.temperature must be positive and finite"
                 generateMode == "sample" && (topK < 1 || topK > 256) ->
                     "phonelm.top_k must be in 1..256"
+                gatePolicy != "legacy" && gatePolicy != "candidate" ->
+                    "phonelm.gate_policy must be legacy or candidate"
                 !checkpointFile.isFile ->
                     "checkpoint file missing: ${checkpointFile.name}"
                 !promptFile.isFile -> "prompt file missing: prompt.bin"
@@ -166,6 +169,7 @@ class MainActivity : Activity() {
                         temperature = temperature,
                         topK = topK,
                         samplingSeed = samplingSeed,
+                        gatePolicy = gatePolicy,
                     )
                 }
                 openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
