@@ -71,4 +71,12 @@ object NativeBridge {
         samplingSeed: Long,
         gatePolicy: String,
     ): String
+
+    external fun nativeRunNicopediaDivergenceLocalization(
+        checkpointPath: String,
+        seed: Long,
+        layers: Int,
+        tapScope: String,
+        diagnosticLayerIndex: Int,
+    ): String
 }

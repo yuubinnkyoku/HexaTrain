@@ -46,7 +46,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
        tapSet != TinyTransformerTrainingTapSet::LN2_INVERSE &&
        tapSet != TinyTransformerTrainingTapSet::LN2_NORMALIZED &&
        tapSet != TinyTransformerTrainingTapSet::LN2_AFFINE &&
-       tapSet != TinyTransformerTrainingTapSet::ALL_INTERNAL)) {
+       tapSet != TinyTransformerTrainingTapSet::ALL_INTERNAL &&
+       tapSet != TinyTransformerTrainingTapSet::NICOPEDIA_FINE)) {
     return fail("APP_CONFIGURATION_VALIDATION: generalized tiny training "
                 "requires valid diagnostic language-model FULL configuration");
   }
@@ -83,6 +84,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.languageModel = true;
   g.diagnosticOutputs = diagnosticOutputs;
   g.tapSet = tapSet;
+  g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
   g.centeredScale = options_.tinyTransformerCenteredScale;
   if (!std::isfinite(g.centeredScale) || g.centeredScale <= 0.0f) {
@@ -236,12 +238,26 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return name == "ln2_xhat";
     if (tapSet == TinyTransformerTrainingTapSet::LN2_AFFINE)
       return name == "ln2_xhat_gamma" || name == "ln2";
+    if (tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE)
+      // H>1: the layer-shared score/probability tensors are not connected to
+      // any node (per-head tensors are used instead), so tapping them would
+      // make graphFinalize fail on an unwritten APP_READ.  The per-head
+      // probabilities are always APP_READ in the established H>1 ABI.
+      return name == "ln1_centered_s" || name == "ln1_square" ||
+             name == "ln1_variance_eps" || name == "ln1_inv" || name == "ln1" ||
+             name == "q" || name == "k" || name == "v" ||
+             name == "attention_context" || name == "attention_projected" ||
+             name == "residual1" || name == "ln2_centered_s" ||
+             name == "ln2_square" || name == "ln2_variance_eps" ||
+             name == "ln2_inv" || name == "ln2" || name == "ff1" ||
+             name == "relu" || name == "ff2" || name == "output";
     return tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL;
   };
   const auto tapBackward = [&](const std::string &name) {
     (void)name;
     if (tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
         tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
+        tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE ||
         (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
          tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE))
       return false;
@@ -293,13 +309,19 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       const bool ff = std::string(name) == "ff1" || std::string(name) == "relu";
       const bool establishedOutput = diagnosticOutputs &&
           layer + 1 == numLayers && activationName == "output";
+      const std::uint32_t targetLayer =
+          (g.diagnosticLayerIndex != std::numeric_limits<std::uint32_t>::max() &&
+           g.diagnosticLayerIndex < numLayers)
+              ? g.diagnosticLayerIndex
+              : numLayers - 1;
       const bool narrowedForwardScope =
           tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
           tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
+          tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE ||
           (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
            tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE);
       const bool selectedTap = tapActivation(activationName) &&
-          (!narrowedForwardScope || layer + 1 == numLayers) &&
+          (!narrowedForwardScope || layer == targetLayer) &&
           !establishedOutput;
       const Qnn_TensorType_t activationType = establishedOutput || selectedTap
           ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;

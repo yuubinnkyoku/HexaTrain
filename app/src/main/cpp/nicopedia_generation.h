@@ -44,6 +44,24 @@ struct GenerateConfig {
   // "candidate" is the full policy F and is only usable after independent
   // review approval; the runner enforces this with -CandidatePolicyApproved.
   std::string gatePolicy = "legacy";
+  // Diagnostic tap configuration ("NONE" | "COARSE" | "FINE").  These fields
+  // are private diagnostics only: they never change parity-gate semantics.
+  std::string diagnosticTapScope = "NONE";
+  uint32_t diagnosticLayerIndex = 0xffffffffu;
+};
+
+// Per-tensor CPU-vs-HTP comparison result for divergence localization.
+// Names are the QNN tap tensor names ("layer_000_ln1", ...).  The values are
+// private diagnostics and never enter public artifacts.
+struct NprtTapMetric {
+  std::string name;
+  double cpuRms = 0;
+  double htpRms = 0;
+  double diffMaxAbs = 0;
+  double diffRms = 0;
+  double relRms = 0;
+  double cosine = 1.0;
+  double centeredRms = 0;
 };
 
 struct Utf8Stats {

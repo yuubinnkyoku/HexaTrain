@@ -489,6 +489,7 @@ struct Runtime::Impl {
         bool active = false, languageModel = false, diagnosticOutputs = false;
         TinyTransformerTrainingTapSet tapSet =
             TinyTransformerTrainingTapSet::NONE;
+        std::uint32_t diagnosticLayerIndex = std::numeric_limits<std::uint32_t>::max();
         bool executeDiagnosticsEmitted = false;
     } generalizedTinyTransformerTraining;
 

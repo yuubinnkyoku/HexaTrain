@@ -5348,6 +5348,49 @@ double nprtLastRowMarginAtK(const std::vector<float> &logits, uint32_t tokens,
   return double(logits[base + idx[0]]) - double(logits[base + idx[r]]);
 }
 
+inline nicopedia_gen::NprtTapMetric computeNprtTapMetric(
+    const std::vector<float> &cpu,
+    const std::vector<float> &htp,
+    const std::string &name) {
+  nicopedia_gen::NprtTapMetric m;
+  m.name = name;
+  if (cpu.size() != htp.size() || cpu.empty()) return m;
+  double cpuSumSq = 0, htpSumSq = 0, diffSumSq = 0, maxAbs = 0;
+  double dot = 0, cpuLenSq = 0, htpLenSq = 0;
+  double cpuSum = 0, htpSum = 0;
+  const size_t n = cpu.size();
+  for (size_t i = 0; i < n; ++i) {
+    const double c = cpu[i];
+    const double h = htp[i];
+    const double d = std::abs(c - h);
+    maxAbs = std::max(maxAbs, d);
+    cpuSumSq += c * c;
+    htpSumSq += h * h;
+    diffSumSq += (c - h) * (c - h);
+    dot += c * h;
+    cpuLenSq += c * c;
+    htpLenSq += h * h;
+    cpuSum += c;
+    htpSum += h;
+  }
+  m.cpuRms = std::sqrt(cpuSumSq / double(n));
+  m.htpRms = std::sqrt(htpSumSq / double(n));
+  m.diffMaxAbs = maxAbs;
+  m.diffRms = std::sqrt(diffSumSq / double(n));
+  m.relRms = m.diffRms / std::max(m.cpuRms, 1.0e-6);
+  const double denom = std::sqrt(cpuLenSq * htpLenSq);
+  m.cosine = denom > 0 ? dot / denom : 1.0;
+  const double cpuMean = cpuSum / double(n);
+  const double htpMean = htpSum / double(n);
+  double centeredDiffSumSq = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const double cd = (cpu[i] - cpuMean) - (htp[i] - htpMean);
+    centeredDiffSumSq += cd * cd;
+  }
+  m.centeredRms = std::sqrt(centeredDiffSumSq / double(n));
+  return m;
+}
+
 struct NprtParityRow {
   std::string label;
   uint32_t contextBytes = 0;
@@ -5375,6 +5418,8 @@ struct NprtParityRow {
   nicopedia_gen::ParityPolicies policies;
   nicopedia_gen::ParityRowMetrics metrics;
   bool candidateOk = true;
+  std::vector<nicopedia_gen::NprtTapMetric> tapMetrics;
+  std::string htpLogitsSha256;
 };
 
 struct NprtArRow {
@@ -5909,10 +5954,278 @@ std::string nicopediaHtpGeneration(
                  ? 0.0
                  : generateSeconds / generated.size() * 1000.0)
          << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
-         << "\ncpu_fallback=false"
-         << "\nnan_detected=" << (nanDetected ? "true" : "false")
-         << "\ninf_detected=" << (infDetected ? "true" : "false") << '\n'
+          << "\ncpu_fallback=false"
+          << "\nnan_detected=" << (nanDetected ? "true" : "false")
+          << "\ninf_detected=" << (infDetected ? "true" : "false") << '\n'
+          << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+
+// Private CPU/HTP divergence localization.  The HTP graph is prepared once
+// per tap scope ("NONE" baseline control, "COARSE" for every layer output,
+// "FINE" for the full single selected layer) and every fixed parity prefix is
+// compared at the same boundaries.  Instrumentation is evaluated before the
+// data is trusted: the logits fingerprint must be identical to the NONE run
+// and the parity_13 FAIL status must not flip to PASS.
+std::string nicopediaHtpDivergenceLocalization(
+    const tiny_lm::Config &config, const std::string &checkpointPath,
+    const nicopedia_gen::GenerateConfig &generateConfig,
+    const LogSink &progress) {
+  const int seed = generateConfig.samplingSeed > 0 &&
+                           generateConfig.samplingSeed < 100000
+                       ? static_cast<int>(generateConfig.samplingSeed)
+                       : 1;
+  const uint32_t layers = config.numLayers;
+  const uint32_t heads = config.numHeads;
+  if (layers == 0 || heads == 0 || config.tokens == 0 ||
+      config.vocabularySize == 0 || config.dimension == 0 ||
+      config.feedForwardDimension == 0)
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=layers_heads_tokens_vocab_dim_ffn_must_be_positive\n";
+  if (heads != 2)
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=heads_must_be_2\n";
+  const std::string scope = generateConfig.diagnosticTapScope;
+  if (scope != "NONE" && scope != "COARSE" && scope != "FINE")
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=diagnostic_tap_scope must be NONE, COARSE or FINE\n";
+  if (scope == "FINE" &&
+      generateConfig.diagnosticLayerIndex >= layers)
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=diagnostic_layer_index out of range\n";
+  uint32_t expectedStep = 0;
+  if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
+                               layers, &expectedStep))
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_FILENAME\n"
+           "error=checkpoint filename must be htp-seed<seed>-l<layers>-step<step>.ckpt\n";
+  LoadedNprtCheckpoint loaded;
+  try {
+    loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
+                                             static_cast<uint32_t>(seed));
+  } catch (const std::exception &exception) {
+    return std::string(
+               "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+               "failure_classification=CHECKPOINT_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
+  if (loaded.step != expectedStep)
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_IDENTITY\n"
+           "error=checkpoint step does not match filename\n";
+  if (!loaded.finite)
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_NONFINITE\n"
+           "error=checkpoint contains non-finite values\n";
+
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  options.diagnosticLayerIndex = generateConfig.diagnosticLayerIndex;
+  runtime.setOptions(options);
+  std::string error;
+  const TinyTransformerTrainingTapSet tapSet =
+      scope == "COARSE" ? TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES
+      : scope == "FINE" ? TinyTransformerTrainingTapSet::NICOPEDIA_FINE
+                        : TinyTransformerTrainingTapSet::NONE;
+  const auto initStarted = std::chrono::steady_clock::now();
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL, tapSet, layers, heads))
+    return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+           "failure_classification=QNN_PREPARE\n" +
+           failure("localization_prepare", error, runtime);
+  const double initializeUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - initStarted)
+          .count();
+  const double graphCreateUs = runtime.metrics().graphCreateUs;
+  const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+
+  const std::vector<float> zeros(
+      size_t(config.tokens) * config.vocabularySize, 0.0f);
+  const auto windowInput = [&](const std::vector<std::uint8_t> &window) {
+    std::vector<uint32_t> tokens;
+    tokens.reserve(window.size());
+    for (uint8_t byte : window) tokens.push_back(byte);
+    return tiny_lm::oneHot(tokens, config.vocabularySize);
+  };
+  const auto &prefixes = nicopedia_gen::parityPrefixes();
+  // Last HTP execution, kept in function scope for the instrumentation-control
+  // fingerprint (the NONE run must be the final scope execution).
+  TinyTransformerTrainingOutputs lastHtpStep;
+
+  // Instrumentation control + coarse profile in a single pass: the NONE run
+  // provides the untapped baseline (fingerprint + parity fields) and the
+  // tapped run the intermediate boundaries.
+  struct BoundaryRow {
+    nicopedia_gen::NprtTapMetric metric;
+  };
+  std::vector<BoundaryRow> rows;
+  bool parity13Fail = true;
+  const bool parity13BlockedLegacy = generateConfig.gatePolicy == "legacy";
+  auto runScope = [&](const char *label,
+                      bool recordBoundaries) -> std::string {
+    for (size_t i = 0; i < prefixes.size(); ++i) {
+      const auto &prefix = prefixes[i];
+      uint32_t pad = 0;
+      const auto prefixContext =
+          nicopedia_gen::buildGenerationContext(prefix.bytes, config.tokens, &pad);
+      const auto cpuTrace = tiny_lm::forwardTraceGeneralized(
+          config, windowInput(prefixContext), loaded.parameters);
+      TinyTransformerTrainingOutputs htpStep;
+      if (!runtime.executeTinyTransformerTraining(
+              windowInput(prefixContext), zeros, loaded.parameters, 0.0f,
+              htpStep, error))
+        return failure("localization_execute", error, runtime);
+      if (recordBoundaries) {
+        const auto logitsError = compareNprt(cpuTrace.logits, htpStep.logits);
+        const auto probabilityError =
+            compareNprt(cpuTrace.probabilities, htpStep.probabilities);
+        if (i == 13)
+          parity13Fail =
+              !(logitsError.nonfinite == 0 && probabilityError.nonfinite == 0 &&
+                logitsError.maxAbs < 2e-2 && probabilityError.maxAbs < 5e-3);
+        BoundaryRow row;
+        row.metric = computeNprtTapMetric(cpuTrace.logits, htpStep.logits,
+                                          "logits");
+        if (scope == "COARSE") {
+          // H=2 graph: every layer's two head probabilities come first
+          // (layer-major/head-major), then the tap registry suffix holds the
+          // non-final layer outputs in layer order.  The final layer output
+          // is the established APP_READ output in htpStep.output.
+          for (uint32_t layer = 0; layer < layers; ++layer) {
+            std::ostringstream name;
+            name << "layer_" << std::setw(3) << std::setfill('0') << layer
+                 << "_output";
+            const size_t tapIndex = size_t(2) * layers + layer;
+            const std::vector<float> &htpValues =
+                layer + 1 == layers ? htpStep.output
+                                    : htpStep.taps[tapIndex].values;
+            row.metric = computeNprtTapMetric(
+                cpuTrace.layers[layer].output, htpValues, name.str());
+            rows.push_back(row);
+          }
+          row.metric = computeNprtTapMetric(cpuTrace.logits, htpStep.logits,
+                                            "logits");
+          rows.push_back(row);
+        } else if (scope == "FINE") {
+          const uint32_t target = generateConfig.diagnosticLayerIndex;
+          const auto &layer = cpuTrace.layers[target];
+          const std::string prefixName = "layer_" + std::to_string(target) + "_";
+          // The H=2 graph emits every layer's two per-head probability
+          // tensors first (layer-major/head-major, 2*numLayers taps), then
+          // the NICOPEDIA_FINE tap registry suffix in tensor creation order.
+          const size_t tapOffset = size_t(2) * layers;
+          const std::vector<float> &cpuProbs = layer.probabilities;
+          const size_t headProbabilityElements = size_t(config.tokens) * config.tokens;
+          const std::vector<float> cpuHead0(
+              cpuProbs.begin(),
+              cpuProbs.begin() + static_cast<std::ptrdiff_t>(headProbabilityElements));
+          const std::vector<float> cpuHead1(
+              cpuProbs.begin() + static_cast<std::ptrdiff_t>(headProbabilityElements),
+              cpuProbs.end());
+          // ff2 is the pre-residual FFN matmul output: block_output - residual1.
+          std::vector<float> cpuFf2(layer.output.size());
+          for (size_t e = 0; e < layer.output.size(); ++e)
+            cpuFf2[e] = layer.output[e] - layer.residual1[e];
+          struct TensorSpec {
+            std::string name;
+            const std::vector<float> *cpu;
+          };
+          const std::vector<TensorSpec> specs{
+              {prefixName + "head_000_probabilities", &cpuHead0},
+              {prefixName + "head_001_probabilities", &cpuHead1},
+              {prefixName + "ln1_centered_s", &layer.ln1Centered},
+              {prefixName + "ln1_square", &layer.ln1Square},
+              {prefixName + "ln1_variance_eps", &layer.ln1VarianceEps},
+              {prefixName + "ln1_inv", &layer.ln1Inv},
+              {prefixName + "ln1", &layer.ln1},
+              {prefixName + "q", &layer.q},
+              {prefixName + "k", &layer.k},
+              {prefixName + "v", &layer.v},
+              {prefixName + "attention_context", &layer.context},
+              {prefixName + "attention_projected", nullptr},
+              {prefixName + "residual1", &layer.residual1},
+              {prefixName + "ln2_centered_s", &layer.ln2Centered},
+              {prefixName + "ln2_square", &layer.ln2Square},
+              {prefixName + "ln2_variance_eps", &layer.ln2VarianceEps},
+              {prefixName + "ln2_inv", &layer.ln2Inv},
+              {prefixName + "ln2", &layer.ln2},
+              {prefixName + "ff1", &layer.ff1},
+              {prefixName + "relu", &layer.relu},
+              {prefixName + "ff2", &cpuFf2},
+              {prefixName + "output", &layer.output},
+          };
+          // Per-head probabilities come from the established head-probability
+          // taps at 2*target and 2*target+1; the remaining specs map to the
+          // tap registry suffix.
+          for (size_t spec = 0; spec < specs.size(); ++spec) {
+            const auto *cpuPtr = specs[spec].cpu;
+            if (cpuPtr == nullptr) continue;
+            const size_t tapIndex =
+                spec < 2 ? size_t(2) * target + spec : tapOffset + (spec - 2);
+            if (tapIndex >= htpStep.taps.size()) continue;
+            row.metric = computeNprtTapMetric(*cpuPtr,
+                                              htpStep.taps[tapIndex].values,
+                                              htpStep.taps[tapIndex].name);
+            rows.push_back(row);
+          }
+        }
+      }
+      if (progress && (i == 0 || i + 1 == prefixes.size()))
+        progress(std::string("phase=localization scope=") + label +
+                 " prefix=" + std::to_string(i) + "/" +
+                 std::to_string(prefixes.size()));
+      lastHtpStep = std::move(htpStep);
+    }
+    return std::string();
+  };
+  std::string scopeError = runScope(scope.c_str(), true);
+  if (!scopeError.empty()) return scopeError;
+
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\ntest=nicopedia_htp_divergence_localization\n"
+         << "status=SUCCESS\n"
+         << "model=L" << layers << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
+         << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
+         << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
+         << "\ndiagnostic_tap_scope=" << scope
+         << "\ndiagnostic_layer_index="
+         << (scope == "FINE" ? std::to_string(generateConfig.diagnosticLayerIndex)
+                             : "n/a")
+         << "\nprefix_count=" << prefixes.size()
+         << "\nparity_13_blocked_legacy="
+         << (parity13BlockedLegacy ? "true" : "false")
+         << "\nparity_13_fail=" << (parity13Fail ? "true" : "false")
+         << "\nhtp_logits_sha256=" << canonicalFloatSha256(lastHtpStep.logits)
+         << "\nboundary_count=" << rows.size()
+         << "\nhtp_initialize_us=" << initializeUs
+         << "\ngraph_create_us=" << graphCreateUs
+         << "\ngraph_finalize_us=" << graphFinalizeUs
+         << "\ncpu_fallback=false" << '\n'
          << runtime.apiTraceSummary() << runtime.diagnostics();
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const auto &m = rows[i].metric;
+    report << "boundary_" << i << "_name=" << m.name
+           << "\nboundary_" << i << "_cpu_rms=" << m.cpuRms
+           << "\nboundary_" << i << "_htp_rms=" << m.htpRms
+           << "\nboundary_" << i << "_diff_max_abs=" << m.diffMaxAbs
+           << "\nboundary_" << i << "_diff_rms=" << m.diffRms
+           << "\nboundary_" << i << "_rel_rms=" << m.relRms
+           << "\nboundary_" << i << "_cosine=" << m.cosine
+           << "\nboundary_" << i << "_centered_rms=" << m.centeredRms
+           << '\n';
+  }
   return report.str();
 }
 
@@ -7034,5 +7347,13 @@ std::string runNicopediaHtpGeneration(
     const LogSink &progress) {
   return nicopediaHtpGeneration(config, checkpointPath, promptPath,
                                 trainingConfig, generateConfig, progress);
+}
+
+std::string runNicopediaHtpDivergenceLocalization(
+    const tiny_lm::Config &config, const std::string &checkpointPath,
+    const nicopedia_gen::GenerateConfig &generateConfig,
+    const LogSink &progress) {
+  return nicopediaHtpDivergenceLocalization(config, checkpointPath,
+                                            generateConfig, progress);
 }
 } // namespace phonelm::qnn

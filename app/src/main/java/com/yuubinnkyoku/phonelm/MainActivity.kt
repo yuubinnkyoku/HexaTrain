@@ -105,6 +105,60 @@ class MainActivity : Activity() {
     private fun runDebugIntentIfRequested() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         val requested = intent.getStringExtra("phonelm.mode") ?: return
+        if (requested == "QNN_HTP_NICOPEDIA_DIVERGENCE_LOCALIZATION") {
+            val dir = intent.getStringExtra("phonelm.checkpoint_dump_dir")
+                ?: "nicopedia-generation"
+            val checkpointDir = filesDir.toPath().resolve("checkpoints").resolve(dir)
+                .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
+            if (checkpointDir == null) {
+                Log.e("PhoneLMDeviceTest",
+                    "DEVICE_TEST_REJECTED error=phonelm.checkpoint_dir must resolve under the app files dir")
+                return
+            }
+            val seed = intent.getStringExtra("phonelm.seed")?.toLongOrNull() ?: 1L
+            val layers = intent.getIntExtra("phonelm.layers", 19)
+            val checkpointStep = intent.getIntExtra("phonelm.checkpoint_step", 1000)
+            val tapScope = intent.getStringExtra("phonelm.tap_scope") ?: "NONE"
+            val diagnosticLayerIndex = intent.getIntExtra("phonelm.diagnostic_layer_index", -1)
+            val checkpointFile = File(checkpointDir,
+                "htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt")
+            val validationError = when {
+                layers != 19 -> "phonelm.layers must be 19"
+                seed < 1L || seed > 99999L -> "phonelm.seed must be in 1..99999"
+                checkpointStep !in 1..100000 -> "phonelm.checkpoint_step must be in 1..100000"
+                tapScope != "NONE" && tapScope != "COARSE" && tapScope != "FINE" ->
+                    "phonelm.tap_scope must be NONE, COARSE or FINE"
+                !checkpointFile.isFile ->
+                    "checkpoint file missing: ${checkpointFile.name}"
+                else -> null
+            }
+            val preReport = if (validationError != null) {
+                "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n" +
+                    "failure_classification=APP_CONFIGURATION_VALIDATION\n" +
+                    "error=$validationError\n"
+            } else {
+                null
+            }
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
+            Thread({
+                val report = if (preReport != null) {
+                    preReport
+                } else {
+                    NativeBridge.nativeRunNicopediaDivergenceLocalization(
+                        checkpointPath = checkpointFile.absolutePath,
+                        seed = seed,
+                        layers = layers,
+                        tapScope = tapScope,
+                        diagnosticLayerIndex = diagnosticLayerIndex,
+                    )
+                }
+                openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
+                    it.write(report)
+                }
+                Log.i("PhoneLMDeviceTest", "DEVICE_TEST_COMPLETE mode=$requested")
+            }, "PhoneLM-nicopedia-localization").start()
+            return
+        }
         if (requested == "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE") {
             val dir = intent.getStringExtra("phonelm.checkpoint_dump_dir")
                 ?: "nicopedia-generation"

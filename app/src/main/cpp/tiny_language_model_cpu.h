@@ -42,6 +42,27 @@ std::vector<float> fixedPosition(const Config&);
 StepResult forwardBackward(const Config&,const std::vector<float>&,const std::vector<float>&,const qnn::TinyTransformerParameters&,float);
 // Test/diagnostic entry point: always uses the generalized layer/head path.
 StepResult forwardBackwardGeneralized(const Config&,const std::vector<float>&,const std::vector<float>&,const qnn::TinyTransformerParameters&,float);
+struct GeneralizedCpuTrace {
+  std::vector<float> embeddedInput;
+  std::vector<float> logits;
+  std::vector<float> probabilities;
+  struct Layer {
+    std::vector<float> input;
+    std::vector<float> ln1;
+    std::vector<float> ln1Centered, ln1Square, ln1VarianceEps, ln1Inv;
+    std::vector<float> q, k, v;
+    std::vector<float> probabilities;
+    std::vector<float> context;
+    std::vector<float> residual1;
+    std::vector<float> ln2;
+    std::vector<float> ln2Centered, ln2Square, ln2VarianceEps, ln2Inv;
+    std::vector<float> ff1;
+    std::vector<float> relu;
+    std::vector<float> output;
+  };
+  std::vector<Layer> layers;
+};
+GeneralizedCpuTrace forwardTraceGeneralized(const Config& config, const std::vector<float>& oneHotInput, const qnn::TinyTransformerParameters& parameters);
 MomentumResult momentumUpdate(const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,float,float);
 AdamResult adamUpdate(const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,
                       const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,

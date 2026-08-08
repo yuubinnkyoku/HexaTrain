@@ -267,6 +267,75 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaDivergenceLocalization(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jstring checkpointPath,
+    jlong seed,
+    jint layers,
+    jstring tapScope,
+    jint diagnosticLayerIndex) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    gStopRequested.store(false, std::memory_order_release);
+
+    std::string checkpoint, scopeString;
+    if (checkpointPath) {
+        const char* chars = env->GetStringUTFChars(checkpointPath, nullptr);
+        if (chars) { checkpoint = chars; env->ReleaseStringUTFChars(checkpointPath, chars); }
+    }
+    if (tapScope) {
+        const char* chars = env->GetStringUTFChars(tapScope, nullptr);
+        if (chars) { scopeString = chars; env->ReleaseStringUTFChars(tapScope, chars); }
+    }
+    if (scopeString.empty()) scopeString = "NONE";
+    if (checkpoint.empty()) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+            "failure_classification=CHECKPOINT_UNAVAILABLE\n"
+            "error=checkpoint_path_required\n");
+    }
+
+    phonelm::tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = 32;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
+    config.numHeads = 2;
+    phonelm::nicopedia_gen::GenerateConfig generateConfig;
+    generateConfig.samplingSeed = static_cast<std::uint64_t>(seed);
+    generateConfig.diagnosticTapScope = scopeString;
+    generateConfig.diagnosticLayerIndex =
+        diagnosticLayerIndex >= 0 ? static_cast<uint32_t>(diagnosticLayerIndex)
+                                  : 0xffffffffu;
+
+    auto sink = [&](const std::string& message) { logcat(message); };
+    try {
+        const auto report = phonelm::qnn::runNicopediaHtpDivergenceLocalization(
+            config, checkpoint, generateConfig, sink);
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string("NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     JNIEnv* env,
     jobject /* receiver */,

@@ -21,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
 namespace {
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
@@ -288,8 +287,107 @@ std::string lower(std::string value) {
 }
 }  // namespace
 
+namespace {
+
+void require(bool condition, const char* what) {
+  if (!condition) throw std::runtime_error(std::string("ASSERT_FAILED: ") + what);
+}
+
+// CPU trace structural self-test: shape, determinism and boundary semantics.
+int traceSelfTest() {
+  phonelm::tiny_lm::Config config;
+  config.vocabularySize = 256;
+  config.tokens = 32;
+  config.dimension = 16;
+  config.feedForwardDimension = 32;
+  config.numLayers = 19;
+  config.numHeads = 2;
+  const std::vector<uint32_t> tokens(32, 0x41);  // "A"
+  const auto oneHot = phonelm::tiny_lm::oneHot(tokens, config.vocabularySize);
+  const auto parameters =
+      phonelm::tiny_lm::initialParameters(config, 1);
+  const std::size_t headProbabilityElements =
+      std::size_t(config.tokens) * config.tokens;
+
+  const auto trace = phonelm::tiny_lm::forwardTraceGeneralized(
+      config, oneHot, parameters);
+  require(trace.embeddedInput.size() ==
+              std::size_t(config.tokens) * config.dimension,
+          "embedded shape");
+  require(trace.logits.size() ==
+              std::size_t(config.tokens) * config.vocabularySize,
+          "logits shape");
+  require(trace.layers.size() == config.numLayers, "layer count");
+  for (const auto& layer : trace.layers) {
+    require(layer.input.size() == std::size_t(config.tokens) * config.dimension,
+            "layer input shape");
+    require(layer.ln1.size() == std::size_t(config.tokens) * config.dimension,
+            "ln1 shape");
+    require(layer.ln1Centered.size() == layer.ln1.size(),
+            "ln1 centered shape");
+    require(layer.ln1Square.size() == layer.ln1.size(), "ln1 square shape");
+    require(layer.ln1VarianceEps.size() == config.tokens,
+            "ln1 variance eps shape");
+    require(layer.ln1Inv.size() == config.tokens, "ln1 inv shape");
+    require(layer.q.size() == std::size_t(config.tokens) * config.dimension,
+            "q shape");
+    require(layer.k.size() == std::size_t(config.tokens) * config.dimension,
+            "k shape");
+    require(layer.v.size() == std::size_t(config.tokens) * config.dimension,
+            "v shape");
+    require(layer.probabilities.size() ==
+                std::size_t(config.numHeads) * headProbabilityElements,
+            "probabilities shape (head-major)");
+    require(layer.context.size() ==
+                std::size_t(config.tokens) * config.dimension,
+            "context shape");
+    require(layer.residual1.size() ==
+                std::size_t(config.tokens) * config.dimension,
+            "residual1 shape");
+    require(layer.ln2.size() == std::size_t(config.tokens) * config.dimension,
+            "ln2 shape");
+    require(layer.ln2Centered.size() == layer.ln2.size(),
+            "ln2 centered shape");
+    require(layer.ln2Square.size() == layer.ln2.size(), "ln2 square shape");
+    require(layer.ln2VarianceEps.size() == config.tokens,
+            "ln2 variance eps shape");
+    require(layer.ln2Inv.size() == config.tokens, "ln2 inv shape");
+    require(layer.ff1.size() ==
+                std::size_t(config.tokens) * config.feedForwardDimension,
+            "ff1 shape");
+    require(layer.relu.size() ==
+                std::size_t(config.tokens) * config.feedForwardDimension,
+            "relu shape");
+    require(layer.output.size() ==
+                std::size_t(config.tokens) * config.dimension,
+            "output shape");
+    // Block output is the residual-2 boundary: next block input == this
+    // block output (position input lives in layer 0 only).
+    for (std::size_t li = 1; li < trace.layers.size(); ++li)
+      require(trace.layers[li].input == trace.layers[li - 1].output,
+              "block chaining input==prev output");
+    // Boundary semantics: logits == last block output x output projection.
+    // The trace is deterministic for identical inputs.
+    const auto replay = phonelm::tiny_lm::forwardTraceGeneralized(
+        config, oneHot, parameters);
+    require(replay.logits == trace.logits, "trace deterministic logits");
+    for (std::size_t li = 0; li < trace.layers.size(); ++li) {
+      require(replay.layers[li].ln1 == trace.layers[li].ln1,
+              "trace deterministic ln1");
+      require(replay.layers[li].output == trace.layers[li].output,
+              "trace deterministic output");
+    }
+  }
+  std::printf("nicopedia_cpu_trace_self_test=PASS\n");
+  return 0;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--trace-self-test")
+      return traceSelfTest();
     if (argc < 5 || argc > 8) {
       std::cerr << "usage: nicopedia_cpu_generate CHECKPOINT PROMPT_HEX MODE "
                    "MAX_NEW_BYTES [TEMPERATURE] [TOP_K] [SAMPLING_SEED]\n";

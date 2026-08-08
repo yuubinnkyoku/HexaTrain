@@ -233,6 +233,17 @@ void testMetricInvariants() {
         require(std::string(prefixes[i].label) != std::string(prefixes[j].label),
                 "prefix label uniqueness");
   }
+  // Diagnostic tap configuration defaults must keep the production parity
+  // path unchanged (gate semantics are independent of the private taps).
+  {
+    const ngen::GenerateConfig config;
+    require(config.diagnosticTapScope == "NONE", "default tap scope NONE");
+    require(config.diagnosticLayerIndex == 0xffffffffu,
+            "default layer index sentinel");
+    const ngen::NprtTapMetric metric;
+    require(metric.name.empty() && metric.diffRms == 0 && metric.relRms == 0,
+            "default tap metric zeroed");
+  }
 }
 
 }  // namespace

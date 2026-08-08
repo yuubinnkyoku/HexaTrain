@@ -10,7 +10,7 @@
 namespace phonelm::tiny_lm { namespace {
 using P=qnn::TinyTransformerParameters;
 using LP=qnn::TinyTransformerLayerParameters;
-struct N{std::vector<float>xhat,inv,out;};
+struct N{std::vector<float>xhat,inv,out,centered,square,variance_eps;};
 struct C{N n1,n2;std::vector<float>et,x,q,k,v,ap,ctx,r1,f1,relu,out,logits,prob;};
 std::vector<float> mm(const std::vector<float>&a,const std::vector<float>&b,uint32_t r,uint32_t k,uint32_t c){std::vector<float>o(size_t(r)*c);for(uint32_t i=0;i<r;++i)for(uint32_t j=0;j<c;++j){double s=0;for(uint32_t z=0;z<k;++z)s+=double(a[size_t(i)*k+z])*b[size_t(z)*c+j];o[size_t(i)*c+j]=float(s);}return o;}
 std::vector<float> atb(const std::vector<float>&a,const std::vector<float>&b,uint32_t r,uint32_t ka,uint32_t cb){std::vector<float>o(size_t(ka)*cb);for(uint32_t i=0;i<ka;++i)for(uint32_t j=0;j<cb;++j){double s=0;for(uint32_t z=0;z<r;++z)s+=double(a[size_t(z)*ka+i])*b[size_t(z)*cb+j];o[size_t(i)*cb+j]=float(s);}return o;}
@@ -33,7 +33,7 @@ void requireGeneralParameterShape(const Config& c,const P& p){
   if(p.layers.size()!=size_t(c.numLayers-1)||!exact(p.tokenEmbedding,size_t(c.vocabularySize)*c.dimension)||!exact(p.outputProjection,size_t(c.dimension)*c.vocabularySize)||!validLayerShape(layer(p,0),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
   for(uint32_t i=1;i<c.numLayers;++i)if(!validLayerShape(layer(p,i),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
 }
-N nf(const Config&c,const std::vector<float>&x,const std::vector<float>&g,const std::vector<float>&b){N n;n.xhat.resize(x.size());n.inv.resize(c.tokens);n.out.resize(x.size());for(uint32_t r=0;r<c.tokens;++r){double m=0,v=0;for(uint32_t d=0;d<c.dimension;++d)m+=x[size_t(r)*c.dimension+d];m/=c.dimension;for(uint32_t d=0;d<c.dimension;++d){double z=x[size_t(r)*c.dimension+d]-m;v+=z*z;}v/=c.dimension;n.inv[r]=float(1/std::sqrt(v+c.epsilon));for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;n.xhat[i]=(x[i]-float(m))*n.inv[r];n.out[i]=n.xhat[i]*g[d]+b[d];}}return n;}
+N nf(const Config&c,const std::vector<float>&x,const std::vector<float>&g,const std::vector<float>&b){N n;n.xhat.resize(x.size());n.inv.resize(c.tokens);n.out.resize(x.size());n.centered.resize(x.size());n.square.resize(x.size());n.variance_eps.resize(c.tokens);for(uint32_t r=0;r<c.tokens;++r){double m=0,v=0;for(uint32_t d=0;d<c.dimension;++d)m+=x[size_t(r)*c.dimension+d];m/=c.dimension;for(uint32_t d=0;d<c.dimension;++d){double z=x[size_t(r)*c.dimension+d]-m;v+=z*z;n.centered[size_t(r)*c.dimension+d]=float(z);}v/=c.dimension;n.variance_eps[r]=float(v+c.epsilon);n.inv[r]=float(1/std::sqrt(v+c.epsilon));for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;n.square[i]=n.centered[i]*n.centered[i];n.xhat[i]=(x[i]-float(m))*n.inv[r];n.out[i]=n.xhat[i]*g[d]+b[d];}}return n;}
 void nb(const Config&c,const std::vector<float>&dy,const N&n,const std::vector<float>&g,std::vector<float>&dx,std::vector<float>&dg,std::vector<float>&db){dx.resize(dy.size());dg.assign(c.dimension,0);db.assign(c.dimension,0);for(uint32_t r=0;r<c.tokens;++r){double s=0,sx=0;for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];s+=z;sx+=z*n.xhat[i];dg[d]+=dy[i]*n.xhat[i];db[d]+=dy[i];}for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];dx[i]=float(n.inv[r]/c.dimension*(c.dimension*z-s-n.xhat[i]*sx));}}}
 C fw(const Config&c,const std::vector<float>&oh,const P&w){C z;z.et=mm(oh,w.tokenEmbedding,c.tokens,c.vocabularySize,c.dimension);z.x=z.et;add(z.x,fixedPosition(c));z.n1=nf(c,z.x,w.gamma1,w.beta1);z.q=mm(z.n1.out,w.wq,c.tokens,c.dimension,c.dimension);z.k=mm(z.n1.out,w.wk,c.tokens,c.dimension,c.dimension);z.v=mm(z.n1.out,w.wv,c.tokens,c.dimension,c.dimension);auto sc=abt(z.q,z.k,c.tokens,c.tokens,c.dimension);z.ap.assign(size_t(c.tokens)*c.tokens,0);float scale=1/std::sqrt(float(c.dimension));for(uint32_t r=0;r<c.tokens;++r){float mx=-std::numeric_limits<float>::infinity();for(uint32_t j=0;j<=r;++j)mx=std::max(mx,sc[size_t(r)*c.tokens+j]*scale);double s=0;for(uint32_t j=0;j<=r;++j){float e=std::exp(sc[size_t(r)*c.tokens+j]*scale-mx);z.ap[size_t(r)*c.tokens+j]=e;s+=e;}for(uint32_t j=0;j<=r;++j)z.ap[size_t(r)*c.tokens+j]/=float(s);}z.ctx=mm(z.ap,z.v,c.tokens,c.tokens,c.dimension);z.r1=z.x;add(z.r1,mm(z.ctx,w.wo,c.tokens,c.dimension,c.dimension));z.n2=nf(c,z.r1,w.gamma2,w.beta2);z.f1=mm(z.n2.out,w.w1,c.tokens,c.dimension,c.feedForwardDimension);z.relu=z.f1;for(float&v:z.relu)v=std::max(0.f,v);z.out=z.r1;add(z.out,mm(z.relu,w.w2,c.tokens,c.feedForwardDimension,c.dimension));z.logits=mm(z.out,w.outputProjection,c.tokens,c.dimension,c.vocabularySize);z.prob.resize(z.logits.size());for(uint32_t r=0;r<c.tokens;++r){size_t base=size_t(r)*c.vocabularySize;float mx=*std::max_element(z.logits.begin()+base,z.logits.begin()+base+c.vocabularySize);double s=0;for(uint32_t j=0;j<c.vocabularySize;++j){float e=std::exp(z.logits[base+j]-mx);z.prob[base+j]=e;s+=e;}for(uint32_t j=0;j<c.vocabularySize;++j)z.prob[base+j]/=float(s);}return z;}
 struct GL { N n1,n2; std::vector<float> x,q,k,v,prob,ctx,r1,f1,relu,out; };
@@ -82,6 +82,44 @@ StepResult generalForwardBackward(const Config&c,const std::vector<float>&oh,con
   r.dEmbeddedInput=dout;r.gradients.tokenEmbedding=atb(oh,dout,c.tokens,c.vocabularySize,c.dimension);upd(r.next.tokenEmbedding,w.tokenEmbedding,r.gradients.tokenEmbedding,lr);upd(r.next.outputProjection,w.outputProjection,r.gradients.outputProjection,lr);return r;
 }
 StepResult forwardBackwardGeneralized(const Config& c,const std::vector<float>& input,const std::vector<float>& target,const P& parameters,float learningRate){std::string error;if(!validateConfig(c,&error))throw std::invalid_argument(error);return generalForwardBackward(c,input,target,parameters,learningRate);}
+GeneralizedCpuTrace forwardTraceGeneralized(const Config& c, const std::vector<float>& oh, const P& w) {
+  std::string error;
+  if (!validateConfig(c, &error)) throw std::invalid_argument(error);
+  if (oh.size() != size_t(c.tokens) * c.vocabularySize)
+    throw std::invalid_argument("INVALID_TINY_LM_INPUT_SHAPE");
+  requireGeneralParameterShape(c, w);
+  auto g = generalForward(c, oh, w);
+  GeneralizedCpuTrace trace;
+  trace.embeddedInput = std::move(g.embedded);
+  trace.logits = std::move(g.logits);
+  trace.probabilities = std::move(g.prob);
+  trace.layers.reserve(g.layers.size());
+  for (auto& l : g.layers) {
+    GeneralizedCpuTrace::Layer layerTrace;
+    layerTrace.input = std::move(l.x);
+    layerTrace.ln1 = std::move(l.n1.out);
+    layerTrace.ln1Centered = std::move(l.n1.centered);
+    layerTrace.ln1Square = std::move(l.n1.square);
+    layerTrace.ln1VarianceEps = std::move(l.n1.variance_eps);
+    layerTrace.ln1Inv = std::move(l.n1.inv);
+    layerTrace.q = std::move(l.q);
+    layerTrace.k = std::move(l.k);
+    layerTrace.v = std::move(l.v);
+    layerTrace.probabilities = std::move(l.prob);
+    layerTrace.context = std::move(l.ctx);
+    layerTrace.residual1 = std::move(l.r1);
+    layerTrace.ln2 = std::move(l.n2.out);
+    layerTrace.ln2Centered = std::move(l.n2.centered);
+    layerTrace.ln2Square = std::move(l.n2.square);
+    layerTrace.ln2VarianceEps = std::move(l.n2.variance_eps);
+    layerTrace.ln2Inv = std::move(l.n2.inv);
+    layerTrace.ff1 = std::move(l.f1);
+    layerTrace.relu = std::move(l.relu);
+    layerTrace.output = std::move(l.out);
+    trace.layers.push_back(std::move(layerTrace));
+  }
+  return trace;
+}
 MomentumResult momentumUpdate(const P&current,const P&gradient,const P&velocity,float lr,float momentum){MomentumResult result;for(auto[name,member]:fields()){(void)name;const auto&w=current.*member;const auto&g=gradient.*member;const auto&v=velocity.*member;auto&nv=result.velocity.*member;auto&nw=result.next.*member;nv.resize(w.size());nw.resize(w.size());for(size_t i=0;i<w.size();++i){nv[i]=momentum*v[i]+g[i];nw[i]=w[i]-lr*nv[i];}}result.velocity.layers.resize(current.layers.size());result.next.layers.resize(current.layers.size());for(size_t li=0;li<current.layers.size();++li){const LP&w=current.layers[li],&g=gradient.layers[li],&v=velocity.layers[li];LP&nv=result.velocity.layers[li];LP&nw=result.next.layers[li];auto f=[&](const std::vector<float>&a,const std::vector<float>&b,const std::vector<float>&old,std::vector<float>&m,std::vector<float>&out){m.resize(a.size());out.resize(a.size());for(size_t i=0;i<a.size();++i){m[i]=momentum*old[i]+b[i];out[i]=a[i]-lr*m[i];}};f(w.gamma1,g.gamma1,v.gamma1,nv.gamma1,nw.gamma1);f(w.beta1,g.beta1,v.beta1,nv.beta1,nw.beta1);f(w.wq,g.wq,v.wq,nv.wq,nw.wq);f(w.wk,g.wk,v.wk,nv.wk,nw.wk);f(w.wv,g.wv,v.wv,nv.wv,nw.wv);f(w.wo,g.wo,v.wo,nv.wo,nw.wo);f(w.gamma2,g.gamma2,v.gamma2,nv.gamma2,nw.gamma2);f(w.beta2,g.beta2,v.beta2,nv.beta2,nw.beta2);f(w.w1,g.w1,v.w1,nv.w1,nw.w1);f(w.w2,g.w2,v.w2,nv.w2,nw.w2);}return result;}
 AdamResult adamUpdate(const P&current,const P&gradient,const P&firstMoment,
                       const P&secondMoment,float lr,float beta1,float beta2,

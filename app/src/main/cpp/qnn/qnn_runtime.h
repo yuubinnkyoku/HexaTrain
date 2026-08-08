@@ -46,6 +46,7 @@ enum class TinyTransformerTrainingTapSet {
     // Exposes forward/backward intermediates in producer order. Existing
     // regular APP_READ outputs are not rebound as taps.
     ALL_INTERNAL,
+    NICOPEDIA_FINE,
 };
 
 const char* backendKindName(QnnBackendKind kind);
@@ -134,6 +135,7 @@ struct RuntimeOptions {
     // square(s*(x-mean)). The LayerNorm transform remains
     // rsqrt(s^2*(variance+epsilon))*s = rsqrt(variance+epsilon).
     float tinyTransformerCenteredScale = 1.0f;
+    std::uint32_t diagnosticLayerIndex = 0xffffffffu;
 };
 
 struct LayerNormBackwardOutputs {

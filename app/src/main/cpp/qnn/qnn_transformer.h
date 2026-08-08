@@ -30,4 +30,13 @@ std::string runNicopediaHtpGeneration(
 std::string replayFirstNonfiniteCheckpoint(
     const std::vector<std::uint8_t>& payload, std::uint32_t repeatCount = 2,
     TinyTransformerTrainingTapSet tapSet = TinyTransformerTrainingTapSet::NONE);
+// Private CPU/HTP divergence localization on the fixed parity prefixes.
+// `config` must be the L19/H2 Nicopedia configuration; the HTP graph is
+// prepared once per tap scope ("NONE" | "COARSE" | "FINE") and every parity
+// prefix is compared at the coarse layer-output boundaries or the single
+// selected fine layer.  Returns the private KEY=VALUE diagnostic report.
+std::string runNicopediaHtpDivergenceLocalization(
+    const tiny_lm::Config& config, const std::string& checkpointPath,
+    const nicopedia_gen::GenerateConfig& generateConfig,
+    const LogSink& progress);
 }
