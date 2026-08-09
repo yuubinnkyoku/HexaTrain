@@ -1,0 +1,25 @@
+# Taste: 科学的実験方法
+
+- 指定された単一仮説の検証ではなく、5〜10個程度の競合仮説を自ら作り、複数の仮説を一度に区別できる・計算量が小さい・因果介入を含む・負の対照を置ける実験を優先して選ぶことを期待する。Confidence: 0.9
+- 因果主張には相関だけでなく因果介入を求め、負の対照（matched control含む）と複数seed（最低3: 例 seed 1/2/4）を必須とする。pooled値だけで結論せずseed別結果を示す。Confidence: 0.9
+- 深さや規模の比較には対照（例: L18 control）を置き、既存結論を前提にせず反証する証拠も積極的に探す。Confidence: 0.85
+- teacher-forced評価とfree-running（自由生成）評価を区別し、「性能が上がる設定を見つけた」だけを原因特定とみなさない。Confidence: 0.9
+- 証拠の強さを「観察 / 機構候補 / 因果支持 / 主要因 / 根本原因」の段階で区別し、観察だけで「根本原因」と呼ばない。Confidence: 0.9
+- 測定器・評価器自体を先に疑い、異常（実装バグ、集計バグ、probe最適化不足等）を見つけたら原因探索より先に修正と回帰testを行う。Confidence: 0.9
+- final holdoutは候補選択に使わず、candidate固定後に一度だけ開封する。Confidence: 0.85
+- 専用HW（QNN/HTP等）の実績は証明可能な範囲の表現（例: 学習stepの数値演算をHTPで実行）に留め、証明できない誇張表現（NPU-only、CPU不使用、完全NPU学習、QNN autograd等）を使わない。tokenization・data供給・graph構築・host制御・評価へのCPU関与は許容される。Confidence: 0.95
+- 数値一致検証はbitwise一致を無条件に要求せず、既存のnumerical evidence policyと許容誤差を再利用する。toleranceは結果前に固定し、結果を見た後に緩めない。Confidence: 0.9
+- 異なるmachine間（PC CPU vs スマホHTP）の速度比較を単純な倍率で過剰解釈せず、目的に即した指標（スマホ上の学習step時間）を主とする。正確に測定できない消費電力・energy efficiencyは推測しない（battery %差は粗い参考値として扱う）。Confidence: 0.85
+- memory/runtime上限などの制約に当たった場合はそれを重要な結果として扱い、回避目的でmodel configを黙って変更しない。configを変えた場合は別実験として明記する。Confidence: 0.85
+- 結果を得るために専用HW利用を偽装したりCPU fallbackで置き換えたりしない。Confidence: 0.9
+- 最終の独立Reviewerには最有力結論に対する別解釈を最低1つ提示させ、blocking findingがあれば修正して検証とReviewerを再実行する。Confidence: 0.85
+- 実機/専用HWの性能はbackend init・graph build/finalize・first execute・steady execute・step時間・updates/sec・tokens/secなど段階別に計測・報告し、単一のaggregate値だけで報告しない。Confidence: 0.85
+- instrumentation（tap・中間出力のgraph追加）は、数値挙動を変えていないことをuntapped baselineとinstrumented graphの最終出力（logits等: finite / max abs / RMS / centered RMS / argmax）比較で先に確認してから信用する。現象が大きく変わる場合はinstrumentation artifactとして扱い、その計測を因果証拠にしない。一度に全層をtapせず単一boundary・少数boundary・単一layer方式を優先する。Confidence: 0.9
+- 数値差の原因候補opは入出力の比較だけでなく、op内部の中間段階（LayerNormならmean/variance/inverse std/normalized、attentionならscore/softmax probability/context）に分解してどこで誤差が増幅しているかを特定する。Confidence: 0.85
+- minimal reproducerが再現しない場合も有効な結果として扱い、single-op問題ではなくgraph context・fusion・accumulated input依存の証拠と解釈する。Confidence: 0.85
+- 最重要の計測（first divergence等）は2〜3回繰り返して再現性（位置・符号・大きさ）を確認するが、無意味な大量runはしない。Confidence: 0.8
+- 判定はgateのPASS/FAIL単独でなく、複数の数値指標（boundary relative RMS、centered logit RMS、raw logit max abs、probability L1/max、argmax、top-k、finite）を並べて判断する。Confidence: 0.85
+- 大規模な一括変更を避け、baseline→単一のisolated intervention→測定→次の順で各介入の効果を帰属可能にする。Confidence: 0.8
+- 改善の採用判定は単一fixture/metric（特定prefix等）だけでなく、全prefix・別checkpoint step・good prefixでの一般化（改善または非劣化）を要求し、特定fixtureへの過適合や「良い出力探し」をしない。Confidence: 0.85
+- 指定された不変条件（parity gate・checkpoint・追加training・参照実装）は変更せず、対象システム（HTP等）の数値経路自体を改善する。gate緩和・出力補正・温度補正・checkpoint修正など参照側に合わせる操作や、特定fixtureだけ通す特殊ケースを禁止する。Confidence: 0.9
+- 実装バグ修正とprecision mitigation（数値経路の改善）を明確に区別して報告する。Confidence: 0.7

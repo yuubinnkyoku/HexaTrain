@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "powershell",
+      "Shell(powershell -Command \"Get-Content app\\src\\main\\cpp\\training_engine.cpp | Measure-Object -Line; Get-Content app\\src\\main\\cpp\\qnn\\qnn_transformer_training.cpp | Measure-Object -Line; Get-Content host_tests\\nicopedia_real_text_pilot.cpp | Measure-Object -Line; Get-Content scripts\\run_qnn_htp_transformer_training_tests.ps1 | Measure-Object -Line; Get-Content app\\src\\main\\cpp\\qnn\\qnn_runtime_transformer_training_generalized.inc | Measure-Object -Line; Get-Content app\\src\\main\\cpp\\qnn\\qnn_runtime_transformer_training_generalized_execute.inc | Measure-Object -Line; Get-Content app\\src\\main\\cpp\\tiny_language_model_cpu.cpp | Measure-Object -Line; Get-Content app\\src\\main\\cpp\\tiny_language_model_cpu.h | Measure-Object -Line\")",
+      "Shell(powershell -Command \"Get-ChildItem build -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name; Write-Host '---private-data---'; Get-ChildItem build/private-data/nicopedia-real-text/caches -ErrorAction SilentlyContinue | Select-Object Name,Length; Write-Host '---reports---'; Get-ChildItem build/private-diagnostics/nicopedia-real-text-goal -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName | Select-Object -First 40\")",
+      "Shell(powershell -Command \"$p = Start-Process -FilePath 'powershell' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','scripts\\run_host_tests.ps1' -RedirectStandardOutput 'build\\host-tests-run.log' -RedirectStandardError 'build\\host-tests-run.err.log' -PassThru -WindowStyle Hidden; Write-Output $p.Id\")",
+      "Shell(powershell -Command \"Start-Sleep -Seconds 60; Get-Content build\\host-tests-run.log -Tail 5 -ErrorAction SilentlyContinue; Write-Host '---running?---'; Get-Process -Id 32792 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id\")",
+      "Shell(powershell -Command \"Wait-Process -Id 32792 -Timeout 300 -ErrorAction SilentlyContinue; Write-Host '---done---'; Get-Content build\\host-tests-run.log -Tail 15 -ErrorAction SilentlyContinue; Write-Host '---err---'; Get-Content build\\host-tests-run.err.log -Tail 10 -ErrorAction SilentlyContinue\")"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
