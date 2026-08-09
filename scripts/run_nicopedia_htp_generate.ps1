@@ -35,6 +35,7 @@ param(
     [int]$HtpGraphPrecisionCompensation = 0,  # private diagnostics: 0 unset, 1 false, 2 true
     [int]$HtpGraphWeightsPacking = 0,  # private diagnostics: 0 unset, 1 false, 2 true
     [int]$HtpGraphAdvancedActivationFusion = 0,  # private diagnostics: 0 unset, 1 false, 2 true
+    [int]$HtpContextGraphSplitting = 0,  # private diagnostics: 0 unset, 1 false, 2 true
     [switch]$HtpNativeTensorFp16,  # private diagnostics: declare NATIVE tensors FP16
     [switch]$SelfTest
 )
@@ -194,6 +195,9 @@ function Invoke-SelfTest {
     foreach ($bad in @(-1, 3, 99)) {
         if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_GRAPH_ACTIVATION_FUSION_RANGE: $bad" }
     }
+    foreach ($bad in @(-1, 3, 99)) {
+        if ($bad -ge 0 -and $bad -le 2) { throw "SELFTEST_HTP_CONTEXT_GRAPH_SPLITTING_RANGE: $bad" }
+    }
     if (-not (0 -ge 0 -and 0 -le 2) -or -not (2 -ge 0 -and 2 -le 2)) {
         throw 'SELFTEST_HTP_GRAPH_PRECISION_VALID_VALUES'
     }
@@ -231,6 +235,9 @@ if ($HtpGraphWeightsPacking -lt 0 -or $HtpGraphWeightsPacking -gt 2) {
 }
 if ($HtpGraphAdvancedActivationFusion -lt 0 -or $HtpGraphAdvancedActivationFusion -gt 2) {
     throw 'HTP_GRAPH_ACTIVATION_FUSION_INVALID: must be 0, 1 or 2'
+}
+if ($HtpContextGraphSplitting -lt 0 -or $HtpContextGraphSplitting -gt 2) {
+    throw 'HTP_CONTEXT_GRAPH_SPLITTING_INVALID: must be 0, 1 or 2'
 }
 if ($Mode -eq 'Sample') {
     if (-not [double]::IsFinite($Temperature) -or $Temperature -le 0.0) { throw 'TEMPERATURE_INVALID' }
@@ -349,6 +356,7 @@ $startArgs = @(
     '--ei', 'phonelm.htp_graph_precision_compensation', $HtpGraphPrecisionCompensation,
     '--ei', 'phonelm.htp_graph_weights_packing', $HtpGraphWeightsPacking,
     '--ei', 'phonelm.htp_graph_activation_fusion', $HtpGraphAdvancedActivationFusion,
+    '--ei', 'phonelm.htp_context_graph_splitting', $HtpContextGraphSplitting,
     '--ez', 'phonelm.htp_native_tensor_fp16', $HtpNativeTensorFp16
 )
 $startOutput = & $adb -s $device @startArgs 2>&1
@@ -397,9 +405,13 @@ $precisionModeReported = [regex]::Match($result, '(?m)^htp_graph_precision_mode=
 $precisionCompensationReported = [regex]::Match($result, '(?m)^htp_graph_precision_compensation=(\d+)$').Groups[1].Value
 $weightsPackingReported = [regex]::Match($result, '(?m)^htp_graph_weights_packing=(\d+)$').Groups[1].Value
 $fusionReported = [regex]::Match($result, '(?m)^htp_graph_activation_fusion=(\d+)$').Groups[1].Value
+$graphSplittingReported = [regex]::Match($result, '(?m)^htp_context_graph_splitting=(\d+)$').Groups[1].Value
+$graphSplittingDelivery = [regex]::Match($result, '(?m)^htp_context_graph_splitting_delivery=(unset_nullptr|passed_to_qnn_context_create)$').Groups[1].Value
+$executionFingerprint = [regex]::Match($result, '(?m)^htp_execution_fingerprint_sha256=([0-9a-f]{64})$').Groups[1].Value
 $nativeFp16Reported = [regex]::Match($result, '(?m)^htp_native_tensor_fp16=(true|false)$').Groups[1].Value
 if ($precisionModeReported -eq '' -or $precisionCompensationReported -eq '' -or
-    $weightsPackingReported -eq '' -or $fusionReported -eq '' -or $nativeFp16Reported -eq '') {
+    $weightsPackingReported -eq '' -or $fusionReported -eq '' -or $graphSplittingReported -eq '' -or
+    $graphSplittingDelivery -eq '' -or $executionFingerprint -eq '' -or $nativeFp16Reported -eq '') {
     throw 'HTP_GRAPH_PRECISION_FIELDS_MISSING: report lacks htp_graph_precision fields'
 }
 $nativeFp16Expected = 'false'
@@ -408,8 +420,13 @@ if ([int]$precisionModeReported -ne $HtpGraphPrecisionMode -or
     [int]$precisionCompensationReported -ne $HtpGraphPrecisionCompensation -or
     [int]$weightsPackingReported -ne $HtpGraphWeightsPacking -or
     [int]$fusionReported -ne $HtpGraphAdvancedActivationFusion -or
+    [int]$graphSplittingReported -ne $HtpContextGraphSplitting -or
     $nativeFp16Reported -ne $nativeFp16Expected) {
-    throw "HTP_GRAPH_PRECISION_MISMATCH: device=($precisionModeReported,$precisionCompensationReported,$weightsPackingReported,$fusionReported,$nativeFp16Reported) requested=($HtpGraphPrecisionMode,$HtpGraphPrecisionCompensation,$HtpGraphWeightsPacking,$HtpGraphAdvancedActivationFusion,$nativeFp16Expected)"
+    throw "HTP_GRAPH_PRECISION_MISMATCH: device=($precisionModeReported,$precisionCompensationReported,$weightsPackingReported,$fusionReported,$graphSplittingReported,$nativeFp16Reported) requested=($HtpGraphPrecisionMode,$HtpGraphPrecisionCompensation,$HtpGraphWeightsPacking,$HtpGraphAdvancedActivationFusion,$HtpContextGraphSplitting,$nativeFp16Expected)"
+}
+$graphSplittingDeliveryExpected = if ($HtpContextGraphSplitting -eq 0) { 'unset_nullptr' } else { 'passed_to_qnn_context_create' }
+if ($graphSplittingDelivery -ne $graphSplittingDeliveryExpected) {
+    throw "HTP_CONTEXT_GRAPH_SPLITTING_DELIVERY_MISMATCH: device=$graphSplittingDelivery requested=$HtpContextGraphSplitting expected=$graphSplittingDeliveryExpected"
 }
 if ($parityGateCandidate -eq '' -or $arGateCandidate -eq '') {
     throw 'CANDIDATE_GATE_FIELDS_MISSING: report lacks parity_gate_candidate/ar_gate_candidate'
@@ -461,6 +478,7 @@ $annotated = $result.TrimEnd() + "`n" +
     "host_htp_graph_precision_compensation=$HtpGraphPrecisionCompensation`n" +
     "host_htp_graph_weights_packing=$HtpGraphWeightsPacking`n" +
     "host_htp_graph_activation_fusion=$HtpGraphAdvancedActivationFusion`n" +
+    "host_htp_context_graph_splitting=$HtpContextGraphSplitting`n" +
     "host_htp_native_tensor_fp16=$nativeFp16Expected`n" +
     "private_serial_recorded_for_identity_only=true`n"
 $reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"

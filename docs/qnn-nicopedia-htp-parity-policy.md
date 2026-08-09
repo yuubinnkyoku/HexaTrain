@@ -185,8 +185,8 @@ consumes its CSV column.
 - budgets: device parity runs <= 12 (8 planned), HTP generation <= 6,
   CPU generation <= 4 (existing CPU step1000 reused, no rerun), APK
   build/install <= 5, device restart <= 1.
-- Every run must be a real device; host identity must be the fixed serial
-  `324753221196` (verified before use).
+- Every run must be a real device; host identity must match the fixed private
+  device identifier (verified before use and never published).
 
 ## 8. Public artifacts (allow-list exporter only)
 
@@ -225,14 +225,14 @@ If no such review, the result is "Reviewer未実施" (incomplete).
 
 ## Appendix A. Measured outcome (2026-08-08, source commit 0dc9116)
 
-Runs: device serial 324753221196 (NX741J SM8850, QAIRT
+Runs: fixed private device identity (NX741J SM8850, QAIRT
 2.48.40.260702 / build 2.48.40.260702151143), greedy fixed-seed generation
 at step320 and step1000 (3 runs total: step320, step1000, step1000-run2),
 budgets 4 parity runs / 2 QNN builds / 2 installs as fixed. Host fault
 battery regenerated from `host_tests/nicopedia_parity_policy_test.cpp`
 (15 synthetic rows), stage-group parity:
-`G2 stage0 none G3 stage0 half` (`fnv1a64` fingerprints 0x71314261 /
-0x60004e5c), model on subsystem root.
+`G2 stage0 none G3 stage0 half` (fingerprints verified privately), model on
+subsystem root.
 
 Results (per-prefix fields in `build/reports/nicopedia-htp-generation/`):
 

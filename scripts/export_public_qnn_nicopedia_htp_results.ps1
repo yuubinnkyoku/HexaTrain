@@ -213,6 +213,7 @@ if ($SelfTest) {
         "compile_time_qnn_api_version=2.37.0",
         "runtime_backend_build_id=v2.48.40.260702151143", "backend_build_id_match=true",
         "device_model=NX741J", "device_soc=SM8850",
+        "device_serial=PRIVATE_DEVICE_SERIAL_SENTINEL",
         "android_thermal_status_before=0", "android_thermal_status_after=0",
         "battery_level_before=90", "battery_level_after=90",
         "battery_temperature_c_before=34", "battery_temperature_c_after=34",
@@ -501,14 +502,14 @@ if ($SelfTest) {
     if ($manifestText -notmatch '"qnn-nicopedia-htp-training-2026-08"') { throw "Self-test: manifest bundle mismatch" }
     # Word-boundary leak scan: hex hashes legitimately contain the substring
     # "adb"/"serial" by chance, so require token boundaries.
-    if ($manifestText -match '\btrain_pilot\b|\.ckpt|324753221196|/data/user/|C:\\Users') { throw "Self-test: private data leaked into manifest" }
+    if ($manifestText -match '\btrain_pilot\b|\.ckpt|PRIVATE_DEVICE_SERIAL_SENTINEL|/data/user/|C:\\Users') { throw "Self-test: private data leaked into manifest" }
     foreach ($file in $bundleFiles) {
         if ($file.Name -eq "manifest.json") { continue }
         $content = Get-Content -Raw -LiteralPath $file.FullName
         # Private leak scan: device serial, private cache names, checkpoint
         # suffixes, host user paths, and app-private device paths must never
         # appear.  The pinned QAIRT SDK root is public configuration.
-        if ($content -match '324753221196|train_pilot\.bin|\.ckpt|/data/user/|C:\\Users|C:\\Qualcomm\\AIStack\\QAIRT\\2\.48\.40\.260702\\build') {
+        if ($content -match 'PRIVATE_DEVICE_SERIAL_SENTINEL|train_pilot\.bin|\.ckpt|/data/user/|C:\\Users|C:\\Qualcomm\\AIStack\\QAIRT\\2\.48\.40\.260702\\build') {
             throw "Self-test: private data leaked into $($file.Name)"
         }
         # C:\Users (host user dir) is private; the pinned QAIRT SDK root in

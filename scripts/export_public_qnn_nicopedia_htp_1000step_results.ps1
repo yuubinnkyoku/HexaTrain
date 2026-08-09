@@ -114,9 +114,14 @@ if (-not $output.StartsWith([IO.Path]::GetFullPath((Join-Path $repoRoot "docs\re
 }
 
 if ($SelfTest) {
-    $reports = Join-Path $repoRoot "build\export-selftest\nicopedia-htp-1000step-generation\reports"
-    $trainingReports = Join-Path $repoRoot "build\export-selftest\nicopedia-htp-1000step-generation\training"
-    $pilot = Join-Path $repoRoot "build\export-selftest\nicopedia-htp-1000step-generation\pilot"
+    $selfTestRoot = Join-Path $repoRoot "build\export-selftest\nicopedia-htp-1000step-generation"
+    if (Test-Path -LiteralPath $selfTestRoot) {
+        Remove-Item -LiteralPath $selfTestRoot -Recurse -Force
+    }
+    $reports = Join-Path $selfTestRoot "reports"
+    $trainingReports = Join-Path $selfTestRoot "training"
+    $pilot = Join-Path $selfTestRoot "pilot"
+    $output = Join-Path $selfTestRoot "bundle"
     [IO.Directory]::CreateDirectory($reports) | Out-Null
     [IO.Directory]::CreateDirectory($trainingReports) | Out-Null
     [IO.Directory]::CreateDirectory($pilot) | Out-Null
@@ -138,6 +143,7 @@ max_same_byte_run=1
 max_scalar_repeat_run=21
 short_period_loop_fraction=1
 finite=true
+checkpoint_finite=true
 parity_gate=true
 ar_gate=true
 generation_gate=true
@@ -146,6 +152,48 @@ parity_0_logits_cosine_similarity=0.9999997766
 parity_0_last_argmax_match=true
 ar_step_0_max_abs_logits_error=0.01110172272
 "@ | Set-Content -LiteralPath (Join-Path $reports "seed1-l19-greedy-step320-max64-result.txt") -Encoding utf8
+    @"
+NICOPEDIA_HTP_GENERATION
+status=FAILED
+model=L19
+layers=19
+seed=1
+checkpoint_step=1000
+generate_mode=greedy
+max_new_bytes=64
+generated_byte_count=0
+generated_valid_utf8_bytes=0
+generated_invalid_utf8_bytes=0
+unique_byte_values=0
+ascii_bytes=0
+max_same_byte_run=0
+max_scalar_repeat_run=0
+short_period_loop_fraction=0
+finite=true
+checkpoint_finite=true
+parity_gate=false
+ar_gate=false
+generation_gate=false
+parity_0_logits_max_abs_error=0.0428122282
+parity_0_logits_cosine_similarity=0.999997337
+parity_0_last_argmax_match=true
+ar_step_0_max_abs_logits_error=0.0308008194
+"@ | Set-Content -LiteralPath (Join-Path $reports "seed1-l19-greedy-step1000-max64-result.txt") -Encoding utf8
+    @"
+NICOPEDIA_HTP_GENERATION
+status=FAILED
+model=L19
+layers=19
+seed=1
+checkpoint_step=320
+generate_mode=greedy
+max_new_bytes=64
+generated_byte_count=0
+checkpoint_finite=true
+parity_gate=false
+ar_gate=true
+generation_gate=false
+"@ | Set-Content -LiteralPath (Join-Path $reports "seed1-l19-greedy-step320-control-result.txt") -Encoding utf8
     @"
 "seed","layers","selection_partition","selection_metric","selected_step","selected_validation_nll"
 "1","19","validation","token NLL","1000","2.510798771"
@@ -163,12 +211,8 @@ learning_rate=0.003
 "@ | Set-Content -LiteralPath (Join-Path $trainingReports "seed1-l19-steps1000-result.txt") -Encoding utf8
 }
 
-if (Test-Path -LiteralPath $output) {
-    Remove-Item -LiteralPath $output -Recurse -Force
-}
-[IO.Directory]::CreateDirectory($output) | Out-Null
-
-$genFiles = Get-ChildItem -LiteralPath $reports -Filter "*result.txt" -File -ErrorAction SilentlyContinue
+$genFiles = Get-ChildItem -LiteralPath $reports -Filter "*result.txt" -File -ErrorAction SilentlyContinue |
+    Sort-Object Name
 if (-not $genFiles) { throw "No device generation result files found under $reports" }
 
 $summaryRows = @()
@@ -176,6 +220,15 @@ $parityRows = @()
 $arRows = @()
 foreach ($file in $genFiles) {
     $map = Read-KeyValueReport $file.FullName
+    $publishCanonicalStep320 = $map['model'] -eq 'L19' -and $map['seed'] -eq '1' -and
+        $map['checkpoint_step'] -eq '320' -and $map['generate_mode'] -eq 'greedy' -and
+        $map['max_new_bytes'] -eq '64' -and
+        $map['status'] -eq 'SUCCESS' -and $map['checkpoint_finite'] -eq 'true' -and
+        $map['parity_gate'] -eq 'true' -and $map['ar_gate'] -eq 'true' -and
+        $map['generation_gate'] -eq 'true' -and [int]$map['generated_byte_count'] -eq 64
+    if (-not $publishCanonicalStep320) {
+        continue
+    }
     $public = Select-PublicFields $map
     $summaryRows += $public
     for ($i = 0; ; ++$i) {
@@ -195,9 +248,13 @@ foreach ($file in $genFiles) {
         $arRows += $row
     }
 }
+if ($summaryRows.Count -ne 1) {
+    throw "Missing unique canonical L19 seed-1 step-320 greedy success under $reports; public bundle left untouched"
+}
 
 $evalRows = @()
-$trainingFiles = Get-ChildItem -LiteralPath $trainingReports -Filter "seed1-l19-steps*-result.txt" -File -ErrorAction SilentlyContinue
+$trainingFiles = Get-ChildItem -LiteralPath $trainingReports -Filter "seed1-l19-steps1000-result.txt" -File -ErrorAction SilentlyContinue |
+    Sort-Object Name
 foreach ($file in $trainingFiles) {
     $map = Read-KeyValueReport $file.FullName
     $row = [ordered]@{
@@ -229,6 +286,11 @@ if (Test-Path -LiteralPath $selectionPath) {
     }
 }
 
+if (Test-Path -LiteralPath $output) {
+    Remove-Item -LiteralPath $output -Recurse -Force
+}
+[IO.Directory]::CreateDirectory($output) | Out-Null
+
 Write-Csv (Join-Path $output "generation-summary.csv") $summaryRows
 Write-Csv (Join-Path $output "generation-parity.csv") $parityRows
 Write-Csv (Join-Path $output "generation-ar.csv") $arRows
@@ -246,12 +308,13 @@ $allowList = @(
     "generation-summary.csv","generation-parity.csv","generation-ar.csv",
     "training-status.csv","cpu-anchor.csv","limitations.csv"
 )
+$manifestedFiles = @($allowList | Where-Object { $_ -ne "manifest.json" })
 $manifest = [ordered]@{
     source_commit = if ($SourceCommit) { $SourceCommit } else { $null }
     created = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
     files = [ordered]@{}
 }
-foreach ($name in $allowList) {
+foreach ($name in $manifestedFiles) {
     $path = Join-Path $output $name
     if (Test-Path -LiteralPath $path) {
         $manifest.files[$name] = [ordered]@{
@@ -279,7 +342,7 @@ The HTP step-1000 validation NLL is within ~0.04 of the CPU anchor.
 
 ## Generation status
 
-- Step-320 HTP generation (greedy, sample): SUCCESS, parity gate PASS.
+- Step-320 HTP generation (published successful runs): SUCCESS, parity and AR gates PASS.
 - Step-1000 HTP generation: BLOCKED by CPU/HTP parity gate.
   The fixed 2e-2 absolute logit-error gate is exceeded because logits grow in
   magnitude between step 320 and step 1000 (CPU logit RMS ~3.21 -> ~3.57 for
@@ -296,19 +359,25 @@ The HTP step-1000 validation NLL is within ~0.04 of the CPU anchor.
 - training-status.csv: training run metadata.
 - cpu-anchor.csv: CPU-selected anchor NLL from the public pilot bundle.
 - limitations.csv: known limitations and blocked outputs.
-- manifest.json: content hashes for the published files.
+- manifest.json: content hashes for the other published files (the manifest
+  deliberately excludes its own self-referential hash).
+
+The CSVs are a fixed historical canonical aggregate. The exporter refuses to
+replace this bundle unless its input contains the canonical L19 seed-1
+step-320 greedy/max-64 success with all unchanged generation gates passing;
+mutable parity-control reports are not substituted for that source.
 
 ## Reproduction (manual)
 
 ```powershell
 # Training
-scripts/run_nicopedia_htp_training.ps1 -Model L19 -Seed 1 -Steps 1000 `
+scripts/run_nicopedia_htp_training.ps1 -Layers 19 -Seed 1 -Steps 1000 `
   -QairtSdkRoot "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702" `
   -ExpectedBuildId "2.48.40.260702151143"
 
 # Generation (step 320)
 scripts/run_nicopedia_htp_generate.ps1 -Model L19 -Seed 1 `
-  -Prompt "人工知能とは" -MaxNewBytes 64 -Mode Greedy -CheckpointStep 320 `
+  -PromptFile <private-greedy-prompt-file> -MaxNewBytes 64 -Mode Greedy -CheckpointStep 320 `
   -QairtSdkRoot "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702" `
   -ExpectedBuildId "2.48.40.260702151143"
 
@@ -322,7 +391,7 @@ build/host_tests/htp_checkpoint_eval.exe `
 
 # Re-create manifest after README is written.
 $manifest.files = [ordered]@{}
-foreach ($name in $allowList) {
+foreach ($name in $manifestedFiles) {
     $path = Join-Path $output $name
     if (Test-Path -LiteralPath $path) {
         $manifest.files[$name] = [ordered]@{
@@ -350,6 +419,37 @@ if ($SelfTest) {
     $expected = $allowList | Sort-Object
     if (Compare-Object $actual $expected) {
         throw "Allow-list guard failed: output files [$($actual -join ', ')] differ from expected [$($expected -join ', ')]"
+    }
+    $manifestMap = Get-Content -Raw -LiteralPath (Join-Path $output "manifest.json") |
+        ConvertFrom-Json -AsHashtable
+    $manifestNames = @($manifestMap.files.Keys | Sort-Object)
+    $expectedManifestNames = @($manifestedFiles | Sort-Object)
+    if (Compare-Object $manifestNames $expectedManifestNames) {
+        throw "Manifest guard failed: entries [$($manifestNames -join ', ')] differ from expected [$($expectedManifestNames -join ', ')]"
+    }
+    foreach ($name in $manifestedFiles) {
+        $path = Join-Path $output $name
+        if ($manifestMap.files[$name].sha256 -ne (Get-NormalizedSha256 $path) -or
+            [long]$manifestMap.files[$name].bytes -ne (Get-Item -LiteralPath $path).Length) {
+            throw "Manifest guard failed: stale hash or byte count for $name"
+        }
+    }
+    $summary = @(Import-Csv -LiteralPath (Join-Path $output "generation-summary.csv"))
+    $step320 = @($summary | Where-Object { $_.checkpoint_step -eq '320' })
+    $step1000 = @($summary | Where-Object { $_.checkpoint_step -eq '1000' })
+    if ($step320.Count -ne 1 -or $step320[0].status -ne 'SUCCESS' -or
+        $step320[0].generate_mode -ne 'greedy' -or $step320[0].max_new_bytes -ne '64' -or
+        $step320[0].parity_gate -ne 'true' -or $step320[0].ar_gate -ne 'true' -or
+        $step320[0].generation_gate -ne 'true' -or [int]$step320[0].generated_byte_count -ne 64) {
+        throw "Publication semantics guard failed: step-320 control rejection was not excluded"
+    }
+    if ($step1000.Count -ne 0) {
+        throw "Publication semantics guard failed: blocked step-1000 run entered the historical generation rows"
+    }
+    $readmeText = Get-Content -Raw -LiteralPath (Join-Path $output "README.md")
+    if ($readmeText -notmatch 'published successful runs.*SUCCESS, parity and AR gates PASS' -or
+        $readmeText -notmatch 'Step-1000 HTP generation: BLOCKED by CPU/HTP parity gate') {
+        throw "Publication semantics guard failed: README status summary is inconsistent"
     }
     Write-Host "qnn_nicopedia_htp_1000step_generation_exporter_self_test=PASS"
 }

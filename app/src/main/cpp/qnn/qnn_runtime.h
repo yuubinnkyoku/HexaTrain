@@ -153,6 +153,11 @@ struct RuntimeOptions {
     // 0 = unset, 1 = false, 2 = true.  Fusion can change intermediate
     // rounding; disabling it is a numeric-path probe.
     std::uint32_t htpGraphAdvancedActivationFusion = 0;
+    // QNN_HTP_CONTEXT_CONFIG_OPTION_GRAPH_SPLITTING_ENABLED (bool).
+    // 0 = unset (passes nullptr to QnnContext_create exactly as the
+    // established path), 1 = false, 2 = true. Context-only private
+    // diagnostic: no graph math, checkpoint, or gate change.
+    std::uint32_t htpContextGraphSplitting = 0;
     // Diagnostic: declare NATIVE (internal) float tensors as FP16 instead of
     // FP32.  APP_READ/APP_WRITE/STATIC tensors stay FP32 because the host
     // buffers are FP32.  Used to probe whether the HTP backend already

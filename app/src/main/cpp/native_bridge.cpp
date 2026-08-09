@@ -353,6 +353,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jint htpGraphPrecisionCompensation,
     jint htpGraphWeightsPacking,
     jint htpGraphAdvancedActivationFusion,
+    jint htpContextGraphSplitting,
     jboolean htpNativeTensorFp16) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -393,6 +394,13 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
             "failure_classification=PROMPT_EMPTY\n"
             "error=prompt_path_required\n");
     }
+    if (htpContextGraphSplitting < 0 || htpContextGraphSplitting > 2) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=phonelm.htp_context_graph_splitting must be 0, 1 or 2\n");
+    }
 
     phonelm::tiny_lm::Config config;
     config.vocabularySize = 256;
@@ -429,6 +437,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         htpGraphAdvancedActivationFusion > 0
             ? static_cast<uint32_t>(htpGraphAdvancedActivationFusion)
             : 0;
+    generateConfig.htpContextGraphSplitting =
+        static_cast<uint32_t>(htpContextGraphSplitting);
     generateConfig.htpNativeTensorFp16 = htpNativeTensorFp16 == JNI_TRUE;
 
     auto sink = [&](const std::string& message) { logcat(message); };

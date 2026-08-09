@@ -5534,6 +5534,7 @@ std::string nicopediaHtpGeneration(
   options.htpGraphWeightsPacking = generateConfig.htpGraphWeightsPacking;
   options.htpGraphAdvancedActivationFusion =
       generateConfig.htpGraphAdvancedActivationFusion;
+  options.htpContextGraphSplitting = generateConfig.htpContextGraphSplitting;
   options.htpNativeTensorFp16 = generateConfig.htpNativeTensorFp16;
   runtime.setOptions(options);
   std::string error;
@@ -5565,6 +5566,12 @@ std::string nicopediaHtpGeneration(
   // Fixed-prefix CPU/HTP parity on the shared deterministic prefixes.
   std::vector<NprtParityRow> parityRows;
   const auto &prefixes = nicopedia_gen::parityPrefixes();
+  // Private execution fingerprint: full HTP logits in the fixed-prefix order,
+  // followed by the fixed eight-step AR order.  This is evidence only; it
+  // neither feeds the gate nor exposes raw tensors in the report.
+  std::vector<float> htpExecutionFingerprintLogits;
+  htpExecutionFingerprintLogits.reserve(
+      (prefixes.size() + 8u) * size_t(config.tokens) * config.vocabularySize);
   bool parityGate = true;          // legacy gate (unchanged semantics)
   bool parityGateCandidate = true; // candidate full policy F (protocol)
   for (const auto &prefix : prefixes) {
@@ -5578,6 +5585,9 @@ std::string nicopediaHtpGeneration(
             windowInput(prefixContext), zeros, loaded.parameters, 0.0f,
             htpStep, error))
       return failure("nicopedia_generate_parity", error, runtime);
+    htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
+                                         htpStep.logits.begin(),
+                                         htpStep.logits.end());
     const auto logitsError = compareNprt(cpuStep.logits, htpStep.logits);
     const auto probabilityError =
         compareNprt(cpuStep.probabilities, htpStep.probabilities);
@@ -5662,6 +5672,9 @@ std::string nicopediaHtpGeneration(
             windowInput(htpContext), zeros, loaded.parameters, 0.0f, htpStep,
             error))
       return failure("nicopedia_generate_ar", error, runtime);
+    htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
+                                         htpStep.logits.begin(),
+                                         htpStep.logits.end());
     NprtArRow row;
     row.step = step;
     const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
@@ -5844,6 +5857,8 @@ std::string nicopediaHtpGeneration(
          << "\nshort_period_loop_fraction=" << ag.shortPeriodLoopFraction
          << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
          << "\nparity_prefix_count=" << parityRows.size()
+         << "\nhtp_execution_fingerprint_sha256="
+         << canonicalFloatSha256(htpExecutionFingerprintLogits)
          << "\nparity_gate=" << (parityGate ? "true" : "false")
          << "\nparity_gate_candidate=" << (parityGateCandidate ? "true" : "false")
          << "\nar_steps=" << kArSteps
@@ -5856,6 +5871,8 @@ std::string nicopediaHtpGeneration(
          << "\nhtp_graph_weights_packing=" << generateConfig.htpGraphWeightsPacking
          << "\nhtp_graph_activation_fusion="
          << generateConfig.htpGraphAdvancedActivationFusion
+         << "\nhtp_context_graph_splitting="
+         << generateConfig.htpContextGraphSplitting
          << "\nhtp_native_tensor_fp16="
          << (generateConfig.htpNativeTensorFp16 ? "true" : "false")
          << "\nar_divergence_step="

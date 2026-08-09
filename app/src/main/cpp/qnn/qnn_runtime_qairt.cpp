@@ -6,6 +6,7 @@
 #include <QnnOpDef.h>
 #include <QnnSdkBuildId.h>
 #include <HTP/QnnHtpDevice.h>
+#include <HTP/QnnHtpContext.h>
 #include <HTP/QnnHtpGraph.h>
 #include <android/log.h>
 #include <dlfcn.h>
@@ -92,6 +93,51 @@ std::string functionLibraryBasename(const void* function) {
     return slash ? slash + 1 : info.dli_fname;
 }
 const char* boolText(bool value) { return value ? "true" : "false"; }
+
+// Holds the official HTP custom config and its QNN wrapper through each
+// QnnContext_create call.  Keeping unset as nullptr preserves the established
+// context creation ABI exactly rather than passing an empty config array.
+struct HtpContextConfigs {
+    QnnHtpContext_CustomConfig_t graphSplitting = QNN_HTP_CONTEXT_CUSTOM_CONFIG_INIT;
+    QnnContext_Config_t contextConfig = QNN_CONTEXT_CONFIG_INIT;
+    std::array<const QnnContext_Config_t*, 2> configPtrs{};
+    bool failClosedInvalid = false;
+    const char* requested = "unset";
+
+    const QnnContext_Config_t** array() {
+        if (configPtrs[0] == nullptr) return nullptr;
+        // The builder returns by value. Rebind every self-reference on the
+        // final object before passing it to QNN; named-return-value elision is
+        // not a lifetime guarantee.
+        contextConfig.customConfig = &graphSplitting;
+        configPtrs[0] = &contextConfig;
+        return configPtrs.data();
+    }
+
+    const char* delivery() const {
+        return configPtrs[0] == nullptr ? "unset_nullptr"
+                                        : "passed_to_qnn_context_create";
+    }
+};
+
+HtpContextConfigs buildHtpContextConfigs(const RuntimeOptions& options) {
+    HtpContextConfigs configs;
+    if (options.htpContextGraphSplitting == 0) return configs;
+    if (options.htpContextGraphSplitting > 2) {
+        configs.failClosedInvalid = true;
+        return configs;
+    }
+    const bool enabled = options.htpContextGraphSplitting == 2;
+    configs.graphSplitting.option =
+        QNN_HTP_CONTEXT_CONFIG_OPTION_GRAPH_SPLITTING_ENABLED;
+    configs.graphSplitting.graphSplittingEnabled = enabled;
+    configs.contextConfig.option = QNN_CONTEXT_CONFIG_OPTION_CUSTOM;
+    configs.contextConfig.customConfig = &configs.graphSplitting;
+    configs.configPtrs[0] = &configs.contextConfig;
+    configs.configPtrs[1] = nullptr;
+    configs.requested = enabled ? "true" : "false";
+    return configs;
+}
 const char* logLevelText(int level) {
     switch (level) {
         case 1: return "ERROR";
@@ -785,17 +831,38 @@ bool Runtime::initialize(QnnBackendKind kind, std::string& error) {
             error = "device_create: deviceCreate=" + std::to_string(QNN_GET_ERROR_CODE(status)); diagnostics_=d.str()+"context_create_called=false\nfailed_api=device_create\n"; return false;
         }
     }
-    d << "context_create_called=true\n";
+    auto htpContextConfigs = buildHtpContextConfigs(options_);
+    if (htpContextConfigs.failClosedInvalid) {
+        error = "context_create: invalid htp context graph splitting option";
+        diagnostics_ = d.str() + "htp_context_graph_splitting_runtime=invalid\n"
+            "context_create_called=false\nfailed_api=context_create_config\n";
+        return false;
+    }
+    if (kind != QnnBackendKind::HTP && htpContextConfigs.array() != nullptr) {
+        error = "context_create: htp context graph splitting requires HTP backend";
+        diagnostics_ = d.str() + "htp_context_graph_splitting_runtime=" +
+            htpContextConfigs.requested +
+            "\ncontext_create_called=false\nfailed_api=context_create_config\n";
+        return false;
+    }
+    d << "htp_context_graph_splitting_runtime=" << htpContextConfigs.requested
+      << "\ncontext_create_config_pointer_null="
+      << (htpContextConfigs.array() == nullptr ? "true" : "false")
+      << "\ncontext_create_config_count="
+      << (htpContextConfigs.array() == nullptr ? 0 : 1)
+      << "\ncontext_create_called=true\n";
     started = Clock::now();
     apiTrace_.contextCreateCalled = true;
-    status = impl_->api.contextCreate(impl_->backend, impl_->device, nullptr, &impl_->context);
+    status = impl_->api.contextCreate(impl_->backend, impl_->device,
+                                      htpContextConfigs.array(), &impl_->context);
     apiTrace_.contextCreateResult = QNN_GET_ERROR_CODE(status);
     apiTrace_.contextHandleNonnull = impl_->context != nullptr;
     metrics_.contextCreateUs = elapsedUs(started);
     d << "context_create_result=" << QNN_GET_ERROR_CODE(status) << "\nQnnContext_create=" << QNN_GET_ERROR_CODE(status)
       << "\ncontext_handle_null=" << (impl_->context ? "false" : "true") << '\n';
     if (status != QNN_SUCCESS) { error = "context_create: contextCreate=" + std::to_string(QNN_GET_ERROR_CODE(status)); diagnostics_=d.str()+"failed_api=context_create\n"; return false; }
-    diagnostics_ = d.str() + "failed_api=none\n";
+    diagnostics_ = d.str() + "htp_context_graph_splitting_delivery=" +
+        htpContextConfigs.delivery() + "\nfailed_api=none\n";
     return true;
 }
 
@@ -987,13 +1054,22 @@ bool Runtime::recreateContext(std::string& error) {
     }
     invalidateContextGraphs();
     impl_->context = nullptr;
+    auto htpContextConfigs = buildHtpContextConfigs(options_);
+    if (htpContextConfigs.failClosedInvalid) {
+        error = "contextCreate(recreate): invalid htp context graph splitting option";
+        return false;
+    }
     status = impl_->api.contextCreate(
-        impl_->backend, impl_->device, nullptr, &impl_->context);
+        impl_->backend, impl_->device, htpContextConfigs.array(), &impl_->context);
     if (status != QNN_SUCCESS) {
         error = "contextCreate(recreate)=" +
                 std::to_string(QNN_GET_ERROR_CODE(status));
         return false;
     }
+    diagnostics_ += "htp_context_graph_splitting_recreate=" +
+        std::string(htpContextConfigs.requested) +
+        "\nhtp_context_graph_splitting_recreate_config_pointer_null=" +
+        (htpContextConfigs.array() == nullptr ? "true" : "false") + "\n";
     return true;
 }
 

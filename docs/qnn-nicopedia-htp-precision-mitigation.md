@@ -17,7 +17,7 @@ The step-1000 checkpoint fails the legacy parity gate on `parity_13`
 (docs/qnn-nicopedia-htp-divergence-localization.md) established
 GRADUAL_ACCUMULATION: a ~1e-3 relative element-wise rounding spread across
 all matmul/LayerNorm arithmetic, accumulating through 19 residual blocks,
-consistent with HTP fp16-equivalent kernel precision. This study asks whether
+consistent with lower-effective-precision HTP kernel arithmetic. This study asks whether
 any precision control exposed by QAIRT 2.48.40.260702 can reduce that error on
 the HTP side itself, keeping the same checkpoint, CPU reference, prefixes, and
 legacy parity policy.
@@ -61,7 +61,7 @@ every run.
 ## 4. Measured outcome (step1000, parity_13)
 
 All runs: fixed serial identity (NX741J SM8850), thermal 0, battery 87%,
-checkpoint hash `fnv1a64:e0cc855676bf33bd`, `cpu_fallback=false`.
+checkpoint identity verified privately, `cpu_fallback=false`.
 
 | candidate | precision | comp | packing | fusion | native fp16 | parity_13 raw | centered RMS | prob L1 |
 |---|---|---|---|---|---|---|---|---|
@@ -95,10 +95,13 @@ FP16-equivalent internal precision, but the internal kernel precision was not
 directly observed and no API-visible FP32 execution path exists in this SDK
 version.
 
-**Result: no precision mitigation is possible through the QAIRT controls
-available in this SDK; the legacy parity gate cannot be passed for step1000 by
-changing the HTP numeric path.** Generation stays BLOCKED with the exact
-reason previously documented (KEEP_LEGACY_BLOCKED).
+**Result: no precision mitigation was found through the tested online graph
+precision controls in this SDK.** This does not exclude every context,
+serialization, partitioning, or future-SDK execution route. A follow-up audit
+of the documented context graph-splitting option is reported in
+`qnn-nicopedia-htp-execution-path.md`. The legacy parity gate remains closed
+for step1000, so generation stays BLOCKED with the exact reason previously
+documented (KEEP_LEGACY_BLOCKED).
 
 The precision-config plumbing added in this milestone is a private diagnostic
 surface (default-off) that preserves existing behavior exactly; it documents

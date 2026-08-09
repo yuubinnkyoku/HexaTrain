@@ -308,6 +308,11 @@ try {
     }
 
     Invoke-Step "resumable-formal-runner-self-test" {
+        Invoke-PwshScript "headless runner physical-identity self-test" `
+            (Join-Path $Root "scripts\run_qnn_headless_tests.ps1") @(
+                "-QairtSdkRoot", $PhoneLmQairtSdkRoot,
+                "-ExpectedBuildId", $PhoneLmQairtBuildId,
+                "-SelfTest")
         Invoke-PwshScript "direct-seed identity self-test" `
             (Join-Path $Root "scripts\run_qnn_direct_seed_equivalence.ps1") @(
                 "-SelfTest")

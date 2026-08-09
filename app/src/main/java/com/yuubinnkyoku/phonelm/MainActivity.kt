@@ -186,6 +186,8 @@ class MainActivity : Activity() {
                 intent.getIntExtra("phonelm.htp_graph_weights_packing", 0)
             val htpGraphAdvancedActivationFusion =
                 intent.getIntExtra("phonelm.htp_graph_activation_fusion", 0)
+            val htpContextGraphSplitting =
+                intent.getIntExtra("phonelm.htp_context_graph_splitting", 0)
             val htpNativeTensorFp16 =
                 intent.getBooleanExtra("phonelm.htp_native_tensor_fp16", false)
             val checkpointFile = File(checkpointDir,
@@ -213,6 +215,8 @@ class MainActivity : Activity() {
                     "phonelm.htp_graph_weights_packing must be 0, 1 or 2"
                 htpGraphAdvancedActivationFusion !in 0..2 ->
                     "phonelm.htp_graph_activation_fusion must be 0, 1 or 2"
+                htpContextGraphSplitting !in 0..2 ->
+                    "phonelm.htp_context_graph_splitting must be 0, 1 or 2"
                 !checkpointFile.isFile ->
                     "checkpoint file missing: ${checkpointFile.name}"
                 !promptFile.isFile -> "prompt file missing: prompt.bin"
@@ -245,6 +249,7 @@ class MainActivity : Activity() {
                         htpGraphPrecisionCompensation = htpGraphPrecisionCompensation,
                         htpGraphWeightsPacking = htpGraphWeightsPacking,
                         htpGraphAdvancedActivationFusion = htpGraphAdvancedActivationFusion,
+                        htpContextGraphSplitting = htpContextGraphSplitting,
                         htpNativeTensorFp16 = htpNativeTensorFp16,
                     )
                 }

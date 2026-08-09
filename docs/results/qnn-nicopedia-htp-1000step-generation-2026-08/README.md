@@ -14,7 +14,7 @@ The HTP step-1000 validation NLL is within ~0.04 of the CPU anchor.
 
 ## Generation status
 
-- Step-320 HTP generation (greedy, sample): SUCCESS, parity gate PASS.
+- Step-320 HTP generation (published successful runs): SUCCESS, parity and AR gates PASS.
 - Step-1000 HTP generation: BLOCKED by CPU/HTP parity gate.
   The fixed 2e-2 absolute logit-error gate is exceeded because logits grow in
   magnitude between step 320 and step 1000 (CPU logit RMS ~3.21 -> ~3.57 for
@@ -31,19 +31,25 @@ The HTP step-1000 validation NLL is within ~0.04 of the CPU anchor.
 - training-status.csv: training run metadata.
 - cpu-anchor.csv: CPU-selected anchor NLL from the public pilot bundle.
 - limitations.csv: known limitations and blocked outputs.
-- manifest.json: content hashes for the published files.
+- manifest.json: content hashes for the other published files (the manifest
+  deliberately excludes its own self-referential hash).
+
+The CSVs are a fixed historical canonical aggregate. The exporter refuses to
+replace this bundle unless its input contains the canonical L19 seed-1
+step-320 greedy/max-64 success with all unchanged generation gates passing;
+mutable parity-control reports are not substituted for that source.
 
 ## Reproduction (manual)
 
 ```powershell
 # Training
-scripts/run_nicopedia_htp_training.ps1 -Model L19 -Seed 1 -Steps 1000 `
+scripts/run_nicopedia_htp_training.ps1 -Layers 19 -Seed 1 -Steps 1000 `
   -QairtSdkRoot "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702" `
   -ExpectedBuildId "2.48.40.260702151143"
 
 # Generation (step 320)
 scripts/run_nicopedia_htp_generate.ps1 -Model L19 -Seed 1 `
-  -Prompt "人工知能とは" -MaxNewBytes 64 -Mode Greedy -CheckpointStep 320 `
+  -PromptFile <private-greedy-prompt-file> -MaxNewBytes 64 -Mode Greedy -CheckpointStep 320 `
   -QairtSdkRoot "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702" `
   -ExpectedBuildId "2.48.40.260702151143"
 

@@ -74,6 +74,7 @@ object NativeBridge {
         htpGraphPrecisionCompensation: Int,
         htpGraphWeightsPacking: Int,
         htpGraphAdvancedActivationFusion: Int,
+        htpContextGraphSplitting: Int,
         htpNativeTensorFp16: Boolean,
     ): String
 

@@ -61,6 +61,9 @@ struct GenerateConfig {
   // QNN_HTP_GRAPH_CONFIG_OPTION_ADVANCED_ACTIVATION_FUSION. 0 = unset,
   // 1 = false, 2 = true.
   uint32_t htpGraphAdvancedActivationFusion = 0;
+  // QNN_HTP_CONTEXT_CONFIG_OPTION_GRAPH_SPLITTING_ENABLED. 0 = unset
+  // (established nullptr context config), 1 = false, 2 = true.
+  uint32_t htpContextGraphSplitting = 0;
   // Private diagnostic: declare NATIVE float tensors as FP16 (probe whether
   // the backend already executes FP32-declared graphs in FP16).  False by
   // default (established behavior).

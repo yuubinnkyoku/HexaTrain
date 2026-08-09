@@ -19,7 +19,7 @@ The 1000-step run is a from-scratch reproduction on QNN HTP:
 - Build ID: `2.48.40.260702151143`
 
 ```powershell
-scripts/run_nicopedia_htp_training.ps1 -Model L19 -Seed 1 -Steps 1000 `
+scripts/run_nicopedia_htp_training.ps1 -Layers 19 -Seed 1 -Steps 1000 `
   -QairtSdkRoot "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702" `
   -ExpectedBuildId "2.48.40.260702151143"
 ```
@@ -39,9 +39,9 @@ better than the step-320 HTP checkpoint.
 
 ### Step 320 HTP generation
 
-- greedy, max 64 bytes, prompt "人工知能とは": SUCCESS, parity gate PASS
-- sample, max 128 bytes, temp=0.6, topK=16, seed=42, prompt "ニコニコとは":
-  SUCCESS, parity gate PASS
+- Published successful run(s): SUCCESS, parity and AR gates PASS.
+- Parity-control runs that do not pass the generation gate are not published as
+  step-320 generation results.
 
 Aggregate byte-level statistics are in the published bundle.
 
@@ -52,7 +52,8 @@ Aggregate byte-level statistics are in the published bundle.
 - Cosine similarity between CPU and HTP logits remains above 0.999998,
   argmax/top-k agreement is preserved, and probability error stays small,
   so the divergence is consistent with growing logit magnitude exposing HTP
-  fixed-point/FP16 quantization error rather than a training correctness bug.
+  backend rounding at lower effective precision rather than a training
+  correctness bug. This does not identify the HTP internal datatype.
 
 ### Step 1000 CPU generation
 
@@ -96,7 +97,9 @@ checkpoint paths, serials, or ADB endpoints are included.
 Pull the 1000-step checkpoint:
 
 ```powershell
-adb -s 324753221196 shell run-as com.yuubinnkyoku.phonelm `
+# Set this only after the Tier policy's stable-identity/alias check. Never
+# record the selected endpoint in a tracked file.
+adb -s $DeviceEndpoint shell run-as com.yuubinnkyoku.phonelm `
   cat files/checkpoints/nicopedia-cache/htp-seed1-l19-step1000.ckpt `
   > build/reports/nicopedia-htp-training/htp-seed1-l19-step1000.ckpt
 ```
@@ -115,7 +118,7 @@ CPU reference generation:
 ```powershell
 build/host-tests/nicopedia_cpu_generate.exe `
   build/reports/nicopedia-htp-training/htp-seed1-l19-step1000.ckpt `
-  e4babae5b7a5e79fa5e883bde381a8e381af greedy 64
+  <private-prompt-hex> greedy 64
 ```
 
 ## Limitations and next work

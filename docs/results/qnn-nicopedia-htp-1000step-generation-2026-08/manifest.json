@@ -1,14 +1,10 @@
 {
   "source_commit": null,
-  "created": "2026-08-08T19:36:40Z",
+  "created": "2026-08-09T09:32:27Z",
   "files": {
     "README.md": {
-      "sha256": "1a14613947772c98c55f24aed5148e8bc92000b3bf554cd0268358b6907fcf08",
-      "bytes": 2373
-    },
-    "manifest.json": {
-      "sha256": "982e56202d972c9b702d396c02cb73f73ff33ab7cc0fe8db130bf7acbd2469c8",
-      "bytes": 937
+      "sha256": "d7c4761fef94be47959bfe472a2a3dc4e02612f49e01b1b90c77d162bfd11db7",
+      "bytes": 2772
     },
     "generation-summary.csv": {
       "sha256": "597ad9e2d360c7accfd133a0f611e7b794153a1b9fcb70ffdcb7caa9ac592f45",
