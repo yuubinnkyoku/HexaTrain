@@ -293,6 +293,26 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia parity policy host tests failed"
 }
 
+$NicopediaResumeExecutable = Join-Path $OutputDirectory "nicopedia_resume_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_resume_test.cpp") `
+    -o $NicopediaResumeExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia resume host test compilation failed"
+}
+Push-Location $OutputDirectory
+try {
+    & $NicopediaResumeExecutable
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nicopedia resume host test failed"
+    }
+} finally {
+    Pop-Location
+}
+Write-Host "nicopedia_resume_host_test=PASS"
+
 $NicopediaCpuGenerateExecutable = Join-Path $OutputDirectory "nicopedia_cpu_generate.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `

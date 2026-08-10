@@ -80,6 +80,8 @@ object NativeBenchmarkEngine : BenchmarkEngine {
         checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
         diagnosticTrajectory = config.diagnosticTrajectory,
         diagnosticCheckpointDir = config.diagnosticCheckpointDir,
+        diagnosticResumeStep = config.diagnosticResumeStep,
+        diagnosticCheckpointInterval = config.diagnosticCheckpointInterval,
         progressCallback = ProgressCallback(progress),
     )
 }

@@ -44,6 +44,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "qairt_version.ps1")
+. (Join-Path $PSScriptRoot "nicopedia_runner_common.ps1")
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
     -ExpectedBuildId $ExpectedBuildId
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -128,9 +129,8 @@ $testApk = Join-Path $root "app\build\outputs\apk\androidTest\debug\app-debug-an
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
 function Get-PrivateAdbOutput([string]$Endpoint, [string[]]$Arguments) {
-    $output = & $adb -s $Endpoint @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "ADB device identity query failed (endpoint redacted)." }
-    return ($output -join "`n").Trim()
+    $result = Invoke-PhoneLmAdb -Adb $adb -Device $Endpoint -Arguments $Arguments
+    return $result.Text.Trim()
 }
 function Get-PhysicalDeviceIdentity([string]$Endpoint) {
     $emulator = Get-PrivateAdbOutput $Endpoint @("shell", "getprop", "ro.kernel.qemu")
@@ -139,7 +139,9 @@ function Get-PhysicalDeviceIdentity([string]$Endpoint) {
     $bootSerial = Get-PrivateAdbOutput $Endpoint @("shell", "getprop", "ro.boot.serialno")
     return Resolve-StablePhysicalIdentity $serial $bootSerial
 }
-$online = @((& $adb devices) | Where-Object { $_ -match '^(\S+)\s+device$' } | ForEach-Object { $Matches[1] })
+$deviceListing = Get-PhoneLmAdbResult -Adb $adb -Arguments @('devices')
+if ($deviceListing.ExitCode -ne 0) { throw "$($deviceListing.Classification): device listing failed" }
+$online = @($deviceListing.Output | Where-Object { $_ -match '^(\S+)\s+device$' } | ForEach-Object { $Matches[1] })
 if ($online.Count -eq 0) { throw "No online ADB endpoint is available." }
 $physicalDevices = @{}
 foreach ($endpoint in $online) {
@@ -180,9 +182,7 @@ if ($Suite -eq "nicopedia-parity") {
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot "nicopedia-input-identity-private.json") -Encoding utf8
 }
 function Adb([string[]]$Arguments) {
-    $output = & $adb -s $device @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "ADB command failed (endpoint redacted): $($Arguments -join ' ')`n$output" }
-    return $output
+    return (Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments $Arguments).Output
 }
 function Private-Cat([string]$Path) { return (Adb @("shell", "run-as", $package, "cat", $Path)) -join "`n" }
 function Get-DeviceCondition {
@@ -212,10 +212,8 @@ function Stage-NicopediaParityInputs {
     $temporaryCheckpoint = "/data/local/tmp/phonelm-headless-$RunId-checkpoint"
     $temporaryPrompt = "/data/local/tmp/phonelm-headless-$RunId-prompt"
     try {
-        & $adb -s $device push $CheckpointHostPath $temporaryCheckpoint *> $null
-        if ($LASTEXITCODE -ne 0) { throw "Unable to stage the nicopedia parity checkpoint (host path redacted)." }
-        & $adb -s $device push $PromptHostPath $temporaryPrompt *> $null
-        if ($LASTEXITCODE -ne 0) { throw "Unable to stage the nicopedia parity prompt (host path redacted)." }
+        Adb @('push', $CheckpointHostPath, $temporaryCheckpoint) | Out-Null
+        Adb @('push', $PromptHostPath, $temporaryPrompt) | Out-Null
         # Keep each command as an argv operation. `adb shell ... sh -c` joins
         # Windows arguments before the remote shell parses them and can strip
         # the command-string boundary, as demonstrated by the fail-closed
@@ -348,7 +346,11 @@ try {
     foreach ($required in @(
         "activity_create_count=0", "activity_resume_count=0",
         "phonelm_became_top_activity_count=0", "focus_takeover_count=0",
-        "single_flight_result=ALREADY_RUNNING", "compile_time_qairt_build_id=$ExpectedBuildId",
+        # The native runtime report owns the compile-time SDK identity.  The
+        # androidTest APK has a separate BuildConfig and must not synthesize
+        # this field from host input.
+        "single_flight_result=ALREADY_RUNNING", "compile_time_sdk_build_id=$ExpectedBuildId",
+        "runtime_backend_build_id=v$ExpectedBuildId", "backend_build_id_match=true",
         "headless_test_mode=$TestMode", "backend_requested=HTP", "cpu_fallback=false"
     )) {
         if ($deviceReport -notmatch "(?m)^$([regex]::Escape($required))$") {

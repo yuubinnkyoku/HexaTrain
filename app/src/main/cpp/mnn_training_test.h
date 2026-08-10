@@ -52,6 +52,14 @@ struct TrainingConfig {
     // validated on the Kotlin side to stay below the app files directory;
     // contents are never part of public artifacts.
     std::string diagnosticCheckpointDir;
+    // NICOPEDIA training: resume from this global optimizer step (>0) instead
+    // of step 0. The NPRTCKPTV2 checkpoint at exactly this step must already
+    // exist in the checkpoint directory; NPRTCKPTV1 (no Adam moments) is
+    // rejected fail-closed. 0 = from scratch.
+    int diagnosticResumeStep = 0;
+    // NICOPEDIA training: save NPRTCKPTV2 checkpoints every N steps and at
+    // the final step. 0 = default 250.
+    int diagnosticCheckpointInterval = 0;
 };
 
 struct TrainingOutcome {

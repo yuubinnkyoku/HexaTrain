@@ -9,6 +9,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /** Instrumentation entry point: never launches MainActivity. */
 @RunWith(AndroidJUnit4::class)
@@ -20,12 +22,23 @@ class HeadlessDeviceTestRunner {
         val arguments = InstrumentationRegistry.getArguments()
         val suite = arguments.getString("suite") ?: "device-probe"
         val testMode = arguments.getString("testMode") ?: "BACKGROUND_CORRECTNESS"
-        val liveUpdateNotification = arguments.getString("liveUpdateNotification")?.toBooleanStrictOrNull() ?: false
+        val liveUpdateNotification = arguments.getString("liveUpdateNotification")?.let {
+            it.toBooleanStrictOrNull() ?: throw IllegalArgumentException(
+                "liveUpdateNotification must be true or false",
+            )
+        } ?: false
+        val nicopediaSuite = suite in NICOPEDIA_SUITES
         require(testMode == "BACKGROUND_CORRECTNESS" || testMode == "EXCLUSIVE_BENCHMARK") {
             "Unknown headless test mode"
         }
         require(suite != "nicopedia-parity" || testMode == "BACKGROUND_CORRECTNESS") {
             "nicopedia-parity is restricted to BACKGROUND_CORRECTNESS"
+        }
+        require(!nicopediaSuite || testMode == "BACKGROUND_CORRECTNESS") {
+            "$suite is restricted to BACKGROUND_CORRECTNESS"
+        }
+        require(!nicopediaSuite || !liveUpdateNotification) {
+            "$suite does not allow live update notifications"
         }
         require(suite.length <= 64) { "suite is too long" }
         val rawRunId = arguments.getString("runId") ?: "local"
@@ -45,6 +58,8 @@ class HeadlessDeviceTestRunner {
             var reportPath = ""
             var phase = "initializing"
             var test = "environment"
+            val currentPhase = AtomicReference(phase)
+            val currentTest = AtomicReference(test)
             state.write(HeadlessStatus(runId, suite, "STARTING", phase, test, 0, 2, startTime = started))
             val contender = state.acquire()
             check(contender.lease == null && contender.existingStatus?.contains("\"run_id\":\"$runId\"") == true) {
@@ -59,8 +74,10 @@ class HeadlessDeviceTestRunner {
                 QnnEnvironment.prepare(context)
                 phase = "native"
                 test = suite
+                currentPhase.set(phase)
+                currentTest.set(test)
                 state.write(HeadlessStatus(runId, suite, "RUNNING", phase, test, 1, 2, startTime = started))
-                val mode = if (suite == "nicopedia-parity") null else modeFor(suite)
+                val mode = if (suite == "nicopedia-parity" || nicopediaSuite) null else modeFor(suite)
                 val notification = if (liveUpdateNotification) LiveUpdateNotificationController(context) else null
                 notification?.onRunStarted("QNN数値検証", 1)
                 notification?.onProgress(RunProgress.PhaseChanged(suite))
@@ -70,7 +87,7 @@ class HeadlessDeviceTestRunner {
                         try {
                             Thread.sleep(30_000L)
                             if (heartbeatRunning.get()) {
-                                state.write(HeadlessStatus(runId, suite, "RUNNING", phase, test, 1, 2,
+                                state.write(HeadlessStatus(runId, suite, "RUNNING", currentPhase.get(), currentTest.get(), 1, 2,
                                     startTime = started, lastHeartbeat = System.currentTimeMillis()))
                             }
                         } catch (_: InterruptedException) {
@@ -78,25 +95,83 @@ class HeadlessDeviceTestRunner {
                         }
                     }
                 }, "PhoneLM-headless-heartbeat").apply { isDaemon = true; start() }
+                val lastProgressStatus = AtomicLong(started)
+                val progressCallback = ProgressCallback { message ->
+                    val event = NativeProgressParser.parse(message)
+                    if (event != null) {
+                        when (event) {
+                            is RunProgress.PhaseChanged -> {
+                                phase = event.phase
+                                test = event.phase
+                                currentPhase.set(event.phase)
+                                currentTest.set(event.phase)
+                            }
+                            is RunProgress.Step -> {
+                                event.phase?.let {
+                                    phase = it
+                                    currentPhase.set(it)
+                                }
+                                val stepLabel = event.phase ?: "step-${event.completed}"
+                                test = stepLabel
+                                currentTest.set(stepLabel)
+                            }
+                            is RunProgress.Started -> {
+                                test = event.kind
+                                currentTest.set(event.kind)
+                            }
+                            is RunProgress.Completed -> {
+                                test = "complete"
+                                currentTest.set(test)
+                            }
+                            is RunProgress.Failed -> {
+                                test = "failed"
+                                currentTest.set(test)
+                            }
+                            RunProgress.Cancelled -> {
+                                test = "cancelled"
+                                currentTest.set(test)
+                            }
+                        }
+                        notification?.onProgress(event)
+                        val now = System.currentTimeMillis()
+                        val terminal = event is RunProgress.Completed ||
+                            event is RunProgress.Failed || event is RunProgress.Cancelled
+                        val previous = lastProgressStatus.get()
+                        if (terminal || now - previous >= PROGRESS_STATUS_INTERVAL_MS) {
+                            if (terminal || lastProgressStatus.compareAndSet(previous, now)) {
+                                state.write(HeadlessStatus(runId, suite, "RUNNING",
+                                    currentPhase.get(), currentTest.get(), 1, 2,
+                                    startTime = started, lastHeartbeat = now))
+                            }
+                        }
+                    }
+                }
                 val report = try {
-                    if (suite == "nicopedia-parity") {
-                        runNicopediaParity(context, arguments, runId)
-                    } else {
-                        NativeBridge.nativeRunExecutionMode(
-                            executionMode = requireNotNull(mode).nativeCode, batchSize = 2, dimension = 4, hiddenDimension = 5,
-                            outputDimension = 3, steps = if (suite == "qnn-reproducibility") 2 else 1,
-                            warmupSteps = 0, learningRate = 0.1f, seed = 20_260_710L, sampleCount = 2,
-                            epochs = 0, measuredSteps = 0, correctnessInterval = 1, benchmarkMode = false,
-                            seedSelectionMode = 0,
-                            trainingStabilityMode = 0,
-                            depthPairInitMode = 0,
-                            checkpointSelectionMode = 0,
-                            diagnosticTrajectory = false,
-                            diagnosticCheckpointDir = null,
-                            progressCallback = ProgressCallback { message ->
-                                NativeProgressParser.parse(message)?.let { notification?.onProgress(it) }
-                            },
-                        )
+                    when {
+                        suite == "nicopedia-parity" ->
+                            runNicopediaParity(context, arguments, runId)
+                        suite == "nicopedia-long-training" ->
+                            runNicopediaLongTraining(context, arguments, runId, progressCallback)
+                        suite == "nicopedia-eval" ->
+                            runNicopediaEvaluate(context, arguments, runId)
+                        suite == "nicopedia-generate" ->
+                            runNicopediaGenerate(context, arguments, runId)
+                        else ->
+                            NativeBridge.nativeRunExecutionMode(
+                                executionMode = requireNotNull(mode).nativeCode, batchSize = 2, dimension = 4, hiddenDimension = 5,
+                                outputDimension = 3, steps = if (suite == "qnn-reproducibility") 2 else 1,
+                                warmupSteps = 0, learningRate = 0.1f, seed = 20_260_710L, sampleCount = 2,
+                                epochs = 0, measuredSteps = 0, correctnessInterval = 1, benchmarkMode = false,
+                                seedSelectionMode = 0,
+                                trainingStabilityMode = 0,
+                                depthPairInitMode = 0,
+                                checkpointSelectionMode = 0,
+                                diagnosticTrajectory = false,
+                                diagnosticCheckpointDir = null,
+                                diagnosticResumeStep = 0,
+                                diagnosticCheckpointInterval = 250,
+                                progressCallback = progressCallback,
+                            )
                     }
                 } finally {
                     heartbeatRunning.set(false)
@@ -111,29 +186,260 @@ class HeadlessDeviceTestRunner {
                 val countersOk = HeadlessActivityCounters.create.get() == 0 &&
                     HeadlessActivityCounters.resume.get() == 0 && HeadlessActivityCounters.becameTop.get() == 0 &&
                     HeadlessActivityCounters.focusTakeover.get() == 0
+                // Nicopedia native reports already carry the authoritative
+                // fallback flag.  Do not append a second false line that
+                // could mask a native fallback in a key/value consumer.
+                val fallbackAnnotation = if (nicopediaSuite) "" else "\ncpu_fallback=false"
                 val appended = report.trimEnd() + "\nactivity_create_count=${HeadlessActivityCounters.create.get()}" +
                     "\nactivity_resume_count=${HeadlessActivityCounters.resume.get()}" +
                     "\nphonelm_became_top_activity_count=${HeadlessActivityCounters.becameTop.get()}" +
                     "\nfocus_takeover_count=${HeadlessActivityCounters.focusTakeover.get()}" +
                     "\nsingle_flight_result=$singleFlightResult" +
                     "\nheadless_test_mode=$testMode" +
-                    "\ncompile_time_qairt_build_id=${BuildConfig.QAIRT_BUILD_ID}" +
                     "\nbackend_requested=HTP" +
                     "\nlive_update_notification_enabled=$liveUpdateNotification" +
-                    "\ncpu_fallback=false\n"
+                    fallbackAnnotation + "\n"
                 reportPath = state.writeReport(runId, appended)
                 state.write(HeadlessStatus(runId, suite, if (success && countersOk) "PASSED" else "FAILED", "complete", test, 2, 2,
                     result = if (success) "SUCCESS" else "NATIVE_FAILED", failureCode = if (countersOk) "" else "ACTIVITY_LAUNCHED", reportRelativePath = reportPath, startTime = started))
                 assertTrue("native result failed", success)
                 assertTrue("PhoneLM Activity was launched", countersOk)
             } catch (error: Throwable) {
-                state.write(HeadlessStatus(runId, suite, "FAILED", phase, test, 0, 2, result = "FAILED",
+                state.write(HeadlessStatus(runId, suite, "FAILED", currentPhase.get(), currentTest.get(), 0, 2, result = "FAILED",
                     failureCode = error.javaClass.simpleName, reportRelativePath = reportPath, startTime = started))
                 throw error
             } finally {
                 if (wakeLock.isHeld) wakeLock.release()
             }
         }
+    }
+
+    private data class NicopediaArguments(
+        val seed: Long,
+        val layers: Int,
+        val heads: Int,
+        val steps: Int,
+        val batchSize: Int,
+        val resumeStep: Int,
+        val checkpointInterval: Int,
+        val validationChunks: Int,
+        val developmentChunks: Int,
+        val checkpointStep: Int,
+        val generateMode: String,
+        val maxNewBytes: Int,
+        val temperature: Float,
+        val topK: Int,
+        val samplingSeed: Long,
+        val gatePolicy: String,
+    )
+
+    private fun parseNicopediaArguments(
+        arguments: android.os.Bundle,
+        suite: String,
+    ): NicopediaArguments {
+        // Instrumentation extras are strings.  Reject non-string values and
+        // malformed numeric text instead of silently falling back to a
+        // different trajectory.
+        val seed = longArgument(arguments, "seed", 1L, 1L..99_999L)
+        val layers = intArgument(arguments, "layers", 19, 1..100)
+        val heads = intArgument(arguments, "heads", 2, 1..32)
+        val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
+        val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
+        val resumeStep = intArgument(arguments, "resumeStep", 0, 0..100_000)
+        val checkpointInterval = intArgument(arguments, "checkpointInterval", 250, 1..10_000)
+        val validationChunks = intArgument(arguments, "validationChunks", 8_192, 1..1_000_000)
+        val developmentChunks = intArgument(arguments, "developmentChunks", 16_384, 1..1_000_000)
+        val checkpointStep = intArgument(arguments, "checkpointStep", 1_000, 1..100_000)
+        val generateMode = stringArgument(arguments, "generateMode", "greedy")
+        require(generateMode == "greedy" || generateMode == "sample") {
+            "generateMode must be greedy or sample"
+        }
+        val maxNewBytes = intArgument(arguments, "maxNewBytes", 64, 1..1_024)
+        val temperature = floatArgument(arguments, "temperature", 0.6f, 0.0001f..100f)
+        val topK = intArgument(arguments, "topK", 16, 1..256)
+        val samplingSeed = longArgument(arguments, "samplingSeed", 42L, 0L..Long.MAX_VALUE)
+        val gatePolicy = stringArgument(arguments, "gatePolicy", "legacy")
+        require(gatePolicy == "legacy" || gatePolicy == "candidate" || gatePolicy == "htp-native") {
+            "gatePolicy must be legacy, candidate, or htp-native"
+        }
+
+        require(layers == 19) { "$suite requires layers=19" }
+        require(heads == 2) { "$suite requires heads=2" }
+        if (suite == "nicopedia-long-training") {
+            require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
+            require(steps in 1..8_000) { "nicopedia-long-training hard ceiling is step 8000" }
+            require(resumeStep < steps) { "resumeStep must be smaller than steps" }
+        }
+        if (suite == "nicopedia-eval" || suite == "nicopedia-generate") {
+            require(checkpointStep >= 1) { "$suite requires checkpointStep >= 1" }
+        }
+        return NicopediaArguments(
+            seed = seed,
+            layers = layers,
+            heads = heads,
+            steps = steps,
+            batchSize = batchSize,
+            resumeStep = resumeStep,
+            checkpointInterval = checkpointInterval,
+            validationChunks = validationChunks,
+            developmentChunks = developmentChunks,
+            checkpointStep = checkpointStep,
+            generateMode = generateMode,
+            maxNewBytes = maxNewBytes,
+            temperature = temperature,
+            topK = topK,
+            samplingSeed = samplingSeed,
+            gatePolicy = gatePolicy,
+        )
+    }
+
+    private fun stringArgument(arguments: android.os.Bundle, name: String, default: String): String {
+        if (!arguments.containsKey(name)) return default
+        val value = arguments.get(name)
+        require(value is String) { "$name must be a string" }
+        require(value.isNotEmpty() && value.trim() == value) { "$name must not be empty or padded" }
+        return value
+    }
+
+    private fun intArgument(arguments: android.os.Bundle, name: String, default: Int, range: IntRange): Int {
+        if (!arguments.containsKey(name)) return default
+        val raw = arguments.get(name)
+        require(raw is String) { "$name must be a decimal string" }
+        require(raw.matches(DECIMAL_INTEGER)) { "$name must be a decimal integer" }
+        val value = raw.toLongOrNull() ?: throw IllegalArgumentException("$name is out of range")
+        require(value in range.first.toLong()..range.last.toLong()) { "$name must be in ${range.first}..${range.last}" }
+        return value.toInt()
+    }
+
+    private fun longArgument(arguments: android.os.Bundle, name: String, default: Long, range: LongRange): Long {
+        if (!arguments.containsKey(name)) return default
+        val raw = arguments.get(name)
+        require(raw is String) { "$name must be a decimal string" }
+        require(raw.matches(DECIMAL_INTEGER)) { "$name must be a decimal integer" }
+        val value = raw.toLongOrNull() ?: throw IllegalArgumentException("$name is out of range")
+        require(value in range) { "$name must be in ${range.first}..${range.last}" }
+        return value
+    }
+
+    private fun floatArgument(arguments: android.os.Bundle, name: String, default: Float, range: ClosedFloatingPointRange<Float>): Float {
+        if (!arguments.containsKey(name)) return default
+        val raw = arguments.get(name)
+        require(raw is String) { "$name must be a finite decimal" }
+        require(raw.matches(DECIMAL_FLOAT)) { "$name must be a finite decimal" }
+        val value = raw.toFloatOrNull() ?: throw IllegalArgumentException("$name is out of range")
+        require(value.isFinite() && value in range) { "$name must be in ${range.start}..${range.endInclusive}" }
+        return value
+    }
+
+    private fun nicopediaInputDirectory(context: Context, runId: String): File {
+        val filesRoot = context.filesDir.canonicalFile
+        val directory = File(filesRoot, "headless-input/$runId").canonicalFile
+        require(directory.path.startsWith(filesRoot.path + File.separator)) {
+            "headless input directory escaped app files"
+        }
+        require(directory.isDirectory) { "headless input directory is unavailable" }
+        return directory
+    }
+
+    private fun requiredInputFile(directory: File, name: String): File {
+        val file = File(directory, name).canonicalFile
+        require(file.path.startsWith(directory.path + File.separator)) {
+            "headless input file escaped run directory"
+        }
+        require(file.isFile) { "headless input file is unavailable: $name" }
+        return file
+    }
+
+    private fun runNicopediaLongTraining(
+        context: Context,
+        arguments: android.os.Bundle,
+        runId: String,
+        progressCallback: ProgressCallback,
+    ): String {
+        val config = parseNicopediaArguments(arguments, "nicopedia-long-training")
+        val directory = nicopediaInputDirectory(context, runId)
+        requiredInputFile(directory, "train_pilot.bin")
+        if (config.resumeStep > 0) {
+            requiredInputFile(directory,
+                "htp-seed${config.seed}-l${config.layers}-step${config.resumeStep}.ckpt")
+        }
+        return NativeBridge.nativeRunExecutionMode(
+            executionMode = ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA.nativeCode,
+            batchSize = config.batchSize,
+            dimension = 16,
+            hiddenDimension = 32,
+            outputDimension = 256,
+            steps = config.steps,
+            warmupSteps = 0,
+            learningRate = 0.003f,
+            seed = config.seed,
+            sampleCount = 32,
+            epochs = config.layers,
+            measuredSteps = config.heads,
+            correctnessInterval = config.seed.toInt(),
+            benchmarkMode = false,
+            seedSelectionMode = 1,
+            trainingStabilityMode = 0,
+            depthPairInitMode = 0,
+            checkpointSelectionMode = 0,
+            diagnosticTrajectory = false,
+            diagnosticCheckpointDir = directory.absolutePath,
+            diagnosticResumeStep = config.resumeStep,
+            diagnosticCheckpointInterval = config.checkpointInterval,
+            progressCallback = progressCallback,
+        )
+    }
+
+    private fun runNicopediaEvaluate(
+        context: Context,
+        arguments: android.os.Bundle,
+        runId: String,
+    ): String {
+        val config = parseNicopediaArguments(arguments, "nicopedia-eval")
+        val directory = nicopediaInputDirectory(context, runId)
+        requiredInputFile(directory,
+            "htp-seed${config.seed}-l${config.layers}-step${config.checkpointStep}.ckpt")
+        requiredInputFile(directory, "validation.bin")
+        requiredInputFile(directory, "development.bin")
+        return NativeBridge.nativeRunNicopediaEvaluate(
+            checkpointDir = directory.absolutePath,
+            seed = config.seed,
+            layers = config.layers,
+            heads = config.heads,
+            checkpointStep = config.checkpointStep,
+            validationChunks = config.validationChunks,
+            developmentChunks = config.developmentChunks,
+        )
+    }
+
+    private fun runNicopediaGenerate(
+        context: Context,
+        arguments: android.os.Bundle,
+        runId: String,
+    ): String {
+        val config = parseNicopediaArguments(arguments, "nicopedia-generate")
+        val directory = nicopediaInputDirectory(context, runId)
+        val checkpoint = requiredInputFile(directory,
+            "htp-seed${config.seed}-l${config.layers}-step${config.checkpointStep}.ckpt")
+        val prompt = requiredInputFile(directory, "prompt.bin")
+        return NativeBridge.nativeRunNicopediaGenerate(
+            checkpointPath = checkpoint.absolutePath,
+            promptPath = prompt.absolutePath,
+            seed = config.seed,
+            layers = config.layers,
+            maxNewBytes = config.maxNewBytes,
+            generateMode = config.generateMode,
+            temperature = config.temperature,
+            topK = config.topK,
+            samplingSeed = config.samplingSeed,
+            gatePolicy = config.gatePolicy,
+            htpGraphPrecisionMode = 0,
+            htpGraphPrecisionCompensation = 0,
+            htpGraphWeightsPacking = 0,
+            htpGraphAdvancedActivationFusion = 0,
+            htpContextGraphSplitting = 0,
+            htpNativeTensorFp16 = false,
+        )
     }
 
     private fun modeFor(suite: String): ExecutionMode = when (suite) {
@@ -241,7 +547,17 @@ class HeadlessDeviceTestRunner {
 
     private fun isSuccessfulSuiteResult(suite: String, report: String, requestedSplit: Int?): Boolean {
         if (suite != "nicopedia-parity") {
-            return Regex("(?m)^status=SUCCESS$").containsMatchIn(report)
+            val statusOk = Regex("(?m)^status=SUCCESS$").containsMatchIn(report)
+            if (suite !in NICOPEDIA_SUITES) return statusOk
+            val prefixOk = when (suite) {
+                "nicopedia-long-training" -> report.startsWith("NICOPEDIA_HTP\n")
+                "nicopedia-eval" -> report.startsWith("NICOPEDIA_HTP_EVAL\n")
+                "nicopedia-generate" -> report.startsWith("NICOPEDIA_HTP_GENERATION\n")
+                else -> false
+            }
+            val fallbackOk = Regex("(?m)^cpu_fallback=false$").containsMatchIn(report)
+            val finiteOk = !Regex("(?m)^(?:nan_detected|inf_detected)=true$").containsMatchIn(report)
+            return statusOk && prefixOk && fallbackOk && finiteOk
         }
         val values = report.lineSequence()
             .mapNotNull { line -> line.split('=', limit = 2).takeIf { it.size == 2 } }
@@ -347,5 +663,18 @@ class HeadlessDeviceTestRunner {
                 generated == 64)
         }
         return rejected || required("status") == "SUCCESS"
+    }
+
+    private companion object {
+        val NICOPEDIA_SUITES = setOf(
+            "nicopedia-long-training",
+            "nicopedia-eval",
+            "nicopedia-generate",
+        )
+        const val PROGRESS_STATUS_INTERVAL_MS = 1_000L
+        val DECIMAL_INTEGER = Regex("[+-]?(?:0|[1-9][0-9]*)")
+        val DECIMAL_FLOAT = Regex(
+            "[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(?:[eE][+-]?[0-9]+)?",
+        )
     }
 }

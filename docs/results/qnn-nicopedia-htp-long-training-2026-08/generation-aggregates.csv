@@ -1,0 +1,7 @@
+step,anchor_id,mode,max_new_bytes,temperature,top_k,sampling_seed,generated_bytes,valid_utf8_bytes,invalid_utf8_bytes,unique_byte_values,short_period_loop_fraction,generation_health,legacy_parity_gate,ar_gate,qnn_executes,qnn_failures,cpu_fallback
+2000,anchor_b,greedy,64,1.0,256,0,64,63,1,6,0.9655172414,true,false,false,92,0,false
+2000,anchor_b,sample,128,0.6,16,42,128,126,2,36,0.4482758621,true,false,false,156,0,false
+8000,anchor_a,greedy,64,1.0,256,0,64,63,1,5,1.0,true,false,false,92,0,false
+8000,anchor_a,sample,128,0.6,16,42,128,124,4,36,0.4137931034,true,false,false,156,0,false
+8000,anchor_b,greedy,64,1.0,256,0,64,63,1,3,1.0,true,false,false,92,0,false
+8000,anchor_b,sample,128,0.6,16,42,128,128,0,26,0.5172413793,true,false,false,156,0,false

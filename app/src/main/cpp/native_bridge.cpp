@@ -180,6 +180,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jint checkpointSelectionMode,
     jboolean diagnosticTrajectory,
     jstring diagnosticCheckpointDir,
+    jint diagnosticResumeStep,
+    jint diagnosticCheckpointInterval,
     jobject progressCallback) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -243,6 +245,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.depthPairInitMode = static_cast<int>(depthPairInitMode);
     config.checkpointSelectionMode = static_cast<int>(checkpointSelectionMode);
     config.diagnosticTrajectory = diagnosticTrajectory == JNI_TRUE;
+    config.diagnosticResumeStep = static_cast<int>(diagnosticResumeStep);
+    config.diagnosticCheckpointInterval =
+        static_cast<int>(diagnosticCheckpointInterval);
     if (diagnosticCheckpointDir != nullptr) {
         const char* chars = env->GetStringUTFChars(diagnosticCheckpointDir, nullptr);
         if (chars != nullptr) {
@@ -455,6 +460,70 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         return toJavaString(env, report);
     } catch (...) {
         const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+// HTP-native held-out evaluation: loads the fixed checkpoint step from the
+// app-private directory (NPRTCKPTV1 or NPRTCKPTV2) together with
+// validation.bin / development.bin caches and teacher-forces them through
+// the HTP forward graph, using the new NICOPEDIA_EVAL execution mode.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jstring checkpointDir,
+    jlong seed,
+    jint layers,
+    jint heads,
+    jint checkpointStep,
+    jint validationChunks,
+    jint developmentChunks) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    gStopRequested.store(false, std::memory_order_release);
+
+    std::string dir;
+    if (checkpointDir) {
+        const char* chars = env->GetStringUTFChars(checkpointDir, nullptr);
+        if (chars) { dir = chars; env->ReleaseStringUTFChars(checkpointDir, chars); }
+    }
+    if (dir.empty()) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=checkpoint_dir_required\n");
+    }
+    phonelm::TrainingConfig config;
+    config.seed = static_cast<std::uint64_t>(seed);
+    config.epochs = layers > 0 ? layers : 6;
+    config.measuredSteps = heads > 0 ? heads : 2;
+    config.diagnosticResumeStep = checkpointStep;
+    config.steps = validationChunks > 0 ? validationChunks : 8192;
+    config.batchSize = developmentChunks > 0 ? developmentChunks : 16384;
+    config.diagnosticCheckpointDir = dir;
+    auto sink = [&](const std::string& message) { logcat(message); };
+    try {
+        const auto report = phonelm::TrainingEngine::run(
+            phonelm::ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL,
+            config, gStopRequested, sink);
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
                                         "failure_classification=JNI_EXCEPTION\n"
                                         "error=unknown");
         logcat(report);

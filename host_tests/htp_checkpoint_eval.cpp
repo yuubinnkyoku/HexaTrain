@@ -109,7 +109,9 @@ Checkpoint loadCheckpoint(const std::string& path) {
   if (!input) throw std::runtime_error("CHECKPOINT_OPEN_FAILED");
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTCKPTV1\n") throw std::runtime_error("CHECKPOINT_MAGIC");
+  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n")
+    throw std::runtime_error("CHECKPOINT_MAGIC");
+  const bool v2 = magic == "NPRTCKPTV2\n";
   Checkpoint checkpoint;
   checkpoint.config.vocabularySize = readU32(input);
   checkpoint.config.tokens = readU32(input);
@@ -134,6 +136,35 @@ Checkpoint loadCheckpoint(const std::string& path) {
     auto& destination = *const_cast<std::vector<float>*>(registry[group].values);
     input.read(reinterpret_cast<char*>(destination.data()), static_cast<std::streamsize>(destination.size() * sizeof(float)));
     if (!input) throw std::runtime_error("CHECKPOINT_VALUES_TRUNCATED");
+    if (!std::all_of(destination.begin(), destination.end(),
+                     [](float value) { return std::isfinite(value); }))
+      throw std::runtime_error("CHECKPOINT_VALUES_NONFINITE");
+  }
+  if (v2) {
+    // NPRTCKPTV2 appends the Adam first/second moment registries (same
+    // registry layout as the parameters). The CPU evaluation only uses the
+    // parameters, so the moments are read and discarded.
+    for (int moment = 0; moment < 2; ++moment) {
+      const std::uint32_t momentCount = readU32(input);
+      if (momentCount != registry.size())
+        throw std::runtime_error("CHECKPOINT_ADAM_REGISTRY_COUNT");
+      std::vector<float> scratch;
+      for (std::uint32_t group = 0; group < momentCount; ++group) {
+        const std::uint32_t nameLength = readU32(input);
+        if (nameLength > 256) throw std::runtime_error("CHECKPOINT_NAME_LENGTH");
+        std::string name(nameLength, '\0');
+        input.read(name.data(), static_cast<std::streamsize>(name.size()));
+        const std::uint64_t values = readU64(input);
+        if (!input || name != registry[group].name || values != registry[group].values->size())
+          throw std::runtime_error("CHECKPOINT_ADAM_REGISTRY_IDENTITY");
+        scratch.resize(static_cast<std::size_t>(values));
+        input.read(reinterpret_cast<char*>(scratch.data()), static_cast<std::streamsize>(scratch.size() * sizeof(float)));
+        if (!input) throw std::runtime_error("CHECKPOINT_ADAM_VALUES_TRUNCATED");
+        if (!std::all_of(scratch.begin(), scratch.end(),
+                         [](float value) { return std::isfinite(value); }))
+          throw std::runtime_error("CHECKPOINT_ADAM_VALUES_NONFINITE");
+      }
+    }
   }
   if (input.get() != std::char_traits<char>::eof()) throw std::runtime_error("CHECKPOINT_TRAILING_BYTES");
   return checkpoint;
@@ -163,7 +194,7 @@ std::uint64_t parameterHash(const phonelm::qnn::TinyTransformerParameters& param
 
 struct Metrics {
   double nll = 0, perplexity = 0, top1 = 0, top5 = 0, meanRank = 0, meanMargin = 0;
-  std::uint64_t tokens = 0;
+  std::uint64_t tokens = 0, chunks = 0;
   bool finite = true;
 };
 
@@ -294,7 +325,10 @@ Metrics evaluate(const Cache& cache, const phonelm::tiny_lm::Config& config,
                  const phonelm::qnn::TinyTransformerParameters& parameters,
                  std::size_t maximumChunks) {
   Metrics metrics;
-  const std::size_t count = std::min(maximumChunks, cache.records.size());
+  if (cache.records.size() < maximumChunks)
+    throw std::runtime_error("CACHE_CAPACITY_MISMATCH");
+  const std::size_t count = maximumChunks;
+  metrics.chunks = count;
   double top1 = 0, top5 = 0, rankSum = 0, marginSum = 0, lossSum = 0;
   for (std::size_t chunk = 0; chunk < count; ++chunk) {
     const auto& record = cache.records[chunk];
@@ -372,11 +406,13 @@ int main(int argc, char** argv) {
               << "\nvalidation_top5=" << validationMetrics.top5
               << "\nvalidation_mean_rank=" << validationMetrics.meanRank
               << "\nvalidation_margin=" << validationMetrics.meanMargin
+              << "\nvalidation_chunks=" << validationMetrics.chunks
               << "\nvalidation_tokens=" << validationMetrics.tokens
               << "\ndevelopment_nll=" << developmentMetrics.nll
               << "\ndevelopment_perplexity=" << developmentMetrics.perplexity
               << "\ndevelopment_top1=" << developmentMetrics.top1
               << "\ndevelopment_top5=" << developmentMetrics.top5
+              << "\ndevelopment_chunks=" << developmentMetrics.chunks
               << "\ndevelopment_tokens=" << developmentMetrics.tokens
               << "\nfinite=true\n";
     return 0;

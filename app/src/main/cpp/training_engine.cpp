@@ -166,6 +166,7 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC: return "QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA: return "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA";
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE: return "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE";
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL: return "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL";
         default: return "UNKNOWN";
     }
 }
@@ -293,6 +294,7 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE:
+        case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL:
             return qnn::runTinyTransformerTrainingExperiment(mode, config, log);
         default: {
             const std::string report =

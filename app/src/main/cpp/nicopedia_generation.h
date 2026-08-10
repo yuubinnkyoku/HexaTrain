@@ -115,6 +115,27 @@ uint8_t greedyArgmax(const float* logits, uint32_t vocab);
 uint8_t sampleTopK(const float* logits, uint32_t vocab, float temperature,
                    uint32_t topK, uint64_t seed, uint64_t step);
 
+// Sampling diagnostics used by the HTP-native generation health gate.  The
+// legacy sampleTopK() ABI remains unchanged; callers that need a fail-closed
+// probability audit use sampleTopKChecked() and inspect every finite/sum flag.
+struct TopKSamplingResult {
+  uint8_t value = 0;
+  bool ok = true;
+  bool logitsFinite = true;
+  bool weightsFinite = true;
+  bool weightSumFinite = true;
+  bool weightSumPositive = true;
+  bool probabilitiesFinite = true;
+  bool probabilitySumFinite = true;
+  bool probabilitySumPositive = true;
+  double weightSum = 0.0;
+  double probabilitySum = 0.0;
+};
+
+TopKSamplingResult sampleTopKChecked(const float* logits, uint32_t vocab,
+                                     float temperature, uint32_t topK,
+                                     uint64_t seed, uint64_t step);
+
 std::string bytesToHex(const std::vector<uint8_t>& bytes);
 
 // Parses hex (both cases accepted); throws std::invalid_argument on
@@ -295,13 +316,24 @@ inline double uniform01(uint64_t mixed) {
 
 }  // namespace detail
 
-inline uint8_t sampleTopK(const float* logits, uint32_t vocab,
-                          float temperature, uint32_t topK, uint64_t seed,
-                          uint64_t step) {
+inline TopKSamplingResult sampleTopKChecked(const float* logits, uint32_t vocab,
+                                            float temperature, uint32_t topK,
+                                            uint64_t seed, uint64_t step) {
+  TopKSamplingResult result;
   if (vocab > 256) throw std::invalid_argument("vocab_gt_256");
-  if (vocab == 0) return 0;
+  if (vocab == 0) return result;
+  for (uint32_t i = 0; i < vocab; ++i) {
+    if (!std::isfinite(logits[i])) {
+      result.logitsFinite = false;
+      result.ok = false;
+    }
+  }
+  if (!result.ok) return result;
   if (!(temperature > 0.0f) || !std::isfinite(temperature))
-    return greedyArgmax(logits, vocab);
+  {
+    result.value = greedyArgmax(logits, vocab);
+    return result;
+  }
   const uint32_t k = (topK == 0 || topK >= vocab) ? vocab : topK;
   // Unique total order (logit desc, index asc) makes the top-K selection
   // deterministic across any conforming sort implementation.
@@ -323,15 +355,52 @@ inline uint8_t sampleTopK(const float* logits, uint32_t vocab,
                               static_cast<double>(temperature));
     weights[i] = w;
     sum += w;
+    if (!std::isfinite(w)) result.weightsFinite = false;
+  }
+  result.weightSum = sum;
+  result.weightSumFinite = std::isfinite(sum);
+  result.weightSumPositive = sum > 0.0;
+  if (!result.weightsFinite || !result.weightSumFinite ||
+      !result.weightSumPositive) {
+    result.ok = false;
+    return result;
   }
   const double u = detail::uniform01(
       detail::mix64(seed + static_cast<uint64_t>(step) * 0x9E3779B97F4A7C15ull));
   double cumulative = 0.0;
+  double probabilitySum = 0.0;
+  bool selected = false;
   for (uint32_t i = 0; i < k; ++i) {
-    cumulative += weights[i] / sum;
-    if (u <= cumulative) return static_cast<uint8_t>(indices[i]);
+    const double probability = weights[i] / sum;
+    if (!std::isfinite(probability)) result.probabilitiesFinite = false;
+    probabilitySum += probability;
+    if (!selected && u <= cumulative + probability) {
+      result.value = static_cast<uint8_t>(indices[i]);
+      selected = true;
+    }
+    cumulative += probability;
   }
-  return static_cast<uint8_t>(indices[k - 1]);
+  if (!std::isfinite(cumulative) || !std::isfinite(probabilitySum))
+    result.probabilitiesFinite = false;
+  result.probabilitySum = probabilitySum;
+  result.probabilitySumFinite = std::isfinite(probabilitySum);
+  result.probabilitySumPositive = probabilitySum > 0.0;
+  if (!result.probabilitiesFinite || !result.probabilitySumFinite ||
+      !result.probabilitySumPositive) {
+    result.ok = false;
+    return result;
+  }
+  // Rounding can leave u just above the cumulative sum; preserve the legacy
+  // deterministic fallback while still publishing the finite/sum audit.
+  if (!selected)
+    result.value = static_cast<uint8_t>(indices[k - 1]);
+  return result;
+}
+
+inline uint8_t sampleTopK(const float* logits, uint32_t vocab,
+                          float temperature, uint32_t topK, uint64_t seed,
+                          uint64_t step) {
+  return sampleTopKChecked(logits, vocab, temperature, topK, seed, step).value;
 }
 
 inline std::string bytesToHex(const std::vector<uint8_t>& bytes) {

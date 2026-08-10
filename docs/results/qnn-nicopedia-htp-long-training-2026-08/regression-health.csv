@@ -1,0 +1,3 @@
+case,status,seed_count,graph_executes,qnn_failures,all_steps_finite,final_evaluation_finite,nonfinite_count,cpu_fallback,backend_build_id_match
+synthetic_scale_formal,SUCCESS,5,3573,0,true,true,0,false,true
+ffn372_l3_h4_count_from_one_seed5,SUCCESS,5,14088,0,true,true,0,false,true

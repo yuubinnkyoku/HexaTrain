@@ -27,8 +27,13 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [int]$PollLimit = 600,
+    [int]$PollSeconds = 2,
+    [int]$ProgressEverySeconds = 30,
     [int]$CheckpointStep = 320,
-    [string]$GatePolicy = 'legacy',   # legacy | candidate (protocol F)
+    [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
+    [string]$TrainingReportPath = '',
+    [string]$EvalReportPath = '',
+    [string]$GatePolicy = 'legacy',   # legacy | candidate | htp-native (explicit experimental, health-gated)
     [switch]$CandidatePolicyApproved, # required to run -GatePolicy candidate
     [switch]$AuditOnly,               # accept a FAILED gate report (audit runs)
     [int]$HtpGraphPrecisionMode = 0,  # private diagnostics: 0 unset, 1 fp16, 2 fp32
@@ -43,6 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_generation_aggregates.ps1')
+. (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -61,6 +67,37 @@ function Write-Event([string]$Type, [hashtable]$Fields) {
 function Get-Sha256Hex([string]$LiteralPath) {
     $hash = Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256
     return $hash.Hash.ToLowerInvariant()
+}
+
+function Resolve-PhoneLmHtpNativeAnchorHash {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EvalHealth,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CpuHealth,
+        [AllowNull()][System.Collections.IDictionary]$TrainingHealth
+    )
+    foreach ($key in @('checkpoint_format', 'checkpoint_finite', 'checkpoint_parameter_hash')) {
+        if (-not $EvalHealth.Contains($key)) { throw "HTP_NATIVE_EVAL_ANCHOR_FIELD_MISSING: $key" }
+    }
+    if ($EvalHealth.checkpoint_format -ne 'NPRTCKPTV2' -or $EvalHealth.checkpoint_finite -ne 'true' -or
+        $EvalHealth.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') {
+        throw 'HTP_NATIVE_EVAL_CHECKPOINT_HEALTH_REJECTED'
+    }
+    foreach ($key in @('parameter_hash', 'finite')) {
+        if (-not $CpuHealth.Contains($key)) { throw "HTP_NATIVE_CPU_EVAL_FIELD_MISSING: $key" }
+    }
+    if ($CpuHealth.parameter_hash -ne $EvalHealth.checkpoint_parameter_hash -or $CpuHealth.finite -ne 'true') {
+        throw 'HTP_NATIVE_CPU_EVAL_IDENTITY_REJECTED'
+    }
+    # A same-step training report is preferred when available.  If the
+    # report was lost after a successful run, the full-cap eval + CPU hash
+    # pair remains the explicit checkpoint-health anchor for HTP-native mode.
+    if ($null -ne $TrainingHealth) {
+        if (-not $TrainingHealth.Contains('final_parameter_hash') -or
+            $TrainingHealth.final_parameter_hash -ne $EvalHealth.checkpoint_parameter_hash) {
+            throw 'HTP_NATIVE_TRAINING_EVAL_HASH_MISMATCH'
+        }
+    }
+    return [string]$EvalHealth.checkpoint_parameter_hash
 }
 
 # Lossless UTF-8 display: valid sequences pass through, invalid/truncated
@@ -206,11 +243,27 @@ function Invoke-SelfTest {
     if ($fp16Expected -notin @('true', 'false')) {
         throw 'SELFTEST_HTP_NATIVE_TENSOR_FP16_BOOL'
     }
+    $evalAnchor = [ordered]@{
+        checkpoint_format = 'NPRTCKPTV2'; checkpoint_finite = 'true'
+        checkpoint_parameter_hash = 'fnv1a64:0123456789abcdef'
+    }
+    $cpuAnchor = [ordered]@{
+        parameter_hash = 'fnv1a64:0123456789abcdef'; finite = 'true'
+    }
+    $resolvedWithoutTraining = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalAnchor -CpuHealth $cpuAnchor -TrainingHealth $null
+    if ($resolvedWithoutTraining -ne $evalAnchor.checkpoint_parameter_hash) {
+        throw 'SELFTEST_HTP_NATIVE_EVAL_BACKED_ANCHOR'
+    }
+    $trainingAnchor = [ordered]@{ final_parameter_hash = $evalAnchor.checkpoint_parameter_hash }
+    $resolvedWithTraining = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalAnchor -CpuHealth $cpuAnchor -TrainingHealth $trainingAnchor
+    if ($resolvedWithTraining -ne $resolvedWithoutTraining) { throw 'SELFTEST_HTP_NATIVE_TRAINING_ANCHOR' }
     Write-Host 'run_nicopedia_htp_generate_self_test=PASS'
     exit 0
 }
 
 if ($SelfTest) { Invoke-SelfTest }
+
+if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 
 if ($Model -ne 'L6' -and $Model -ne 'L19') { throw "MODEL_INVALID: Model must be L6 or L19 (got '$Model')" }
 $layers = if ($Model -eq 'L19') { 19 } else { 6 }
@@ -220,7 +273,9 @@ if ($CheckpointStep -lt 1 -or $CheckpointStep -gt 999999) {
 }
 if ($MaxNewBytes -lt 1 -or $MaxNewBytes -gt 1024) { throw 'MAX_NEW_BYTES_INVALID: MaxNewBytes must be in 1..1024' }
 if ($Mode -ne 'Greedy' -and $Mode -ne 'Sample') { throw 'MODE_INVALID: Mode must be Greedy or Sample' }
-if ($GatePolicy -ne 'legacy' -and $GatePolicy -ne 'candidate') { throw 'GATE_POLICY_INVALID: GatePolicy must be legacy or candidate' }
+if ($GatePolicy -ne 'legacy' -and $GatePolicy -ne 'candidate' -and $GatePolicy -ne 'htp-native') {
+    throw 'GATE_POLICY_INVALID: GatePolicy must be legacy, candidate or htp-native'
+}
 if ($GatePolicy -eq 'candidate' -and -not $CandidatePolicyApproved) {
     throw 'CANDIDATE_POLICY_NOT_APPROVED: -GatePolicy candidate requires -CandidatePolicyApproved (independent Reviewer PASS + explicit instruction)'
 }
@@ -264,11 +319,46 @@ if ($promptBytes.Length -gt 32) {
 $checkpoint = Join-Path $trainingRoot "htp-seed$Seed-l$layers-step$CheckpointStep.ckpt"
 $anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers-steps$CheckpointStep-result.txt"
 if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf)) { throw "CHECKPOINT_MISSING: $checkpoint" }
-if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
-$anchorText = Get-Content -LiteralPath $anchorFile -Raw
-$anchorMatch = [regex]::Match($anchorText, '(?m)^final_parameter_hash=(fnv1a64:[0-9a-f]{16})$')
-if (-not $anchorMatch.Success) { throw "ANCHOR_HASH_NOT_FOUND: $anchorFile" }
-$anchorHash = $anchorMatch.Groups[1].Value
+$anchorHash = ''
+if ($GatePolicy -ne 'htp-native') {
+    if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
+    $anchorText = Get-Content -LiteralPath $anchorFile -Raw
+    $anchorMatch = [regex]::Match($anchorText, '(?m)^final_parameter_hash=(fnv1a64:[0-9a-f]{16})$')
+    if (-not $anchorMatch.Success) { throw "ANCHOR_HASH_NOT_FOUND: $anchorFile" }
+    $anchorHash = $anchorMatch.Groups[1].Value
+}
+
+# Experimental HTP-native generation is intentionally downstream of the
+# full-cap HTP+CPU held-out reports and, when present, the same-step training
+# health report.  If a runner hang lost only the terminal training text, the
+# eval/CPU V2 identity pair is the explicit fallback checkpoint anchor.
+# Legacy/candidate generation keeps its existing parity behavior unchanged.
+if ($GatePolicy -eq 'htp-native') {
+    if ($PollLimit -lt 1 -or $PollSeconds -lt 1 -or $ProgressEverySeconds -lt 1) { throw 'POLL_CONFIGURATION_INVALID' }
+    if (-not $TrainingReportPath) { $TrainingReportPath = Join-Path $trainingRoot "seed$Seed-l$layers-steps$CheckpointStep-result.txt" }
+    if (-not $EvalReportPath) { $EvalReportPath = Join-Path $root "build\reports\nicopedia-htp-eval\seed$Seed-l$layers-step$CheckpointStep-htp.txt" }
+    if (-not (Test-Path -LiteralPath $EvalReportPath -PathType Leaf)) { throw "HTP_NATIVE_EVAL_HEALTH_MISSING: $EvalReportPath" }
+    $trainingHealth = $null
+    if (Test-Path -LiteralPath $TrainingReportPath -PathType Leaf) {
+        $trainingHealth = Assert-PhoneLmHealthReport -Text (Get-Content -LiteralPath $TrainingReportPath -Raw) -ExpectedBuildId $ExpectedBuildId -ExpectedStep $CheckpointStep -Kind training
+    } else {
+        Write-Host "htp-native training report unavailable; using eval-backed checkpoint health: $TrainingReportPath"
+    }
+    $evalHealth = Assert-PhoneLmHealthReport -Text (Get-Content -LiteralPath $EvalReportPath -Raw) -ExpectedBuildId $ExpectedBuildId -ExpectedStep $CheckpointStep -Kind eval
+    if ($evalHealth.checkpoint_format -ne 'NPRTCKPTV2' -or $evalHealth.checkpoint_finite -ne 'true') {
+        throw 'HTP_NATIVE_EVAL_CHECKPOINT_HEALTH_REJECTED'
+    }
+    $cpuEvalPath = if ($EvalReportPath -match '-htp\.txt$') { $EvalReportPath -replace '-htp\.txt$', '-cpu.txt' } else { [IO.Path]::ChangeExtension($EvalReportPath, 'cpu.txt') }
+    if (-not (Test-Path -LiteralPath $cpuEvalPath -PathType Leaf)) { throw "HTP_NATIVE_CPU_EVAL_MISSING: $cpuEvalPath" }
+    $cpuHealth = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $cpuEvalPath -Raw)
+    $anchorHash = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalHealth -CpuHealth $cpuHealth -TrainingHealth $trainingHealth
+    $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
+    if ($checkpointHeader.Magic -ne 'NPRTCKPTV2' -or $checkpointHeader.Seed -ne $Seed -or $checkpointHeader.Layers -ne $layers -or $checkpointHeader.Heads -ne 2 -or $checkpointHeader.Step -ne $CheckpointStep) {
+        throw 'HTP_NATIVE_CHECKPOINT_IDENTITY_REJECTED'
+    }
+    $anchorSource = if ($null -ne $trainingHealth) { 'training-report' } else { 'full-cap-eval-cpu' }
+    Write-Host "htp-native prerequisites accepted: source=$anchorSource eval/CPU checkpoint health and V2 identity verified"
+}
 
 # Fingerprints computed on the host (never the prompt text itself).
 $checkpointSha256 = Get-Sha256Hex $checkpoint
@@ -285,50 +375,45 @@ $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $package = 'com.yuubinnkyoku.phonelm'
-$activity = "$package/.MainActivity"
 $apk = Join-Path $root 'app\build\outputs\apk\debug\app-debug.apk'
+$testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
 
 if (-not $SkipBuild) {
-    if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw "APK_MISSING: $apk" }
-    Write-Host "apk=$apk"
+    & (Join-Path $root 'gradlew.bat') :app:assembleDebug :app:assembleDebugAndroidTest '-Pphonelm.enableQnn=true' "-Pqairt.sdkRoot=$QairtSdkRoot" "-Pqairt.expectedBuildId=$ExpectedBuildId" --no-daemon
+    if ($LASTEXITCODE -ne 0) { throw 'QNN instrumentation build failed' }
 }
 
-$online = @()
-foreach ($line in (& $adb devices)) { if ($line -match '^(\S+)\s+device$') { $online += $Matches[1] } }
-if ($online.Count -ne 1) { throw "Expected one online ADB device; found $($online.Count)" }
-$device = $online[0]
-$serial = ((& $adb -s $device shell getprop ro.serialno) -join '').Trim()
-$modelName = ((& $adb -s $device shell getprop ro.product.model) -join '').Trim()
-$soc = ((& $adb -s $device shell getprop ro.soc.model) -join '').Trim()
-$thermal = ((& $adb -s $device shell dumpsys thermalservice) -join "`n")
-$thermalStatus = [regex]::Match($thermal, '(?m)^Thermal Status:\s*(\d+)').Groups[1].Value
-$battery = ((& $adb -s $device shell dumpsys battery) -join "`n")
-$batteryLevel = [regex]::Match($battery, '(?m)^\s*level:\s*(\d+)').Groups[1].Value
-$batteryTemp = [regex]::Match($battery, '(?m)^\s*temperature:\s*(\d+)').Groups[1].Value
-if ($thermalStatus -ge 5) { throw "THERMAL_ABORT: android_thermal_status=$thermalStatus" }
+$deviceInfo = Resolve-PhoneLmDevice -Adb $adb
+$device = $deviceInfo.Endpoint
+Assert-PhoneLmPhysicalDevice -Adb $adb -Device $device
+Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
+Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
+$stateBefore = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'before'
+$serial = $deviceInfo.Serial
+$modelName = $deviceInfo.Model
+$soc = $deviceInfo.Soc
 
 function Adb([string[]]$Arguments) {
-    $output = & $adb -s $device @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "ADB command failed (endpoint redacted): $($Arguments -join ' ')`n$output" }
-    $output
+    return (Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments $Arguments).Output
 }
 
 if (-not $SkipInstall) {
+    if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
     Adb @('install', '-r', $apk) | Out-Null
+    Adb @('install', '-r', '-t', $testApk) | Out-Null
 }
 
-# Stage checkpoint + prompt under the app-private files directory.
-$remoteDir = 'files/checkpoints/nicopedia-generation'
+# Stage checkpoint + prompt under the run-scoped headless input directory.
+$remoteDir = "files/headless-input/$RunId"
+Assert-PhoneLmHeadlessInputFresh -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir
 Adb @('shell', 'run-as', $package, 'mkdir', '-p', $remoteDir) | Out-Null
-$tmpCheckpoint = '/data/local/tmp/nicopedia-gen.ckpt'
-$tmpPrompt = '/data/local/tmp/nicopedia-prompt.bin'
+$tmpCheckpoint = "/data/local/tmp/phonelm-headless-$RunId-checkpoint"
+$tmpPrompt = "/data/local/tmp/phonelm-headless-$RunId-prompt.bin"
 $localPrompt = Join-Path $env:TEMP ("nicopedia-prompt-" + [guid]::NewGuid().ToString('N') + '.bin')
 try {
     [IO.File]::WriteAllBytes($localPrompt, $promptBytes)
-    & $adb -s $device push $checkpoint $tmpCheckpoint | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'CHECKPOINT_PUSH_FAILED' }
-    & $adb -s $device push $localPrompt $tmpPrompt | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'PROMPT_PUSH_FAILED' }
+Adb @('push', $checkpoint, $tmpCheckpoint) | Out-Null
+Adb @('push', $localPrompt, $tmpPrompt) | Out-Null
 } finally {
     Remove-Item -LiteralPath $localPrompt -Force -ErrorAction SilentlyContinue
 }
@@ -336,42 +421,40 @@ Adb @('shell', 'run-as', $package, 'cp', $tmpCheckpoint, "$remoteDir/htp-seed$Se
 Adb @('shell', 'run-as', $package, 'cp', $tmpPrompt, "$remoteDir/prompt.bin") | Out-Null
 Adb @('shell', 'rm', '-f', $tmpCheckpoint, $tmpPrompt) | Out-Null
 
-# Drive the generation mode through the debug intent path.
-Adb @('shell', 'am', 'force-stop', $package) | Out-Null
-& $adb -s $device shell run-as $package rm -f files/device-test-result.txt 2>$null | Out-Null
-$startArgs = @(
-    'shell', 'am', 'start', '-W', '-n', $activity,
-    '--es', 'phonelm.mode', 'QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE',
-    '--es', 'phonelm.checkpoint_dump_dir', 'nicopedia-generation',
-    '--es', 'phonelm.seed', [string]$Seed,
-    '--ei', 'phonelm.layers', $layers,
-    '--ei', 'phonelm.checkpoint_step', $CheckpointStep,
-    '--ei', 'phonelm.max_new_bytes', $MaxNewBytes,
-    '--es', 'phonelm.generate_mode', $Mode.ToLowerInvariant(),
-    '--es', 'phonelm.temperature', $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-    '--ei', 'phonelm.top_k', $TopK,
-    '--es', 'phonelm.sampling_seed', [string]$SamplingSeed,
-    '--es', 'phonelm.gate_policy', $GatePolicy,
-    '--ei', 'phonelm.htp_graph_precision_mode', $HtpGraphPrecisionMode,
-    '--ei', 'phonelm.htp_graph_precision_compensation', $HtpGraphPrecisionCompensation,
-    '--ei', 'phonelm.htp_graph_weights_packing', $HtpGraphWeightsPacking,
-    '--ei', 'phonelm.htp_graph_activation_fusion', $HtpGraphAdvancedActivationFusion,
-    '--ei', 'phonelm.htp_context_graph_splitting', $HtpContextGraphSplitting,
-    '--ez', 'phonelm.htp_native_tensor_fp16', $HtpNativeTensorFp16
-)
-$startOutput = & $adb -s $device @startArgs 2>&1
-if ($LASTEXITCODE -ne 0) { throw "am start failed (endpoint redacted): $($startArgs -join ' ')`n$startOutput" }
-
-$result = ''
-for ($poll = 0; $poll -lt $PollLimit; $poll++) {
-    Start-Sleep -Seconds 5
-    $line = (& $adb -s $device shell run-as $package cat files/device-test-result.txt 2>$null) -join "`n"
-    if ($line -match 'NICOPEDIA_HTP_GENERATION') {
-        $result = $line
-        break
+# Drive generation through the headless instrumentation suite.  The preflight
+# above ensures no prior process/result exists; lifecycle remains headless.
+Clear-PhoneLmResultMarker -Adb $adb -Device $device -Package $package
+$instrumentDir = Join-Path $reportRoot "instrumentation-$RunId"
+if (Test-Path -LiteralPath $instrumentDir) { throw 'RUN_ID_REUSE: host instrumentation directory exists' }
+[IO.Directory]::CreateDirectory($instrumentDir) | Out-Null
+$instrument = $null
+try {
+  $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
+    -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-generate' -RunId $RunId `
+    -Arguments @{ seed = $Seed; layers = $layers; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
+    -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
+$waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
+    -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "generation-step-$CheckpointStep" `
+    -ExpectedRunId $RunId `
+    -PartialPath (Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-partial-status.json") `
+    -StatusProgressAction {
+        param($elapsed, $status)
+        $phase = [regex]::Match($status, '"current_phase"\s*:\s*"([^"]*)"').Groups[1].Value
+        Write-Host "progress phase=generation elapsed_seconds=$elapsed status_phase=$phase"
+    } `
+    -ConditionAction {
+        param($elapsed)
+        $state = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase "generation-$elapsed-sec"
+        Write-Host "health elapsed_seconds=$elapsed thermal=$($state.thermal_status) battery_temp_c=$($state.battery_temperature_c) battery_voltage_mv=$($state.battery_voltage_mv)"
+    } `
+    -FocusAction {
+        param($elapsed)
+        if ((Get-PhoneLmTopPackage -Adb $adb -Device $device) -eq $package) { throw 'FOCUS_TAKEOVER_DETECTED' }
     }
-}
-if ($result -eq '') { throw 'DEVICE_RESULT_TIMEOUT' }
+$result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -Device $device -Package $package
+if ($waited.ProcessExitCode -ne 0 -and -not $AuditOnly) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
+Assert-PhoneLmHeadlessNoActivity -Text $result
+if ($result -notmatch 'NICOPEDIA_HTP_GENERATION') { throw 'DEVICE_RESULT_SCHEMA_MISMATCH' }
 if ($result -notmatch '(?m)^status=SUCCESS$') {
     if (-not $AuditOnly) {
         throw "DEVICE_GENERATION_FAILED:`n$result"
@@ -397,7 +480,7 @@ $arGate = [regex]::Match($result, '(?m)^ar_gate=(true|false)$').Groups[1].Value
 $generationGate = [regex]::Match($result, '(?m)^generation_gate=(true|false)$').Groups[1].Value
 $parityGateCandidate = [regex]::Match($result, '(?m)^parity_gate_candidate=(true|false)$').Groups[1].Value
 $arGateCandidate = [regex]::Match($result, '(?m)^ar_gate_candidate=(true|false)$').Groups[1].Value
-$gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate)$').Groups[1].Value
+$gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate|htp-native)$').Groups[1].Value
 if ($gatePolicyReported -ne $GatePolicy) {
     throw "GATE_POLICY_MISMATCH: device=$gatePolicyReported requested=$GatePolicy"
 }
@@ -431,11 +514,37 @@ if ($graphSplittingDelivery -ne $graphSplittingDeliveryExpected) {
 if ($parityGateCandidate -eq '' -or $arGateCandidate -eq '') {
     throw 'CANDIDATE_GATE_FIELDS_MISSING: report lacks parity_gate_candidate/ar_gate_candidate'
 }
-if ($parityGate -ne 'true' -or $arGate -ne 'true' -or $generationGate -ne 'true') {
-    if (-not $AuditOnly) {
-        throw "GENERATION_GATE_REJECTED parity=$parityGate ar=$arGate generation=$generationGate`n$result"
+
+if ($GatePolicy -eq 'htp-native') {
+    # HTP-native execution is health-gated independently of legacy parity.
+    # The trace and every reported finite row are mandatory evidence; missing
+    # fields fail closed instead of being interpreted as a success.
+    $generationHealthMap = Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $CheckpointStep -Kind generation
+    if (-not $generationHealthMap.Contains('checkpoint_finite') -or $generationHealthMap.checkpoint_finite -ne 'true' -or
+        -not $generationHealthMap.Contains('generation_health') -or $generationHealthMap.generation_health -ne 'true') {
+        throw 'GENERATION_HEALTH_REJECTED'
     }
-    Write-Host "AUDIT_ONLY: gate rejected (parity=$parityGate ar=$arGate generation=$generationGate) — parity metrics recorded"
+    $parityFinite = @([regex]::Matches($result, '(?m)^parity_\d+_finite=(true|false)$'))
+    $arFinite = @([regex]::Matches($result, '(?m)^ar_step_\d+_finite=(true|false)$'))
+    $probabilityFields = @([regex]::Matches($result, '(?m)^parity_\d+_probability_(?:max_abs_error|mean_abs_error)=([^\s]+)$'))
+    if ($parityFinite.Count -eq 0 -or $arFinite.Count -eq 0) { throw 'GENERATION_FINITE_FIELDS_MISSING' }
+    if (@($parityFinite | Where-Object { $_.Groups[1].Value -ne 'true' }).Count -gt 0 -or @($arFinite | Where-Object { $_.Groups[1].Value -ne 'true' }).Count -gt 0) { throw 'GENERATION_FINITE_REJECTED' }
+    if ($probabilityFields.Count -eq 0 -or @($probabilityFields | Where-Object { $_.Groups[1].Value -match '(?i)nan|inf' }).Count -gt 0) { throw 'GENERATION_PROBABILITY_FIELDS_REJECTED' }
+    if (-not $result.Contains('generated_valid_utf8_bytes=') -or -not $result.Contains('generated_invalid_utf8_bytes=')) { throw 'GENERATION_PROBABILITY_OR_UTF8_FIELDS_MISSING' }
+    # The explicit experimental policy: generation is gated on HTP health
+    # alone (fail-closed at every graph execute on-device); the parity rows
+    # stay in the report as diagnostics and never block the run.
+    if ($generationGate -ne 'true') {
+        throw "HTP_NATIVE_GENERATION_GATE_REJECTED generation=$generationGate`n$result"
+    }
+    Write-Host "htp-native policy accepted; parity diagnostics: parity=$parityGate ar=$arGate"
+} else {
+    if ($parityGate -ne 'true' -or $arGate -ne 'true' -or $generationGate -ne 'true') {
+        if (-not $AuditOnly) {
+            throw "GENERATION_GATE_REJECTED parity=$parityGate ar=$arGate generation=$generationGate`n$result"
+        }
+        Write-Host "AUDIT_ONLY: gate rejected (parity=$parityGate ar=$arGate generation=$generationGate) — parity metrics recorded"
+    }
 }
 $generatedHex = [regex]::Match($result, '(?m)^generated_hex=([0-9a-f]*)$').Groups[1].Value
 $generatedBytes = [byte[]]@()
@@ -454,11 +563,7 @@ $generatedSha256Bytes = [System.Security.Cryptography.SHA256]::Create()
 $generatedSha256 = [System.BitConverter]::ToString($generatedSha256Bytes.ComputeHash($generatedBytes)).Replace('-', '').ToLowerInvariant()
 $generatedStats = Get-SafeUtf8Display -Bytes $generatedBytes
 
-$thermalAfter = ((& $adb -s $device shell dumpsys thermalservice) -join "`n")
-$thermalStatusAfter = [regex]::Match($thermalAfter, '(?m)^Thermal Status:\s*(\d+)').Groups[1].Value
-$batteryAfter = ((& $adb -s $device shell dumpsys battery) -join "`n")
-$batteryLevelAfter = [regex]::Match($batteryAfter, '(?m)^\s*level:\s*(\d+)').Groups[1].Value
-$batteryTempAfter = [regex]::Match($batteryAfter, '(?m)^\s*temperature:\s*(\d+)').Groups[1].Value
+$stateAfter = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'after'
 
 $annotated = $result.TrimEnd() + "`n" +
     "host_prompt_sha256=$promptSha256`n" +
@@ -467,12 +572,18 @@ $annotated = $result.TrimEnd() + "`n" +
     "host_anchor_hash=$anchorHash`n" +
     "device_model=$modelName`n" +
     "device_soc=$soc`n" +
-    "android_thermal_status_before=$thermalStatus`n" +
-    "android_thermal_status_after=$thermalStatusAfter`n" +
-    "battery_level_before=$batteryLevel`n" +
-    "battery_level_after=$batteryLevelAfter`n" +
-    "battery_temperature_c_before=$([int]$batteryTemp / 10.0)`n" +
-    "battery_temperature_c_after=$([int]$batteryTempAfter / 10.0)`n" +
+    "android_thermal_status_before=$($stateBefore.thermal_status)`n" +
+    "android_thermal_status_after=$($stateAfter.thermal_status)`n" +
+    "battery_health_before=$($stateBefore.battery_health)`n" +
+    "battery_health_after=$($stateAfter.battery_health)`n" +
+    "battery_present_before=$($stateBefore.battery_present.ToString().ToLowerInvariant())`n" +
+    "battery_present_after=$($stateAfter.battery_present.ToString().ToLowerInvariant())`n" +
+    "battery_level_before=$($stateBefore.battery_level)`n" +
+    "battery_level_after=$($stateAfter.battery_level)`n" +
+    "battery_voltage_mv_before=$($stateBefore.battery_voltage_mv)`n" +
+    "battery_voltage_mv_after=$($stateAfter.battery_voltage_mv)`n" +
+    "battery_temperature_c_before=$($stateBefore.battery_temperature_c)`n" +
+    "battery_temperature_c_after=$($stateAfter.battery_temperature_c)`n" +
     "compile_time_qairt_build_id=$ExpectedBuildId`n" +
     "host_htp_graph_precision_mode=$HtpGraphPrecisionMode`n" +
     "host_htp_graph_precision_compensation=$HtpGraphPrecisionCompensation`n" +
@@ -481,7 +592,13 @@ $annotated = $result.TrimEnd() + "`n" +
     "host_htp_context_graph_splitting=$HtpContextGraphSplitting`n" +
     "host_htp_native_tensor_fp16=$nativeFp16Expected`n" +
     "private_serial_recorded_for_identity_only=true`n"
-$reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
+$canonicalReportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
+# Keep the legacy canonical name for aggregate exporters, but also preserve a
+# run-scoped private copy so multiple prompts with the same numeric config do
+# not destroy one another's raw evidence.  The `.private.txt` suffix is
+# intentionally outside the public exporter's `*result.txt` input glob.
+$reportFile = Join-Path $reportRoot "seed$Seed-l$layers-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-$RunId.private.txt"
+$annotated | Set-Content -LiteralPath $canonicalReportFile -Encoding utf8
 $annotated | Set-Content -LiteralPath $reportFile -Encoding utf8
 $annotated | Add-Content -LiteralPath (Join-Path $reportRoot 'device-identity-private.txt') -Encoding utf8
 
@@ -529,3 +646,7 @@ Write-Host "generated_sha256=$generatedSha256"
 Write-Host "checkpoint_parameter_hash=$($deviceHashMatch.Groups[1].Value) (anchor match)"
 Write-Host "PASS NICOPEDIA_HTP_GENERATION seed=$Seed layers=$layers mode=$($Mode.ToLowerInvariant()) bytes=$($generatedBytes.Length)"
 Write-Host "Report: $reportFile"
+} finally {
+    [void](Stop-PhoneLmCompletedHeadlessProcesses -Adb $adb -Device $device -Package $package -ExpectedRunId $RunId)
+    Stop-PhoneLmOwnedInstrumentation -Process $instrument
+}

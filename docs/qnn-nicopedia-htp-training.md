@@ -1,5 +1,10 @@
 # ニコニコ大百科実テキスト QNN HTP 学習
 
+> 2026-08-10追記: canonical L19 seed1/batch8をNPRTCKPTV2 resumeで
+> step 8,000まで継続した結果は
+> [Nicopedia L19 HTP-native long training](qnn-nicopedia-htp-long-training.md)
+> を参照。この節以降は初期320-step milestoneの記録である。
+
 ## 結論
 
 CPU referenceを保持したまま、ニコニコ大百科実テキストの学習stepの数値演算を

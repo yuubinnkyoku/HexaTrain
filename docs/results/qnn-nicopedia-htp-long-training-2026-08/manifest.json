@@ -1,0 +1,22 @@
+{
+  "milestone": "nicopedia-l19-htp-native-long-training",
+  "date": "2026-08-10",
+  "seed_count": 1,
+  "seed": 1,
+  "start_step": 2000,
+  "final_step": 8000,
+  "best_validation_step": 8000,
+  "best_development_step": 8000,
+  "batch_size": 8,
+  "learning_rate": 0.003,
+  "checkpoint_format": "NPRTCKPTV2",
+  "checkpoint_interval": 250,
+  "qairt_build_id": "2.48.40.260702151143",
+  "legacy_parity_thresholds_changed": false,
+  "legacy_generation_gate": "FAIL",
+  "htp_native_generation_policy": "experimental-health-gated",
+  "cpu_fallback": false,
+  "nicopedia_final_test_opened": false,
+  "synthetic_final_holdout_opened": false,
+  "raw_private_data_included": false
+}

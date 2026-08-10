@@ -4,6 +4,7 @@
 #include "qnn_first_nonfinite_diagnostics.h"
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
+#include "../nicopedia_checkpoint_policy.h"
 #include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
 #include "../training_stability.h"
@@ -5066,11 +5067,86 @@ bool nprtSaveCheckpoint(const std::string &path, const tiny_lm::Config &config,
   return static_cast<bool>(output);
 }
 
+// NPRTCKPTV2 private checkpoint: full canonical training state so a run can
+// resume bit-for-bit.  Layout = NPRTCKPTV1 (header + parameter registry),
+// then the Adam first-moment registry, then the Adam second-moment registry.
+// The header `step` is the optimizer step (Adam bias corrections and the
+// training order index are both functions of it); the record selection order
+// is regenerated deterministically from the step (nprtTrainingOrder), so no
+// separate data cursor is needed.  The file never enters public artifacts.
+bool nprtSaveCheckpointV2(const std::string &path, const tiny_lm::Config &config,
+                          uint32_t seed, uint32_t step, const Params &parameters,
+                          const Params &firstMoments,
+                          const Params &secondMoments) {
+  // Never create or replace a canonical resume source with non-finite state.
+  // This check happens before the existing temporary file is removed.
+  if (step == 0 || !finiteParams(parameters) || !finiteParams(firstMoments) ||
+      !finiteParams(secondMoments))
+    return false;
+  // Checkpoints are app-private but are also the canonical resume source.  Do
+  // not expose a partially-written file under the final name: write in the
+  // same directory, flush/close, then atomically replace the destination.
+  const std::string temporaryPath = path + ".tmp";
+  std::remove(temporaryPath.c_str());
+  std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+  const auto fail = [&]() {
+    output.close();
+    std::remove(temporaryPath.c_str());
+    return false;
+  };
+  if (!output) return fail();
+  output.write("NPRTCKPTV2\n", 11);
+  nprtWriteU32(output, config.vocabularySize);
+  nprtWriteU32(output, config.tokens);
+  nprtWriteU32(output, config.dimension);
+  nprtWriteU32(output, config.feedForwardDimension);
+  nprtWriteU32(output, config.numLayers);
+  nprtWriteU32(output, config.numHeads);
+  nprtWriteU32(output, seed);
+  nprtWriteU32(output, step);
+  const auto registry = tiny_lm::parameterRegistry(parameters);
+  const auto firstRegistry = tiny_lm::parameterRegistry(firstMoments);
+  const auto secondRegistry = tiny_lm::parameterRegistry(secondMoments);
+  if (registry.size() != firstRegistry.size() ||
+      registry.size() != secondRegistry.size())
+    return fail();
+  const auto writeRegistry =
+      [&output](const auto &entries) -> bool {
+    nprtWriteU32(output, static_cast<uint32_t>(entries.size()));
+    for (const auto &info : entries) {
+      nprtWriteU32(output, static_cast<uint32_t>(info.name.size()));
+      output.write(info.name.data(), static_cast<std::streamsize>(info.name.size()));
+      nprtWriteU64(output, info.values->size());
+      output.write(reinterpret_cast<const char *>(info.values->data()),
+                   static_cast<std::streamsize>(info.values->size() * sizeof(float)));
+    }
+    return static_cast<bool>(output);
+  };
+  for (size_t i = 0; i < registry.size(); ++i) {
+    if (registry[i].name != firstRegistry[i].name ||
+        registry[i].name != secondRegistry[i].name ||
+        registry[i].values->size() != firstRegistry[i].values->size() ||
+        registry[i].values->size() != secondRegistry[i].values->size())
+      return fail();
+  }
+  if (!writeRegistry(registry) || !writeRegistry(firstRegistry) ||
+      !writeRegistry(secondRegistry))
+    return fail();
+  output.flush();
+  if (!output) return fail();
+  output.close();
+  if (!output || std::rename(temporaryPath.c_str(), path.c_str()) != 0) {
+    std::remove(temporaryPath.c_str());
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Nicopedia byte-level generation on the HTP graph.
 //
-// The checkpoint is the NPRTCKPTV1 private checkpoint written by the HTP
-// training milestone.  Identity is validated fail-closed on the device
+// The checkpoint is an NPRTCKPTV1/V2 private checkpoint written by the HTP
+// training milestone. Identity is validated fail-closed on the device
 // (header config/seed/step, canonical registry order and element counts,
 // finiteness) and the returned registry hash is compared by the host against
 // the approved anchor from the training milestone's device report.
@@ -5164,7 +5240,10 @@ struct LoadedNprtCheckpoint {
   std::uint64_t fileBytes = 0;
   std::uint64_t parameterElements = 0;
   bool finite = true;
+  bool hasAdam = false;
   Params parameters;
+  std::vector<std::pair<std::string, std::vector<float>>> adamFirst;
+  std::vector<std::pair<std::string, std::vector<float>>> adamSecond;
   std::string parameterHash;
 };
 
@@ -5182,7 +5261,9 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.fileBytes = static_cast<std::uint64_t>(size);
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTCKPTV1\n") throw std::runtime_error("NPRT_CKPT_MAGIC");
+  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n")
+    throw std::runtime_error("NPRT_CKPT_MAGIC");
+  const bool v2 = magic == "NPRTCKPTV2\n";
   result.vocabulary = nprtReadU32(input);
   result.tokens = nprtReadU32(input);
   result.dimension = nprtReadU32(input);
@@ -5235,6 +5316,38 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
     nprtAssignRegistryMember(parameters, result.layers, name,
                              std::move(values));
     elements += count;
+  }
+  if (v2) {
+    const auto readMomentRegistry =
+        [&](std::vector<std::pair<std::string, std::vector<float>>> &target) {
+      const uint32_t count = nprtReadU32(input);
+      if (count != registry.size())
+        throw std::runtime_error("NPRT_CKPT_ADAM_REGISTRY_COUNT");
+      target.reserve(count);
+      for (size_t i = 0; i < count; ++i) {
+        const uint32_t nameLength = nprtReadU32(input);
+        if (nameLength == 0 || nameLength > 256)
+          throw std::runtime_error("NPRT_CKPT_NAME_LENGTH");
+        std::string name(nameLength, '\0');
+        input.read(name.data(), static_cast<std::streamsize>(name.size()));
+        if (!input) throw std::runtime_error("NPRT_CKPT_NAME_TRUNCATED");
+        const std::uint64_t countValues = nprtReadU64(input);
+        if (name != registry[i].name ||
+            countValues != registry[i].values->size() ||
+            countValues > 100000000ull)
+          throw std::runtime_error("NPRT_CKPT_ADAM_REGISTRY_IDENTITY");
+        std::vector<float> values(static_cast<std::size_t>(countValues));
+        input.read(reinterpret_cast<char *>(values.data()),
+                   static_cast<std::streamsize>(values.size() * sizeof(float)));
+        if (!input) throw std::runtime_error("NPRT_CKPT_VALUES_TRUNCATED");
+        for (float value : values)
+          if (!std::isfinite(value)) result.finite = false;
+        target.emplace_back(std::move(name), std::move(values));
+      }
+    };
+    result.hasAdam = true;
+    readMomentRegistry(result.adamFirst);
+    readMomentRegistry(result.adamSecond);
   }
   char tail = 0;
   if (input.read(&tail, 1))
@@ -5476,10 +5589,14 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=temperature_or_top_k_invalid\n";
-  if (generateConfig.gatePolicy != "legacy" && generateConfig.gatePolicy != "candidate")
+  // htp-native is the explicit experimental policy: the AR parity loop still
+  // runs as diagnostics, but generation is gated on HTP health alone.
+  const bool htpNativePolicy = generateConfig.gatePolicy == "htp-native";
+  if (!htpNativePolicy && generateConfig.gatePolicy != "legacy" &&
+      generateConfig.gatePolicy != "candidate")
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
-           "error=gate_policy must be legacy or candidate\n";
+           "error=gate_policy must be legacy, candidate, or htp-native\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
                                layers, &expectedStep))
@@ -5552,6 +5669,78 @@ std::string nicopediaHtpGeneration(
           .count();
   const double graphCreateUs = runtime.metrics().graphCreateUs;
   const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+  bool htpNativeQnnSuccess = true;
+  bool htpNativePrefixLogitsFinite = true;
+  bool htpNativePrefixProbabilitiesFinite = true;
+  bool htpNativeArLogitsFinite = true;
+  bool htpNativeArProbabilitiesFinite = true;
+  bool htpNativeGenerationLogitsFinite = true;
+  bool htpNativeGenerationProbabilitiesFinite = true;
+  bool samplingHealth = true;
+  bool samplingLogitsFinite = true;
+  bool samplingWeightsFinite = true;
+  bool samplingWeightSumFinite = true;
+  bool samplingWeightSumPositive = true;
+  bool samplingProbabilitiesFinite = true;
+  bool samplingProbabilitySumFinite = true;
+  bool samplingProbabilitySumPositive = true;
+  double samplingWeightSum = 0.0;
+  double samplingProbabilitySum = 0.0;
+  uint32_t samplingFailureCount = 0;
+  const auto htpNativeFailure = [&](const char *phase,
+                                    const std::string &detail) {
+    std::ostringstream report;
+    report << "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           << "failure_classification=HTP_NATIVE_HEALTH\nhealth_phase="
+           << phase << "\nerror=" << detail
+           << "\nhtp_native_qnn_success="
+           << (htpNativeQnnSuccess ? "true" : "false")
+           << "\nhtp_native_prefix_logits_finite="
+           << (htpNativePrefixLogitsFinite ? "true" : "false")
+           << "\nhtp_native_prefix_probabilities_finite="
+           << (htpNativePrefixProbabilitiesFinite ? "true" : "false")
+           << "\nhtp_native_ar_logits_finite="
+           << (htpNativeArLogitsFinite ? "true" : "false")
+           << "\nhtp_native_ar_probabilities_finite="
+           << (htpNativeArProbabilitiesFinite ? "true" : "false")
+           << "\nhtp_native_generation_logits_finite="
+           << (htpNativeGenerationLogitsFinite ? "true" : "false")
+           << "\nhtp_native_generation_probabilities_finite="
+           << (htpNativeGenerationProbabilitiesFinite ? "true" : "false")
+           << "\nsampling_health=" << (samplingHealth ? "true" : "false")
+           << "\nsampling_failure_count=" << samplingFailureCount
+           << "\nsampling_logits_finite="
+           << (samplingLogitsFinite ? "true" : "false")
+           << "\nsampling_weights_finite="
+           << (samplingWeightsFinite ? "true" : "false")
+           << "\nsampling_weight_sum_finite="
+           << (samplingWeightSumFinite ? "true" : "false")
+           << "\nsampling_weight_sum_positive="
+           << (samplingWeightSumPositive ? "true" : "false")
+           << "\nsampling_weight_sum=" << samplingWeightSum
+           << "\nsampling_probabilities_finite="
+           << (samplingProbabilitiesFinite ? "true" : "false")
+           << "\nsampling_probability_sum_finite="
+           << (samplingProbabilitySumFinite ? "true" : "false")
+           << "\nsampling_probability_sum_positive="
+           << (samplingProbabilitySumPositive ? "true" : "false")
+           << "\nsampling_probability_sum=" << samplingProbabilitySum
+           << "\ncpu_fallback=false\n"
+           << runtime.apiTraceSummary() << runtime.diagnostics();
+    return report.str();
+  };
+  const auto generationExecuteFailure = [&](const char *phase,
+                                             const std::string &detail) {
+    // Runtime execution returns false for either a QNN error or a successful
+    // QNN call whose APP_READ tensor failed finite/poison validation.  Keep
+    // those dimensions separate in the health report.
+    const auto &trace = runtime.apiTrace();
+    const bool qnnStatusSuccess = trace.graphExecuteAttemptCount > 0 &&
+                                  trace.graphExecuteLastResult == 0;
+    htpNativeQnnSuccess = htpNativeQnnSuccess && qnnStatusSuccess;
+    return htpNativePolicy ? htpNativeFailure(phase, detail)
+                           : failure(phase, detail, runtime);
+  };
 
   // Inference-only forward: zero target (logits are target-independent).
   const std::vector<float> zeros(
@@ -5583,8 +5772,24 @@ std::string nicopediaHtpGeneration(
     TinyTransformerTrainingOutputs htpStep;
     if (!runtime.executeTinyTransformerTraining(
             windowInput(prefixContext), zeros, loaded.parameters, 0.0f,
-            htpStep, error))
-      return failure("nicopedia_generate_parity", error, runtime);
+            htpStep, error)) {
+      htpNativePrefixLogitsFinite =
+          htpNativePrefixLogitsFinite && !htpStep.logits.empty() &&
+          finite(htpStep.logits);
+      htpNativePrefixProbabilitiesFinite =
+          htpNativePrefixProbabilitiesFinite &&
+          !htpStep.probabilities.empty() && finite(htpStep.probabilities);
+      return generationExecuteFailure("nicopedia_generate_parity", error);
+    }
+    const bool prefixLogitsFinite = !htpStep.logits.empty() && finite(htpStep.logits);
+    const bool prefixProbabilitiesFinite =
+        !htpStep.probabilities.empty() && finite(htpStep.probabilities);
+    htpNativePrefixLogitsFinite =
+        htpNativePrefixLogitsFinite && prefixLogitsFinite;
+    htpNativePrefixProbabilitiesFinite =
+        htpNativePrefixProbabilitiesFinite && prefixProbabilitiesFinite;
+    if (htpNativePolicy && (!prefixLogitsFinite || !prefixProbabilitiesFinite))
+      return htpNativeFailure("fixed_prefix", "non-finite HTP logits/probabilities");
     htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
                                          htpStep.logits.begin(),
                                          htpStep.logits.end());
@@ -5670,8 +5875,23 @@ std::string nicopediaHtpGeneration(
     TinyTransformerTrainingOutputs htpStep;
     if (!runtime.executeTinyTransformerTraining(
             windowInput(htpContext), zeros, loaded.parameters, 0.0f, htpStep,
-            error))
-      return failure("nicopedia_generate_ar", error, runtime);
+            error)) {
+      htpNativeArLogitsFinite = htpNativeArLogitsFinite &&
+                               !htpStep.logits.empty() && finite(htpStep.logits);
+      htpNativeArProbabilitiesFinite =
+          htpNativeArProbabilitiesFinite && !htpStep.probabilities.empty() &&
+          finite(htpStep.probabilities);
+      return generationExecuteFailure("nicopedia_generate_ar", error);
+    }
+    const bool arLogitsFinite = !htpStep.logits.empty() && finite(htpStep.logits);
+    const bool arProbabilitiesFinite =
+        !htpStep.probabilities.empty() && finite(htpStep.probabilities);
+    htpNativeArLogitsFinite = htpNativeArLogitsFinite && arLogitsFinite;
+    htpNativeArProbabilitiesFinite =
+        htpNativeArProbabilitiesFinite && arProbabilitiesFinite;
+    if (htpNativePolicy && (!arLogitsFinite || !arProbabilitiesFinite))
+      return htpNativeFailure("autoregressive_parity",
+                              "non-finite HTP logits/probabilities");
     htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
                                          htpStep.logits.begin(),
                                          htpStep.logits.end());
@@ -5754,8 +5974,19 @@ std::string nicopediaHtpGeneration(
   arGate = arGate && !divergenceBlocked;
   const bool legacyGate = parityGate && arGate;
   const bool candidateGate = parityGateCandidate && arGateCandidate;
+  // htp-native experimental policy: fixed-prefix and AR parity are diagnostic
+  // only, while generation is gated on QNN success plus finite HTP tensors in
+  // every one of those executions.  Legacy/candidate parity gates remain
+  // exactly as established above.
+  const bool htpNativeGate =
+      htpNativeQnnSuccess && htpNativePrefixLogitsFinite &&
+      htpNativePrefixProbabilitiesFinite && htpNativeArLogitsFinite &&
+      htpNativeArProbabilitiesFinite;
   const bool generationGate =
-      (generateConfig.gatePolicy == "candidate") ? candidateGate : legacyGate;
+      htpNativePolicy
+          ? htpNativeGate
+          : ((generateConfig.gatePolicy == "candidate") ? candidateGate
+                                                        : legacyGate);
 
   // User-prompt generation (only when both gates pass).
   std::vector<std::uint8_t> generated;
@@ -5766,27 +5997,78 @@ std::string nicopediaHtpGeneration(
     for (uint32_t step = 0; step < generateConfig.maxNewBytes; ++step) {
       TinyTransformerTrainingOutputs htpStep;
       if (!runtime.executeTinyTransformerTraining(
-              windowInput(generateContext), zeros, loaded.parameters, 0.0f,
-              htpStep, error))
-        return failure("nicopedia_generate_step", error, runtime);
+               windowInput(generateContext), zeros, loaded.parameters, 0.0f,
+               htpStep, error)) {
+        htpNativeGenerationLogitsFinite =
+            htpNativeGenerationLogitsFinite && !htpStep.logits.empty() &&
+            finite(htpStep.logits);
+        htpNativeGenerationProbabilitiesFinite =
+            htpNativeGenerationProbabilitiesFinite &&
+            !htpStep.probabilities.empty() && finite(htpStep.probabilities);
+        return generationExecuteFailure("nicopedia_generate_step", error);
+      }
       const size_t lastBase =
           size_t(config.tokens - 1) * config.vocabularySize;
-      const float *row = htpStep.logits.data() + lastBase;
-      bool rowFinite = true;
-      for (uint32_t j = 0; j < config.vocabularySize; ++j)
-        rowFinite = rowFinite && std::isfinite(row[j]);
+      const bool rowAvailable =
+          htpStep.logits.size() >= lastBase + config.vocabularySize;
+      const float *row = rowAvailable ? htpStep.logits.data() + lastBase : nullptr;
+      bool rowFinite = rowAvailable;
+      if (rowAvailable) {
+        for (uint32_t j = 0; j < config.vocabularySize; ++j)
+          rowFinite = rowFinite && std::isfinite(row[j]);
+      }
+      htpNativeGenerationLogitsFinite =
+          htpNativeGenerationLogitsFinite && rowFinite;
+      const bool generationProbabilitiesFinite =
+          !htpStep.probabilities.empty() && finite(htpStep.probabilities);
+      htpNativeGenerationProbabilitiesFinite =
+          htpNativeGenerationProbabilitiesFinite && generationProbabilitiesFinite;
       if (!rowFinite)
-        return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
-               "failure_classification=EXECUTION_NONFINITE\n"
-               "error=generation step produced non-finite logits\n" +
-               runtime.apiTraceSummary() + runtime.diagnostics();
-      const uint8_t byte =
-          generateConfig.greedy
-              ? nicopedia_gen::greedyArgmax(row, config.vocabularySize)
-              : nicopedia_gen::sampleTopK(row, config.vocabularySize,
-                                          generateConfig.temperature,
-                                          generateConfig.topK,
-                                          generateConfig.samplingSeed, step);
+        return htpNativePolicy
+                   ? htpNativeFailure("generation_loop",
+                                      "generation step produced non-finite logits")
+                   : "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                     "failure_classification=EXECUTION_NONFINITE\n"
+                     "error=generation step produced non-finite logits\n" +
+                         runtime.apiTraceSummary() + runtime.diagnostics();
+      if (!generationProbabilitiesFinite && htpNativePolicy)
+        return htpNativeFailure("generation_loop",
+                                "generation step produced non-finite probabilities");
+      uint8_t byte = 0;
+      if (generateConfig.greedy) {
+        byte = nicopedia_gen::greedyArgmax(row, config.vocabularySize);
+      } else {
+        const auto sampling = nicopedia_gen::sampleTopKChecked(
+            row, config.vocabularySize, generateConfig.temperature,
+            generateConfig.topK, generateConfig.samplingSeed, step);
+        samplingHealth = samplingHealth && sampling.ok;
+        samplingLogitsFinite = samplingLogitsFinite && sampling.logitsFinite;
+        samplingWeightsFinite = samplingWeightsFinite && sampling.weightsFinite;
+        samplingWeightSumFinite =
+            samplingWeightSumFinite && sampling.weightSumFinite;
+        samplingWeightSumPositive =
+            samplingWeightSumPositive && sampling.weightSumPositive;
+        samplingProbabilitiesFinite =
+            samplingProbabilitiesFinite && sampling.probabilitiesFinite;
+        samplingProbabilitySumFinite =
+            samplingProbabilitySumFinite && sampling.probabilitySumFinite;
+        samplingProbabilitySumPositive =
+            samplingProbabilitySumPositive && sampling.probabilitySumPositive;
+        samplingWeightSum = sampling.weightSum;
+        samplingProbabilitySum = sampling.probabilitySum;
+        if (!sampling.ok) {
+          ++samplingFailureCount;
+          if (htpNativePolicy)
+            return htpNativeFailure(
+                "sampling",
+                "top-k probability weights/logits are non-finite or sum<=0");
+          return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                 "failure_classification=EXECUTION_NONFINITE\n"
+                 "error=top-k probability weights/logits are non-finite or sum<=0\n" +
+                 runtime.apiTraceSummary() + runtime.diagnostics();
+        }
+        byte = sampling.value;
+      }
       generated.push_back(byte);
       nicopedia_gen::appendByteWindow(generateContext, byte);
       if (progress &&
@@ -5807,22 +6089,27 @@ std::string nicopediaHtpGeneration(
       nicopedia_gen::utf8StatsOf(generated);
   const nicopedia_gen::GenerationAggregates ag =
       nicopedia_gen::generationAggregates(generated);
-  // Row-level logit finiteness is enforced fail-closed inside the generation
-  // loop (any non-finite logit aborts with EXECUTION_NONFINITE before the
-  // report is produced), so on SUCCESS these flags can only reflect a
-  // non-finite host-side timing measurement.  They are published as
-  // final-gate booleans, not per-step diagnostics.
+  const bool htpNativeHealth =
+      htpNativeGate && htpNativeGenerationLogitsFinite &&
+      htpNativeGenerationProbabilitiesFinite && samplingHealth;
+  const bool reportGenerationGate =
+      htpNativePolicy ? htpNativeHealth : generationGate;
+  // Row-level logit/probability finiteness is enforced fail-closed inside the
+  // generation loop.  Keep the host timing flags separate from tensor health
+  // so a QNN success is never mistaken for finite application-visible data.
   const bool nanDetected = !std::isfinite(generateSeconds);
   const bool infDetected = !std::isfinite(generateSeconds);
-  const std::string status = generationGate ? "SUCCESS" : "FAILED";
+  const std::string status = reportGenerationGate ? "SUCCESS" : "FAILED";
 
   std::ostringstream report;
   report << std::setprecision(10)
-         << "NICOPEDIA_HTP_GENERATION\ntest=nicopedia_htp_generation\nstatus="
-         << status
-         << (generationGate
-                 ? ""
-                 : "\nfailure_classification=PARITY_GATE_REJECTED")
+          << "NICOPEDIA_HTP_GENERATION\ntest=nicopedia_htp_generation\nstatus="
+          << status
+          << (reportGenerationGate
+                  ? ""
+                  : (htpNativePolicy
+                         ? "\nfailure_classification=HTP_NATIVE_HEALTH"
+                         : "\nfailure_classification=PARITY_GATE_REJECTED"))
          << "\nmodel=L" << layers << "\nlayers=" << layers << "\nheads=" << heads
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
@@ -5879,7 +6166,45 @@ std::string nicopediaHtpGeneration(
          << (hasDivergence ? static_cast<int>(divergenceStep) : 0)
          << "\nar_divergence_margin_cpu=" << divergenceMarginCpu
          << "\nar_divergence_blocked=" << (divergenceBlocked ? "true" : "false")
-         << "\ngeneration_gate=" << (generationGate ? "true" : "false");
+          << "\ngeneration_gate=" << (generationGate ? "true" : "false")
+          << "\ngeneration_health="
+          << (htpNativePolicy ? (htpNativeHealth ? "true" : "false")
+                              : "n/a")
+          << "\nhtp_native_qnn_success="
+          << (htpNativeQnnSuccess ? "true" : "false")
+          << "\nhtp_native_prefix_logits_finite="
+          << (htpNativePrefixLogitsFinite ? "true" : "false")
+          << "\nhtp_native_prefix_probabilities_finite="
+          << (htpNativePrefixProbabilitiesFinite ? "true" : "false")
+          << "\nhtp_native_ar_logits_finite="
+          << (htpNativeArLogitsFinite ? "true" : "false")
+          << "\nhtp_native_ar_probabilities_finite="
+          << (htpNativeArProbabilitiesFinite ? "true" : "false")
+          << "\nhtp_native_generation_logits_finite="
+          << (htpNativeGenerationLogitsFinite ? "true" : "false")
+          << "\nhtp_native_generation_probabilities_finite="
+          << (htpNativeGenerationProbabilitiesFinite ? "true" : "false")
+          << "\nsampling_enabled="
+          << (generateConfig.greedy ? "false" : "true")
+          << "\nsampling_health=" << (samplingHealth ? "true" : "false")
+          << "\nsampling_failure_count=" << samplingFailureCount
+          << "\nsampling_logits_finite="
+          << (samplingLogitsFinite ? "true" : "false")
+          << "\nsampling_weights_finite="
+          << (samplingWeightsFinite ? "true" : "false")
+          << "\nsampling_weight_sum_finite="
+          << (samplingWeightSumFinite ? "true" : "false")
+          << "\nsampling_weight_sum_positive="
+          << (samplingWeightSumPositive ? "true" : "false")
+          << "\nsampling_weight_sum=" << samplingWeightSum
+          << "\nsampling_probabilities_finite="
+          << (samplingProbabilitiesFinite ? "true" : "false")
+          << "\nsampling_probability_sum_finite="
+          << (samplingProbabilitySumFinite ? "true" : "false")
+          << "\nsampling_probability_sum_positive="
+          << (samplingProbabilitySumPositive ? "true" : "false")
+          << "\nsampling_probability_sum=" << samplingProbabilitySum
+          << "\ngeneration_policy=" << generateConfig.gatePolicy;
   for (size_t i = 0; i < parityRows.size(); ++i) {
     const auto &row = parityRows[i];
     report << "\nparity_" << i << "_label=" << row.label
@@ -6301,6 +6626,22 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   const float lr = trainingConfig.learningRate > 0.0f
                        ? trainingConfig.learningRate
                        : 0.003f;
+  // Resume/checkpoint-interval settings arrive via the dedicated
+  // TrainingConfig fields (phonelm.resume_step / phonelm.checkpoint_interval
+  // in the intent path). Values must be explicit; there is no implicit
+  // fallback from unrelated config slots.
+  const uint32_t resumeStep =
+      trainingConfig.diagnosticResumeStep > 0
+          ? static_cast<uint32_t>(trainingConfig.diagnosticResumeStep)
+          : 0u;
+  const uint32_t checkpointInterval =
+      trainingConfig.diagnosticCheckpointInterval > 0
+          ? static_cast<uint32_t>(trainingConfig.diagnosticCheckpointInterval)
+          : 250u;
+  if (resumeStep >= steps)
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=resume_step must be in 1..steps-1\n";
   const auto order = nprtTrainingOrder(cache.records.size(), steps, batchSize);
   const std::string orderHashValue = nprtOrderHash(order);
   const Params shape = tiny_lm::initialParameters(config, 1);
@@ -6348,34 +6689,87 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   Params htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
   Params cpuFirst = htpFirst, cpuSecond = htpFirst;
   const std::string initialParameterHash = nprtParameterHash(htp);
+  const bool fromScratch = resumeStep == 0;
+  std::string resumeCheckpointHash = "n/a", resumeCheckpointFormat = "n/a";
+  if (!fromScratch) {
+    // Canonical resume audit: NPRTCKPTV2 carries parameters + Adam first/
+    // second moments; NPRTCKPTV1 (parameters only) cannot continue a
+    // canonical trajectory and is rejected fail-closed here.
+    const std::string resumePath = cachePath + "/htp-seed" +
+                                   std::to_string(seed) + "-l" +
+                                   std::to_string(layers) + "-step" +
+                                   std::to_string(resumeStep) + ".ckpt";
+    LoadedNprtCheckpoint loaded;
+    try {
+      loaded = nprtLoadCheckpointForGeneration(
+          resumePath, config, static_cast<uint32_t>(seed));
+    } catch (const std::exception &exception) {
+      return std::string("NICOPEDIA_HTP\nstatus=FAILED\n"
+                         "failure_classification=RESUME_CHECKPOINT_DECODE\nerror=") +
+             exception.what() + '\n';
+    }
+    if (loaded.step != resumeStep || !loaded.finite)
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=RESUME_CHECKPOINT_IDENTITY\n"
+             "error=resume checkpoint step/finiteness mismatch\n";
+    if (!loaded.hasAdam)
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=RESUME_ADAM_STATE_MISSING\n"
+             "error=NPRTCKPTV1 has no Adam moments; canonical resume "
+             "requires NPRTCKPTV2\n";
+    htp = std::move(loaded.parameters);
+    const auto restoreMoments = [&](Params &moment,
+                                    const std::vector<std::pair<std::string, std::vector<float>>> &entries) {
+      for (const auto &entry : entries)
+        nprtAssignRegistryMember(moment, static_cast<uint32_t>(layers),
+                                 entry.first,
+                                 std::vector<float>(entry.second));
+    };
+    restoreMoments(htpFirst, loaded.adamFirst);
+    restoreMoments(htpSecond, loaded.adamSecond);
+    resumeCheckpointHash = loaded.parameterHash;
+    resumeCheckpointFormat = "NPRTCKPTV2";
+  }
 
   // Step 0: same-batch CPU/HTP one-step comparison before any update.
-  const auto firstBatch = nprtBatch(config, cache, order[0]);
-  const auto cpuStep0 = tiny_lm::forwardBackwardGeneralized(
-      config, firstBatch.input, firstBatch.target, cpu, 0.0f);
-  TinyTransformerTrainingOutputs htpStep0;
-  const auto executeStarted = std::chrono::steady_clock::now();
-  if (!runtime.executeTinyTransformerTraining(
-          firstBatch.input, firstBatch.target, htp, 0.0f, htpStep0, error))
-    return failure("nicopedia_step0", error, runtime);
-  const double firstExecuteUs =
-      std::chrono::duration<double, std::micro>(
-          std::chrono::steady_clock::now() - executeStarted)
-          .count();
-  const auto logits0 = compareNprt(cpuStep0.logits, htpStep0.logits);
-  const auto probs0 = compareNprt(cpuStep0.probabilities, htpStep0.probabilities);
-  const auto dlogits0 = compareNprt(cpuStep0.dLogits, htpStep0.dLogits);
-  const double gradient0 = nprtMaxParamError(cpuStep0.gradients, htpStep0.gradients);
-  const bool step0Finite =
-      std::isfinite(cpuStep0.loss) && std::isfinite(htpStep0.loss) &&
-      logits0.nonfinite == 0 && probs0.nonfinite == 0 &&
-      dlogits0.nonfinite == 0 && std::isfinite(gradient0);
-  // Tolerances are fixed before results are interpreted (numerical evidence
-  // policy): logits/probability/dlogits use the established tiny-LM one-step
-  // bounds; the gradient uses the established diagnostic 0.03 bound.
-  const bool step0Ok =
-      step0Finite && logits0.maxAbs < 2e-2 && probs0.maxAbs < 5e-3 &&
-      dlogits0.maxAbs < 5e-3 && gradient0 < 3e-2;
+  // From-scratch only; a resumed run starts at its saved global step and the
+  // one-step diagnostic would compare mismatched parameter identities.
+  double firstExecuteUs = 0.0;
+  NprtComparison logits0, probs0, dlogits0;
+  double gradient0 = 0.0;
+  double cpuStep0Loss = std::numeric_limits<double>::quiet_NaN();
+  double htpStep0Loss = cpuStep0Loss;
+  bool step0Finite = true, step0Ok = true;
+  if (fromScratch) {
+    const auto firstBatch = nprtBatch(config, cache, order[0]);
+    const auto cpuStep0 = tiny_lm::forwardBackwardGeneralized(
+        config, firstBatch.input, firstBatch.target, cpu, 0.0f);
+    TinyTransformerTrainingOutputs htpStep0;
+    const auto executeStarted = std::chrono::steady_clock::now();
+    if (!runtime.executeTinyTransformerTraining(
+            firstBatch.input, firstBatch.target, htp, 0.0f, htpStep0, error))
+      return failure("nicopedia_step0", error, runtime);
+    firstExecuteUs =
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - executeStarted)
+            .count();
+    cpuStep0Loss = cpuStep0.loss;
+    htpStep0Loss = htpStep0.loss;
+    logits0 = compareNprt(cpuStep0.logits, htpStep0.logits);
+    probs0 = compareNprt(cpuStep0.probabilities, htpStep0.probabilities);
+    dlogits0 = compareNprt(cpuStep0.dLogits, htpStep0.dLogits);
+    gradient0 = nprtMaxParamError(cpuStep0.gradients, htpStep0.gradients);
+    step0Finite =
+        std::isfinite(cpuStep0.loss) && std::isfinite(htpStep0.loss) &&
+        logits0.nonfinite == 0 && probs0.nonfinite == 0 &&
+        dlogits0.nonfinite == 0 && std::isfinite(gradient0);
+    // Tolerances are fixed before results are interpreted (numerical evidence
+    // policy): logits/probability/dlogits use the established tiny-LM one-step
+    // bounds; the gradient uses the established diagnostic 0.03 bound.
+    step0Ok =
+        step0Finite && logits0.maxAbs < 2e-2 && probs0.maxAbs < 5e-3 &&
+        dlogits0.maxAbs < 5e-3 && gradient0 < 3e-2;
+  }
 
   // Short trajectory: 2, 4, 8 steps of CPU and HTP training from the same
   // initial parameters and the same batch order, comparing loss and parameter
@@ -6466,17 +6860,26 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     }
     return true;
   };
-  if (!runTrajectory(8)) return failure("nicopedia_short_trajectory", error, runtime);
+  if (fromScratch && !runTrajectory(8))
+    return failure("nicopedia_short_trajectory", error, runtime);
 
   // Full training loop: HTP forward/backward and HTP Adam for every step.
-  // The CPU reference runs in lockstep so the final state and the trajectory
-  // remain comparable.
-  Params current = cpu, currentFirst = cpuFirst, currentSecond = cpuSecond;
+  // The CPU reference runs in lockstep on scratch so the final state and the
+  // trajectory remain comparable.  On a resume, HTP parameters and Adam
+  // moments are restored from the checkpoint; no CPU replay is used as a
+  // resume source or post-training tail.
+  Params current = fromScratch ? cpu : htp;
+  Params currentFirst = fromScratch ? cpuFirst : htpFirst;
+  Params currentSecond = fromScratch ? cpuSecond : htpSecond;
   float firstLoss = 0, lastLoss = 0;
   bool allFinite = true;
-  uint32_t completedSteps = 0;
+  uint32_t completedSteps = 0, lastCompletedStep = resumeStep;
+  uint32_t checkpointCount = 0;
+  std::string lastCheckpointPath;
+  bool lastCheckpointWritten = false;
+  std::vector<std::pair<uint32_t, float>> curve;
   const auto trainingStarted = std::chrono::steady_clock::now();
-  for (uint32_t step = 1; step <= steps; ++step) {
+  for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
     Params gradientAccum = zeroLanguageParameters(current);
     double lossSum = 0;
     bool stepFinite = true;
@@ -6520,9 +6923,27 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     allFinite = allFinite && stepFinite;
     if (!stepFinite) break;
     ++completedSteps;
-    if (step == 1) firstLoss = meanLoss;
+    lastCompletedStep = step;
+    if (step % 25 == 0 || step == steps)
+      curve.emplace_back(step, meanLoss);
+    if (step % checkpointInterval == 0 || step == steps) {
+      const std::string intervalPath =
+          cachePath + "/htp-seed" + std::to_string(seed) + "-l" +
+          std::to_string(layers) + "-step" + std::to_string(step) + ".ckpt";
+      const bool written = nprtSaveCheckpointV2(
+          intervalPath, config, uint32_t(seed), step, current, currentFirst,
+          currentSecond);
+      if (!written)
+        return failure("nicopedia_checkpoint_interval",
+                       "NPRTCKPTV2 atomic interval write failed", runtime);
+      ++checkpointCount;
+      lastCheckpointPath = intervalPath;
+      lastCheckpointWritten = true;
+    }
+    if (step == resumeStep + 1) firstLoss = meanLoss;
     lastLoss = meanLoss;
-    if (progress && (step == 1 || step % 32 == 0 || step == steps)) {
+    if (progress && (step == resumeStep + 1 || step % 32 == 0 ||
+                     step == steps)) {
       std::ostringstream update;
       update << std::setprecision(10) << "phase=training\nseed=" << seed
              << "\nstep=" << step << "\nsteps=" << steps << "\nloss=" << meanLoss;
@@ -6534,53 +6955,115 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           .count();
   const double stepMs = completedSteps ? trainingSeconds / completedSteps * 1000.0
                                        : 0.0;
-  // Final state comparison.
-  Params cpuFinal = cpu, cpuFinalFirst = cpuFirst, cpuFinalSecond = cpuSecond;
-  for (uint32_t step = 1; step <= completedSteps; ++step) {
-    Params gradientAccum = zeroLanguageParameters(cpuFinal);
-    for (uint32_t batch = 0; batch < batchSize; ++batch) {
-      const auto batchData =
-          nprtBatch(config, cache, order[std::size_t(step - 1) * batchSize + batch]);
-      const auto cpuGradient = tiny_lm::forwardBackwardGeneralized(
-          config, batchData.input, batchData.target, cpuFinal, 0.0f);
-      const auto registry = tiny_lm::parameterRegistry(gradientAccum);
-      const auto gradientRegistry = tiny_lm::parameterRegistry(cpuGradient.gradients);
-      for (size_t i = 0; i < registry.size(); ++i) {
-        auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
-        const auto &values = *gradientRegistry[i].values;
-        for (size_t j = 0; j < accum.size(); ++j)
-          accum[j] += values[j] * (1.0f / float(batchSize));
+  // Final state comparison.  The scratch path keeps the established CPU
+  // replay and comparison threshold.  A resumed run already has a canonical
+  // HTP state (parameters + Adam moments); replaying every prior step on CPU
+  // is both redundant and an unbounded host-side tail, so it is deliberately
+  // skipped and reported as such.
+  const bool cpuReplayPerformed = fromScratch;
+  Params cpuFinal = current, cpuFinalFirst = currentFirst,
+         cpuFinalSecond = currentSecond;
+  if (cpuReplayPerformed) {
+    cpuFinal = cpu;
+    cpuFinalFirst = cpuFirst;
+    cpuFinalSecond = cpuSecond;
+    for (uint32_t step = 1; step <= lastCompletedStep; ++step) {
+      Params gradientAccum = zeroLanguageParameters(cpuFinal);
+      for (uint32_t batch = 0; batch < batchSize; ++batch) {
+        const auto batchData = nprtBatch(
+            config, cache, order[std::size_t(step - 1) * batchSize + batch]);
+        const auto cpuGradient = tiny_lm::forwardBackwardGeneralized(
+            config, batchData.input, batchData.target, cpuFinal, 0.0f);
+        const auto registry = tiny_lm::parameterRegistry(gradientAccum);
+        const auto gradientRegistry =
+            tiny_lm::parameterRegistry(cpuGradient.gradients);
+        for (size_t i = 0; i < registry.size(); ++i) {
+          auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
+          const auto &values = *gradientRegistry[i].values;
+          for (size_t j = 0; j < accum.size(); ++j)
+            accum[j] += values[j] * (1.0f / float(batchSize));
+        }
+      }
+      const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
+      const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+      const auto cpuUpdate = tiny_lm::adamUpdate(
+          cpuFinal, gradientAccum, cpuFinalFirst, cpuFinalSecond, lr, .9f,
+          .999f, 1e-8f, c1, c2);
+      cpuFinal = cpuUpdate.next;
+      cpuFinalFirst = cpuUpdate.firstMoment;
+      cpuFinalSecond = cpuUpdate.secondMoment;
+      // Keep long scratch runs observable without emitting one line per
+      // replayed optimizer step.
+      if (progress && (step == 1 || step == lastCompletedStep || step % 256 == 0)) {
+        std::ostringstream update;
+        update << "phase=cpu_replay\nstep=" << step << "/"
+               << lastCompletedStep;
+        progress(update.str());
       }
     }
-    const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
-    const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
-    const auto cpuUpdate = tiny_lm::adamUpdate(
-        cpuFinal, gradientAccum, cpuFinalFirst, cpuFinalSecond, lr, .9f, .999f,
-        1e-8f, c1, c2);
-    cpuFinal = cpuUpdate.next;
-    cpuFinalFirst = cpuUpdate.firstMoment;
-    cpuFinalSecond = cpuUpdate.secondMoment;
   }
-  const double finalParameterError = nprtMaxParamError(cpuFinal, current);
-  const double finalFirstError = nprtMaxParamError(cpuFinalFirst, currentFirst);
-  const double finalSecondError = nprtMaxParamError(cpuFinalSecond, currentSecond);
+  const double finalParameterError =
+      cpuReplayPerformed ? nprtMaxParamError(cpuFinal, current) : -1.0;
+  const double finalFirstError =
+      cpuReplayPerformed ? nprtMaxParamError(cpuFinalFirst, currentFirst) : -1.0;
+  const double finalSecondError =
+      cpuReplayPerformed ? nprtMaxParamError(cpuFinalSecond, currentSecond) : -1.0;
   const bool finalFinite =
       finiteParams(current) && finiteParams(currentFirst) &&
-      finiteParams(currentSecond) && finiteParams(cpuFinal);
+      finiteParams(currentSecond) &&
+      (!cpuReplayPerformed || finiteParams(cpuFinal));
   const bool lossDecreased = std::isfinite(firstLoss) && std::isfinite(lastLoss) &&
                              lastLoss < firstLoss;
-  const bool ok = step0Ok && allFinite && finalFinite && lossDecreased &&
-                  completedSteps == steps;
-  // Private checkpoint: NPRTCKPTV1 in the app files directory.  The host
-  // runner pulls it and evaluates validation/development with the CPU pilot
-  // evaluation path.  It never enters public artifacts.
+  // Scratch retains the established loss-decrease assertion.  A resumed
+  // segment is a continuation diagnostic: a noisy endpoint must not turn an
+  // otherwise finite, fully-checkpointed segment into a health failure.
+  const bool ok = step0Ok && allFinite && finalFinite &&
+                  (!fromScratch || lossDecreased) &&
+                  lastCompletedStep == steps;
+  if (!curve.empty()) {
+    std::ofstream curveOut(cachePath + "/training-curve-" +
+                               std::to_string(lastCompletedStep) + ".csv",
+                           std::ios::binary | std::ios::trunc);
+    if (curveOut) {
+      curveOut << std::setprecision(9);
+      for (const auto &point : curve)
+        curveOut << point.first << ',' << point.second << '\n';
+    }
+  }
+  // Private checkpoint: NPRTCKPTV2 (parameters + Adam moments + step) in the
+  // app files directory.  The host runner pulls it, evaluates held-out data,
+  // and uses it as the resume source for the next segment.  NPRTCKPTV1 from
+  // older runs is still loadable (generation/read paths) but cannot resume.
   const std::string checkpointPath =
       cachePath + "/htp-seed" + std::to_string(seed) + "-l" +
-      std::to_string(layers) + "-step" + std::to_string(completedSteps) +
+      std::to_string(layers) + "-step" + std::to_string(lastCompletedStep) +
       ".ckpt";
-  const bool checkpointWritten =
-      nprtSaveCheckpoint(checkpointPath, config, uint32_t(seed),
-                         completedSteps, current);
+  bool checkpointWritten = false;
+  std::ifstream checkpointPresent(checkpointPath, std::ios::binary);
+  checkpointPresent.seekg(0, std::ios::end);
+  const bool existingCheckpoint = checkpointPresent.good() &&
+                                  checkpointPresent.tellg() > std::streamoff(0);
+  const bool checkpointSaveEligible =
+      nicopedia_checkpoint::finalWriteAllowed(allFinite, finalFinite,
+                                              lastCompletedStep, steps);
+  if (!checkpointSaveEligible) {
+    // Preserve every previously committed interval/resume checkpoint. The
+    // report remains FAILED with checkpoint_written=false.
+    checkpointWritten = false;
+  } else if (checkpointPath == lastCheckpointPath && lastCheckpointWritten &&
+             existingCheckpoint) {
+    // The interval write at the final completed step is already canonical;
+    // avoid a redundant second replacement of the same file.
+    checkpointWritten = true;
+  } else {
+    checkpointWritten = nprtSaveCheckpointV2(
+        checkpointPath, config, uint32_t(seed), lastCompletedStep, current,
+        currentFirst, currentSecond);
+    if (!checkpointWritten)
+      return failure("nicopedia_checkpoint_final",
+                     "NPRTCKPTV2 atomic final write failed", runtime);
+    ++checkpointCount;
+  }
   std::ostringstream report;
   report << std::setprecision(10)
          << "NICOPEDIA_HTP\ntest=nicopedia_real_text_htp_training\nstatus="
@@ -6588,6 +7071,11 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
          << "\nsteps=" << steps << "\nbatch_size=" << batchSize
          << "\nlearning_rate=" << lr
+         << "\nresume_from_step=" << resumeStep
+         << "\nresume_checkpoint_format=" << resumeCheckpointFormat
+         << "\nresume_checkpoint_hash=" << resumeCheckpointHash
+         << "\ncheckpoint_interval=" << checkpointInterval
+         << "\ncheckpoint_count=" << checkpointCount
          << "\ncache_context=" << cache.context
          << "\ncache_vocabulary=" << cache.vocabulary
          << "\ncache_record_count=" << cache.records.size()
@@ -6596,8 +7084,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\ninitial_parameter_hash=" << initialParameterHash
          << "\nparameter_element_count=" << optimizerElements
          << "\noptimizer_chunk_count=" << optimizerChunkCount
-         << "\nstep0_loss_cpu=" << cpuStep0.loss << "\nstep0_loss_htp="
-         << htpStep0.loss << "\nstep0_logits_max_abs_error=" << logits0.maxAbs
+         << "\nstep0_loss_cpu=" << cpuStep0Loss << "\nstep0_loss_htp="
+         << htpStep0Loss << "\nstep0_logits_max_abs_error=" << logits0.maxAbs
          << "\nstep0_logits_mean_abs_error=" << logits0.meanAbs
          << "\nstep0_logits_max_relative_error=" << logits0.maxRelative
          << "\nstep0_logits_l2_error=" << logits0.l2
@@ -6623,18 +7111,22 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   }
   report << "\nfirst_loss=" << firstLoss << "\nlast_loss=" << lastLoss
          << "\nloss_decreased=" << (lossDecreased ? "true" : "false")
-         << "\ncompleted_steps=" << completedSteps
+         << "\ncompleted_steps=" << lastCompletedStep
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\nfinal_parameter_max_abs_error=" << finalParameterError
          << "\nfinal_first_moment_max_abs_error=" << finalFirstError
          << "\nfinal_second_moment_max_abs_error=" << finalSecondError
-         << "\nfinal_parameter_canonical_hash="
-         << canonicalFloatSha256(flattenLanguageParameters(current))
-         << "\nfinal_cpu_parameter_canonical_hash="
-         << canonicalFloatSha256(flattenLanguageParameters(cpuFinal))
-         << "\nfinal_parameter_hash=" << nprtParameterHash(current)
-         << "\nfinal_finite=" << (finalFinite ? "true" : "false")
-         << "\ncheckpoint_written=" << (checkpointWritten ? "true" : "false")
+          << "\nfinal_parameter_canonical_hash="
+          << canonicalFloatSha256(flattenLanguageParameters(current))
+          << "\nfinal_cpu_parameter_canonical_hash="
+          << (cpuReplayPerformed
+                  ? canonicalFloatSha256(flattenLanguageParameters(cpuFinal))
+                  : "NOT_RUN")
+          << "\nfinal_parameter_hash=" << nprtParameterHash(current)
+          << "\nfinal_finite=" << (finalFinite ? "true" : "false")
+          << "\ncpu_replay_performed="
+          << (cpuReplayPerformed ? "true" : "false")
+          << "\ncheckpoint_written=" << (checkpointWritten ? "true" : "false")
          << "\nhtp_initialize_us=" << initializeUs
          << "\ngraph_create_us=" << graphCreateUs
          << "\ngraph_finalize_us=" << graphFinalizeUs
@@ -6651,6 +7143,255 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   return report.str();
 }
 }  // namespace
+
+namespace {
+// HTP-native held-out evaluation: teacher-forces validation/development
+// caches through the HTP forward graph with a loaded checkpoint and computes
+// the same NLL/perplexity/top-1/top-5/mean-rank/margin aggregates as the CPU
+// host evaluator (host_tests/htp_checkpoint_eval.cpp).  Unlike the CPU eval
+// this runs the model itself on HTP: any QNN failure or non-finite tensor is
+// an HTP health failure.  No optimizer, no parity gate.
+// Mapped TrainingConfig fields: epochs=layers, measuredSteps=heads,
+// diagnosticResumeStep=checkpoint step (1..999999), steps=validation chunk
+// cap (default 8192), batchSize=development chunk cap (default 16384).
+std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
+                                 const TrainingConfig &trainingConfig,
+                                 const LogSink &progress) {
+  const std::string dir = trainingConfig.diagnosticCheckpointDir;
+  if (dir.empty())
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=checkpoint_dir_required\n";
+  const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
+                       ? static_cast<int>(trainingConfig.seed)
+                       : 1;
+  const int layers = static_cast<int>(config.numLayers);
+  const int heads = static_cast<int>(config.numHeads);
+  const uint32_t checkpointStep =
+      static_cast<uint32_t>(trainingConfig.diagnosticResumeStep);
+  if (checkpointStep == 0 || checkpointStep >= 1000000)
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=checkpoint_step_required\n";
+  const uint32_t validationLimit =
+      trainingConfig.steps > 0 ? static_cast<uint32_t>(trainingConfig.steps)
+                               : 8192u;
+  const uint32_t developmentLimit =
+      trainingConfig.batchSize > 0
+          ? static_cast<uint32_t>(trainingConfig.batchSize)
+          : 16384u;
+  if (validationLimit == 0 || developmentLimit == 0 || layers <= 0 ||
+      heads <= 0)
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=limits_layers_heads_must_be_positive\n";
+  const std::string checkpointPath =
+      dir + "/htp-seed" + std::to_string(seed) + "-l" +
+      std::to_string(layers) + "-step" + std::to_string(checkpointStep) +
+      ".ckpt";
+  LoadedNprtCheckpoint loaded;
+  try {
+    loaded = nprtLoadCheckpointForGeneration(
+        checkpointPath, config, static_cast<uint32_t>(seed));
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                       "failure_classification=CHECKPOINT_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
+  if (loaded.step != checkpointStep || !loaded.finite)
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_IDENTITY\n"
+           "error=checkpoint step or finiteness mismatch\n";
+  NprtCache validation;
+  NprtCache development;
+  try {
+    validation = loadNprtCache(dir + "/validation.bin");
+    development = loadNprtCache(dir + "/development.bin");
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                       "failure_classification=CACHE_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
+  if (validation.context != config.tokens ||
+      development.context != config.tokens ||
+      validation.vocabulary != config.vocabularySize ||
+      development.vocabulary != config.vocabularySize)
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=CACHE_CONFIG_MISMATCH\n"
+           "error=cache context/vocabulary mismatch\n";
+  if (validation.records.size() < validationLimit ||
+      development.records.size() < developmentLimit)
+    return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+           "failure_classification=CACHE_CAPACITY_MISMATCH\n"
+           "error=requested full-cap chunks exceed cache records\n";
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  std::string error;
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          config.numHeads))
+    return failure("nicopedia_eval_prepare", error, runtime);
+
+  struct SplitResult {
+    bool finite = true;
+    double nll = 0, perplexity = 0, top1 = 0, top5 = 0, meanRank = 0;
+    double meanMargin = 0, graphLossMean = 0;
+    std::uint64_t tokens = 0, chunks = 0;
+    uint32_t nonfiniteChunks = 0;
+  };
+  const auto evaluateSplit = [&](const NprtCache &cache, uint32_t limit,
+                                 const char *label,
+                                 const LogSink &splitProgress) -> SplitResult {
+    SplitResult result;
+    const std::size_t count =
+        std::min<std::size_t>(limit, cache.records.size());
+    double top1 = 0, top5 = 0, rankSum = 0, marginSum = 0, lossSum = 0;
+    double graphLossSum = 0;
+    for (std::size_t chunk = 0; chunk < count; ++chunk) {
+      const NprtBatch batch = nprtBatch(config, cache, chunk);
+      TinyTransformerTrainingOutputs output;
+      if (!runtime.executeTinyTransformerTraining(
+              batch.input, batch.target, loaded.parameters, 0.0f, output,
+              error)) {
+        result.nonfiniteChunks = count;
+        result.finite = false;
+        return result;
+      }
+      bool chunkFinite =
+          std::isfinite(output.loss) &&
+          std::all_of(output.logits.begin(), output.logits.end(),
+                      [](float value) { return std::isfinite(value); });
+      ++result.chunks;
+      graphLossSum += output.loss;
+      if (!chunkFinite) {
+        ++result.nonfiniteChunks;
+        result.finite = false;
+        continue;
+      }
+      // Identical formulas to the CPU host evaluator (htp_checkpoint_eval):
+      // per-row NLL = max + log(sum(exp(logits - max))) - logit_truth.
+      for (uint32_t row = 0; row < config.tokens; ++row) {
+        const std::size_t base = std::size_t(row) * config.vocabularySize;
+        const uint32_t truth = cache.records[chunk].window[row + 1];
+        const float truthLogit = output.logits[base + truth];
+        float maximum = output.logits[base];
+        float maximumOther = -std::numeric_limits<float>::infinity();
+        uint32_t prediction = 0, rank = 1;
+        for (uint32_t token = 0; token < config.vocabularySize; ++token) {
+          const float value = output.logits[base + token];
+          if (value > maximum) {
+            maximum = value;
+            prediction = token;
+          }
+          if (token != truth) maximumOther = std::max(maximumOther, value);
+          if (value > truthLogit) ++rank;
+        }
+        double exponentialSum = 0;
+        for (uint32_t token = 0; token < config.vocabularySize; ++token)
+          exponentialSum +=
+              std::exp(double(output.logits[base + token] - maximum));
+        lossSum += maximum + std::log(exponentialSum) - truthLogit;
+        top1 += prediction == truth;
+        top5 += rank <= 5;
+        rankSum += rank;
+        marginSum += truthLogit - maximumOther;
+        ++result.tokens;
+      }
+      if (splitProgress && (chunk == 0 || (chunk + 1) % 1024 == 0 ||
+                            chunk + 1 == count)) {
+        std::ostringstream update;
+        update << "phase=eval\nsplit=" << label << "\nchunk=" << (chunk + 1)
+               << "/" << count;
+        splitProgress(update.str());
+      }
+    }
+    const double total = std::max<double>(1.0, double(result.tokens));
+    result.nll = lossSum / total;
+    result.perplexity = std::exp(std::min(50.0, result.nll));
+    result.top1 = top1 / total;
+    result.top5 = top5 / total;
+    result.meanRank = rankSum / total;
+    result.meanMargin = marginSum / total;
+    result.graphLossMean =
+        graphLossSum / std::max<double>(1.0, double(result.chunks));
+    result.finite =
+        result.finite && std::isfinite(result.nll) &&
+        std::isfinite(result.perplexity) &&
+        std::isfinite(result.graphLossMean);
+    return result;
+  };
+  const auto evaluationStarted = std::chrono::steady_clock::now();
+  const SplitResult validationResult =
+      evaluateSplit(validation, validationLimit, "validation", progress);
+  const SplitResult developmentResult =
+      evaluateSplit(development, developmentLimit, "development", progress);
+  const double evaluationSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    evaluationStarted)
+          .count();
+  const double evaluatedChunks =
+      double(validationResult.chunks + developmentResult.chunks);
+  const double evaluationMsPerChunk =
+      evaluatedChunks > 0.0 ? evaluationSeconds * 1000.0 / evaluatedChunks : 0.0;
+  const bool evalFinite = validationResult.finite && developmentResult.finite;
+  const bool ok =
+      evalFinite && validationResult.nonfiniteChunks == 0 &&
+      developmentResult.nonfiniteChunks == 0 &&
+      validationResult.chunks == validationLimit &&
+      developmentResult.chunks == developmentLimit;
+  std::ostringstream report;
+  report << std::setprecision(10)
+         << "NICOPEDIA_HTP_EVAL\ntest=nicopedia_real_text_htp_eval\nstatus="
+         << (ok ? "SUCCESS" : "FAILED")
+         << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
+          << "\ncheckpoint_step=" << checkpointStep
+          << "\ncheckpoint_format="
+          << (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")
+          << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
+          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
+         << "\nvalidation_cache=" << validation.contentHash
+         << "\ndevelopment_cache=" << development.contentHash
+         << "\nvalidation_chunks=" << validationResult.chunks
+         << "\ndevelopment_chunks=" << developmentResult.chunks
+         << "\nvalidation_nll=" << validationResult.nll
+         << "\nvalidation_perplexity=" << validationResult.perplexity
+         << "\nvalidation_top1=" << validationResult.top1
+         << "\nvalidation_top5=" << validationResult.top5
+         << "\nvalidation_mean_rank=" << validationResult.meanRank
+         << "\nvalidation_margin=" << validationResult.meanMargin
+         << "\nvalidation_graph_loss_mean=" << validationResult.graphLossMean
+         << "\nvalidation_tokens=" << validationResult.tokens
+         << "\nvalidation_nonfinite_chunks="
+         << validationResult.nonfiniteChunks
+         << "\ndevelopment_nll=" << developmentResult.nll
+         << "\ndevelopment_perplexity=" << developmentResult.perplexity
+         << "\ndevelopment_top1=" << developmentResult.top1
+         << "\ndevelopment_top5=" << developmentResult.top5
+         << "\ndevelopment_mean_rank=" << developmentResult.meanRank
+         << "\ndevelopment_margin=" << developmentResult.meanMargin
+         << "\ndevelopment_graph_loss_mean=" << developmentResult.graphLossMean
+         << "\ndevelopment_tokens=" << developmentResult.tokens
+         << "\ndevelopment_nonfinite_chunks="
+         << developmentResult.nonfiniteChunks
+          << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+          << "\nevaluation_total_seconds=" << evaluationSeconds
+          << "\nevaluation_ms_per_chunk=" << evaluationMsPerChunk
+         << "\nevaluation_math_responsibility=HTP"
+         << "\ncpu_fallback=false\nnan_detected="
+         << (evalFinite ? "false" : "true")
+         << "\ninf_detected=" << (evalFinite ? "false" : "true") << '\n'
+         << runtime.apiTraceSummary() << runtime.diagnostics();
+  return report.str();
+}
+}  // namespace
+
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
     const LogSink& progress) {
@@ -6711,6 +7452,25 @@ std::string runTinyTransformerTrainingExperiment(
     generate.samplingSeed = static_cast<uint64_t>(trainingConfig.seed);
     return nicopediaHtpGeneration(config, checkpointPath, promptPath,
                                   trainingConfig, generate, progress);
+  }
+  if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL) {
+    tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = 32;
+    config.dimension = 16;
+    config.feedForwardDimension = 32;
+    config.numLayers =
+        static_cast<uint32_t>(trainingConfig.epochs > 0 ? trainingConfig.epochs : 6);
+    config.numHeads =
+        static_cast<uint32_t>(trainingConfig.measuredSteps > 0
+                                  ? trainingConfig.measuredSteps
+                                  : 2);
+    std::string error;
+    if (!tiny_lm::validateConfig(config, &error))
+      return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=" +
+             error + '\n';
+    return nicopediaHtpEvaluate(config, trainingConfig, progress);
   }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_GRAPH_BISECTION)
     return runTinyLmGraphBisection(false);

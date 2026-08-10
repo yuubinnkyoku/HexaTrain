@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -143,6 +144,29 @@ void testSampling() {
       ngen::sampleTopK(logits.data(), 256, 1e-4f, 256, 5, 0);
   require(logits[coldTied] == logits[6],
           "tie collapse stays inside the argmax value band");
+}
+
+void testSamplingHealth() {
+  const std::vector<float> logits = {0.0f, 1.0f, 2.0f, -1.0f};
+  const auto healthy =
+      ngen::sampleTopKChecked(logits.data(), 4, 0.6f, 3, 42, 0);
+  require(healthy.ok, "checked sampling accepts finite positive weights");
+  require(healthy.logitsFinite && healthy.weightsFinite,
+          "checked sampling logits and weights finite");
+  require(healthy.weightSumFinite && healthy.weightSumPositive,
+          "checked sampling weight sum finite and positive");
+  require(healthy.probabilitiesFinite && healthy.probabilitySumFinite &&
+              healthy.probabilitySumPositive,
+          "checked sampling probabilities finite and positive sum");
+  require(std::abs(healthy.probabilitySum - 1.0) < 1e-12,
+          "checked sampling probabilities sum to one");
+
+  std::vector<float> nonfinite = logits;
+  nonfinite[2] = std::numeric_limits<float>::quiet_NaN();
+  const auto unhealthy =
+      ngen::sampleTopKChecked(nonfinite.data(), 4, 0.6f, 3, 42, 0);
+  require(!unhealthy.ok && !unhealthy.logitsFinite,
+          "checked sampling rejects non-finite logits");
 }
 
 void testDisplay() {
@@ -332,6 +356,7 @@ int main() {
     testContextWindow();
     testGreedy();
     testSampling();
+    testSamplingHealth();
     testDisplay();
     testHex();
     testWindowAppend();

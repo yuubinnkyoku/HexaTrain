@@ -50,6 +50,8 @@ object NativeBridge {
         checkpointSelectionMode: Int,
         diagnosticTrajectory: Boolean,
         diagnosticCheckpointDir: String?,
+        diagnosticResumeStep: Int,
+        diagnosticCheckpointInterval: Int,
         progressCallback: ProgressCallback,
     ): String
 
@@ -84,5 +86,15 @@ object NativeBridge {
         layers: Int,
         tapScope: String,
         diagnosticLayerIndex: Int,
+    ): String
+
+    external fun nativeRunNicopediaEvaluate(
+        checkpointDir: String,
+        seed: Long,
+        layers: Int,
+        heads: Int,
+        checkpointStep: Int,
+        validationChunks: Int,
+        developmentChunks: Int,
     ): String
 }

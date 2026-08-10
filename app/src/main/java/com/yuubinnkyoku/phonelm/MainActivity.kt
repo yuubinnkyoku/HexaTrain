@@ -205,8 +205,8 @@ class MainActivity : Activity() {
                     "phonelm.temperature must be positive and finite"
                 generateMode == "sample" && (topK < 1 || topK > 256) ->
                     "phonelm.top_k must be in 1..256"
-                gatePolicy != "legacy" && gatePolicy != "candidate" ->
-                    "phonelm.gate_policy must be legacy or candidate"
+                gatePolicy != "legacy" && gatePolicy != "candidate" && gatePolicy != "htp-native" ->
+                    "phonelm.gate_policy must be legacy, candidate or htp-native"
                 htpGraphPrecisionMode !in 0..2 ->
                     "phonelm.htp_graph_precision_mode must be 0, 1 or 2"
                 htpGraphPrecisionCompensation !in 0..2 ->
@@ -258,6 +258,68 @@ class MainActivity : Activity() {
                 }
                 Log.i("PhoneLMDeviceTest", "DEVICE_TEST_COMPLETE mode=$requested")
             }, "PhoneLM-nicopedia-generate").start()
+            return
+        }
+        if (requested == "QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL") {
+            val dir = intent.getStringExtra("phonelm.checkpoint_dump_dir")
+                ?: "nicopedia-eval"
+            val checkpointDir = filesDir.toPath().resolve("checkpoints").resolve(dir)
+                .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
+            if (checkpointDir == null) {
+                Log.e("PhoneLMDeviceTest",
+                    "DEVICE_TEST_REJECTED error=phonelm.checkpoint_dir must resolve under the app files dir")
+                return
+            }
+            val seed = intent.getStringExtra("phonelm.seed")?.toLongOrNull() ?: 1L
+            val layers = intent.getIntExtra("phonelm.layers", 19)
+            val heads = intent.getIntExtra("phonelm.heads", 2)
+            val checkpointStep = intent.getIntExtra("phonelm.checkpoint_step", 1000)
+            val validationChunks = intent.getIntExtra("phonelm.validation_chunks", 8192)
+            val developmentChunks = intent.getIntExtra("phonelm.development_chunks", 16384)
+            val validationError = when {
+                layers != 19 -> "phonelm.layers must be 19"
+                heads != 2 -> "phonelm.heads must be 2"
+                seed < 1L || seed > 99999L -> "phonelm.seed must be in 1..99999"
+                checkpointStep !in 1..100000 -> "phonelm.checkpoint_step must be in 1..100000"
+                validationChunks !in 1..1000000 -> "phonelm.validation_chunks must be in 1..1000000"
+                developmentChunks !in 1..1000000 ->
+                    "phonelm.development_chunks must be in 1..1000000"
+                !File(checkpointDir,
+                    "htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt").isFile ->
+                    "checkpoint file missing: htp-seed${seed}-l${layers}-step${checkpointStep}.ckpt"
+                !File(checkpointDir, "validation.bin").isFile ->
+                    "cache file missing: validation.bin"
+                !File(checkpointDir, "development.bin").isFile ->
+                    "cache file missing: development.bin"
+                else -> null
+            }
+            val preReport = if (validationError != null) {
+                "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n" +
+                    "failure_classification=APP_CONFIGURATION_VALIDATION\n" +
+                    "error=$validationError\n"
+            } else {
+                null
+            }
+            Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
+            Thread({
+                val report = if (preReport != null) {
+                    preReport
+                } else {
+                    NativeBridge.nativeRunNicopediaEvaluate(
+                        checkpointDir = checkpointDir.absolutePath,
+                        seed = seed,
+                        layers = layers,
+                        heads = heads,
+                        checkpointStep = checkpointStep,
+                        validationChunks = validationChunks,
+                        developmentChunks = developmentChunks,
+                    )
+                }
+                openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {
+                    it.write(report)
+                }
+                Log.i("PhoneLMDeviceTest", "DEVICE_TEST_COMPLETE mode=$requested")
+            }, "PhoneLM-nicopedia-eval").start()
             return
         }
         if (requested == "QNN_HTP_FIRST_NONFINITE_REPLAY") {
@@ -329,6 +391,18 @@ class MainActivity : Activity() {
                 .normalize().takeIf { it.startsWith(filesDir.toPath()) }?.toFile()
         }
         if (checkpointDir != null) checkpointDir.mkdirs()
+        // NICOPEDIA training: phonelm.resume_step (global optimizer step to
+        // continue from; requires the matching NPRTCKPTV2 checkpoint) and
+        // phonelm.checkpoint_interval (NPRTCKPTV2 save cadence). Private
+        // diagnostics; ignored by every other execution mode.
+        val nicopediaResumeStep =
+            if (mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA)
+                intent.getIntExtra("phonelm.resume_step", 0)
+            else 0
+        val nicopediaCheckpointInterval =
+            if (mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA)
+                intent.getIntExtra("phonelm.checkpoint_interval", 250)
+            else 250
         val config = BenchmarkConfig(backend = Backend.CPU, batchSize = batchSize, dimension = dimension,
             steps = steps, warmupSteps = warmupSteps, learningRate = learningRate, seed = seed,
             sampleCount = sampleCount, epochs = epochs, measuredSteps = measuredSteps,
@@ -339,6 +413,8 @@ class MainActivity : Activity() {
             checkpointSelectionMode = checkpointSelectionMode,
             diagnosticTrajectory = diagnosticTrajectory,
             diagnosticCheckpointDir = checkpointDir?.absolutePath,
+            diagnosticResumeStep = nicopediaResumeStep,
+            diagnosticCheckpointInterval = nicopediaCheckpointInterval,
             hiddenDimension = hiddenDimension, outputDimension = outputDimension)
         applyPreset(config)
         Log.i("PhoneLMDeviceTest", "DEVICE_TEST_START mode=$requested")
@@ -357,6 +433,15 @@ class MainActivity : Activity() {
                 "BEST_VALIDATION_V1 is only supported by QNN_HTP_TINY_LANGUAGE_MODEL_GENERIC"
             intent.getStringExtra("phonelm.checkpoint_dump_dir") != null && checkpointDir == null ->
                 "phonelm.checkpoint_dump_dir must resolve under the app files dir"
+            mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA &&
+                nicopediaResumeStep !in 0..100000 ->
+                "phonelm.resume_step must be in 0..100000"
+            mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA &&
+                nicopediaResumeStep > 0 && nicopediaResumeStep >= steps ->
+                "phonelm.resume_step must be smaller than phonelm.steps"
+            mode == ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA &&
+                nicopediaCheckpointInterval !in 1..10000 ->
+                "phonelm.checkpoint_interval must be in 1..10000"
             else -> config.validationError()
         }
         if (validationError != null) {
@@ -392,6 +477,8 @@ class MainActivity : Activity() {
                 checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
                 diagnosticTrajectory = config.diagnosticTrajectory,
                 diagnosticCheckpointDir = config.diagnosticCheckpointDir,
+                diagnosticResumeStep = config.diagnosticResumeStep,
+                diagnosticCheckpointInterval = config.diagnosticCheckpointInterval,
                 progressCallback = ProgressCallback { },
             )
             openFileOutput("device-test-result.txt", MODE_PRIVATE).bufferedWriter().use {

@@ -150,13 +150,6 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   }
   g.lastInputTensorCount = uint32_t(in.size());
   g.lastOutputTensorCount = uint32_t(out.size());
-  if (!g.executeDiagnosticsEmitted) {
-    diagnostics_ += "generalized_tiny_training_execute_app_write_count=" +
-                    std::to_string(in.size()) + '\n' +
-                    "generalized_tiny_training_execute_app_read_count=" +
-                    std::to_string(out.size()) + '\n';
-    g.executeDiagnosticsEmitted = true;
-  }
   std::uint32_t learningRateBitsBefore = 0;
   std::memcpy(&learningRateBitsBefore, &learningRate, sizeof(learningRateBitsBefore));
   const auto started = Clock::now();
@@ -180,7 +173,6 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     error = "generalized tiny training APP_WRITE mutation";
     return false;
   }
-  diagnostics_ += "generalized_tiny_training_input_immutable=true\n";
   if (status != QNN_SUCCESS) {
     diagnostics_ += "generalized_tiny_training_qnn_return=" +
                     std::to_string(QNN_GET_ERROR_CODE(status)) + '\n';
@@ -286,10 +278,21 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     }
     return false;
   }
-  diagnostics_ += "generalized_tiny_training_qnn_return=0\n"
-                  "generalized_tiny_training_output_poison_count=0\n"
-                  "generalized_tiny_training_output_nonfinite_count=0\n"
-                  "generalized_tiny_training_outputs_all_written=true\n";
+  if (!g.executeDiagnosticsEmitted) {
+    // Emit the successful execution schema once per Runtime instance.  The
+    // failure paths above intentionally retain per-call details so a bad QNN
+    // return or non-finite tensor is never hidden by spam suppression.
+    diagnostics_ += "generalized_tiny_training_execute_app_write_count=" +
+                    std::to_string(in.size()) + '\n' +
+                    "generalized_tiny_training_execute_app_read_count=" +
+                    std::to_string(out.size()) + '\n' +
+                    "generalized_tiny_training_input_immutable=true\n"
+                    "generalized_tiny_training_qnn_return=0\n"
+                    "generalized_tiny_training_output_poison_count=0\n"
+                    "generalized_tiny_training_output_nonfinite_count=0\n"
+                    "generalized_tiny_training_outputs_all_written=true\n";
+    g.executeDiagnosticsEmitted = true;
+  }
   double loss = 0.0;
   for (uint32_t row = 0; row < g.tokens; ++row) {
     const float *logits = outputs.logits.data() + size_t(row) * g.vocabularySize;

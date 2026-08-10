@@ -172,6 +172,11 @@ data class BenchmarkConfig(
     val checkpointSelectionMode: CheckpointSelectionMode = CheckpointSelectionMode.FINAL_STEP,
     val diagnosticTrajectory: Boolean = false,
     val diagnosticCheckpointDir: String? = null,
+    // NICOPEDIA training only: resume from this global optimizer step and
+    // save NPRTCKPTV2 checkpoints every N steps. Both are private
+    // diagnostics; ignored by every other execution mode.
+    val diagnosticResumeStep: Int = 0,
+    val diagnosticCheckpointInterval: Int = 250,
     val hiddenDimension: Int = dimension,
     val outputDimension: Int = maxOf(1, dimension / 2),
 ) {

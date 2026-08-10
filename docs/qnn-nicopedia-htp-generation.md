@@ -1,5 +1,11 @@
 # Nicopedia byte-level HTP generation
 
+> 2026-08-10追記: legacy CPU-equivalence gateは変更せずFAILを維持する。
+> 別目的のexperimental HTP-native modeはcheckpoint/runtime/QNN/finite/
+> held-out healthを独立にfail-closedで確認する。step 8,000のaggregate結果は
+> [L19 long-training milestone](qnn-nicopedia-htp-long-training.md)を参照。
+> この節以降はlegacy generation milestoneの記録である。
+
 Milestone: load the HTP-trained Nicopedia real-text checkpoint
 (`build/reports/nicopedia-htp-training/htp-seed<S>-l<L>-step320.ckpt`,
 NPRTCKPTV1 private format) into the QNN HTP graph and run byte-level

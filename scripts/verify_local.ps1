@@ -304,6 +304,9 @@ try {
         Invoke-PwshScript "Nicopedia real-text HTP public exporter self-test" `
             (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_results.ps1") @(
                 "-SelfTest")
+        Invoke-PwshScript "Nicopedia HTP long-training public exporter self-test" `
+            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_long_training_results.ps1") @(
+                "-SelfTest")
         "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
     }
 
