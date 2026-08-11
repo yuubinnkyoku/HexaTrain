@@ -386,6 +386,12 @@ int main(int argc, char** argv) {
     const Cache development = loadCache(argv[3]);
     const std::size_t validationChunks = std::stoull(argv[4]);
     const std::size_t developmentChunks = std::stoull(argv[5]);
+    // Fail closed: a cache whose context length differs from the checkpoint's
+    // tokens would silently misread the window (record.window has
+    // context+1 bytes but evaluate reads config.tokens). Reject up front.
+    if (validation.context != checkpoint.config.tokens ||
+        development.context != checkpoint.config.tokens)
+      throw std::runtime_error("CACHE_CONTEXT_MISMATCH");
     if (!parametersFinite(checkpoint.parameters))
       throw std::runtime_error("CHECKPOINT_PARAMETERS_NONFINITE");
     const Metrics validationMetrics =

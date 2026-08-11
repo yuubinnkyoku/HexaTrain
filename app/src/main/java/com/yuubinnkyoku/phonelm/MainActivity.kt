@@ -239,6 +239,9 @@ class MainActivity : Activity() {
                         promptPath = promptFile.absolutePath,
                         seed = seed,
                         layers = layers,
+                        // UI fallback stays at the fixed T32 nicopedia contract;
+                        // headless runs pass the explicit context length.
+                        tokens = 32,
                         maxNewBytes = maxNewBytes,
                         generateMode = generateMode,
                         temperature = temperature,
@@ -310,6 +313,9 @@ class MainActivity : Activity() {
                         seed = seed,
                         layers = layers,
                         heads = heads,
+                        // UI fallback stays at the fixed T32 nicopedia contract;
+                        // headless runs pass the explicit context length.
+                        tokens = 32,
                         checkpointStep = checkpointStep,
                         validationChunks = validationChunks,
                         developmentChunks = developmentChunks,

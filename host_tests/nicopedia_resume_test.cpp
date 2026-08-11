@@ -505,6 +505,25 @@ int main() {
       std::cerr << "seed mismatch must be rejected\n";
       ++failures;
     }
+
+    // Fail-closed cross-load: a checkpoint built with one context length
+    // (config.tokens) must be rejected when validated against an expected
+    // config with a DIFFERENT tokens value, never silently accepted under
+    // the wrong context window.
+    bool tokensRejected = false;
+    {
+      Config wrongTokens = config;
+      wrongTokens.tokens = config.tokens + 8;  // deliberately different
+      try {
+        loadCheckpoint(v2Path, wrongTokens, seed, 12, /*requireAdam=*/true);
+      } catch (const std::runtime_error& error) {
+        tokensRejected = std::string(error.what()) == "CONFIG_MISMATCH";
+      }
+    }
+    if (!tokensRejected) {
+      std::cerr << "tokens mismatch must be rejected fail-closed\n";
+      ++failures;
+    }
   } catch (const std::exception& error) {
     std::cerr << "nicopedia_resume_test_error=" << error.what() << '\n';
     return 1;

@@ -218,6 +218,7 @@ class HeadlessDeviceTestRunner {
         val seed: Long,
         val layers: Int,
         val heads: Int,
+        val tokens: Int,
         val steps: Int,
         val batchSize: Int,
         val resumeStep: Int,
@@ -243,6 +244,7 @@ class HeadlessDeviceTestRunner {
         val seed = longArgument(arguments, "seed", 1L, 1L..99_999L)
         val layers = intArgument(arguments, "layers", 19, 1..100)
         val heads = intArgument(arguments, "heads", 2, 1..32)
+        val tokens = intArgument(arguments, "tokens", 32, 8..256)
         val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
         val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
         val resumeStep = intArgument(arguments, "resumeStep", 0, 0..100_000)
@@ -277,6 +279,7 @@ class HeadlessDeviceTestRunner {
             seed = seed,
             layers = layers,
             heads = heads,
+            tokens = tokens,
             steps = steps,
             batchSize = batchSize,
             resumeStep = resumeStep,
@@ -341,6 +344,14 @@ class HeadlessDeviceTestRunner {
         return directory
     }
 
+    private fun nicopediaCheckpointName(seed: Long, layers: Int, tokens: Int, step: Int): String =
+        if (tokens == 32) {
+            // Legacy T32 naming: no t-variant, byte-identical to historical artifacts.
+            "htp-seed${seed}-l${layers}-step${step}.ckpt"
+        } else {
+            "htp-seed${seed}-l${layers}-t${tokens}-step${step}.ckpt"
+        }
+
     private fun requiredInputFile(directory: File, name: String): File {
         val file = File(directory, name).canonicalFile
         require(file.path.startsWith(directory.path + File.separator)) {
@@ -360,8 +371,7 @@ class HeadlessDeviceTestRunner {
         val directory = nicopediaInputDirectory(context, runId)
         requiredInputFile(directory, "train_pilot.bin")
         if (config.resumeStep > 0) {
-            requiredInputFile(directory,
-                "htp-seed${config.seed}-l${config.layers}-step${config.resumeStep}.ckpt")
+            requiredInputFile(directory, nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.resumeStep))
         }
         return NativeBridge.nativeRunExecutionMode(
             executionMode = ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA.nativeCode,
@@ -373,7 +383,7 @@ class HeadlessDeviceTestRunner {
             warmupSteps = 0,
             learningRate = 0.003f,
             seed = config.seed,
-            sampleCount = 32,
+            sampleCount = config.tokens,
             epochs = config.layers,
             measuredSteps = config.heads,
             correctnessInterval = config.seed.toInt(),
@@ -398,7 +408,7 @@ class HeadlessDeviceTestRunner {
         val config = parseNicopediaArguments(arguments, "nicopedia-eval")
         val directory = nicopediaInputDirectory(context, runId)
         requiredInputFile(directory,
-            "htp-seed${config.seed}-l${config.layers}-step${config.checkpointStep}.ckpt")
+            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.checkpointStep))
         requiredInputFile(directory, "validation.bin")
         requiredInputFile(directory, "development.bin")
         return NativeBridge.nativeRunNicopediaEvaluate(
@@ -406,6 +416,7 @@ class HeadlessDeviceTestRunner {
             seed = config.seed,
             layers = config.layers,
             heads = config.heads,
+            tokens = config.tokens,
             checkpointStep = config.checkpointStep,
             validationChunks = config.validationChunks,
             developmentChunks = config.developmentChunks,
@@ -420,13 +431,14 @@ class HeadlessDeviceTestRunner {
         val config = parseNicopediaArguments(arguments, "nicopedia-generate")
         val directory = nicopediaInputDirectory(context, runId)
         val checkpoint = requiredInputFile(directory,
-            "htp-seed${config.seed}-l${config.layers}-step${config.checkpointStep}.ckpt")
+            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.checkpointStep))
         val prompt = requiredInputFile(directory, "prompt.bin")
         return NativeBridge.nativeRunNicopediaGenerate(
             checkpointPath = checkpoint.absolutePath,
             promptPath = prompt.absolutePath,
             seed = config.seed,
             layers = config.layers,
+            tokens = config.tokens,
             maxNewBytes = config.maxNewBytes,
             generateMode = config.generateMode,
             temperature = config.temperature,
@@ -515,6 +527,7 @@ class HeadlessDeviceTestRunner {
             ?: throw IllegalArgumentException("htpContextGraphSplitting is required for nicopedia-parity")
         require(split in 0..2) { "htpContextGraphSplitting must be 0, 1, or 2" }
         val inputDirectory = File(context.filesDir, "headless-input/$runId")
+        // Parity is the fixed T32 contract: legacy checkpoint name and tokens=32.
         val checkpoint = File(inputDirectory, "htp-seed1-l19-step1000.ckpt")
         val prompt = File(inputDirectory, "prompt.bin")
         require(checkpoint.isFile) { "nicopedia parity checkpoint is unavailable" }
@@ -524,6 +537,7 @@ class HeadlessDeviceTestRunner {
             promptPath = prompt.absolutePath,
             seed = 1L,
             layers = 19,
+            tokens = 32,
             // If the unchanged legacy gate unexpectedly passes, this is the
             // preregistered fixed Greedy generation (64 bytes). On the known
             // reject path no generation executes and the count remains zero.

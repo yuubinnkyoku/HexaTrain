@@ -17,6 +17,7 @@ param(
   [int]$Seed = 1,
   [int]$Layers = 19,
   [int]$Steps = 32,
+  [int]$Tokens = 32,  # context window length (8..256; 32 = legacy T32 behavior)
   [int]$BatchSize = 8,   # canonical pilot config (protocol.json): 8 samples/step
   [string]$CachePath = "",
   [int]$PollLimit = 7200,
@@ -36,6 +37,7 @@ Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $Expe
 if ($SelfTest) {
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
   if ($Layers -ne 19) { throw "SELFTEST_LAYERS_DEFAULT: expected=19 actual=$Layers" }
+  if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
   if ($CheckpointInterval -lt 1 -or $PollSeconds -lt 1 -or $PollLimit -lt 1 -or $ProgressEverySeconds -lt 1 -or $CheckpointStallSeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
   if (-not ("status=SUCCESS`n" -match '(?m)^status=(SUCCESS|FAILED)\s*$')) { throw 'SELFTEST_TERMINAL_STATUS' }
   $progressState = [ordered]@{ Count = 0; LastProgressUtc = [DateTime]::UtcNow }
@@ -50,7 +52,9 @@ if ($SelfTest) {
 }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 if ($Steps -lt 1 -or $Steps -gt 8000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..8000' }
+if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens must be in 8..256' }
 $root = Split-Path -Parent $PSScriptRoot
+$tokenTag = if ($Tokens -eq 32) { '' } else { "-t$Tokens" }
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
@@ -62,7 +66,8 @@ $reportRoot = Join-Path $root "build\reports\nicopedia-htp-training"
 
 # The private token cache lives under build/private-data and is never
 # committed.  The host pushes only the minimal pilot input the device needs.
-if (-not $CachePath) { $CachePath = Join-Path $root 'build\private-data\nicopedia-real-text\caches\train_pilot.bin' }
+$trainingDataRoot = if ($Tokens -eq 32) { 'build\private-data\nicopedia-real-text' } else { 'build\private-data\nicopedia-real-text-t64' }
+if (-not $CachePath) { $CachePath = Join-Path $root (Join-Path $trainingDataRoot 'caches\train_pilot.bin') }
 if (-not (Test-Path -LiteralPath $CachePath -PathType Leaf)) { throw "PRIVATE_CACHE_MISSING: $CachePath" }
 $cacheResolved = [IO.Path]::GetFullPath($CachePath)
 $allowed = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
@@ -108,16 +113,17 @@ Adb @('shell', 'rm', '-f', $tmpOnDevice) | Out-Null
 # are rejected by the device (RESUME_ADAM_STATE_MISSING).
 if ($ResumeStep -gt 0) {
   if ($ResumeStep -ge $Steps) { throw "RESUME_MUST_BE_BELOW_STEPS: $ResumeStep >= $Steps" }
-  $resumeCheckpoint = Join-Path $reportRoot "htp-seed$Seed-l$Layers-step$ResumeStep.ckpt"
+  $resumeCheckpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Step $ResumeStep
+  $resumeCheckpoint = Join-Path $reportRoot $resumeCheckpointName
   if (-not (Test-Path -LiteralPath $resumeCheckpoint -PathType Leaf)) {
     throw "RESUME_CHECKPOINT_MISSING: $resumeCheckpoint"
   }
   $tmpCkpt = "/data/local/tmp/phonelm-headless-$RunId-resume"
   Adb @('push', $resumeCheckpoint, $tmpCkpt) | Out-Null
   Adb @('shell', 'run-as', $package, 'cp', $tmpCkpt,
-    "$remoteDir/htp-seed$Seed-l$Layers-step$ResumeStep.ckpt") | Out-Null
+    "$remoteDir/$resumeCheckpointName") | Out-Null
   Adb @('shell', 'rm', '-f', $tmpCkpt) | Out-Null
-  Write-Host "RESUME_STAGE checkpoint=htp-seed$Seed-l$Layers-step$ResumeStep.ckpt"
+  Write-Host "RESUME_STAGE checkpoint=$resumeCheckpointName"
 }
 
 # Run the NICOPEDIA mode through the debug intent path. Existing processes and
@@ -134,12 +140,12 @@ $checkpointProgress = [ordered]@{
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-long-training' -RunId $RunId `
-  -Arguments @{ seed = $Seed; layers = $Layers; heads = 2; steps = $Steps; batchSize = $BatchSize; resumeStep = $ResumeStep; checkpointInterval = $CheckpointInterval } `
+  -Arguments @{ seed = $Seed; layers = $Layers; heads = 2; tokens = $Tokens; steps = $Steps; batchSize = $BatchSize; resumeStep = $ResumeStep; checkpointInterval = $CheckpointInterval } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
   -ExpectedRunId $RunId `
-  -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers-steps$Steps-partial-status.json") `
+  -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-steps$Steps-partial-status.json") `
   -StatusProgressAction {
     param($elapsed, $status)
     $phase = [regex]::Match($status, '"current_phase"\s*:\s*"([^"]*)"').Groups[1].Value
@@ -196,7 +202,7 @@ $annotated = $result.TrimEnd() + "`n" +
   "private_serial_recorded_for_identity_only=true`n"
 # The serial is recorded in the private report for the same-device
 # reattach check; it is stripped by the public exporter.
-$annotated | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers-steps$Steps-result.txt") -Encoding utf8
+$annotated | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-steps$Steps-result.txt") -Encoding utf8
 $annotated | Add-Content -LiteralPath (Join-Path $reportRoot "device-identity-private.txt") -Encoding utf8
 # Pull every interval NPRTCKPTV2 checkpoint and the loss curve back to
 # build/reports. Both stay out of the public bundle and out of git.
@@ -206,17 +212,17 @@ $firstExpected = if ($ResumeStep -gt 0) { $ResumeStep + $CheckpointInterval } el
 for ($s = $firstExpected; $s -le $Steps; $s += $CheckpointInterval) { $expectedSteps += $s }
 if ($expectedSteps -notcontains $Steps) { $expectedSteps += $Steps }
 foreach ($expected in $expectedSteps) {
-  $name = "htp-seed$Seed-l$Layers-step$expected.ckpt"
+  $name = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Step $expected
   if ($checkpointNames -notcontains $name) { throw "CHECKPOINT_INTERVAL_MISSING: $name" }
 }
 foreach ($name in $checkpointNames) {
-  if ($name -notmatch "^htp-seed$Seed-l$Layers-step(\d+)\.ckpt$") { continue }
-  $stepName = [int]$Matches[1]
+  if ($name -notmatch "^htp-seed$Seed-l$Layers(-t$Tokens)?-step(\d+)\.ckpt$") { continue }
+  $stepName = [int]$Matches[2]
   $local = Join-Path $reportRoot $name
   $pulled = Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   $header = Get-PhoneLmCheckpointHeaders -Path $local
-  if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne 256 -or $header.Tokens -ne 32 -or $header.Dimension -ne 16 -or $header.FeedForward -ne 32) {
+  if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne 256 -or $header.Tokens -ne $Tokens -or $header.Dimension -ne 16 -or $header.FeedForward -ne 32) {
     throw "CHECKPOINT_IDENTITY_MISMATCH: $name"
   }
   if ($header.Magic -ne 'NPRTCKPTV2') { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
@@ -225,8 +231,8 @@ foreach ($name in $checkpointNames) {
   # (one chunk is sufficient for identity/finiteness; full-cap eval is a
   # separate milestone).  Header validation above remains fail-closed.
   $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
-  $validationHost = Join-Path $root 'build\private-data\nicopedia-real-text\caches\validation.bin'
-  $developmentHost = Join-Path $root 'build\private-data\nicopedia-real-text\caches\development.bin'
+  $validationHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\validation.bin')
+  $developmentHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\development.bin')
   if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf) -or -not (Test-Path -LiteralPath $validationHost -PathType Leaf) -or -not (Test-Path -LiteralPath $developmentHost -PathType Leaf)) {
     throw 'HOST_CHECKPOINT_EVALUATOR_UNAVAILABLE'
   }
@@ -237,12 +243,16 @@ foreach ($name in $checkpointNames) {
   if ([int]$hostIdentity.seed -ne $Seed -or [int]$hostIdentity.layers -ne $Layers -or [int]$hostIdentity.step -ne $stepName -or $hostIdentity.finite -ne 'true') { throw "HOST_CHECKPOINT_EVALUATOR_IDENTITY_MISMATCH: $name" }
   Write-Host "checkpoint step=$stepName size=$($pulled.Size) sha256=$($pulled.Sha256) identity=verified"
 }
-$finalCkptName = "htp-seed$Seed-l$Layers-step$Steps.ckpt"
-$curveName = "training-curve-$Steps.csv"
+$finalCkptName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Step $Steps
+# The device writes the curve with an untagged name; the host keeps the
+# legacy name for T32 and a -t<T>-tagged name for every other context so a
+# T64 milestone cannot collide with the existing T32 curve files.
+$curveRemote = "training-curve-$Steps.csv"
+$curveLocal = if ($Tokens -eq 32) { $curveRemote } else { "training-curve-t$Tokens-$Steps.csv" }
 if ($checkpointNames.Count -eq 0) { throw 'CHECKPOINT_PULL_VERIFY_FAILED: no checkpoints' }
 Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
-  -RemotePath "$remoteDir/$curveName" -LocalPath (Join-Path $reportRoot $curveName) -MinimumBytes 1 | Out-Null
-Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveName"
+  -RemotePath "$remoteDir/$curveRemote" -LocalPath (Join-Path $reportRoot $curveLocal) -MinimumBytes 1 | Out-Null
+Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveLocal"
 Write-Host "PASS NICOPEDIA_HTP seed=$Seed layers=$Layers steps=$Steps"
 Write-Host "Reports: $reportRoot"
 } finally {

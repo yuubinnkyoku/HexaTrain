@@ -20,6 +20,7 @@ param(
   [int]$Seed = 1,
   [int]$Layers = 19,
   [int]$Heads = 2,
+  [int]$Tokens = 32,  # context window length (8..256; 32 = legacy T32 behavior)
   [int]$CheckpointStep = 1000,
   [int]$ValidationChunks = 8192,
   [int]$DevelopmentChunks = 16384,
@@ -38,11 +39,13 @@ Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $Expe
 
 if ($SelfTest) {
   if ($PollLimit -lt 1 -or $PollSeconds -lt 1 -or $ProgressEverySeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
+  if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
   $sample = "status=SUCCESS`ncheckpoint_step=1000`n"
   if (-not ($sample -match '(?m)^status=SUCCESS\s*$')) { throw 'SELFTEST_TERMINAL_STATUS' }
   Write-Host 'run_nicopedia_htp_eval_self_test=PASS'
   exit 0
 }
+if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens must be in 8..256' }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 $root = Split-Path -Parent $PSScriptRoot
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
@@ -54,9 +57,12 @@ $testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-an
 $reportRoot = Join-Path $root "build\reports\nicopedia-htp-eval"
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
-if (-not $CacheRoot) { $CacheRoot = Join-Path $root 'build\private-data\nicopedia-real-text\caches' }
+$tokenTag = if ($Tokens -eq 32) { '' } else { "-t$Tokens" }
+$evalDataRoot = if ($Tokens -eq 32) { 'build\private-data\nicopedia-real-text' } else { 'build\private-data\nicopedia-real-text-t64' }
+if (-not $CacheRoot) { $CacheRoot = Join-Path $root (Join-Path $evalDataRoot 'caches') }
 if (-not $CheckpointPath) {
-  $CheckpointPath = Join-Path $root "build\reports\nicopedia-htp-training\htp-seed$Seed-l$Layers-step$CheckpointStep.ckpt"
+  $checkpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Step $CheckpointStep
+  $CheckpointPath = Join-Path $root (Join-Path 'build\reports\nicopedia-htp-training' $checkpointName)
 }
 if (-not (Test-Path -LiteralPath $CheckpointPath -PathType Leaf)) { throw "CHECKPOINT_MISSING: $CheckpointPath" }
 $validationCache = Join-Path $CacheRoot 'validation.bin'
@@ -107,7 +113,7 @@ function PushPrivate([string]$LocalPath, [string]$RemoteName) {
   Adb @('shell', 'run-as', $package, 'cp', $tmp, "$remoteDir/$RemoteName") | Out-Null
   Adb @('shell', 'rm', '-f', $tmp) | Out-Null
 }
-PushPrivate $CheckpointPath "htp-seed$Seed-l$Layers-step$CheckpointStep.ckpt"
+PushPrivate $CheckpointPath (Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Step $CheckpointStep)
 PushPrivate $validationCache 'validation.bin'
 PushPrivate $developmentCache 'development.bin'
 
@@ -119,12 +125,12 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-eval' -RunId $RunId `
-  -Arguments @{ seed = $Seed; layers = $Layers; heads = $Heads; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks } `
+  -Arguments @{ seed = $Seed; layers = $Layers; heads = $Heads; tokens = $Tokens; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "eval-step-$CheckpointStep" `
   -ExpectedRunId $RunId `
-  -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers-step$CheckpointStep-partial-status.json") `
+  -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-step$CheckpointStep-partial-status.json") `
   -StatusProgressAction {
     param($elapsed, $status)
     $phase = [regex]::Match($status, '"current_phase"\s*:\s*"([^"]*)"').Groups[1].Value
@@ -145,7 +151,7 @@ $result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -De
 if ($waited.ProcessExitCode -ne 0) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
 Assert-PhoneLmHeadlessNoActivity -Text $result
 if ($waited.StatusJson -notmatch '"status"\s*:\s*"PASSED"' -or $result -notmatch '(?m)^status=SUCCESS\s*$') {
-  $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers-step$CheckpointStep-result.txt") -Encoding utf8
+  $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-step$CheckpointStep-result.txt") -Encoding utf8
   throw "NICOPEDIA_EVAL_FAILED: seed=$Seed layers=$Layers step=$CheckpointStep"
 }
 $reportMap = Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $CheckpointStep -Kind eval
@@ -154,8 +160,8 @@ foreach ($field in @('validation_chunks', 'development_chunks', 'validation_toke
 }
 if ([int64]$reportMap.validation_chunks -ne $ValidationChunks -or
     [int64]$reportMap.development_chunks -ne $DevelopmentChunks -or
-    [int64]$reportMap.validation_tokens -ne ([int64]$ValidationChunks * 32) -or
-    [int64]$reportMap.development_tokens -ne ([int64]$DevelopmentChunks * 32)) {
+    [int64]$reportMap.validation_tokens -ne ([int64]$ValidationChunks * $Tokens) -or
+    [int64]$reportMap.development_tokens -ne ([int64]$DevelopmentChunks * $Tokens)) {
   throw 'HTP_EVAL_CAPACITY_MISMATCH'
 }
 $stateAfter = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'after'
@@ -176,7 +182,7 @@ $annotated = $result.TrimEnd() + "`n" +
   "battery_temperature_c_after=$($stateAfter.battery_temperature_c)`n" +
   "compile_time_qairt_build_id=$ExpectedBuildId`n" +
   "private_serial_recorded_for_identity_only=true`n"
-$annotated | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers-step$CheckpointStep-htp.txt") -Encoding utf8
+$annotated | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-step$CheckpointStep-htp.txt") -Encoding utf8
 # Host-side CPU evaluation of the same checkpoint + caches for comparison.
 $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
 if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf)) {
@@ -189,7 +195,7 @@ if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf)) {
 }
 $hostEval = & $hostEvalExe $CheckpointPath $validationCache $developmentCache $ValidationChunks $DevelopmentChunks
 if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval failed: $hostEval" }
-$hostEval | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers-step$CheckpointStep-cpu.txt") -Encoding utf8
+$hostEval | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-step$CheckpointStep-cpu.txt") -Encoding utf8
 $hostMap = Get-PhoneLmKeyValueMap -Text ($hostEval -join "`n")
 foreach ($key in @('seed', 'layers', 'step', 'parameter_hash', 'finite', 'validation_nll', 'development_nll', 'validation_chunks', 'development_chunks', 'validation_tokens', 'development_tokens')) {
   if (-not $hostMap.Contains($key)) { throw "HOST_EVALUATOR_FIELD_MISSING: $key" }
@@ -199,8 +205,8 @@ if ([int]$hostMap.seed -ne $Seed -or [int]$hostMap.layers -ne $Layers -or [int]$
 }
 if ([int64]$hostMap.validation_chunks -ne $ValidationChunks -or
     [int64]$hostMap.development_chunks -ne $DevelopmentChunks -or
-    [int64]$hostMap.validation_tokens -ne ([int64]$ValidationChunks * 32) -or
-    [int64]$hostMap.development_tokens -ne ([int64]$DevelopmentChunks * 32)) {
+    [int64]$hostMap.validation_tokens -ne ([int64]$ValidationChunks * $Tokens) -or
+    [int64]$hostMap.development_tokens -ne ([int64]$DevelopmentChunks * $Tokens)) {
   throw 'HOST_EVALUATOR_CAPACITY_MISMATCH'
 }
 if ($hostMap.parameter_hash -ne $reportMap.checkpoint_parameter_hash) {

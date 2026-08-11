@@ -348,6 +348,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jstring promptPath,
     jlong seed,
     jint layers,
+    jint tokens,
     jint maxNewBytes,
     jstring generateMode,
     jfloat temperature,
@@ -407,9 +408,12 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
             "error=phonelm.htp_context_graph_splitting must be 0, 1 or 2\n");
     }
 
+    // 256 is the cache context range max; out-of-range falls back to the
+    // legacy T=32.
+    if (tokens < 1 || tokens > 256) tokens = 32;
     phonelm::tiny_lm::Config config;
     config.vocabularySize = 256;
-    config.tokens = 32;
+    config.tokens = static_cast<uint32_t>(tokens);
     config.dimension = 16;
     config.feedForwardDimension = 32;
     config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
@@ -479,6 +483,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     jlong seed,
     jint layers,
     jint heads,
+    jint tokens,
     jint checkpointStep,
     jint validationChunks,
     jint developmentChunks) {
@@ -501,10 +506,14 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
             "error=checkpoint_dir_required\n");
     }
+    // 256 is the cache context range max; out-of-range falls back to the
+    // legacy T=32.
+    if (tokens < 1 || tokens > 256) tokens = 32;
     phonelm::TrainingConfig config;
     config.seed = static_cast<std::uint64_t>(seed);
     config.epochs = layers > 0 ? layers : 6;
     config.measuredSteps = heads > 0 ? heads : 2;
+    config.sampleCount = tokens;
     config.diagnosticResumeStep = checkpointStep;
     config.steps = validationChunks > 0 ? validationChunks : 8192;
     config.batchSize = developmentChunks > 0 ? developmentChunks : 16384;

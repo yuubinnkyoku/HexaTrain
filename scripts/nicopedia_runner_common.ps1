@@ -418,10 +418,23 @@ function Receive-PhoneLmBinary {
     }
 }
 
+function Get-PhoneLmCheckpointName {
+    param(
+        [Parameter(Mandatory = $true)][int]$Seed,
+        [Parameter(Mandatory = $true)][int]$Layers,
+        [Parameter(Mandatory = $true)][int]$Tokens,
+        [Parameter(Mandatory = $true)][int]$Step
+    )
+    # Legacy name for the canonical 32-token context; the -t<T> variant marks
+    # every non-32 context so T32 baselines and T64 artifacts stay distinct.
+    if ($Tokens -eq 32) { return "htp-seed$Seed-l$Layers-step$Step.ckpt" }
+    return "htp-seed$Seed-l$Layers-t$Tokens-step$Step.ckpt"
+}
+
 function Get-PhoneLmCheckpointNames {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package, [Parameter(Mandatory = $true)][string]$RemoteDir)
     $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'run-as', $Package, 'ls', '-1', $RemoteDir)
-    return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+-step\d+\.ckpt$' } | Sort-Object -Unique)
+    return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+(-t\d+)?-step\d+\.ckpt$' } | Sort-Object -Unique)
 }
 
 function Wait-PhoneLmResult {

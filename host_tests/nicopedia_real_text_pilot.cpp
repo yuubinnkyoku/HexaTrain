@@ -691,7 +691,8 @@ void runCompare(const fs::path& trainPath, const fs::path& developmentPath,
         checkpoint.config.epsilon != config.epsilon) throw std::runtime_error("COMPARE_CONFIG_MISMATCH");
     if (checkpoint.seed != expectedSeeds[checkpointIndex]) throw std::runtime_error("COMPARE_SEED_ORDER_MISMATCH");
   }
-  if (config.vocabularySize != 256 || config.tokens != 32 || config.dimension != 16 ||
+  // Real-text pilot now supports 32/64-byte contexts; other fields unchanged.
+  if (config.vocabularySize != 256 || (config.tokens != 32 && config.tokens != 64) || config.dimension != 16 ||
       config.feedForwardDimension != 32 || config.numHeads != 2 ||
       (config.numLayers != 6 && config.numLayers != 19)) throw std::runtime_error("COMPARE_FORMAL_CONFIG_MISMATCH");
   if (config.tokens != train.context || config.vocabularySize != train.vocabulary ||
@@ -880,7 +881,8 @@ void runCheckpointAudit(const fs::path& outputPath, const std::vector<fs::path>&
     const Checkpoint checkpoint = loadCheckpoint(checkpointPaths[index]);
     if (checkpoint.seed != expectedSeeds[index]) throw std::runtime_error("CHECKPOINT_AUDIT_SEED_ORDER");
     if (!expectedLayers) expectedLayers = checkpoint.config.numLayers;
-    if (checkpoint.config.vocabularySize != 256 || checkpoint.config.tokens != 32 ||
+    // Real-text pilot now supports 32/64-byte contexts; other fields unchanged.
+    if (checkpoint.config.vocabularySize != 256 || (checkpoint.config.tokens != 32 && checkpoint.config.tokens != 64) ||
         checkpoint.config.dimension != 16 || checkpoint.config.feedForwardDimension != 32 ||
         checkpoint.config.numHeads != 2 || checkpoint.config.numLayers != expectedLayers ||
         (expectedLayers != 6 && expectedLayers != 19) || !parametersFinite(checkpoint.parameters)) {

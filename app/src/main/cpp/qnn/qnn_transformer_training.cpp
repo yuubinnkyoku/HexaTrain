@@ -5212,25 +5212,68 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
   else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
 }
 
-bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
-                             uint32_t expectedLayers, uint32_t *step) {
-  const std::string base = path.substr(path.find_last_of('/') + 1);
-  const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
-                             std::to_string(expectedLayers) + "-step";
-  if (base.size() <= prefix.size() + 5 ||
-      base.compare(0, prefix.size(), prefix) != 0 ||
-      base.compare(base.size() - 5, 5, ".ckpt") != 0)
-    return false;
-  const std::string digits =
-      base.substr(prefix.size(), base.size() - prefix.size() - 5);
+// Checkpoint file naming: T==32 keeps the legacy
+// htp-seed<S>-l<L>-step<N>.ckpt (byte-identical to historical runs); any
+// other T gains the -t<T> segment: htp-seed<S>-l<L>-t<T>-step<N>.ckpt.
+std::string nprtCheckpointName(uint32_t seed, uint32_t layers,
+                               uint32_t tokens, uint32_t step) {
+  return "htp-seed" + std::to_string(seed) + "-l" + std::to_string(layers) +
+         (tokens == 32 ? "" : "-t" + std::to_string(tokens)) + "-step" +
+         std::to_string(step) + ".ckpt";
+}
+
+// Shared digit validation for the step segment (and, in the -t<T> variant,
+// the token segment): 1..6 ASCII digits parsing to a value in 1..999999,
+// mirroring the legacy checkpoint step rule.
+static bool nprtParseCheckpointDigits(const std::string &digits,
+                                      uint32_t *value) {
   if (digits.empty() || digits.size() > 6) return false;
   for (char digit : digits)
     if (digit < '0' || digit > '9') return false;
   char *end = nullptr;
-  const long value = std::strtol(digits.c_str(), &end, 10);
-  if (!end || *end != '\0' || value <= 0 || value >= 1000000) return false;
-  *step = static_cast<uint32_t>(value);
+  const long parsed = std::strtol(digits.c_str(), &end, 10);
+  if (!end || *end != '\0' || parsed <= 0 || parsed >= 1000000) return false;
+  *value = static_cast<uint32_t>(parsed);
   return true;
+}
+
+bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
+                             uint32_t expectedLayers, uint32_t *step,
+                             uint32_t expectedTokens = 32) {
+  const std::string base = path.substr(path.find_last_of('/') + 1);
+  const std::string stepMarker = "-step";
+  const std::string suffix = ".ckpt";
+  const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
+                             std::to_string(expectedLayers) + stepMarker;
+  // Legacy name (no -t<T> segment) is accepted for every expectedTokens.
+  if (base.size() > prefix.size() + suffix.size() &&
+      base.compare(0, prefix.size(), prefix) == 0 &&
+      base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+    return nprtParseCheckpointDigits(
+        base.substr(prefix.size(), base.size() - prefix.size() - suffix.size()),
+        step);
+  }
+  // The -t<T>-step variant is accepted only when expectedTokens != 32 and
+  // only with T == expectedTokens; a mismatched or misplaced -t segment is
+  // rejected fail-closed.
+  if (expectedTokens == 32) return false;
+  const std::string tPrefix = "htp-seed" + std::to_string(expectedSeed) +
+                              "-l" + std::to_string(expectedLayers) + "-t";
+  if (base.size() <= tPrefix.size() ||
+      base.compare(0, tPrefix.size(), tPrefix) != 0 ||
+      base.compare(base.size() - suffix.size(), suffix.size(), suffix) != 0)
+    return false;
+  const std::size_t stepPos = base.find(stepMarker, tPrefix.size());
+  if (stepPos == std::string::npos) return false;
+  uint32_t tokens = 0;
+  if (!nprtParseCheckpointDigits(
+          base.substr(tPrefix.size(), stepPos - tPrefix.size()), &tokens))
+    return false;
+  if (tokens != expectedTokens) return false;
+  return nprtParseCheckpointDigits(
+      base.substr(stepPos + stepMarker.size(),
+                  base.size() - stepPos - stepMarker.size() - suffix.size()),
+      step);
 }
 
 struct LoadedNprtCheckpoint {
@@ -5599,10 +5642,16 @@ std::string nicopediaHtpGeneration(
            "error=gate_policy must be legacy, candidate, or htp-native\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
-                               layers, &expectedStep))
+                               layers, &expectedStep, config.tokens)) {
+    const std::string variant =
+        config.tokens == 32
+            ? "htp-seed<seed>-l<layers>-step<step>.ckpt"
+            : "htp-seed<seed>-l<layers>-t<tokens>-step<step>.ckpt";
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FILENAME\n"
-           "error=checkpoint filename must be htp-seed<seed>-l<layers>-step<step>.ckpt\n";
+           "error=checkpoint filename must be " +
+           variant + "\n";
+  }
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
@@ -6695,10 +6744,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     // Canonical resume audit: NPRTCKPTV2 carries parameters + Adam first/
     // second moments; NPRTCKPTV1 (parameters only) cannot continue a
     // canonical trajectory and is rejected fail-closed here.
-    const std::string resumePath = cachePath + "/htp-seed" +
-                                   std::to_string(seed) + "-l" +
-                                   std::to_string(layers) + "-step" +
-                                   std::to_string(resumeStep) + ".ckpt";
+    const std::string resumePath =
+        cachePath + "/" +
+        nprtCheckpointName(static_cast<uint32_t>(seed), layers, config.tokens,
+                           resumeStep);
     LoadedNprtCheckpoint loaded;
     try {
       loaded = nprtLoadCheckpointForGeneration(
@@ -6928,8 +6977,9 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       curve.emplace_back(step, meanLoss);
     if (step % checkpointInterval == 0 || step == steps) {
       const std::string intervalPath =
-          cachePath + "/htp-seed" + std::to_string(seed) + "-l" +
-          std::to_string(layers) + "-step" + std::to_string(step) + ".ckpt";
+          cachePath + "/" +
+          nprtCheckpointName(static_cast<uint32_t>(seed), layers,
+                             config.tokens, step);
       const bool written = nprtSaveCheckpointV2(
           intervalPath, config, uint32_t(seed), step, current, currentFirst,
           currentSecond);
@@ -7035,9 +7085,9 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   // and uses it as the resume source for the next segment.  NPRTCKPTV1 from
   // older runs is still loadable (generation/read paths) but cannot resume.
   const std::string checkpointPath =
-      cachePath + "/htp-seed" + std::to_string(seed) + "-l" +
-      std::to_string(layers) + "-step" + std::to_string(lastCompletedStep) +
-      ".ckpt";
+      cachePath + "/" +
+      nprtCheckpointName(static_cast<uint32_t>(seed), layers, config.tokens,
+                         lastCompletedStep);
   bool checkpointWritten = false;
   std::ifstream checkpointPresent(checkpointPath, std::ios::binary);
   checkpointPresent.seekg(0, std::ios::end);
@@ -7186,9 +7236,10 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=limits_layers_heads_must_be_positive\n";
   const std::string checkpointPath =
-      dir + "/htp-seed" + std::to_string(seed) + "-l" +
-      std::to_string(layers) + "-step" + std::to_string(checkpointStep) +
-      ".ckpt";
+      dir + "/" +
+      nprtCheckpointName(static_cast<uint32_t>(seed),
+                         static_cast<uint32_t>(layers), config.tokens,
+                         checkpointStep);
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(
@@ -7356,6 +7407,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
           << (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")
           << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
           << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
+          << "\ncontext_tokens=" << config.tokens
          << "\nvalidation_cache=" << validation.contentHash
          << "\ndevelopment_cache=" << development.contentHash
          << "\nvalidation_chunks=" << validationResult.chunks
@@ -7398,7 +7450,8 @@ std::string runTinyTransformerTrainingExperiment(
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA) {
     tiny_lm::Config config;
     config.vocabularySize = 256;
-    config.tokens = 32;
+    config.tokens = static_cast<uint32_t>(
+        trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
     config.dimension = 16;
     config.feedForwardDimension = 32;
     config.numLayers =
@@ -7407,6 +7460,10 @@ std::string runTinyTransformerTrainingExperiment(
         static_cast<uint32_t>(trainingConfig.measuredSteps > 0
                                   ? trainingConfig.measuredSteps
                                   : 2);
+    if (config.tokens < 8 || config.tokens > 256)
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=tokens_must_be_8_256\n";
     std::string error;
     if (!tiny_lm::validateConfig(config, &error))
       return "NICOPEDIA_HTP\nstatus=FAILED\n"
@@ -7417,6 +7474,9 @@ std::string runTinyTransformerTrainingExperiment(
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE) {
     tiny_lm::Config config;
     config.vocabularySize = 256;
+    // KEEP 32: this UI fallback pins the legacy T=32 configuration; the
+    // parameterized path is the dedicated JNI entry nativeRunNicopedia
+    // Generate, which supplies tokens directly.
     config.tokens = 32;
     config.dimension = 16;
     config.feedForwardDimension = 32;
@@ -7456,7 +7516,8 @@ std::string runTinyTransformerTrainingExperiment(
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL) {
     tiny_lm::Config config;
     config.vocabularySize = 256;
-    config.tokens = 32;
+    config.tokens = static_cast<uint32_t>(
+        trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
     config.dimension = 16;
     config.feedForwardDimension = 32;
     config.numLayers =
@@ -7465,6 +7526,10 @@ std::string runTinyTransformerTrainingExperiment(
         static_cast<uint32_t>(trainingConfig.measuredSteps > 0
                                   ? trainingConfig.measuredSteps
                                   : 2);
+    if (config.tokens < 8 || config.tokens > 256)
+      return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=tokens_must_be_8_256\n";
     std::string error;
     if (!tiny_lm::validateConfig(config, &error))
       return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"

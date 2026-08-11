@@ -78,6 +78,25 @@ void testContextWindow() {
     require(context.size() == 32 && pad == 0, "exact window unchanged");
     require(context == exact, "exact window content");
   }
+  {
+    uint32_t pad = 999;
+    std::vector<uint8_t> longHistory(100);
+    for (size_t i = 0; i < longHistory.size(); ++i) longHistory[i] = uint8_t(i);
+    const auto context = ngen::buildGenerationContext(longHistory, 64, &pad);
+    require(context.size() == 64, "long history takes last 64 (tokens=64)");
+    require(pad == 0, "long history no padding (tokens=64)");
+    for (size_t i = 0; i < 64; ++i)
+      require(context[i] == longHistory[100 - 64 + i], "window is the tail 64");
+  }
+  {
+    uint32_t pad = 999;
+    const std::vector<uint8_t> shortHistory = {'x', 'y', 'z'};
+    const auto context = ngen::buildGenerationContext(shortHistory, 64, &pad);
+    require(context.size() == 64, "short history pads to 64 (tokens=64)");
+    require(pad == 61, "short history pad count (tokens=64)");
+    require(context[61] == 'x' && context[62] == 'y' && context[63] == 'z',
+            "history right-aligned (tokens=64)");
+  }
 }
 
 void testGreedy() {
