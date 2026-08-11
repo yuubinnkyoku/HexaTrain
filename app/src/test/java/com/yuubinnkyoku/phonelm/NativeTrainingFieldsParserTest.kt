@@ -35,6 +35,9 @@ class NativeTrainingFieldsParserTest {
         assertFalse(
             TrainingRuntimeEvidence(true, true, false, backend = "HTP", error = "trace").isAuthoritativelyHtp,
         )
+        assertFalse(
+            TrainingRuntimeEvidence(true, true, false, backend = null).isAuthoritativelyHtp,
+        )
     }
 
     @Test

@@ -142,9 +142,13 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
             runCatching {
                 val root = checkpointDirectory.canonicalFile
                 val candidate = java.io.File(path).canonicalFile
-                candidate.path.startsWith(root.path + java.io.File.separator) && candidate.isFile
+                candidate.path.startsWith(root.path + java.io.File.separator) &&
+                    candidate.isFile && candidate.length() > 0L
             }.getOrDefault(false)
         }
+
+    override fun isUsableForResume(metadata: TrainingCheckpointMetadata): Boolean =
+        resolveNativePath(metadata) != null
 
     override fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = runCatching {
         val root = checkpointDirectory.canonicalFile

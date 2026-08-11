@@ -199,6 +199,7 @@ class BenchmarkViewModel(
             return false
         }
 
+        var startupFailure: Throwable? = null
         synchronized(lock) {
             if (closed || running) return false
             running = true
@@ -229,18 +230,38 @@ class BenchmarkViewModel(
             // still protected by the same lock. A lifecycle close or stop
             // cannot otherwise slip between this state transition and the
             // worker's JNI entry and lose its cancellation request.
-            engine.prepareRun()
+            try {
+                engine.prepareRun()
+                // Publish the foreground-run ownership before releasing the
+                // same lock. A close cannot otherwise send its terminal event
+                // before this start notification and leave an orphaned service.
+                runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
+            } catch (error: Throwable) {
+                startupFailure = error
+                engine.cancelPreparedRun()
+                running = false
+                output.appendLine(
+                    "status=FAILED\nerror=benchmark startup could not be accepted: " +
+                        (error.message ?: error.javaClass.simpleName),
+                )
+            }
+        }
+        if (startupFailure != null) {
+            runNotifications.onProgress(RunProgress.Cancelled)
+            requestPublish()
+            return false
         }
         requestPublish()
-        runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
 
-        worker.execute {
+        try {
+            worker.execute {
             var lastProgress = ""
             var terminalProgressSent = false
             val accepted = synchronized(lock) { !closed && running }
             if (!accepted) {
                 engine.cancelPreparedRun()
                 synchronized(lock) { running = false }
+                runNotifications.onProgress(RunProgress.Cancelled)
                 requestPublish()
                 return@execute
             }
@@ -283,6 +304,16 @@ class BenchmarkViewModel(
                 }
                 requestPublish()
             }
+            }
+        } catch (error: Throwable) {
+            // RejectedExecutionException can race close() after the
+            // foreground notification was accepted. Compensate with a
+            // terminal event so the dataSync service cannot remain orphaned.
+            engine.cancelPreparedRun()
+            synchronized(lock) { running = false }
+            runNotifications.onProgress(RunProgress.Cancelled)
+            append("status=FAILED\nerror=benchmark worker could not be queued: ${error.message ?: error.javaClass.simpleName}")
+            requestPublish()
         }
         return true
     }

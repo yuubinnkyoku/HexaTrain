@@ -30,6 +30,9 @@ interface TrainingCheckpointStore {
     /** Resolve an opaque metadata id to an app-private native checkpoint path. */
     fun resolveNativePath(metadata: TrainingCheckpointMetadata): String? = null
 
+    /** Whether the opaque record has a usable native payload for Resume UI. */
+    fun isUsableForResume(metadata: TrainingCheckpointMetadata): Boolean = true
+
     /** Register a native-created checkpoint without exposing its path to UI state. */
     fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = false
 }
