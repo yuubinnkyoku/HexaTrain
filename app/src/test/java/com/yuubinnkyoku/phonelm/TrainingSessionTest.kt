@@ -79,6 +79,26 @@ class TrainingSessionTest {
         session.close()
     }
 
+    @Test fun regressingNativeProgressBecomesStructuredError() {
+        val finished = CountDownLatch(1)
+        val evidence = TrainingRuntimeEvidence(true, true, false)
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(request: TrainingRequest, onProgress: (TrainingBackendProgress) -> Unit): TrainingBackendResult {
+                    onProgress(TrainingBackendProgress(2, request.totalSteps, 0.4f, runtimeEvidence = evidence))
+                    onProgress(TrainingBackendProgress(1, request.totalSteps, 0.5f, runtimeEvidence = evidence))
+                    return TrainingBackendResult.Cancelled()
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.ERROR) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 3)))
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertTrue(session.snapshot().message!!.contains("moved backwards"))
+        session.close()
+    }
+
     @Test fun invalidTerminalTimingIsRejectedBeforeTimingSnapshot() {
         val finished = CountDownLatch(1)
         val session = TrainingSession(
@@ -145,6 +165,35 @@ class TrainingSessionTest {
         assertTrue(finished.await(2, TimeUnit.SECONDS))
         assertFalse(ran)
         assertTrue(session.snapshot().message!!.contains("foreground training lifetime"))
+        session.close()
+    }
+
+    @Test fun stopIsNotAcceptedBeforeNativeTrainingBoundaryIsObservable() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val finished = CountDownLatch(1)
+        var stopCalls = 0
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() { stopCalls += 1 }
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    entered.countDown()
+                    release.await(2, TimeUnit.SECONDS)
+                    return TrainingBackendResult.Cancelled()
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.INTERRUPTED) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 2)))
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertEquals(TrainingPhase.INITIALIZING_HTP, session.snapshot().phase)
+        assertFalse(session.requestStop())
+        assertEquals(0, stopCalls)
+        release.countDown()
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
         session.close()
     }
 

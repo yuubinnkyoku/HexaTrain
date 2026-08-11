@@ -51,7 +51,7 @@ data class HtpActivityWindow(
         }
 }
 
-enum class TrainingOperationPhase { FORWARD, BACKWARD, ADAM, HOST }
+enum class TrainingOperationPhase { FORWARD, BACKWARD, FUSED_FORWARD_BACKWARD, ADAM, HOST }
 
 enum class TimingBackend { HTP, CPU, UNAVAILABLE }
 
@@ -77,12 +77,20 @@ data class PhaseTiming(
 data class TrainingTimingSample(
     val forward: PhaseTiming? = null,
     val backward: PhaseTiming? = null,
+    /**
+     * The Nicopedia graph currently fuses forward and backward into one QNN
+     * execute.  Keep that measured value separate instead of attributing it
+     * to either phase.  The UI can therefore show the real fused timing while
+     * preserving the no-fake-number contract for Forward/Backward.
+     */
+    val fusedForwardBackward: PhaseTiming? = null,
     val adam: PhaseTiming? = null,
     val host: PhaseTiming? = null,
 ) {
     fun entries(): Map<TrainingOperationPhase, PhaseTiming> = buildMap {
         forward?.let { put(TrainingOperationPhase.FORWARD, it) }
         backward?.let { put(TrainingOperationPhase.BACKWARD, it) }
+        fusedForwardBackward?.let { put(TrainingOperationPhase.FUSED_FORWARD_BACKWARD, it) }
         adam?.let { put(TrainingOperationPhase.ADAM, it) }
         host?.let { put(TrainingOperationPhase.HOST, it) }
     }
@@ -91,6 +99,7 @@ data class TrainingTimingSample(
     fun withoutHtpEvidence(): TrainingTimingSample = TrainingTimingSample(
         forward = forward.withoutHtpEvidence(),
         backward = backward.withoutHtpEvidence(),
+        fusedForwardBackward = fusedForwardBackward.withoutHtpEvidence(),
         adam = adam.withoutHtpEvidence(),
         host = host.withoutHtpEvidence(),
     )
@@ -139,30 +148,31 @@ class TimingAccumulator {
     private var hasCpuHostTime = false
     private var hasCheckpointIo = false
 
-    fun add(sample: TrainingTimingSample?, checkpointIoMs: Double? = null) {
+    fun add(sample: TrainingTimingSample?, checkpointIoMs: Double? = null, sampleWeight: Long = 1L) {
+        require(sampleWeight > 0L) { "timing sample weight must be positive" }
         if (sample != null) {
             current = sample
-            sampleCount += 1L
+            sampleCount += sampleWeight
             sample.entries().forEach { (phase, timing) ->
                 val totals = sums.getOrPut(phase) { PhaseTimingTotals() }
-                counts[phase] = (counts[phase] ?: 0L) + 1L
+                counts[phase] = (counts[phase] ?: 0L) + sampleWeight
                 when (timing.backend) {
-                    TimingBackend.HTP -> htpCounts[phase] = (htpCounts[phase] ?: 0L) + 1L
-                    TimingBackend.CPU -> cpuCounts[phase] = (cpuCounts[phase] ?: 0L) + 1L
+                    TimingBackend.HTP -> htpCounts[phase] = (htpCounts[phase] ?: 0L) + sampleWeight
+                    TimingBackend.CPU -> cpuCounts[phase] = (cpuCounts[phase] ?: 0L) + sampleWeight
                     TimingBackend.UNAVAILABLE -> Unit
                 }
                 timing.qnnExecuteMs?.let {
-                    totals.qnnExecuteMs += it
-                    htpExecuteTimeMs += it
+                    totals.qnnExecuteMs += it * sampleWeight
+                    htpExecuteTimeMs += it * sampleWeight
                     hasHtpTime = true
                 }
-                totals.qnnExecuteCount += timing.qnnExecuteCount
-                htpExecuteCount += timing.qnnExecuteCount
+                totals.qnnExecuteCount += timing.qnnExecuteCount * sampleWeight
+                htpExecuteCount += timing.qnnExecuteCount * sampleWeight
                 if (timing.qnnExecuteCount > 0L) hasHtpCount = true
                 timing.hostMs?.let {
-                    totals.hostMs += it
+                    totals.hostMs += it * sampleWeight
                     if (phase == TrainingOperationPhase.HOST) {
-                        cpuHostTimeMs += it
+                        cpuHostTimeMs += it * sampleWeight
                         hasCpuHostTime = true
                     }
                 }
@@ -205,6 +215,7 @@ class TimingAccumulator {
             return TrainingTimingSample(
                 forward = values[TrainingOperationPhase.FORWARD],
                 backward = values[TrainingOperationPhase.BACKWARD],
+                fusedForwardBackward = values[TrainingOperationPhase.FUSED_FORWARD_BACKWARD],
                 adam = values[TrainingOperationPhase.ADAM],
                 host = values[TrainingOperationPhase.HOST],
             )

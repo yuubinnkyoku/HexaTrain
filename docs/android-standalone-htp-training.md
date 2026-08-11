@@ -9,11 +9,12 @@ not claim that the path has been run on a physical device.
 The current screen exposes the fixed canonical preset as read-only text. On
 Start, the repository validates the SAF selection and creates an immutable
 `TrainingRequest`. `TrainingSession` owns the request, a worker, structured
-state, running timing aggregates, and the future native handle. The Android
-adapter reuses `LiveUpdateForegroundService`/`LiveUpdateNotificationController`.
-The production default is deliberately `UnavailableTrainingBackend` until the
-typed JNI contract is implemented; it transitions to `ERROR` and never claims
-an HTP run.
+state, and running timing aggregates. In a QNN-enabled build the registry
+injects `NativeHtpTrainingBackend`; it stages and validates the selected
+NPRTBYTEV1 document, invokes the existing mode-100 JNI entrypoint from the
+session worker, and maps the native report/callback into typed progress and
+terminal state. A QNN-disabled build injects `UnavailableTrainingBackend` and
+fails closed; it never silently selects CPU training.
 
 ```
 UI -> TrainingRequest -> TrainingSession -> JNI adapter -> native HTP runtime
@@ -28,6 +29,11 @@ UI -> TrainingRequest -> TrainingSession -> JNI adapter -> native HTP runtime
 Only one process-wide training session may execute at once. A second start is
 rejected with `ALREADY_RUNNING`; it must not attach to or cancel the active
 native run.
+
+The Android benchmark adapter and standalone adapter share a small Kotlin
+`NativeRunArbiter` before entering the legacy process-global JNI bridge. This
+prevents a standalone Stop from cancelling a benchmark-owned native run; the
+native `gRunning` check remains a second defensive gate.
 
 ## ModelConfig is the configuration source
 
@@ -51,12 +57,19 @@ selected `content://` URI, its granted read permission, and non-sensitive
 identity metadata such as byte count and digest. Take persistable read
 permission at selection time and verify it again before Start and Resume.
 
-The current Android adapter persists the URI/display name in app-private
-`SharedPreferences`, takes/releases persistable grants, verifies a persisted
-read grant and a lightweight readable descriptor, and does not read the file
-on the UI thread. A bounded
-stream or app-private normalized `train_pilot.bin` copy is still a native
-integration task; no guessed filesystem path or fallback dataset is used.
+The current Android adapter persists the URI/display name and validated
+content identity in app-private `SharedPreferences`, takes/releases
+persistable grants, and verifies a persisted read grant. Selection runs on the
+Activity IO executor. `NativeHtpTrainingBackend` repeats the validation,
+copies the stream to an app-private run directory as `train_pilot.bin`,
+computes SHA-256 plus the native cache FNV identity, and atomically replaces
+the staged file before JNI. No URI or guessed filesystem path is passed to
+native; only the backend's private staging directory is.
+
+Dataset and checkpoint metadata use synchronous preference commits so a
+process restart does not intentionally race an asynchronous write. The native
+V2 writer provides atomic replacement; Android filesystem power-loss
+durability is not claimed beyond the platform's flush/rename behavior.
 
 ## TrainingSession state machine
 
@@ -77,13 +90,21 @@ Legal transitions are explicit and monotonic except an explicit resume from
 status, required output tensor finite-status, and no-fallback evidence have
 all been checked. A successful QNN return code alone is insufficient; missing
 evidence turns completion into `ERROR`.
+The Stop action is exposed only after a native training progress boundary is
+observable (or while checkpointing). A close during preparation is retained as
+a pending native stop and is never reported as an accepted UI stop.
 
 ## Structured progress and timing semantics
 
-JNI progress is structured data, not parsed display text. Each event includes
-the session ID, sequence number, monotonic elapsed time, phase, completed and
-total steps when known, and optional loss/checkpoint metadata. Sequence numbers
-must increase; duplicate or late events are ignored after durable recording.
+The JNI ABI is the existing synchronous String callback/report entrypoint,
+but the backend treats its KEY=VALUE records as a strict typed boundary;
+display text is never used as the state source. The Android adapter associates
+one local run ID with the request and accepts only the native phase/step/loss
+records emitted during that call; the current native callback does not provide
+a native sequence number or live-query status. Monotonic elapsed time and
+terminal ordering are therefore owned by `TrainingSession`, not fabricated
+from log lines. A future handle-based JNI API must add an explicit sequence and
+status query before claiming live process-death reattachment.
 
 Timing fields have these meanings:
 
@@ -101,7 +122,14 @@ checkpoint completion, failure, and cancellation events are structured and are
 not inferred from raw log text. `TimingAccumulator` keeps sum/count values
 independent of UI refresh frequency. A phase is labeled HTP only when its
 sample carries authoritative QNN/tensor-finite/no-fallback evidence; mixed
-HTP/CPU samples are rendered unavailable rather than relabeled as HTP.
+HTP/CPU samples are rendered unavailable rather than relabeled as HTP. The
+current native Nicopedia graph has one fused forward/backward QNN execute, so
+its measured value is exposed as `Fwd+Backward (fused)`; separate Forward and
+Backward rows remain unavailable until native graph boundaries can distinguish
+them.
+Progress timing is provisional until the terminal report also validates the
+pinned QAIRT runtime identity; a mismatch becomes an error and cannot produce
+a successful HTP result.
 
 ## HTP activity and non-utilization wording
 
@@ -118,6 +146,12 @@ training, complete CPU non-utilization, or QNN automatic differentiation.
 HTP creation failure, unavailable required symbols, a nonzero QNN return code,
 or a non-finite required tensor ends the run as `FAILED_RUNTIME`; there is no
 automatic QAIRT-version, backend, or CPU fallback.
+
+The CPU process percentage is a non-privileged process CPU-time delta divided
+by monotonic wall-time delta. `100%` means one logical CPU fully busy; a
+multi-threaded process may exceed 100%, and the value is unavailable when
+Android cannot provide either sample. This is process activity, not a device
+CPU-utilization or HTP-occupancy claim.
 
 ## Checkpoint and resume
 
@@ -178,12 +212,18 @@ UI must show the run as unavailable or failed rather than successful.
 ## Physical-device validation not yet performed
 
 Implemented in this branch: canonical config/plan, SAF selector and URI
-preference restore, structured `TrainingSession`/repository state, timing
-accumulation and formatting, evidence-gated HTP labels, fail-closed terminal
-payload handling, metadata-only checkpoint catalog, start-over confirmation,
-and foreground-service notification adapter. Stub/scaffold only:
-the JNI/native backend, native cache import/tokenization, native V2 save/load,
-real phase timing evidence, pause/resume, and live process-death reattachment.
+preference restore, NPRTBYTEV1 staging/identity validation, production
+QNN-enabled `NativeHtpTrainingBackend` wiring, structured `TrainingSession`
+state, evidence-gated terminal handling, measured fused/Adam QNN timing and
+checkpoint-I/O/host aggregation, native stop at a safe step boundary,
+NPRTCKPTV2 opaque-path registration, metadata catalog, start-over
+confirmation, and foreground-service notification adapter. The native V2
+codec remains the single source of truth for parameters and Adam m/v; Kotlin
+stores only compatibility metadata and an app-private opaque-path index.
+Separate Forward versus Backward timing, in-run pause, and live native
+process-death reattachment remain blocked by the existing native graph/JNI
+surface. Resume after process death is metadata/path based and fail-closed;
+it is not a claim that a killed native run is still alive.
 
 The following are required before claiming the standalone path works on a
 physical device. They are intentionally not executed by this document.
@@ -199,6 +239,33 @@ physical device. They are intentionally not executed by this document.
   finite evidence separately, and confirm zero fallback for the claimed run.
 - Apply the applicable device Tier gate. Any UI foregrounding, permissions, or
   formal UI validation requires explicit Tier 3 authorization.
+
+## Integration audit snapshot
+
+This integration was based on the committed training baseline
+`7c9aa9947c71ca17dd6eeeac399944e92f5a135f` and incorporated the standalone UI
+commit `d2de9e8f2d81d02c823578bef230311aedb99b6a`. The final integration SHA
+is reported by the handoff rather than embedded here, so this document does
+not become stale after the integration commit.
+The shared production surfaces are the existing `NativeBridge`,
+`TrainingEngine`, `nicopediaHtpTraining`, `NPRTBYTEV1` cache reader, and
+`NPRTCKPTV2` writer/loader. This integration branch changes only the
+standalone session/backend adapters plus the minimal native stop/evidence/
+telemetry bridge. Existing headless PowerShell runners remain reference
+tools and are not started by the Android app.
+
+## PRE-DEVICE CHECKLIST
+
+- Run `git diff --check` and the required host/JVM/build gates from
+  `docs/agent/verification.md` in this integration worktree.
+- For a QNN-enabled build, verify the explicit QAIRT root and Build ID and run
+  the fixed-argument QNN build/APK audit. Do not use an auto-discovered SDK.
+- Confirm the APK contains the production backend wiring and does not contain
+  a test/fake backend selection in the release path.
+- Review the native report contract: `qnn_return_code_success`,
+  `output_tensors_finite`, and `cpu_fallback` are independent fields.
+- Leave all device, emulator, ADB, installation, instrumentation, and
+  long-training checks for the device-validation agent.
 
 ## Integration order
 

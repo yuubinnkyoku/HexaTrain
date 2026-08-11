@@ -18,4 +18,14 @@ inline bool finalWriteAllowed(bool allStepsFinite, bool finalStateFinite,
          lastCompletedStep == requestedStep;
 }
 
+// A user stop is accepted only at a completed optimizer-step boundary.  The
+// last finite V2 state may be committed so an explicit Resume can continue
+// from the canonical next step, but an in-flight partial update is never
+// serialized as a checkpoint.
+inline bool interruptedWriteAllowed(bool allStepsFinite, bool finalStateFinite,
+                                    std::uint32_t lastCompletedStep,
+                                    std::uint32_t resumeStep) {
+  return allStepsFinite && finalStateFinite && lastCompletedStep > resumeStep;
+}
+
 }  // namespace phonelm::nicopedia_checkpoint

@@ -29,6 +29,9 @@ object NativeBridge {
 
     external fun nativeRequestStop()
 
+    /** Clears a stop queued before a JNI run was actually entered. */
+    external fun nativeClearStop()
+
     external fun nativeRunExecutionMode(
         executionMode: Int,
         batchSize: Int,

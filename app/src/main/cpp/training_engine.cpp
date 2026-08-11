@@ -295,7 +295,8 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE:
         case ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL:
-            return qnn::runTinyTransformerTrainingExperiment(mode, config, log);
+            return qnn::runTinyTransformerTrainingExperiment(
+                mode, config, log, &stopRequested);
         default: {
             const std::string report =
                 "status=NOT_IMPLEMENTED\nerror=unknown execution mode";

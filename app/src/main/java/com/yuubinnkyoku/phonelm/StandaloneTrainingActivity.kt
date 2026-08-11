@@ -77,6 +77,8 @@ class StandaloneTrainingActivity : Activity() {
         val generation = synchronized(subscriptionLock) {
             activityStarted = true
             ++subscriptionGeneration
+            if (pendingStart) pendingStartGeneration = subscriptionGeneration
+            subscriptionGeneration
         }
         ioExecutor.execute {
             val candidate = repository.subscribe(::render)
@@ -94,6 +96,7 @@ class StandaloneTrainingActivity : Activity() {
         val old = synchronized(subscriptionLock) {
             activityStarted = false
             ++subscriptionGeneration
+            pendingStartGeneration = null
             subscription.also { subscription = null }
         }
         old?.close()
@@ -105,23 +108,41 @@ class StandaloneTrainingActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_OPEN_DATASET || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        val readFlags = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-        if (readFlags == 0) {
+        if (data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0) {
             toast(getString(R.string.training_dataset_access_failed))
             return
         }
+        val callbackGeneration = synchronized(subscriptionLock) {
+            if (!activityStarted) return
+            subscriptionGeneration
+        }
+        val selectionToken = repository.nextDatasetSelectionToken()
         ioExecutor.execute {
             try {
-                // ACTION_OPEN_DOCUMENT providers should grant persistable read access.
-                contentResolver.takePersistableUriPermission(uri, readFlags)
-                val selected = repository.selectDataset(TrainingDataset(uri.toString(), displayName(uri)))
+                // The SAF adapter persists and validates the grant on this IO
+                // executor, keeping permission and full cache inspection out
+                // of the Activity callback/UI thread.
+                if (!isCurrentGeneration(callbackGeneration)) return@execute
+                val selected = repository.selectDataset(
+                    TrainingDataset(uri.toString(), displayName(uri)),
+                    selectionToken,
+                )
                 runOnUiThread {
+                    if (!isCurrentGeneration(callbackGeneration)) return@runOnUiThread
                     if (!selected) toast(getString(R.string.training_dataset_access_failed))
                 }
             } catch (_: SecurityException) {
-                runOnUiThread { toast(getString(R.string.training_dataset_access_failed)) }
+                runOnUiThread {
+                    if (isCurrentGeneration(callbackGeneration)) {
+                        toast(getString(R.string.training_dataset_access_failed))
+                    }
+                }
             } catch (_: Throwable) {
-                runOnUiThread { toast(getString(R.string.training_dataset_access_failed)) }
+                runOnUiThread {
+                    if (isCurrentGeneration(callbackGeneration)) {
+                        toast(getString(R.string.training_dataset_access_failed))
+                    }
+                }
             }
         }
     }
@@ -152,8 +173,13 @@ class StandaloneTrainingActivity : Activity() {
     }
 
     private fun render(state: TrainingUiState) {
+        val generation = synchronized(subscriptionLock) {
+            if (!activityStarted) return
+            subscriptionGeneration
+        }
         if (isFinishing || isDestroyed) return
         runOnUiThread {
+            if (!isCurrentGeneration(generation)) return@runOnUiThread
             overview.text = "Training overview: ${state.overview}"
             timing.text = timingText(state)
             activity.text = activityText(state)
@@ -173,27 +199,55 @@ class StandaloneTrainingActivity : Activity() {
         }
     }
 
+    private fun isCurrentGeneration(generation: Long): Boolean =
+        synchronized(subscriptionLock) {
+            activityStarted && subscriptionGeneration == generation
+        } && !isFinishing && !isDestroyed
+
     private fun startTrainingAfterNotificationCheck() {
+        val generation = synchronized(subscriptionLock) {
+            if (!activityStarted) return
+            subscriptionGeneration
+        }
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
+            synchronized(subscriptionLock) {
+                if (!activityStarted || subscriptionGeneration != generation) return
+                pendingStartGeneration = generation
+            }
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             pendingStart = true
             return
         }
         ioExecutor.execute {
-            if (!repository.start()) runOnUiThread { toast("Training could not be started; check dataset and native HTP availability") }
+            if (!isCurrentGeneration(generation)) return@execute
+            if (!repository.start()) runOnUiThread {
+                if (isCurrentGeneration(generation)) {
+                    toast("Training could not be started; check dataset and native HTP availability")
+                }
+            }
         }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_NOTIFICATIONS || !pendingStart) return
-        pendingStart = false
+        val generation = synchronized(subscriptionLock) {
+            if (!activityStarted || pendingStartGeneration != subscriptionGeneration) return
+            pendingStart = false
+            pendingStartGeneration = null
+            subscriptionGeneration
+        }
         // Notification permission is not training evidence; a denial leaves the
         // run UI usable but the foreground notification may be hidden by Android.
         ioExecutor.execute {
-            if (!repository.start()) runOnUiThread { toast("Training could not be started; check dataset and native HTP availability") }
+            if (!isCurrentGeneration(generation)) return@execute
+            if (!repository.start()) runOnUiThread {
+                if (isCurrentGeneration(generation)) {
+                    toast("Training could not be started; check dataset and native HTP availability")
+                }
+            }
         }
     }
 
@@ -217,7 +271,10 @@ class StandaloneTrainingActivity : Activity() {
     }
 
     override fun onDestroy() {
-        synchronized(subscriptionLock) { activityStarted = false }
+        synchronized(subscriptionLock) {
+            activityStarted = false
+            pendingStartGeneration = null
+        }
         ioExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -246,4 +303,5 @@ class StandaloneTrainingActivity : Activity() {
     }
 
     private var pendingStart = false
+    private var pendingStartGeneration: Long? = null
 }

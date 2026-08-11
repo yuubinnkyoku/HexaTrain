@@ -1536,6 +1536,25 @@ bool executeLanguageAdam(Runtime &runtime, const Params &current,
     append(output.scaledUpdate, chunkOutput.scaledUpdate, count);
     append(output.weightNext, chunkOutput.weightNext, count);
   }
+  const std::array<std::pair<const char *, const std::vector<float> *>, 10>
+      adamOutputs{{
+          {"adam_m_next", &output.firstMomentNext},
+          {"adam_v_next", &output.secondMomentNext},
+          {"adam_m_hat", &output.firstMomentHat},
+          {"adam_v_hat", &output.secondMomentHat},
+          {"adam_sqrt_v_hat", &output.secondRoot},
+          {"adam_denominator", &output.denominator},
+          {"adam_divided_update", &output.dividedUpdate},
+          {"adam_normalized_update", &output.normalizedUpdate},
+          {"adam_scaled_update", &output.scaledUpdate},
+          {"next_parameter", &output.weightNext},
+      }};
+  for (const auto &entry : adamOutputs) {
+    if (!finite(*entry.second)) {
+      error = std::string("QNN_NONFINITE: ") + entry.first;
+      return false;
+    }
+  }
   next = unflattenLanguageParameters(output.weightNext, current);
   firstMomentNext =
       unflattenLanguageParameters(output.firstMomentNext, current);
@@ -6640,7 +6659,8 @@ std::string nicopediaHtpDivergenceLocalization(
 
 std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const TrainingConfig &trainingConfig,
-                                 const LogSink &progress) {
+                                 const LogSink &progress,
+                                 std::atomic_bool *stopRequested) {
   // Cache path: app-private file pushed by the host runner.  The parameter is
   // carried in diagnosticCheckpointDir to avoid extending the JNI ABI; the
   // Kotlin side validates it to stay below the app files directory.
@@ -6789,6 +6809,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   double cpuStep0Loss = std::numeric_limits<double>::quiet_NaN();
   double htpStep0Loss = cpuStep0Loss;
   bool step0Finite = true, step0Ok = true;
+  bool allQnnOutputsFinite = true;
   if (fromScratch) {
     const auto firstBatch = nprtBatch(config, cache, order[0]);
     const auto cpuStep0 = tiny_lm::forwardBackwardGeneralized(
@@ -6812,6 +6833,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
         std::isfinite(cpuStep0.loss) && std::isfinite(htpStep0.loss) &&
         logits0.nonfinite == 0 && probs0.nonfinite == 0 &&
         dlogits0.nonfinite == 0 && std::isfinite(gradient0);
+    allQnnOutputsFinite = step0Finite;
     // Tolerances are fixed before results are interpreted (numerical evidence
     // policy): logits/probability/dlogits use the established tiny-LM one-step
     // bounds; the gradient uses the established diagnostic 0.03 bound.
@@ -6927,21 +6949,61 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   std::string lastCheckpointPath;
   bool lastCheckpointWritten = false;
   std::vector<std::pair<uint32_t, float>> curve;
+  // RuntimeMetrics.executeUs is measured around the actual QNN execute call.
+  // The Nicopedia training graph fuses forward and backward into one execute,
+  // so it is reported as a fused phase rather than attributed to either one.
+  double fusedForwardBackwardQnnUs = 0.0;
+  double adamQnnUs = 0.0;
+  double hostOverheadUs = 0.0;
+  double checkpointIoUs = 0.0;
+  std::uint64_t fusedQnnExecuteCount = 0;
+  std::uint64_t adamQnnExecuteCount = 0;
+  double intervalFusedUs = 0.0, intervalAdamUs = 0.0,
+         intervalHostUs = 0.0, intervalCheckpointUs = 0.0,
+         intervalWallUs = 0.0;
+  std::uint64_t intervalFusedCount = 0, intervalAdamCount = 0;
+  std::uint32_t intervalSteps = 0;
+  bool interrupted = false;
   const auto trainingStarted = std::chrono::steady_clock::now();
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
+    if (stopRequested && stopRequested->load()) {
+      interrupted = true;
+      break;
+    }
+    const auto stepStarted = std::chrono::steady_clock::now();
+    const double fusedBeforeStep = fusedForwardBackwardQnnUs;
+    const double adamBeforeStep = adamQnnUs;
+    const double checkpointBeforeStep = checkpointIoUs;
+    const std::uint64_t fusedCountBeforeStep = fusedQnnExecuteCount;
+    const std::uint64_t adamCountBeforeStep = adamQnnExecuteCount;
     Params gradientAccum = zeroLanguageParameters(current);
     double lossSum = 0;
     bool stepFinite = true;
     for (uint32_t batch = 0; batch < batchSize; ++batch) {
+      if (stopRequested && stopRequested->load()) {
+        interrupted = true;
+        break;
+      }
       const auto batchData =
           nprtBatch(config, cache, order[std::size_t(step - 1) * batchSize + batch]);
       TinyTransformerTrainingOutputs htpGradient;
+      const std::size_t executeCountBefore = runtime.metrics().executeUs.size();
       if (!runtime.executeTinyTransformerTraining(
               batchData.input, batchData.target, current, 0.0f, htpGradient,
               error))
         return failure("nicopedia_train_gradient", error, runtime);
+      const auto &executeMetrics = runtime.metrics().executeUs;
+      for (std::size_t i = executeCountBefore; i < executeMetrics.size(); ++i) {
+        fusedForwardBackwardQnnUs += executeMetrics[i];
+        ++fusedQnnExecuteCount;
+      }
       lossSum += htpGradient.loss;
-      stepFinite = stepFinite && std::isfinite(htpGradient.loss);
+      const bool outputFinite =
+          std::isfinite(htpGradient.loss) && finite(htpGradient.logits) &&
+          finite(htpGradient.probabilities) && finite(htpGradient.dLogits) &&
+          finiteParams(htpGradient.gradients);
+      allQnnOutputsFinite = allQnnOutputsFinite && outputFinite;
+      stepFinite = stepFinite && outputFinite;
       const auto registry = tiny_lm::parameterRegistry(gradientAccum);
       const auto gradientRegistry = tiny_lm::parameterRegistry(htpGradient.gradients);
       if (registry.size() != gradientRegistry.size()) {
@@ -6956,14 +7018,21 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           accum[j] += values[j] * (1.0f / float(batchSize));
       }
     }
+    if (interrupted) break;
     const float meanLoss = float(lossSum / batchSize);
     Params next, firstNext, secondNext;
     AdamOptimizerOutputs raw;
+    const std::size_t adamExecuteCountBefore = runtime.metrics().executeUs.size();
     if (!executeLanguageAdam(runtime, current, gradientAccum, currentFirst,
                              currentSecond, lr, int(step), 1.0f, next,
                              firstNext, secondNext, &raw, error,
                              optimizerGraphElements))
       return failure("nicopedia_train_adam", error, runtime);
+    const auto &adamMetrics = runtime.metrics().executeUs;
+    for (std::size_t i = adamExecuteCountBefore; i < adamMetrics.size(); ++i) {
+      adamQnnUs += adamMetrics[i];
+      ++adamQnnExecuteCount;
+    }
     current = std::move(next);
     currentFirst = std::move(firstNext);
     currentSecond = std::move(secondNext);
@@ -6975,6 +7044,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     lastCompletedStep = step;
     if (step % 25 == 0 || step == steps)
       curve.emplace_back(step, meanLoss);
+    bool stepCheckpointWritten = false;
+    const auto checkpointStarted = std::chrono::steady_clock::now();
     if (step % checkpointInterval == 0 || step == steps) {
       const std::string intervalPath =
           cachePath + "/" +
@@ -6989,16 +7060,62 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       ++checkpointCount;
       lastCheckpointPath = intervalPath;
       lastCheckpointWritten = true;
+      stepCheckpointWritten = true;
     }
+    if (stepCheckpointWritten) {
+      checkpointIoUs += std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - checkpointStarted).count();
+    }
+    const double stepWallUs = std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - stepStarted).count();
+    const double stepFusedUs = fusedForwardBackwardQnnUs - fusedBeforeStep;
+    const double stepAdamUs = adamQnnUs - adamBeforeStep;
+    const double stepCheckpointUs = checkpointIoUs - checkpointBeforeStep;
+    const std::uint64_t stepFusedCount = fusedQnnExecuteCount - fusedCountBeforeStep;
+    const std::uint64_t stepAdamCount = adamQnnExecuteCount - adamCountBeforeStep;
+    const double stepHostUs = std::max(0.0, stepWallUs - stepFusedUs - stepAdamUs -
+                                                stepCheckpointUs);
+    hostOverheadUs += stepHostUs;
+    intervalFusedUs += stepFusedUs;
+    intervalAdamUs += stepAdamUs;
+    intervalHostUs += stepHostUs;
+    intervalCheckpointUs += stepCheckpointUs;
+    intervalWallUs += stepWallUs;
+    intervalFusedCount += stepFusedCount;
+    intervalAdamCount += stepAdamCount;
+    intervalSteps += 1;
     if (step == resumeStep + 1) firstLoss = meanLoss;
     lastLoss = meanLoss;
-    if (progress && (step == resumeStep + 1 || step % 32 == 0 ||
-                     step == steps)) {
+    if (stopRequested && stopRequested->load()) interrupted = true;
+    if (progress && (stepCheckpointWritten || step == resumeStep + 1 ||
+                     step % 32 == 0 || step == steps || interrupted)) {
       std::ostringstream update;
-      update << std::setprecision(10) << "phase=training\nseed=" << seed
-             << "\nstep=" << step << "\nsteps=" << steps << "\nloss=" << meanLoss;
+      update << std::setprecision(10) << "phase="
+             << (stepCheckpointWritten ? "saving_checkpoint" : "training")
+             << "\nseed=" << seed
+             << "\nstep=" << step << "\nsteps=" << steps << "\nloss=" << meanLoss
+             << "\ntiming_sample_steps=" << intervalSteps
+             << "\nfused_forward_backward_qnn_us="
+             << (intervalSteps ? intervalFusedUs : 0.0)
+             << "\nadam_qnn_us=" << intervalAdamUs
+             << "\nhost_overhead_us=" << intervalHostUs
+             << "\ncheckpoint_io_us=" << intervalCheckpointUs
+             << "\nobservation_wall_us=" << intervalWallUs
+             << "\nstep_wall_us=" << stepWallUs
+             << "\nfused_qnn_execute_count=" << intervalFusedCount
+             << "\nadam_qnn_execute_count=" << intervalAdamCount
+             << "\nqnn_return_code_success=true"
+             << "\noutput_tensors_finite=" << (stepFinite ? "true" : "false")
+             << "\nbackend=HTP\ncpu_fallback=false";
+      if (stepCheckpointWritten)
+        update << "\ncheckpoint_step=" << step << "\ncheckpoint_written=true";
       progress(update.str());
+      intervalFusedUs = intervalAdamUs = intervalHostUs = intervalCheckpointUs =
+          intervalWallUs = 0.0;
+      intervalFusedCount = intervalAdamCount = 0;
+      intervalSteps = 0;
     }
+    if (interrupted) break;
   }
   const double trainingSeconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - trainingStarted)
@@ -7010,7 +7127,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   // HTP state (parameters + Adam moments); replaying every prior step on CPU
   // is both redundant and an unbounded host-side tail, so it is deliberately
   // skipped and reported as such.
-  const bool cpuReplayPerformed = fromScratch;
+  // A requested stop must return after the safe optimizer boundary; the
+  // diagnostic full CPU replay is intentionally skipped for an interrupted
+  // run so cancellation does not turn into another long training pass.
+  bool cpuReplayPerformed = fromScratch && !interrupted;
   Params cpuFinal = current, cpuFinalFirst = currentFirst,
          cpuFinalSecond = currentSecond;
   if (cpuReplayPerformed) {
@@ -7018,6 +7138,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     cpuFinalFirst = cpuFirst;
     cpuFinalSecond = cpuSecond;
     for (uint32_t step = 1; step <= lastCompletedStep; ++step) {
+      if (stopRequested && stopRequested->load()) {
+        interrupted = true;
+        break;
+      }
       Params gradientAccum = zeroLanguageParameters(cpuFinal);
       for (uint32_t batch = 0; batch < batchSize; ++batch) {
         const auto batchData = nprtBatch(
@@ -7052,6 +7176,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       }
     }
   }
+  if (stopRequested && stopRequested->load()) interrupted = true;
+  if (interrupted) cpuReplayPerformed = false;
   const double finalParameterError =
       cpuReplayPerformed ? nprtMaxParamError(cpuFinal, current) : -1.0;
   const double finalFirstError =
@@ -7067,7 +7193,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   // Scratch retains the established loss-decrease assertion.  A resumed
   // segment is a continuation diagnostic: a noisy endpoint must not turn an
   // otherwise finite, fully-checkpointed segment into a health failure.
-  const bool ok = step0Ok && allFinite && finalFinite &&
+  const bool ok = !interrupted && step0Ok && allFinite && finalFinite &&
                   (!fromScratch || lossDecreased) &&
                   lastCompletedStep == steps;
   if (!curve.empty()) {
@@ -7093,12 +7219,14 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   checkpointPresent.seekg(0, std::ios::end);
   const bool existingCheckpoint = checkpointPresent.good() &&
                                   checkpointPresent.tellg() > std::streamoff(0);
-  const bool checkpointSaveEligible =
-      nicopedia_checkpoint::finalWriteAllowed(allFinite, finalFinite,
-                                              lastCompletedStep, steps);
+  const bool checkpointSaveEligible = interrupted
+      ? nicopedia_checkpoint::interruptedWriteAllowed(
+            allFinite, finalFinite, lastCompletedStep, resumeStep)
+      : nicopedia_checkpoint::finalWriteAllowed(
+            allFinite, finalFinite, lastCompletedStep, steps);
   if (!checkpointSaveEligible) {
-    // Preserve every previously committed interval/resume checkpoint. The
-    // report remains FAILED with checkpoint_written=false.
+    // Preserve every previously committed interval/resume checkpoint. An
+    // interruption with no completed boundary is not resumable.
     checkpointWritten = false;
   } else if (checkpointPath == lastCheckpointPath && lastCheckpointWritten &&
              existingCheckpoint) {
@@ -7117,7 +7245,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   std::ostringstream report;
   report << std::setprecision(10)
          << "NICOPEDIA_HTP\ntest=nicopedia_real_text_htp_training\nstatus="
-         << (ok ? "SUCCESS" : "FAILED")
+         << (interrupted ? "CANCELLED" : (ok ? "SUCCESS" : "FAILED"))
          << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
          << "\nsteps=" << steps << "\nbatch_size=" << batchSize
          << "\nlearning_rate=" << lr
@@ -7176,7 +7304,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           << "\nfinal_finite=" << (finalFinite ? "true" : "false")
           << "\ncpu_replay_performed="
           << (cpuReplayPerformed ? "true" : "false")
-          << "\ncheckpoint_written=" << (checkpointWritten ? "true" : "false")
+         << "\ncheckpoint_written=" << (checkpointWritten ? "true" : "false")
+         << "\ncheckpoint_io_us=" << checkpointIoUs
          << "\nhtp_initialize_us=" << initializeUs
          << "\ngraph_create_us=" << graphCreateUs
          << "\ngraph_finalize_us=" << graphFinalizeUs
@@ -7184,6 +7313,17 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\ntraining_total_seconds=" << trainingSeconds
          << "\ntraining_step_ms=" << stepMs
          << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nqnn_execute_count="
+         << (fusedQnnExecuteCount + adamQnnExecuteCount)
+         << "\nfused_forward_backward_qnn_us=" << fusedForwardBackwardQnnUs
+         << "\nadam_qnn_us=" << adamQnnUs
+         << "\nhost_overhead_us=" << hostOverheadUs
+         << "\nqnn_return_code_success="
+         << (runtime.metrics().graphExecuteCount > 0 ? "true" : "false")
+         << "\noutput_tensors_finite="
+         << (allQnnOutputsFinite ? "true" : "false")
+         << "\nbackend=HTP\nstop_requested="
+         << (interrupted ? "true" : "false")
          << "\nexecute_count_per_training_step=" << (1 + optimizerChunkCount)
          << "\nbias_correction_scalar_responsibility=CPU"
          << "\noptimizer_math_responsibility=HTP"
@@ -7446,7 +7586,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
 
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
-    const LogSink& progress) {
+    const LogSink& progress, std::atomic_bool* stopRequested) {
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA) {
     tiny_lm::Config config;
     config.vocabularySize = 256;
@@ -7469,7 +7609,7 @@ std::string runTinyTransformerTrainingExperiment(
       return "NICOPEDIA_HTP\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\nerror=" +
              error + '\n';
-    return nicopediaHtpTraining(config, trainingConfig, progress);
+    return nicopediaHtpTraining(config, trainingConfig, progress, stopRequested);
   }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE) {
     tiny_lm::Config config;

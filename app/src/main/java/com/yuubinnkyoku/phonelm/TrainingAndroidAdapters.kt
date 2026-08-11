@@ -7,30 +7,51 @@ import android.os.Process
 import android.provider.OpenableColumns
 import java.util.Locale
 
-/** SAF adapter: validates only provider access and metadata, never the full file on the UI thread. */
+/** SAF adapter: full NPRTBYTEV1 identity validation runs only on the caller's IO executor. */
 class AndroidTrainingDatasetUriStore(private val context: Context) : TrainingDatasetUriStore {
     private val resolver = context.contentResolver
 
     override fun persistReadAccess(uri: String): Result<TrainingDataset> = runCatching {
         val parsed = Uri.parse(uri)
         require(parsed.scheme == "content") { "dataset must be a content:// URI" }
-        if (resolver.persistedUriPermissions.none { it.uri == parsed && it.isReadPermission }) {
-            resolver.takePersistableUriPermission(parsed, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val alreadyPersisted = resolver.persistedUriPermissions.any { it.uri == parsed && it.isReadPermission }
+        var grantedHere = false
+        try {
+            if (!alreadyPersisted) {
+                resolver.takePersistableUriPermission(parsed, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                grantedHere = true
+            }
+            require(resolver.persistedUriPermissions.any { it.uri == parsed && it.isReadPermission }) {
+                "persistable read permission is unavailable"
+            }
+            val displayName = resolver.query(
+                parsed,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) null
+                else cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+            }
+            // Selection runs on the Activity's IO executor.  Calculate the
+            // content identity now so Resume can be fail-closed after restart;
+            // the backend still stages and verifies the bytes again before JNI.
+            val inspection = resolver.openInputStream(parsed)?.use {
+                NicopediaCacheInspector.inspect(it, TrainingPlan.NICOPEDIA_L19.modelConfig)
+            } ?: error("dataset provider returned no readable stream")
+            TrainingDataset(uri, displayName, inspection.identity)
+        } catch (failure: Throwable) {
+            if (grantedHere) {
+                runCatching {
+                    resolver.releasePersistableUriPermission(
+                        parsed,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+            }
+            throw failure
         }
-        require(resolver.persistedUriPermissions.any { it.uri == parsed && it.isReadPermission }) {
-            "persistable read permission is unavailable"
-        }
-        val displayName = resolver.query(
-            parsed,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) null
-            else cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
-        }
-        TrainingDataset(uri, displayName)
     }
 
     override fun releaseReadAccess(uri: String): Result<Unit> = runCatching {
@@ -65,11 +86,11 @@ class AndroidTrainingSelectionPersistence(context: Context) : TrainingSelectionP
     }
 
     override fun saveDataset(dataset: TrainingDataset) {
-        prefs.edit()
+        check(prefs.edit()
             .putString(KEY_URI, dataset.uri)
             .putString(KEY_NAME, dataset.displayName)
             .putString(KEY_IDENTITY, dataset.identity)
-            .apply()
+            .commit()) { "dataset selection could not be persisted" }
     }
 
     private companion object {
@@ -86,6 +107,7 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
     // Native integration writes opaque NPRTCKPTV2 files below this app-managed
     // directory. The path is never exposed to UI or persisted metadata.
     private val checkpointDirectory = context.getDir("standalone_training_checkpoints", Context.MODE_PRIVATE)
+    internal val nativeRootDirectory: java.io.File get() = checkpointDirectory
 
     init {
         check(checkpointDirectory.isDirectory || checkpointDirectory.mkdirs()) {
@@ -100,12 +122,51 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
 
     override fun save(metadata: TrainingCheckpointMetadata) {
         val next = list().filterNot { it.uri == metadata.uri }.toMutableList().apply { add(metadata) }
-        prefs.edit().putStringSet(KEY_ENTRIES, next.map(::encode).toSet()).apply()
+        check(prefs.edit().putStringSet(KEY_ENTRIES, next.map(::encode).toSet()).commit()) {
+            "checkpoint metadata could not be persisted"
+        }
     }
 
     override fun archive(metadata: TrainingCheckpointMetadata) {
-        prefs.edit().putStringSet(KEY_ENTRIES, list().filterNot { it.uri == metadata.uri }.map(::encode).toSet()).apply()
+        check(prefs.edit().putStringSet(KEY_ENTRIES, list().filterNot { it.uri == metadata.uri }.map(::encode).toSet()).commit()) {
+            "checkpoint metadata could not be archived"
+        }
+        val paths = nativePaths().filterKeys { it != metadata.uri }
+        check(prefs.edit().putStringSet(KEY_PATHS, paths.map { (uri, path) -> encodePath(uri, path) }.toSet()).commit()) {
+            "checkpoint path index could not be archived"
+        }
     }
+
+    override fun resolveNativePath(metadata: TrainingCheckpointMetadata): String? =
+        nativePaths()[metadata.uri]?.takeIf { path ->
+            runCatching {
+                val root = checkpointDirectory.canonicalFile
+                val candidate = java.io.File(path).canonicalFile
+                candidate.path.startsWith(root.path + java.io.File.separator) && candidate.isFile
+            }.getOrDefault(false)
+        }
+
+    override fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = runCatching {
+        val root = checkpointDirectory.canonicalFile
+        val candidate = java.io.File(path).canonicalFile
+        require(candidate.path.startsWith(root.path + java.io.File.separator)) { "native checkpoint escaped app root" }
+        require(candidate.isFile && candidate.length() > 0L) { "native checkpoint is not durable" }
+        val next = nativePaths().toMutableMap().apply { put(metadata.uri, candidate.path) }
+        require(prefs.edit().putStringSet(KEY_PATHS, next.map { (uri, value) -> encodePath(uri, value) }.toSet()).commit()) {
+            "checkpoint path index could not be persisted"
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun nativePaths(): Map<String, String> = prefs.getStringSet(KEY_PATHS, emptySet()).orEmpty().mapNotNull { encoded ->
+        runCatching {
+            val separator = encoded.indexOf('=')
+            require(separator > 0)
+            Uri.decode(encoded.substring(0, separator)) to Uri.decode(encoded.substring(separator + 1))
+        }.getOrNull()
+    }.toMap()
+
+    private fun encodePath(uri: String, path: String): String = "${Uri.encode(uri)}=${Uri.encode(path)}"
 
     private fun encode(value: TrainingCheckpointMetadata): String = listOf(
         value.uri,
@@ -152,6 +213,7 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
     private companion object {
         const val PREFS = "phonelm_standalone_training_checkpoints"
         const val KEY_ENTRIES = "metadata"
+        const val KEY_PATHS = "native_paths"
         const val DELIMITER = "|"
     }
 }

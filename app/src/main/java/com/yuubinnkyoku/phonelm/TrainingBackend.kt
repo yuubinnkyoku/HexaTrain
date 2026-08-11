@@ -39,6 +39,8 @@ data class TrainingBackendProgress(
     val htpExecuteCount: Long? = null,
     val checkpointIoMs: Long? = null,
     val timingSample: TrainingTimingSample? = null,
+    /** Number of completed native steps represented by this throttled sample. */
+    val timingSampleWeight: Long = 1L,
     /** Native evidence is kept separate from timing; missing evidence is fail-closed. */
     val runtimeEvidence: TrainingRuntimeEvidence? = null,
 )
@@ -74,6 +76,10 @@ sealed interface TrainingBackendResult {
 interface TrainingBackend {
     fun run(request: TrainingRequest, onProgress: (TrainingBackendProgress) -> Unit): TrainingBackendResult
     fun requestStop()
+    /** Arms cancellation for the small window before the worker enters [run]. */
+    fun prepareForRun() = Unit
+    /** Clears the arm when foreground acceptance/worker queueing fails. */
+    fun cancelPreparedRun() = Unit
     /** Returns null when the backend cannot authoritatively determine a run length. */
     fun resolveTotalSteps(config: TrainingModelConfig, dataset: TrainingDataset): Int? =
         TrainingPlan.NICOPEDIA_L19.targetSteps.takeIf { config == TrainingPlan.NICOPEDIA_L19.modelConfig }
@@ -85,7 +91,7 @@ interface TrainingBackend {
     fun resume(): Boolean = false
 }
 
-/** Deliberate production default until a JNI implementation satisfying the contract exists. */
+/** Fail-closed diagnostic backend used by QNN-disabled builds and pure JVM tests. */
 object UnavailableTrainingBackend : TrainingBackend {
     private const val MESSAGE = "HTP training backend is unavailable: no JNI backend has been configured"
     override fun run(request: TrainingRequest, onProgress: (TrainingBackendProgress) -> Unit): TrainingBackendResult =
@@ -93,10 +99,7 @@ object UnavailableTrainingBackend : TrainingBackend {
     override fun requestStop() = Unit
 }
 
-/**
- * Typed JNI boundary. The native implementation is intentionally not selected
- * until it can provide QNN return-code and tensor-finite evidence separately.
- */
+/** Typed JNI boundary retained for a future handle-based/reconnect API. */
 interface StandaloneTrainingJniApi {
     fun startTraining(request: TrainingRequest, observer: StandaloneTrainingJniObserver): StandaloneTrainingJniHandle
     fun getTrainingState(): StandaloneTrainingJniState
@@ -119,15 +122,18 @@ data class StandaloneTrainingJniState(
     val outputTensorsFinite: Boolean?,
     val cpuFallback: Boolean?,
     val error: String? = null,
+    val backend: String? = "HTP",
 ) {
     /** A QNN success code is never sufficient without a finite-output result. */
     val isAuthoritativelySuccessful: Boolean
-        get() = qnnReturnCodeSuccess == true && outputTensorsFinite == true && cpuFallback == false
+        get() = backend.equals("HTP", ignoreCase = true) && error == null &&
+            qnnReturnCodeSuccess == true && outputTensorsFinite == true && cpuFallback == false
 
     fun runtimeEvidence(): TrainingRuntimeEvidence = TrainingRuntimeEvidence(
         qnnReturnCodeSuccess = qnnReturnCodeSuccess,
         outputTensorsFinite = outputTensorsFinite,
         cpuFallback = cpuFallback,
+        backend = backend,
         error = error,
     )
 }

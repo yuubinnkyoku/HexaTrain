@@ -52,4 +52,23 @@ class TrainingTimingTest {
         assertNull(phase?.qnnExecuteMs)
         assertEquals(0L, phase?.qnnExecuteCount)
     }
+
+    @Test fun throttledFusedSamplesUseNativeStepWeight() {
+        val accumulator = TimingAccumulator()
+        accumulator.add(
+            TrainingTimingSample(
+                fusedForwardBackward = PhaseTiming(
+                    TimingBackend.HTP,
+                    qnnExecuteMs = 4.0,
+                    qnnExecuteCount = 2,
+                ),
+            ),
+            sampleWeight = 4,
+        )
+        val snapshot = accumulator.snapshot()
+        assertEquals(4L, snapshot.sampleCount)
+        assertEquals(16.0, snapshot.cumulative?.fusedForwardBackward?.qnnExecuteMs ?: -1.0, 1e-6)
+        assertEquals(4.0, snapshot.average?.fusedForwardBackward?.qnnExecuteMs ?: -1.0, 1e-6)
+        assertEquals(8L, snapshot.htpExecuteCount)
+    }
 }

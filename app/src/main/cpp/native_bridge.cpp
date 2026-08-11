@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,19 @@ namespace {
 constexpr const char* kLogTag = "PhoneLMBench";
 std::atomic_bool gStopRequested{false};
 std::atomic_bool gRunning{false};
+// A Kotlin stop can arrive after the worker is accepted but before the
+// synchronous JNI method has entered.  Keep that request separate from the
+// per-run flag so the method cannot erase it with its normal reset.
+std::mutex gStopStateMutex;
+bool gNativeCallEntered = false;
+bool gPendingStop = false;
+
+void beginNativeCall() {
+    std::lock_guard<std::mutex> lock(gStopStateMutex);
+    gStopRequested.store(gPendingStop, std::memory_order_release);
+    gPendingStop = false;
+    gNativeCallEntered = true;
+}
 
 void logcat(const std::string& message) {
     __android_log_print(ANDROID_LOG_INFO, kLogTag, "%s", message.c_str());
@@ -38,6 +52,9 @@ std::string failedReport(const std::string& error) {
 class RunningGuard {
 public:
     ~RunningGuard() {
+        std::lock_guard<std::mutex> lock(gStopStateMutex);
+        gNativeCallEntered = false;
+        gPendingStop = false;
         gRunning.store(false, std::memory_order_release);
     }
 };
@@ -95,7 +112,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunBenchmark(
         return toJavaString(env, report);
     }
     RunningGuard guard;
-    gStopRequested.store(false, std::memory_order_release);
+    beginNativeCall();
 
     jmethodID progressMethod = nullptr;
     if (progressCallback != nullptr) {
@@ -190,7 +207,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
         return toJavaString(env, report);
     }
     RunningGuard guard;
-    gStopRequested.store(false, std::memory_order_release);
+    beginNativeCall();
 
     jmethodID progressMethod = nullptr;
     if (progressCallback != nullptr) {
@@ -285,7 +302,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaDivergenceLocalizat
         return toJavaString(env, failedReport("a benchmark is already running"));
     }
     RunningGuard guard;
-    gStopRequested.store(false, std::memory_order_release);
+    beginNativeCall();
 
     std::string checkpoint, scopeString;
     if (checkpointPath) {
@@ -366,7 +383,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         return toJavaString(env, failedReport("a benchmark is already running"));
     }
     RunningGuard guard;
-    gStopRequested.store(false, std::memory_order_release);
+    beginNativeCall();
 
     std::string checkpoint, prompt, modeString, policyString;
     if (checkpointPath) {
@@ -492,7 +509,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
         return toJavaString(env, failedReport("a benchmark is already running"));
     }
     RunningGuard guard;
-    gStopRequested.store(false, std::memory_order_release);
+    beginNativeCall();
 
     std::string dir;
     if (checkpointDir) {
@@ -603,8 +620,27 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeReplayFirstNonfiniteCheckpoint(
 extern "C" JNIEXPORT void JNICALL
 Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRequestStop(
     JNIEnv* /* env */, jobject /* receiver */) {
-    gStopRequested.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(gStopStateMutex);
+        if (gNativeCallEntered) {
+            gStopRequested.store(true, std::memory_order_release);
+        } else {
+            // Preserve a stop that races the JNI entry.  The Android backend
+            // explicitly clears this flag when it cancels before entering JNI.
+            gPendingStop = true;
+        }
+    }
     logcat("stop_requested=true");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeClearStop(
+    JNIEnv* /* env */, jobject /* receiver */) {
+    std::lock_guard<std::mutex> lock(gStopStateMutex);
+    if (!gRunning.load(std::memory_order_acquire) && !gNativeCallEntered) {
+        gPendingStop = false;
+        gStopRequested.store(false, std::memory_order_release);
+    }
 }
 
 JNIEXPORT jint JNI_OnLoad(JavaVM* /* vm */, void* /* reserved */) {

@@ -26,6 +26,12 @@ interface TrainingCheckpointStore {
     fun list(): List<TrainingCheckpointMetadata>
     fun save(metadata: TrainingCheckpointMetadata)
     fun archive(metadata: TrainingCheckpointMetadata)
+
+    /** Resolve an opaque metadata id to an app-private native checkpoint path. */
+    fun resolveNativePath(metadata: TrainingCheckpointMetadata): String? = null
+
+    /** Register a native-created checkpoint without exposing its path to UI state. */
+    fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = false
 }
 
 class InMemoryTrainingCheckpointStore : TrainingCheckpointStore {
