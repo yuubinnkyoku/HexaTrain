@@ -1,0 +1,9 @@
+resume_step,completed_step,first_loss,last_loss,training_seconds,graph_executes,qnn_failures,all_steps_finite,optimizer_finite,checkpoint_count,checkpoint_written,cpu_replay_performed,cpu_fallback,thermal_status_after,battery_health_after,battery_temperature_c_after
+250,1000,2.708266735,2.348858595,780.2772634,7500,0,true,true,3,true,false,false,0,2,33
+1000,2000,2.463187218,2.201229572,1485.117128,10000,0,true,true,4,true,false,false,0,2,30
+2000,3000,2.212851763,2.269340992,742.7739042,10000,0,true,true,4,true,false,false,0,2,30
+3000,4000,2.489655256,2.075017214,710.8664101,10000,0,true,true,4,true,false,false,0,2,33
+4000,5000,2.1365273,2.025691509,731.7262275,10000,0,true,true,4,true,false,false,0,2,33
+5000,6000,1.994393826,2.277900219,916.4207871,10000,0,true,true,4,true,false,false,0,2,32
+6000,7000,2.797261715,2.26416254,1546.744168,10000,0,true,true,4,true,false,false,0,2,30
+7000,8000,2.0970819,1.986400008,1068.526354,10000,0,true,true,4,true,false,false,0,2,30

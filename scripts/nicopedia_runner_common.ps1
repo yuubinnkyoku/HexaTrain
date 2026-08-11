@@ -359,26 +359,44 @@ function Receive-PhoneLmBinary {
     $directory = Split-Path -Parent $LocalPath
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     $incoming = "$LocalPath.incoming.$([guid]::NewGuid().ToString('N'))"
-    $cmdExe = $env:ComSpec
-    $command = ('"{0}" -s "{1}" exec-out run-as "{2}" cat "{3}" > "{4}"' -f $Adb, $Device, $Package, $RemotePath, $incoming)
+    # adb exec-out emits raw bytes, but routing it through cmd.exe /c mangles
+    # the quoted redirect target (cmd strips the outer quote pair, so the
+    # destination path ends up unterminated). Spawn adb directly and copy its
+    # stdout byte stream to disk; never route binary data through PowerShell
+    # string pipelines, which would corrupt the checkpoint.
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Adb
+    $psi.Arguments = '-s "{0}" exec-out run-as "{1}" cat "{2}"' -f $Device, $Package, $RemotePath
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $pull = [System.Diagnostics.Process]::new()
+    $pull.StartInfo = $psi
+    $stream = $null
+    $stderr = ''
     try {
-        # /c and the command string are deliberately separate arguments; this
-        # keeps binary stdout redirection lossless on Windows PowerShell.
-        $pull = Start-Process -FilePath $cmdExe -ArgumentList @('/c', $command) `
-            -PassThru -WindowStyle Hidden -ErrorAction Stop
+        [void]$pull.Start()
+        $stream = [IO.File]::Create($incoming)
+        # Drain stdout and stderr concurrently so neither pipe can fill and
+        # deadlock the child; stdout is copied byte-for-byte to the file.
+        $copy = $pull.StandardOutput.BaseStream.CopyToAsync($stream)
+        $stderrTask = $pull.StandardError.ReadToEndAsync()
         $pullTimedOut = -not $pull.WaitForExit($TimeoutSeconds * 1000)
         if ($pullTimedOut) {
             Stop-PhoneLmProcessTree -RootProcessId $pull.Id
             [void]$pull.WaitForExit(5000)
         }
+        $copy.GetAwaiter().GetResult() | Out-Null
+        $stream.Dispose(); $stream = $null
+        $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($pull.HasExited) { $pull.WaitForExit() }
         $pullExitCode = if ($pullTimedOut -or -not $pull.HasExited) { 124 } else { [int]$pull.ExitCode }
-        $pull.Dispose()
         if ($pullTimedOut) { throw 'ADB_TRANSPORT_TIMEOUT: binary pull exceeded its command deadline' }
         if ($pullExitCode -ne 0) {
             $transport = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('get-state') -AllowFailure
             if ($transport.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($transport.Classification): binary pull interrupted" }
-            throw 'CHECKPOINT_PULL_FAILED'
+            throw "CHECKPOINT_PULL_FAILED: adb exit=$pullExitCode stderr=$($stderr.Trim())"
         }
         if (-not (Test-Path -LiteralPath $incoming -PathType Leaf)) { throw 'CHECKPOINT_PULL_MISSING' }
         $size = (Get-Item -LiteralPath $incoming).Length
@@ -394,6 +412,8 @@ function Receive-PhoneLmBinary {
         }
         [pscustomobject][ordered]@{ Path = $LocalPath; Size = $size; Sha256 = $hash }
     } finally {
+        if ($stream) { $stream.Dispose() }
+        $pull.Dispose()
         if (Test-Path -LiteralPath $incoming -PathType Leaf) { Remove-Item -LiteralPath $incoming -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -499,31 +519,51 @@ function Wait-PhoneLmHeadlessStatus {
     $lastProgress = -1
     $lastCondition = -30
     $seenExpectedStatus = $false
+    $transportFaults = 0
     try {
         for ($poll = 0; $poll -lt $PollLimit; $poll++) {
             $Process.Refresh()
             $elapsed = [int]([DateTimeOffset]::UtcNow - $started).TotalSeconds
-            $lastStatus = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
-            if ($lastStatus -ne '' -and $ExpectedRunId -ne '') {
-                $expectedPattern = '"run_id"\s*:\s*"' + [regex]::Escape($ExpectedRunId) + '"'
-                if ($lastStatus -match $expectedPattern) {
-                    $seenExpectedStatus = $true
-                } else {
-                    # Immediately after launch the atomic status file may
-                    # still contain a terminal record from the previous run.
-                    # Ignore that record only until this run is first seen;
-                    # a foreign live status, or any identity change after the
-                    # expected run appeared, is always fatal.
-                    if ($seenExpectedStatus -or
-                        $lastStatus -match '"status"\s*:\s*"(STARTING|RUNNING)"') {
-                        throw 'HEADLESS_STATUS_IDENTITY_MISMATCH'
+            try {
+                $lastStatus = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
+                if ($lastStatus -ne '' -and $ExpectedRunId -ne '') {
+                    $expectedPattern = '"run_id"\s*:\s*"' + [regex]::Escape($ExpectedRunId) + '"'
+                    if ($lastStatus -match $expectedPattern) {
+                        $seenExpectedStatus = $true
+                    } else {
+                        # Immediately after launch the atomic status file may
+                        # still contain a terminal record from the previous run.
+                        # Ignore that record only until this run is first seen;
+                        # a foreign live status, or any identity change after the
+                        # expected run appeared, is always fatal.
+                        if ($seenExpectedStatus -or
+                            $lastStatus -match '"status"\s*:\s*"(STARTING|RUNNING)"') {
+                            throw 'HEADLESS_STATUS_IDENTITY_MISMATCH'
+                        }
+                        $lastStatus = ''
                     }
-                    $lastStatus = ''
                 }
+                if ($FocusAction) { & $FocusAction $elapsed }
+                if ($ConditionAction -and ($elapsed -ge $lastCondition + 30)) { $lastCondition = $elapsed; & $ConditionAction $elapsed }
+                if ($StatusProgressAction -and ($elapsed -eq 0 -or $elapsed -ge $lastProgress + $ProgressEverySeconds)) { $lastProgress = $elapsed; & $StatusProgressAction $elapsed $lastStatus }
+                # A fully successful poll round clears the fault streak.
+                $transportFaults = 0
+            } catch {
+                # A single adb call may exceed its 60 s deadline while the
+                # device itself is healthy (the segment keeps training); the
+                # previous run aborted mid-segment on exactly that transient.
+                # Tolerate a bounded streak of transport faults, then fail
+                # closed exactly as before so persistent transport loss still
+                # stops the segment. Non-transport errors (focus takeover,
+                # thermal abort, identity/heartbeat mismatch, checkpoint
+                # stall) are never retried.
+                if ($_.Exception.Message -notmatch 'ADB_TRANSPORT_(FAILURE|TIMEOUT)') { throw }
+                $transportFaults++
+                if ($transportFaults -ge 5) { throw }
+                $lastStatus = ''
+                Start-Sleep -Seconds 10
+                continue
             }
-            if ($FocusAction) { & $FocusAction $elapsed }
-            if ($ConditionAction -and ($elapsed -ge $lastCondition + 30)) { $lastCondition = $elapsed; & $ConditionAction $elapsed }
-            if ($StatusProgressAction -and ($elapsed -eq 0 -or $elapsed -ge $lastProgress + $ProgressEverySeconds)) { $lastProgress = $elapsed; & $StatusProgressAction $elapsed $lastStatus }
             $terminal = $lastStatus -match '"status"\s*:\s*"(PASSED|FAILED)"'
             if (-not $terminal -and $lastStatus -match '"last_heartbeat"\s*:\s*(\d+)') {
                 $heartbeatMs = [int64]$Matches[1]

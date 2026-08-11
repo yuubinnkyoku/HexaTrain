@@ -160,11 +160,20 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
     if ((Get-PhoneLmTopPackage -Adb $adb -Device $device) -eq $package) { throw 'FOCUS_TAKEOVER_DETECTED' }
   }
 $result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -Device $device -Package $package
-if ($waited.ProcessExitCode -ne 0) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
 Assert-PhoneLmHeadlessNoActivity -Text $result
-if ($waited.StatusJson -notmatch '"status"\s*:\s*"PASSED"' -or $result -notmatch '(?m)^status=SUCCESS\s*$') {
-  $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers-steps$Steps-result.txt") -Encoding utf8
+$deviceCompleted = $waited.StatusJson -match '"status"\s*:\s*"PASSED"' -and $result -match '(?m)^status=SUCCESS\s*$'
+if (-not $deviceCompleted) {
+  if ($waited.ProcessExitCode -ne 0) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
+  $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$tokenTag-steps$Steps-result.txt") -Encoding utf8
   throw "NICOPEDIA_HTP_FAILED: seed=$Seed layers=$Layers steps=$Steps"
+}
+# The device terminal state (status PASSED + report status=SUCCESS for the
+# expected run) is the authoritative completion signal. The host `am
+# instrument` wrapper can exit nonzero on an adb transport hiccup after the
+# device has already finished and written its report; that is a host artifact,
+# not a failed segment. Genuine device failures still abort above.
+if ($waited.ProcessExitCode -ne 0) {
+  Write-Host "WARN INSTRUMENTATION_EXIT_NONZERO_AFTER_DEVICE_COMPLETION code=$($waited.ProcessExitCode) (device run PASSED; wrapper exit treated as host transport artifact)"
 }
 $reportMap = Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $Steps -Kind training
 $stateAfter = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'after'
