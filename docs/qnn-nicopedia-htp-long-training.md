@@ -56,7 +56,9 @@ resume後もnative codeがstep 1から完了stepまでCPU forward/backwardを無
 - resume時のlegacy CPU replayを実行せず、scratch diagnosticだけに限定
 - checkpointをtemporary fileからatomic renameし、interval/final write failureをfatal化
 - 未完了/非有限segmentではfinal checkpointを書かず、既存canonical resume sourceを保持
-- binary pullを`cmd.exe`の`/c`とcommand stringの別引数で実行し、V2 identityをdecode
+- binary pullを`Start-Process`/`cmd.exe`を介さず、`adb exec-out`のbyte
+  streamを.NET `Process`（`UseShellExecute=$false`、stdout byte redirect）で
+ 直接ファイルへ書き出し、V2 identityをdecode
 - QNN success diagnosticsをaggregate化し、full-cap reportを約5.8 MBから約7 KBへ削減
 
 ## full-cap trajectory
@@ -103,3 +105,40 @@ seed5回帰もSUCCESS、seed5は14,088 execute、nonzero return 0、training/eva
 finiteだった。旧host commandはdevice run中に外側timeoutへ達したが、既存processを
 再起動せずterminal reportを回収した。今回EXACT_SEED側は再実行していないため、
 新しいdirect-seed equivalence主張は行わない。
+
+## T64 context extension (step 0-8,000)
+
+同じcanonical条件（seed 1、batch 8、learning rate 0.003、V=256、D=16、FFN=32、
+H=2、L=19）でcontext lengthをT=64に拡張した。学習stepの数値演算をQNN HTP graph
+で実行し、8 segment（0→8,000）をNPRTCKPTV2のAdam state引き継ぎでresumeし、
+計80,000 graph execute、32 interval checkpointが全てfinite、QNN failure 0、
+CPU fallbackなしで完了した。各segmentは250-step単位のcheckpointをpullし、
+host CPU evaluatorで250-step境界ごとのheld-out NLLを記録した。
+
+- segment 1（0→1,000）: 250/500/750/1,000の4 checkpointをpull。元のT64初回runは
+  デフォルトstall予算300秒がT64の250-step区間（実測155-400秒）より短く
+  誤検知`CHECKPOINT_PROGRESS_STALLED`でabortしていたため、stall予算を900秒に
+  引き上げ、orphan checkpointを回収してresumeした。
+- segment 2-8: 各1,000 step。segment 3はpull後のログ行の変数名バグ、segment 7は
+  デバイス完了後にhost `am instrument`がexit 255したためhost側がabortした。
+  いずれもデバイス側は完了済みで、デバイスterminal状態（status PASSED +
+  report status=SUCCESS + build ID/step一致）を正とする形にrunnerを修正し、
+  orphan成果物をbyte-stream pullで回収した。CDN transportの一時hangには
+  連続5回までstatus pollを再試行するbounded retryを入れ、persistentな
+  transport lossは従来通りfail-closedで停止する。
+
+held-out評価はstep 8,000でbest。250-step CPU evaluatorではvalidation NLLが
+3.0133（step 250）から2.3487（step 8,000）へ、development NLLが2.6632から
+2.0544へ低下した（局所的な反発はstep 1,750/3,750/7,500に見られた）。
+full-cap HTP eval（validation 4,096 chunks = 262,144 tokens、development
+8,192 chunks = 524,288 tokens、計12,288 graph execute、failure 0、
+nonfinite chunk 0）では、validation NLL 2.150418944（CPU 2.150434198、差
+-1.5e-5）、development NLL 2.131013825（CPU 2.131041532、差 -2.8e-5）で、
+HTPとCPUのheld-out quality一致を示す。step 8,000がvalidation/developmentとも
+最良で、事前宣言した8,000 stepのhard ceilingで停止した（plateauの証明ではない）。
+
+公開aggregateは
+[`docs/results/qnn-nicopedia-htp-t64-context-2026-08/`](results/qnn-nicopedia-htp-t64-context-2026-08/README.md)
+を参照する。生テキスト、prompt、生成内容、checkpoint、raw tensor、device識別子、
+ローカルpathは収録せず、aggregateのみである。Nicopedia final testと人工データ
+final holdoutは未開封のままである。legacy CPU-equivalence parity閾値は変更していない。
