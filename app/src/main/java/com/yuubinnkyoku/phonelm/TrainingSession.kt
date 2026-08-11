@@ -74,10 +74,24 @@ class TrainingSession(
         }
         notifyListeners()
         if (validationError != null) return false
+        try {
+            backend.prepareForRun()
+        } catch (failure: Throwable) {
+            publish(
+                TrainingState(
+                    TrainingPhase.ERROR,
+                    message = "training backend could not be prepared: " +
+                        (failure.message ?: failure.javaClass.simpleName),
+                ),
+                runId,
+            )
+            return false
+        }
         val acceptanceFailure = onAccepted?.let { callback ->
             runCatching { callback() }.exceptionOrNull()
         }
         if (acceptanceFailure != null) {
+            runCatching { backend.cancelPreparedRun() }
             publish(
                 TrainingState(
                     TrainingPhase.ERROR,
@@ -91,6 +105,7 @@ class TrainingSession(
         try {
             worker.execute { execute(request, runId) }
         } catch (failure: Throwable) {
+            runCatching { backend.cancelPreparedRun() }
             publish(
                 TrainingState(
                     TrainingPhase.ERROR,
@@ -106,7 +121,11 @@ class TrainingSession(
 
     fun requestStop(): Boolean {
         synchronized(backendOperationLock) {
-            val running = synchronized(lock) { !closed && state.phase in activePhases }
+            // The native bridge resets its stop flag when the JNI call starts.
+            // Do not claim that a stop was accepted while preparation or HTP
+            // initialization is still in flight; only a safe training/checkpoint
+            // boundary is cancellable through the current backend contract.
+            val running = synchronized(lock) { !closed && state.phase in stopAcceptingPhases }
             if (running) backend.requestStop()
             return running
         }
@@ -133,6 +152,16 @@ class TrainingSession(
     }
 
     private fun execute(request: TrainingRequest, runId: Long) {
+        // Activity recreation and repository close can leave a queued worker
+        // behind.  Never enter JNI for a run that is no longer owned by this
+        // session.
+        val stillOwned = synchronized(lock) {
+            !closed && activeRunId == runId && state.phase == TrainingPhase.PREPARING
+        }
+        if (!stillOwned) {
+            runCatching { backend.cancelPreparedRun() }
+            return
+        }
         val startedAt = clock.elapsedRealtimeMs()
         val cpuAtStart = cpuMetrics.read()
         val accumulator = TimingAccumulator()
@@ -153,10 +182,43 @@ class TrainingSession(
                         return@run
                     }
                     val trusted = progress.withTrustedTiming()
+                    val checkpointError = trusted.checkpoint?.let {
+                        progressCheckpointValidationError(it, request, trusted.completedSteps)
+                    }
+                    if (checkpointError != null) {
+                        malformedProgress = checkpointError
+                        runCatching { backend.requestStop() }
+                        return@run
+                    }
+                    if (latestProgress != null && trusted.completedSteps < latestProgress!!.completedSteps) {
+                        malformedProgress = "native progress step moved backwards"
+                        runCatching { backend.requestStop() }
+                        return@run
+                    }
+                    if (latestCheckpoint != null &&
+                        trusted.checkpoint != null &&
+                        trusted.checkpoint.completedStep < latestCheckpoint!!.completedStep
+                    ) {
+                        malformedProgress = "native checkpoint step moved backwards"
+                        runCatching { backend.requestStop() }
+                        return@run
+                    }
+                    if (latestProgress?.phase == TrainingPhase.SAVING_CHECKPOINT &&
+                        trusted.phase == TrainingPhase.TRAINING &&
+                        trusted.completedSteps == latestProgress!!.completedSteps
+                    ) {
+                        malformedProgress = "native progress phase moved backwards"
+                        runCatching { backend.requestStop() }
+                        return@run
+                    }
                     latestProgress = trusted
                     latestCheckpoint = trusted.checkpoint ?: latestCheckpoint
                     latestHtpWindow = trusted.htpActivity ?: latestHtpWindow
-                    accumulator.add(trusted.timingSample, trusted.checkpointIoMs?.toDouble())
+                    accumulator.add(
+                        trusted.timingSample,
+                        trusted.checkpointIoMs?.toDouble(),
+                        trusted.timingSampleWeight,
+                    )
                     val phase = trusted.phase.takeIf { it in progressPhases } ?: TrainingPhase.TRAINING
                     publish(
                         TrainingState(
@@ -296,6 +358,7 @@ class TrainingSession(
         progress.cumulativeHtpActivityMs != null && progress.cumulativeHtpActivityMs < 0L -> "native cumulative HTP timing is negative"
         progress.htpExecuteCount != null && progress.htpExecuteCount < 0L -> "native HTP execute count is negative"
         progress.checkpointIoMs != null && progress.checkpointIoMs < 0L -> "native checkpoint I/O timing is negative"
+        progress.timingSampleWeight <= 0L -> "native timing sample weight is not positive"
         else -> null
     }
 
@@ -324,6 +387,23 @@ class TrainingSession(
                 checkpoint.datasetIdentity != request.dataset.identity
             ) return "terminal checkpoint dataset identity differs"
         }
+        return null
+    }
+
+    private fun progressCheckpointValidationError(
+        checkpoint: TrainingCheckpointMetadata,
+        request: TrainingRequest,
+        completedSteps: Int,
+    ): String? {
+        if (!checkpoint.finite) return "native checkpoint is not finite"
+        if (checkpoint.completedStep > completedSteps) return "native checkpoint is ahead of progress"
+        if (checkpoint.modelConfig != request.modelConfig) return "native checkpoint model configuration differs"
+        if (checkpoint.format != TrainingPlan.NICOPEDIA_L19.checkpointFormat ||
+            checkpoint.formatVersion != TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion
+        ) return "native checkpoint format differs"
+        if (checkpoint.datasetIdentity == null || request.dataset.identity == null ||
+            checkpoint.datasetIdentity != request.dataset.identity
+        ) return "native checkpoint dataset identity differs"
         return null
     }
 
@@ -453,6 +533,10 @@ class TrainingSession(
             TrainingPhase.TRAINING,
             TrainingPhase.SAVING_CHECKPOINT,
         )
+        val stopAcceptingPhases = setOf(
+            TrainingPhase.TRAINING,
+            TrainingPhase.SAVING_CHECKPOINT,
+        )
     }
 }
 
@@ -494,11 +578,19 @@ class StandaloneTrainingRepository(
     @Volatile private var selectedDataset: TrainingDataset? = selectionPersistence.loadDataset()
     @Volatile private var selectedConfig: TrainingModelConfig = TrainingModelConfig.NICOPEDIA_L19
     @Volatile private var resumeMessage: String? = null
+    @Volatile private var persistedLatestCheckpoint: TrainingCheckpointMetadata? =
+        TrainingCheckpointCatalog.sortedNewestFirst(checkpointStore.list()).firstOrNull()
     private val commandLock = Any()
+    private var datasetSelectionGeneration = 0L
     private val listeners = CopyOnWriteArrayList<(TrainingUiState) -> Unit>()
     private val sessionSubscription = session.subscribe { state ->
         runCatching {
-            if (state.lastCheckpoint != null) checkpointStore.save(state.lastCheckpoint)
+            state.lastCheckpoint?.let { checkpoint ->
+                checkpointStore.save(checkpoint)
+                persistedLatestCheckpoint = TrainingCheckpointCatalog.sortedNewestFirst(
+                    checkpointStore.list(),
+                ).firstOrNull()
+            }
         }
         runCatching { runLifecycle.onStateChanged(state) }
         runCatching { publishUi() }
@@ -513,12 +605,27 @@ class StandaloneTrainingRepository(
 
     fun snapshot(): TrainingUiState = toUiState(session.snapshot())
 
-    fun selectDataset(dataset: TrainingDataset): Boolean {
+    /** Allocates a monotonic token so a slow, stale SAF callback cannot win. */
+    fun nextDatasetSelectionToken(): Long = synchronized(commandLock) {
+        ++datasetSelectionGeneration
+    }
+
+    fun selectDataset(dataset: TrainingDataset): Boolean =
+        selectDataset(dataset, nextDatasetSelectionToken())
+
+    fun selectDataset(dataset: TrainingDataset, selectionGeneration: Long): Boolean {
         synchronized(commandLock) {
+            if (selectionGeneration < datasetSelectionGeneration) return false
             if (session.snapshot().phase in activePhases) return false
             val result = datasetStore.persistReadAccess(dataset.uri)
                 .map { persisted -> dataset.copy(identity = dataset.identity ?: persisted.identity) }
             val selected = result.getOrNull() ?: return false
+            if (selectionGeneration != datasetSelectionGeneration) {
+                if (selected.uri != selectedDataset?.uri) {
+                    runCatching { datasetStore.releaseReadAccess(selected.uri) }
+                }
+                return false
+            }
             val previous = selectedDataset
             selectedDataset = selected
             selectionPersistence.saveDataset(selected)
@@ -623,7 +730,7 @@ class StandaloneTrainingRepository(
     }
 
     private fun toUiState(state: TrainingState): TrainingUiState {
-        val checkpoint = state.lastCheckpoint
+        val checkpoint = state.lastCheckpoint ?: persistedLatestCheckpoint
         val config = latestRequest?.modelConfig ?: selectedConfig
         val progress = state.progress
         val overview = buildString {
@@ -662,9 +769,10 @@ class StandaloneTrainingRepository(
             datasetUri = selectedDataset?.uri,
             datasetDisplayName = selectedDataset?.displayName,
             canStart = state.phase !in activePhases && selectedDataset != null,
-            canStop = state.phase in activePhases,
+            canStop = state.phase in stopAcceptingPhases,
             canPause = session.canPause(),
-            canResume = session.canResume() || compatibleCheckpoint() != null,
+            canResume = session.canResume() ||
+                (state.phase !in activePhases && compatibleCheckpoint() != null),
         )
     }
 
@@ -702,7 +810,7 @@ class StandaloneTrainingRepository(
     }
 
     private fun formatSample(sample: TrainingTimingSample?): String {
-        if (sample == null) return "Forward        —\nBackward       —\nAdam           —\nHost           —"
+        if (sample == null) return "Forward        —\nBackward       —\nFwd+Backward   —\nAdam           —\nHost           —"
         fun line(label: String, value: PhaseTiming?): String {
             val backend = value?.backend?.name ?: "Unavailable"
             val ms = when (value?.backend) {
@@ -715,6 +823,7 @@ class StandaloneTrainingRepository(
         return listOf(
             line("Forward", sample.forward),
             line("Backward", sample.backward),
+            line("Fwd+Backward", sample.fusedForwardBackward),
             line("Adam", sample.adam),
             line("Host", sample.host),
         ).joinToString("\n")
@@ -743,6 +852,10 @@ class StandaloneTrainingRepository(
             TrainingPhase.SAVING_CHECKPOINT,
             TrainingPhase.PAUSED,
         )
+        val stopAcceptingPhases = setOf(
+            TrainingPhase.TRAINING,
+            TrainingPhase.SAVING_CHECKPOINT,
+        )
     }
 }
 
@@ -756,11 +869,20 @@ object StandaloneTrainingRepositoryRegistry {
         if (applicationContext !is android.content.Context) return fallback
         val appContext = applicationContext.applicationContext
         return repositories.getOrPut(appContext) {
+            val checkpointStore = AndroidTrainingCheckpointStore(appContext)
+            val backend = if (BuildConfig.PHONELM_QNN_ENABLED) {
+                NativeHtpTrainingBackend(appContext, checkpointStore)
+            } else {
+                UnavailableTrainingBackend
+            }
             StandaloneTrainingRepository(
-                session = TrainingSession(cpuMetrics = AndroidCpuProcessMetricSource()),
+                session = TrainingSession(
+                    backend = backend,
+                    cpuMetrics = AndroidCpuProcessMetricSource(),
+                ),
                 datasetStore = AndroidTrainingDatasetUriStore(appContext),
                 selectionPersistence = AndroidTrainingSelectionPersistence(appContext),
-                checkpointStore = AndroidTrainingCheckpointStore(appContext),
+                checkpointStore = checkpointStore,
                 runLifecycle = AndroidTrainingRunLifecycle(appContext),
             )
         }

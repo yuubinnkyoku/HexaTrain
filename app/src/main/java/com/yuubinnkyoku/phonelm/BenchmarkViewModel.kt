@@ -27,6 +27,12 @@ interface BenchmarkEngine {
     fun run(config: BenchmarkConfig, progress: (String) -> Unit): String
     fun requestStop()
 
+    /** Arms cancellation for the accepted-but-not-yet-entered JNI window. */
+    fun prepareRun() = Unit
+
+    /** Clears the arm when the worker was rejected or could not be queued. */
+    fun cancelPreparedRun() = Unit
+
     fun qnnStatus(): String = "qnn_status=BLOCKED_BY_QAIRT_SDK_NOT_INSTALLED"
 
     fun runMode(
@@ -37,21 +43,54 @@ interface BenchmarkEngine {
 }
 
 object NativeBenchmarkEngine : BenchmarkEngine {
+    private const val OWNER = "benchmark"
+    private val stopLock = Any()
+    private var prepared = false
+    private var pendingStop = false
+
     override fun environmentReport(): String = NativeBridge.nativeGetEnvironmentInfo()
 
     override fun run(config: BenchmarkConfig, progress: (String) -> Unit): String =
-        NativeBridge.nativeRunBenchmark(
-            backend = config.backend.nativeCode,
-            batchSize = config.batchSize,
-            dimension = config.dimension,
-            steps = config.steps,
-            warmupSteps = config.warmupSteps,
-            learningRate = config.learningRate,
-            seed = config.seed,
-            progressCallback = ProgressCallback(progress),
-        )
+        withOwnership {
+            NativeBridge.nativeRunBenchmark(
+                backend = config.backend.nativeCode,
+                batchSize = config.batchSize,
+                dimension = config.dimension,
+                steps = config.steps,
+                warmupSteps = config.warmupSteps,
+                learningRate = config.learningRate,
+                seed = config.seed,
+                progressCallback = ProgressCallback(progress),
+            )
+        }
 
-    override fun requestStop() = NativeBridge.nativeRequestStop()
+    override fun requestStop() {
+        val callNative = synchronized(stopLock) {
+            when {
+                NativeRunArbiter.isOwner(OWNER) -> true
+                prepared -> {
+                    pendingStop = true
+                    false
+                }
+                else -> false
+            }
+        }
+        if (callNative) NativeBridge.nativeRequestStop()
+    }
+
+    override fun prepareRun() {
+        synchronized(stopLock) {
+            prepared = true
+            pendingStop = false
+        }
+    }
+
+    override fun cancelPreparedRun() {
+        synchronized(stopLock) {
+            prepared = false
+            pendingStop = false
+        }
+    }
 
     override fun qnnStatus(): String = NativeBridge.nativeGetQnnStatus()
 
@@ -59,31 +98,52 @@ object NativeBenchmarkEngine : BenchmarkEngine {
         mode: ExecutionMode,
         config: BenchmarkConfig,
         progress: (String) -> Unit,
-    ): String = NativeBridge.nativeRunExecutionMode(
-        executionMode = mode.nativeCode,
-        batchSize = config.batchSize,
-        dimension = config.dimension,
-        hiddenDimension = config.hiddenDimension,
-        outputDimension = config.outputDimension,
-        steps = config.steps,
-        warmupSteps = config.warmupSteps,
-        learningRate = config.learningRate,
-        seed = config.seed,
-        sampleCount = config.sampleCount,
-        epochs = config.epochs,
-        measuredSteps = config.measuredSteps,
-        correctnessInterval = config.correctnessInterval,
-        benchmarkMode = config.benchmarkMode,
-        seedSelectionMode = config.seedSelectionMode.nativeCode,
-        trainingStabilityMode = config.trainingStabilityMode.nativeCode,
-        depthPairInitMode = config.depthPairInitMode.nativeCode,
-        checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
-        diagnosticTrajectory = config.diagnosticTrajectory,
-        diagnosticCheckpointDir = config.diagnosticCheckpointDir,
-        diagnosticResumeStep = config.diagnosticResumeStep,
-        diagnosticCheckpointInterval = config.diagnosticCheckpointInterval,
-        progressCallback = ProgressCallback(progress),
-    )
+    ): String = withOwnership {
+        NativeBridge.nativeRunExecutionMode(
+            executionMode = mode.nativeCode,
+            batchSize = config.batchSize,
+            dimension = config.dimension,
+            hiddenDimension = config.hiddenDimension,
+            outputDimension = config.outputDimension,
+            steps = config.steps,
+            warmupSteps = config.warmupSteps,
+            learningRate = config.learningRate,
+            seed = config.seed,
+            sampleCount = config.sampleCount,
+            epochs = config.epochs,
+            measuredSteps = config.measuredSteps,
+            correctnessInterval = config.correctnessInterval,
+            benchmarkMode = config.benchmarkMode,
+            seedSelectionMode = config.seedSelectionMode.nativeCode,
+            trainingStabilityMode = config.trainingStabilityMode.nativeCode,
+            depthPairInitMode = config.depthPairInitMode.nativeCode,
+            checkpointSelectionMode = config.checkpointSelectionMode.nativeCode,
+            diagnosticTrajectory = config.diagnosticTrajectory,
+            diagnosticCheckpointDir = config.diagnosticCheckpointDir,
+            diagnosticResumeStep = config.diagnosticResumeStep,
+            diagnosticCheckpointInterval = config.diagnosticCheckpointInterval,
+            progressCallback = ProgressCallback(progress),
+        )
+    }
+
+    private fun withOwnership(block: () -> String): String {
+        synchronized(stopLock) {
+            if (pendingStop) {
+                pendingStop = false
+                prepared = false
+                return "RESULT\nstatus=CANCELLED\nerror=run cancelled before JNI entry\n"
+            }
+            prepared = false
+            if (!NativeRunArbiter.tryAcquire(OWNER)) {
+                return "RESULT\nstatus=FAILED\nerror=another native run is already active\n"
+            }
+        }
+        return try {
+            block()
+        } finally {
+            NativeRunArbiter.release(OWNER)
+        }
+    }
 }
 
 class BenchmarkViewModel(
@@ -165,6 +225,11 @@ class BenchmarkViewModel(
             output.appendLine("execution_mode=${mode.name}")
             output.appendLine("backend_requested=${config.backend.name}")
             if (configurationSummary.isNotEmpty()) output.appendLine(configurationSummary)
+            // Arm the native adapter while the accepted/running state is
+            // still protected by the same lock. A lifecycle close or stop
+            // cannot otherwise slip between this state transition and the
+            // worker's JNI entry and lose its cancellation request.
+            engine.prepareRun()
         }
         requestPublish()
         runNotifications.onRunStarted(runKind(mode), config.steps.toLong())
@@ -172,6 +237,13 @@ class BenchmarkViewModel(
         worker.execute {
             var lastProgress = ""
             var terminalProgressSent = false
+            val accepted = synchronized(lock) { !closed && running }
+            if (!accepted) {
+                engine.cancelPreparedRun()
+                synchronized(lock) { running = false }
+                requestPublish()
+                return@execute
+            }
             fun forwardProgress(message: String) {
                 NativeProgressParser.parse(message)?.let { progress ->
                     val terminal = progress is RunProgress.Completed ||
@@ -287,6 +359,7 @@ class BenchmarkViewModel(
             running
         }
         if (stop) engine.requestStop()
+        if (stop) runNotifications.onProgress(RunProgress.Cancelled)
         worker.shutdown()
     }
 

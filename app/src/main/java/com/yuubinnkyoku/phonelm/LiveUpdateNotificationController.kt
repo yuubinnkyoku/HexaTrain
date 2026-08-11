@@ -44,10 +44,13 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
 
     override fun onProgress(progress: RunProgress) {
         val run = current ?: return
-        if (isDismissed(run.id)) return
-        if (!run.throttle.shouldPost(progress, System.currentTimeMillis())) return
         val finished = progress is RunProgress.Completed || progress is RunProgress.Failed || progress is RunProgress.Cancelled
-        post(run, progress, force = finished)
+        // Dismissal suppresses intermediate user-visible updates only.  A
+        // terminal event must still finish the foreground service.
+        val dismissed = isDismissed(run.id)
+        if (dismissed && !finished) return
+        if (!run.throttle.shouldPost(progress, System.currentTimeMillis())) return
+        post(run, progress, force = finished, suppressTerminalNotification = dismissed)
         if (finished) {
             current = null
         }
@@ -64,10 +67,30 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
         }.getOrDefault(false)
     }
 
-    private fun post(run: ActiveRun, event: RunProgress, force: Boolean) {
-        if (!notificationsAllowed()) return
+    private fun post(
+        run: ActiveRun,
+        event: RunProgress,
+        force: Boolean,
+        suppressTerminalNotification: Boolean = false,
+    ) {
         val finished = event is RunProgress.Completed || event is RunProgress.Failed || event is RunProgress.Cancelled
         val snapshot = run.apply(event)
+        if (!notificationsAllowed()) {
+            // Notification permission controls user-visible posts, but it
+            // must not strand the dataSync foreground service after a
+            // terminal event.
+            if (finished) {
+                LiveUpdateForegroundService.finish(
+                    appContext,
+                    run.id,
+                    "PhoneLM ${snapshot.kind} ${snapshot.terminalTitle}",
+                    snapshot.contentText(),
+                    snapshot.detailText(),
+                    showTerminalNotification = false,
+                )
+            }
+            return
+        }
         val builder = Notification.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(if (finished) "PhoneLM ${snapshot.kind} ${snapshot.terminalTitle}" else "PhoneLMを実行中")
@@ -106,6 +129,7 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
                 if (finished) "PhoneLM ${snapshot.kind} ${snapshot.terminalTitle}" else "PhoneLMを実行中",
                 snapshot.contentText(),
                 snapshot.detailText(),
+                showTerminalNotification = !suppressTerminalNotification,
             )
         } else {
             manager.notify(run.id, notification)

@@ -18,6 +18,7 @@ class LiveUpdateForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_FINISH) {
             val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
+            val showTerminalNotification = intent.getBooleanExtra(EXTRA_SHOW_TERMINAL, true)
             // A terminal command from an older run must not stop a newer run's
             // foreground service. Controllers use process-wide unique ids.
             if (notificationId <= 0 || notificationId != activeNotificationId) {
@@ -25,7 +26,7 @@ class LiveUpdateForegroundService : Service() {
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
             activeNotificationId = 0
-            if (notificationId > 0) {
+            if (notificationId > 0 && showTerminalNotification) {
                 val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
                 val contentIntent = launchIntent?.let {
                     PendingIntent.getActivity(
@@ -89,6 +90,7 @@ class LiveUpdateForegroundService : Service() {
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TEXT = "text"
         private const val EXTRA_SUBTEXT = "subtext"
+        private const val EXTRA_SHOW_TERMINAL = "show_terminal_notification"
         private const val CHANNEL_ID = "phonelm_runs"
 
         fun start(context: Context, notificationId: Int, kind: String) {
@@ -106,6 +108,7 @@ class LiveUpdateForegroundService : Service() {
             title: String,
             text: String,
             subtext: String,
+            showTerminalNotification: Boolean = true,
         ) {
             context.startService(
                 Intent(context, LiveUpdateForegroundService::class.java)
@@ -113,7 +116,8 @@ class LiveUpdateForegroundService : Service() {
                     .putExtra(EXTRA_NOTIFICATION_ID, notificationId)
                     .putExtra(EXTRA_TITLE, title)
                     .putExtra(EXTRA_TEXT, text)
-                    .putExtra(EXTRA_SUBTEXT, subtext),
+                    .putExtra(EXTRA_SUBTEXT, subtext)
+                    .putExtra(EXTRA_SHOW_TERMINAL, showTerminalNotification),
             )
         }
     }

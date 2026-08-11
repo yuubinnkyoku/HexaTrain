@@ -257,7 +257,7 @@ $pwshCandidates = @(
     (Get-Command pwsh -ErrorAction SilentlyContinue).Source
 ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
 if (-not $pwshCandidates) { throw "PWSH_NOT_FOUND" }
-$pwshExe = $pwshCandidates[0]
+$pwshExe = @($pwshCandidates)[0]
 & $pwshExe -NoProfile -File (Join-Path $Root "scripts\run_nicopedia_real_text_pilot.ps1") -SelfTest
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia real-text pipeline self-tests failed"

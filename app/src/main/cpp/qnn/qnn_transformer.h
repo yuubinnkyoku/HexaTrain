@@ -6,6 +6,7 @@
 #include "../tiny_language_model_cpu.h"
 #include "../training_engine.h"
 #include "qnn_runtime.h"
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,7 +14,7 @@ namespace phonelm::qnn {
 std::string runTransformerExperiment(ExecutionMode mode);
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
-    const LogSink& progress);
+    const LogSink& progress, std::atomic_bool* stopRequested = nullptr);
 // Nicopedia byte-level generation on the HTP graph (device-side loop).
 // `checkpointPath`/`promptPath` are app-private files; the checkpoint is the
 // NPRTCKPTV1 private checkpoint written by the HTP training milestone and its

@@ -47,4 +47,45 @@ class TrainingRepositoryTest {
         assertTrue(state.timingText.contains("Unavailable"))
         repository.close()
     }
+
+    @Test fun persistedCheckpointIsVisibleAfterRepositoryRecreation() {
+        val identity = "NPRTBYTEV1;context=32;vocab=256;records=1;bytes=70;sha256=test"
+        val checkpoint = TrainingCheckpointMetadata(
+            uri = "native-checkpoint:run:250",
+            completedStep = 250,
+            modelConfig = TrainingPlan.NICOPEDIA_L19.modelConfig,
+            format = TrainingPlan.NICOPEDIA_L19.checkpointFormat,
+            formatVersion = TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion,
+            finite = true,
+            createdAtMs = 1L,
+            datasetIdentity = identity,
+        )
+        val checkpointStore = InMemoryTrainingCheckpointStore().apply { save(checkpoint) }
+        val repository = StandaloneTrainingRepository(checkpointStore = checkpointStore)
+        assertTrue(repository.selectDataset(TrainingDataset("content://provider/cache", identity = identity)))
+        val state = repository.snapshot()
+        assertEquals(250, state.lastCheckpoint?.completedStep)
+        assertTrue(state.canResume)
+        repository.close()
+    }
+
+    @Test fun staleDatasetSelectionTokenCannotOverwriteNewerSelection() {
+        val repository = StandaloneTrainingRepository()
+        val oldToken = repository.nextDatasetSelectionToken()
+        val newToken = repository.nextDatasetSelectionToken()
+        assertFalse(
+            repository.selectDataset(
+                TrainingDataset("content://provider/old", "old.bin"),
+                oldToken,
+            ),
+        )
+        assertTrue(
+            repository.selectDataset(
+                TrainingDataset("content://provider/new", "new.bin"),
+                newToken,
+            ),
+        )
+        assertEquals("content://provider/new", repository.snapshot().datasetUri)
+        repository.close()
+    }
 }
