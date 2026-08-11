@@ -14,18 +14,34 @@
 ## 完了前の検証
 
 変更や検証報告の前に [verification.md](docs/agent/verification.md) を読む。
-`verify_local.ps1` は全変更に共通するローカル基礎ゲートであり、
-対象に応じてQNN build、実機試験、公開bundleの追加gateが必要である。
+検証は変更範囲と作業段階に応じて段階的に行う。
+開発・反復中は、変更箇所に対応するtargeted testを優先し、
+重い全体gateを変更ごとに反復しない。
 
-```powershell
-.\scripts\verify_local.ps1
-```
+途中確認では原則として、
+- `git diff --check`
+- 関連unit/host test
+- 変更対象のbuild / validator
+を実行する。
 
-全必須工程がPASSするまで完了と報告しない。
+`verify_local.ps1` のfull gateは原則として、
+- マイルストーン完了時
+- mainへの統合前
+- push前
+- ユーザーがformal verificationを明示的に要求した場合
+に実行する。
+
+途中commitや局所修正ではfull gate未実施でも完了可能だが、
+未実施であることと、実行済みのtargeted testを報告する。
+
+最終formal verificationでは対象に応じてQNN build、実機試験、
+公開bundle等の追加gateも実行し、必須工程がPASSするまで
+formal verification完了とは報告しない。
+
 検証不能なら未実行工程、原因、再現コマンドを示して `BLOCKED` とし、
 環境を勝手にインストール・変更しない。
 `-SkipAndroidBuild` は docs/scripts-only 変更の最終確認に使用できるが、
-Android/JNI/Gradle/CMake/APK packaging変更では途中確認専用である。
+Android/JNI/Gradle/CMake/APK packaging変更ではtargetedなbuild/testと併用する。
 incremental buildを既定とし、必要な場合だけ `-Clean` を使う。
 
 QNN node/tensor変更では `run_host_tests.ps1` のshape validatorを必須とし、
@@ -48,8 +64,11 @@ QNN有効操作ではrootとBuild IDを明示し、正本との一致をfail clo
 SDKをインストール・移動・変更せず停止する。
 `QAIRT_CORE_INCOMPLETE` はfatal、optional tools/samplesだけの
 `QAIRT_INVENTORY_INCOMPLETE` はadvisoryである。
-正式gateは固定引数付き `verify_local.ps1 -WithQairt` と
+QNN/QAIRT変更の最終formal gateは固定引数付き
+`verify_local.ps1 -WithQairt` と
 `audit_qnn_apk.ps1` のABI/hash/path/2.47混入監査であり、advisoryだけでは停止しない。
+開発中の局所変更では、影響範囲のtargeted QNN build/testを先に用い、
+このformal gateを変更ごとに反復する必要はない。
 引数なし自動探索は読み取り専用inventory調査に限る。self-testのtemp内偽SDKは例外とする。
 
 ## 実機Tier
