@@ -17,4 +17,21 @@
     <string name="qnn_htp_forward">HTP forward</string>
     <string name="qnn_htp_forward_dw">HTP forward+dW</string>
     <string name="qnn_status_loading">QNN status loading…</string>
+    <string name="standalone_training_title">Standalone HTP training</string>
+    <string name="training_overview_initial">Training overview: awaiting configuration</string>
+    <string name="training_timing_initial">Timing: not started</string>
+    <string name="training_activity_initial">Activity: idle</string>
+    <string name="training_checkpoint_initial">Checkpoint: none</string>
+    <string name="training_dataset">Training dataset</string>
+    <string name="training_dataset_not_selected">No document selected</string>
+    <string name="training_select_dataset">Select document</string>
+    <string name="training_start">Start</string>
+    <string name="training_stop">Stop</string>
+    <string name="training_pause">Pause</string>
+    <string name="training_resume">Resume</string>
+    <string name="training_start_over">Start over</string>
+    <string name="training_start_over_title">Start over?</string>
+    <string name="training_start_over_message">This starts a new training session. Existing checkpoints are preserved and are not selected for the new run. The selected document remains available.</string>
+    <string name="training_start_over_confirm">Start over</string>
+    <string name="training_dataset_access_failed">The selected document could not be retained.</string>
 </resources>

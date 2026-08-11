@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/standalone_training_title"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/trainingOverviewText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/training_overview_initial"
+            android:textStyle="bold" />
+
+        <ProgressBar
+            android:id="@+id/trainingProgressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:max="100"
+            android:progress="0" />
+
+        <TextView
+            android:id="@+id/trainingTimingText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="@string/training_timing_initial"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/trainingActivityText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="@string/training_activity_initial"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/trainingCheckpointText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="@string/training_checkpoint_initial"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/trainingErrorText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#B00020"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/training_dataset"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/trainingDatasetUriText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="@string/training_dataset_not_selected"
+            android:textIsSelectable="true"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/selectTrainingDatasetButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/training_select_dataset"
+            android:textAllCaps="false" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/startTrainingButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/training_start"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/stopTrainingButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/training_stop"
+                android:textAllCaps="false" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/pauseTrainingButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/training_pause"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/resumeTrainingButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/training_resume"
+                android:textAllCaps="false" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/startOverTrainingButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/training_start_over"
+            android:textAllCaps="false" />
+    </LinearLayout>
+</ScrollView>
