@@ -27,8 +27,8 @@ UI -> TrainingRequest -> TrainingSession -> JNI adapter -> native HTP runtime
 ```
 
 Only one process-wide training session may execute at once. A second start is
-rejected with `ALREADY_RUNNING`; it must not attach to or cancel the active
-native run.
+rejected with a structured `Failed` terminal summary; it must not attach to or
+cancel the active native run.
 
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
@@ -47,8 +47,8 @@ The JNI adapter maps that immutable snapshot to the native `TrainingConfig`.
 Neither defaults in the UI nor values reconstructed after process death may
 silently replace fields in the snapshot. Native validation remains authoritative
 for resource bounds and graph-supported configurations. A disagreement between
-the Kotlin snapshot, JNI mapping, and native acceptance is a terminal
-`FAILED_CONFIG`, not a fallback to another model or backend.
+the Kotlin snapshot, JNI mapping, and native acceptance is a terminal `Failed`
+result with a configuration summary, not a fallback to another model or backend.
 
 ## Dataset URI and SAF persistence
 
@@ -144,7 +144,7 @@ Use the wording “the learning-step numerical operations were executed by the
 QNN HTP graph” only when the run record supports it. Do not claim NPU-only
 training, complete CPU non-utilization, or QNN automatic differentiation.
 HTP creation failure, unavailable required symbols, a nonzero QNN return code,
-or a non-finite required tensor ends the run as `FAILED_RUNTIME`; there is no
+or a non-finite required tensor ends the run as a failed terminal result; there is no
 automatic QAIRT-version, backend, or CPU fallback.
 
 The CPU process percentage is a non-privileged process CPU-time delta divided
@@ -165,10 +165,13 @@ state.
 Resume is fail-closed. Before native load, verify all of: V2 format, finite
 checkpoint health, model and tokenizer compatibility, optimizer identity,
 dataset digest/order identity, seed, requested resume step, and existence of a
-durably completed checkpoint record. Native codec validation then remains a
-second required gate. Any mismatch, partial write, missing record, or failed
-validation is `FAILED_RESUME_INCOMPATIBLE`; starting from scratch requires an
-explicit new request.
+persisted checkpoint record with a resolvable native payload. Native codec
+validation then remains a second required gate. Any mismatch, partial write,
+missing record, or failed validation returns a typed terminal `Failed` result
+with a resume-incompatibility summary; starting from scratch requires an
+explicit new request. The Android writer currently guarantees atomic
+replacement and flush/rename behavior, not power-loss durability beyond the
+platform filesystem contract.
 
 The integration point is the existing native V2 save/load contract, not a new
 Kotlin checkpoint serializer. This branch has an app-managed checkpoint
