@@ -28,7 +28,9 @@ object NoOpRunNotificationSink : RunNotificationSink {
 class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
     private val appContext = context.applicationContext
     private val manager = appContext.getSystemService(NotificationManager::class.java)
-    private val sequence = AtomicInteger(10_000)
+    // Notification ids are process-wide because benchmark and standalone
+    // controllers share one foreground service.
+    private val sequence = NEXT_ID
     private var current: ActiveRun? = null
 
     override fun onRunStarted(kind: String, totalSteps: Long?) {
@@ -175,6 +177,7 @@ class LiveUpdateNotificationController(context: Context) : RunNotificationSink {
     }
 
     companion object {
+        private val NEXT_ID = AtomicInteger(10_000)
         private const val CHANNEL_ID = "phonelm_runs"
         private const val PREFS = "phonelm_live_update"
         const val EXTRA_RUN_ID = "run_id"

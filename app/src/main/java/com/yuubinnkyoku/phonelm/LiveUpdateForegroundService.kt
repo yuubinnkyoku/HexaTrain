@@ -11,12 +11,20 @@ import android.os.IBinder
 
 /** Keeps user-started long runs out of the cached-empty process state. */
 class LiveUpdateForegroundService : Service() {
+    private var activeNotificationId: Int = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_FINISH) {
             val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
+            // A terminal command from an older run must not stop a newer run's
+            // foreground service. Controllers use process-wide unique ids.
+            if (notificationId <= 0 || notificationId != activeNotificationId) {
+                return START_NOT_STICKY
+            }
             stopForeground(STOP_FOREGROUND_REMOVE)
+            activeNotificationId = 0
             if (notificationId > 0) {
                 val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
                 val contentIntent = launchIntent?.let {
@@ -46,6 +54,7 @@ class LiveUpdateForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        activeNotificationId = notificationId
         val kind = intent?.getStringExtra(EXTRA_KIND) ?: "run"
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(

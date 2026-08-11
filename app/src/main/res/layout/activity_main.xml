@@ -12,6 +12,13 @@
         android:textSize="18sp"
         android:textStyle="bold" />
 
+    <Button
+        android:id="@+id/openStandaloneTrainingButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/standalone_training_title"
+        android:textAllCaps="false" />
+
     <TextView
         android:id="@+id/qnnStatusText"
         android:layout_width="match_parent"
