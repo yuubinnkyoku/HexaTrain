@@ -2,6 +2,7 @@ package com.yuubinnkyoku.phonelm
 
 import android.app.Activity
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.content.pm.ApplicationInfo
@@ -40,6 +41,10 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         QnnEnvironment.prepare(this)
+
+        findViewById<Button>(R.id.openStandaloneTrainingButton).setOnClickListener {
+            startActivity(Intent(this, StandaloneTrainingActivity::class.java))
+        }
 
         batchSizeInput = findViewById(R.id.batchSizeInput)
         dimensionInput = findViewById(R.id.dimensionInput)

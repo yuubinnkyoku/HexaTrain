@@ -42,6 +42,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".StandaloneTrainingActivity"
+            android:configChanges="orientation|screenSize"
+            android:exported="false" />
         <receiver android:name=".LiveUpdateDismissReceiver" android:exported="false" />
         <service
             android:name=".LiveUpdateForegroundService"
