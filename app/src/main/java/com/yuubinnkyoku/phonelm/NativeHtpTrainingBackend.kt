@@ -522,6 +522,7 @@ class NativeHtpTrainingBackend(
         val status = fields.string("status") ?: "FAILED"
         if (status == "SUCCESS") {
             val required = mapOf(
+                "backend" to "HTP",
                 "api_trace_backend_requested" to "HTP",
                 "api_trace_graph_execute_failure_count" to "0",
                 "api_trace_last_qnn_result" to "0",
@@ -596,7 +597,10 @@ class NativeHtpTrainingBackend(
             qnnReturnCodeSuccess = qnn,
             outputTensorsFinite = finite,
             cpuFallback = fallback,
-            backend = fields.string("backend") ?: "HTP",
+            // Missing backend identity is deliberately not promoted to HTP;
+            // progress may still be displayed, but all HTP timing/evidence
+            // gates must fail closed until native says backend=HTP explicitly.
+            backend = fields.string("backend"),
             error = fields.string("qnn_error") ?: fields.string("error"),
         )
     }

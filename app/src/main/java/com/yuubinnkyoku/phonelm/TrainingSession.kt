@@ -4,6 +4,7 @@ import java.io.Closeable
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 /** Non-Android asynchronous session. Observers are invoked on the worker thread. */
 class TrainingSession(
@@ -578,18 +579,13 @@ class StandaloneTrainingRepository(
     @Volatile private var selectedDataset: TrainingDataset? = selectionPersistence.loadDataset()
     @Volatile private var selectedConfig: TrainingModelConfig = TrainingModelConfig.NICOPEDIA_L19
     @Volatile private var resumeMessage: String? = null
-    @Volatile private var persistedLatestCheckpoint: TrainingCheckpointMetadata? =
-        TrainingCheckpointCatalog.sortedNewestFirst(checkpointStore.list()).firstOrNull()
     private val commandLock = Any()
-    private var datasetSelectionGeneration = 0L
+    private val datasetSelectionGeneration = AtomicLong(0L)
     private val listeners = CopyOnWriteArrayList<(TrainingUiState) -> Unit>()
     private val sessionSubscription = session.subscribe { state ->
         runCatching {
             state.lastCheckpoint?.let { checkpoint ->
                 checkpointStore.save(checkpoint)
-                persistedLatestCheckpoint = TrainingCheckpointCatalog.sortedNewestFirst(
-                    checkpointStore.list(),
-                ).firstOrNull()
             }
         }
         runCatching { runLifecycle.onStateChanged(state) }
@@ -606,21 +602,19 @@ class StandaloneTrainingRepository(
     fun snapshot(): TrainingUiState = toUiState(session.snapshot())
 
     /** Allocates a monotonic token so a slow, stale SAF callback cannot win. */
-    fun nextDatasetSelectionToken(): Long = synchronized(commandLock) {
-        ++datasetSelectionGeneration
-    }
+    fun nextDatasetSelectionToken(): Long = datasetSelectionGeneration.incrementAndGet()
 
     fun selectDataset(dataset: TrainingDataset): Boolean =
         selectDataset(dataset, nextDatasetSelectionToken())
 
     fun selectDataset(dataset: TrainingDataset, selectionGeneration: Long): Boolean {
         synchronized(commandLock) {
-            if (selectionGeneration < datasetSelectionGeneration) return false
+            if (selectionGeneration < datasetSelectionGeneration.get()) return false
             if (session.snapshot().phase in activePhases) return false
             val result = datasetStore.persistReadAccess(dataset.uri)
                 .map { persisted -> dataset.copy(identity = dataset.identity ?: persisted.identity) }
             val selected = result.getOrNull() ?: return false
-            if (selectionGeneration != datasetSelectionGeneration) {
+            if (selectionGeneration != datasetSelectionGeneration.get()) {
                 if (selected.uri != selectedDataset?.uri) {
                     runCatching { datasetStore.releaseReadAccess(selected.uri) }
                 }
@@ -688,7 +682,13 @@ class StandaloneTrainingRepository(
                 checkpointStore.list(), selectedConfig,
                 plan.checkpointFormat, plan.checkpointFormatVersion, dataset.identity,
                 expectedTotalSteps = plan.targetSteps,
-            )
+            ).let { selection ->
+                if (selection is TrainingCheckpointSelection.Selected &&
+                    !checkpointStore.isUsableForResume(selection.checkpoint)
+                ) {
+                    TrainingCheckpointSelection.Incompatible("checkpoint payload is unavailable")
+                } else selection
+            }
         }
         val checkpoint = (selection as? TrainingCheckpointSelection.Selected)?.checkpoint
         if (checkpoint == null) {
@@ -730,7 +730,10 @@ class StandaloneTrainingRepository(
     }
 
     private fun toUiState(state: TrainingState): TrainingUiState {
-        val checkpoint = state.lastCheckpoint ?: persistedLatestCheckpoint
+        val compatible = compatibleCheckpoint()
+        val checkpoint = state.lastCheckpoint
+            ?.takeIf(::isDisplayableCheckpoint)
+            ?: compatible
         val config = latestRequest?.modelConfig ?: selectedConfig
         val progress = state.progress
         val overview = buildString {
@@ -772,7 +775,7 @@ class StandaloneTrainingRepository(
             canStop = state.phase in stopAcceptingPhases,
             canPause = session.canPause(),
             canResume = session.canResume() ||
-                (state.phase !in activePhases && compatibleCheckpoint() != null),
+                (state.phase !in activePhases && compatible != null),
         )
     }
 
@@ -784,7 +787,21 @@ class StandaloneTrainingRepository(
             checkpointStore.list(), selectedConfig,
             plan.checkpointFormat, plan.checkpointFormatVersion, identity,
             expectedTotalSteps = plan.targetSteps,
-        ) as? TrainingCheckpointSelection.Selected)?.checkpoint
+        ) as? TrainingCheckpointSelection.Selected)?.checkpoint?.takeIf {
+            checkpointStore.isUsableForResume(it)
+        }
+    }
+
+    private fun isDisplayableCheckpoint(checkpoint: TrainingCheckpointMetadata): Boolean {
+        val dataset = selectedDataset ?: return false
+        val plan = TrainingPlan.NICOPEDIA_L19
+        return checkpoint.finite &&
+            checkpoint.modelConfig == selectedConfig &&
+            checkpoint.format == plan.checkpointFormat &&
+            checkpoint.formatVersion == plan.checkpointFormatVersion &&
+            checkpoint.datasetIdentity != null &&
+            checkpoint.datasetIdentity == dataset.identity &&
+            checkpointStore.isUsableForResume(checkpoint)
     }
 
     private fun formatTiming(timing: TrainingTiming?): String {
