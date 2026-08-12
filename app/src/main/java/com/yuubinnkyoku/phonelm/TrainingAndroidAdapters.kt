@@ -3,7 +3,9 @@ package com.yuubinnkyoku.phonelm
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Debug
 import android.os.Process
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import java.util.Locale
 
@@ -121,7 +123,9 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
     }
 
     override fun save(metadata: TrainingCheckpointMetadata) {
-        val next = list().filterNot { it.uri == metadata.uri }.toMutableList().apply { add(metadata) }
+        val existing = list()
+        if (existing.any { it.uri == metadata.uri && it.completedStep == metadata.completedStep }) return
+        val next = existing.filterNot { it.uri == metadata.uri }.toMutableList().apply { add(metadata) }
         check(prefs.edit().putStringSet(KEY_ENTRIES, next.map(::encode).toSet()).commit()) {
             "checkpoint metadata could not be persisted"
         }
@@ -223,7 +227,22 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
 }
 
 class AndroidCpuProcessMetricSource : CpuProcessMetricSource {
-    override fun read(): CpuProcessMetrics = CpuProcessMetrics(Process.getElapsedCpuTime())
+    private var lastMemoryReadAtMs = -MEMORY_READ_INTERVAL_MS
+    private var cachedMemoryBytes: Long? = null
+
+    @Synchronized
+    override fun read(): CpuProcessMetrics {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastMemoryReadAtMs >= MEMORY_READ_INTERVAL_MS) {
+            cachedMemoryBytes = runCatching {
+                Debug.getPss().takeIf { it >= 0 }?.toLong()?.times(1024L)
+            }.getOrNull()
+            lastMemoryReadAtMs = now
+        }
+        return CpuProcessMetrics(Process.getElapsedCpuTime(), memoryBytes = cachedMemoryBytes)
+    }
+
+    private companion object { const val MEMORY_READ_INTERVAL_MS = 1_000L }
 }
 
 /** Reuses the existing user-run notification and dataSync foreground service. */

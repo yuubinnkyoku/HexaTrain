@@ -21,6 +21,7 @@ class TrainingSession(
     private var closed = false
     private var nextRunId = 0L
     private var activeRunId = 0L
+    private var dashboardRecorder = TrainingDashboardRecorder(0)
     private val listeners = CopyOnWriteArrayList<TrainingStateListener>()
 
     /** Compatibility setter for existing tests; repositories use [subscribe]. */
@@ -70,7 +71,17 @@ class TrainingSession(
             } else {
                 runId = ++nextRunId
                 activeRunId = runId
-                state = TrainingState(TrainingPhase.PREPARING, TrainingProgress(0, request.totalSteps))
+                val runStartStep = request.resumeFrom?.completedStep ?: 0
+                dashboardRecorder = TrainingDashboardRecorder(runStartStep).apply {
+                    recordPhase(TrainingPhase.PREPARING, runStartStep)
+                    if (request.resumeFrom != null) recordResume(runStartStep)
+                }
+                val progress = TrainingProgress(runStartStep, request.totalSteps)
+                state = TrainingState(
+                    TrainingPhase.PREPARING,
+                    progress,
+                    dashboard = dashboardRecorder.snapshot(progress, null),
+                )
             }
         }
         notifyListeners()
@@ -166,17 +177,31 @@ class TrainingSession(
         val startedAt = clock.elapsedRealtimeMs()
         val cpuAtStart = cpuMetrics.read()
         val accumulator = TimingAccumulator()
+        val dashboard = synchronized(lock) { dashboardRecorder }
         var latestCheckpoint: TrainingCheckpointMetadata? = null
         var latestHtpWindow: HtpActivityWindow? = null
         var latestProgress: TrainingBackendProgress? = null
         var malformedProgress: String? = null
-        publish(TrainingState(TrainingPhase.INITIALIZING_HTP, TrainingProgress(0, request.totalSteps)), runId)
+        val initializingProgress = TrainingProgress(request.resumeFrom?.completedStep ?: 0, request.totalSteps)
+        dashboard.recordPhase(TrainingPhase.INITIALIZING_HTP, initializingProgress.completedSteps)
+        publish(
+            TrainingState(
+                TrainingPhase.INITIALIZING_HTP,
+                initializingProgress,
+                dashboard = dashboard.snapshot(initializingProgress, null),
+            ),
+            runId,
+        )
 
         val result = try {
             backend.run(request) { progress ->
                 if (!acceptingProgress(runId)) return@run
                 try {
-                    val validation = progressValidationError(progress, request.totalSteps)
+                    val validation = progressValidationError(
+                        progress,
+                        request.totalSteps,
+                        request.resumeFrom?.completedStep ?: 0,
+                    )
                     if (validation != null) {
                         malformedProgress = validation
                         runCatching { backend.requestStop() }
@@ -214,22 +239,31 @@ class TrainingSession(
                     }
                     latestProgress = trusted
                     latestCheckpoint = trusted.checkpoint ?: latestCheckpoint
-                    latestHtpWindow = trusted.htpActivity ?: latestHtpWindow
+                    // Each progress record owns its observation window. Do not
+                    // carry a previous authoritative HTP ratio into a record
+                    // whose timing was stripped by the fail-closed evidence gate.
+                    latestHtpWindow = trusted.htpActivity
                     accumulator.add(
                         trusted.timingSample,
                         trusted.checkpointIoMs?.toDouble(),
                         trusted.timingSampleWeight,
                     )
                     val phase = trusted.phase.takeIf { it in progressPhases } ?: TrainingPhase.TRAINING
-                    publish(
+                    val timing = timingSnapshot(
+                        startedAt, clock.elapsedRealtimeMs(), latestHtpWindow,
+                        cpuAtStart, cpuMetrics.read(), latestProgress, accumulator,
+                    )
+                    val stateProgress = TrainingProgress(trusted.completedSteps, trusted.totalSteps, trusted.loss)
+                    dashboard.recordProgress(trusted, timing)
+                    dashboard.recordPhase(phase, trusted.completedSteps)
+                    publishProgress(
                         TrainingState(
                             phase = phase,
-                            progress = TrainingProgress(trusted.completedSteps, trusted.totalSteps, trusted.loss),
-                            timing = timingSnapshot(
-                                startedAt, clock.elapsedRealtimeMs(), latestHtpWindow,
-                                cpuAtStart, cpuMetrics.read(), latestProgress, accumulator,
-                            ),
+                            progress = stateProgress,
+                            timing = timing,
                             lastCheckpoint = latestCheckpoint,
+                            runtimeEvidence = trusted.runtimeEvidence,
+                            dashboard = dashboard.snapshot(stateProgress, timing),
                         ),
                         runId,
                     )
@@ -271,24 +305,43 @@ class TrainingSession(
         val trustedFinalProgress = finalProgress
             ?.takeIf { finalValidationError == null }
             ?.withTrustedTiming(effectiveResult.runtimeEvidenceOrNull())
+        val terminalResultEvidence = effectiveResult.runtimeEvidenceOrNull()
         val terminalTiming = safeTimingSnapshot(
             startedAt = startedAt,
             endedAt = runCatching { clock.elapsedRealtimeMs() }.getOrDefault(startedAt),
-            htpWindow = if (finalValidationError == null) {
-                effectiveResult.htpActivityOrNull()
-                    ?.takeIf { effectiveResult.runtimeEvidenceOrNull()?.isAuthoritativelyHtp == true }
-                    ?: latestHtpWindow
-            } else latestHtpWindow,
+            // Terminal current activity is present only when the terminal
+            // payload itself supplies both an observation and authoritative
+            // HTP evidence. The last good window remains in dashboard history.
+            htpWindow = effectiveResult.htpActivityOrNull()
+                ?.takeIf { finalValidationError == null && terminalResultEvidence?.isAuthoritativelyHtp == true },
             cpuAtStart = cpuAtStart,
             cpuAtEnd = runCatching { cpuMetrics.read() }.getOrNull(),
             progress = trustedFinalProgress ?: latestProgress,
             accumulator = accumulator,
         )
+        // Terminal payloads are authoritative. Never promote an earlier
+        // successful progress sample when terminal evidence is missing,
+        // mismatched, or explicitly failed.
+        val terminalEvidence = terminalResultEvidence
+        dashboard.recordRuntimeEvidence(
+            trustedFinalProgress?.completedSteps ?: latestProgress?.completedSteps ?: request.resumeFrom?.completedStep ?: 0,
+            terminalEvidence,
+        )
+        trustedFinalProgress?.let { dashboard.recordProgress(it, terminalTiming, terminalEvidence) }
+        fun terminalDashboard(
+            phase: TrainingPhase,
+            progress: TrainingProgress?,
+            error: String? = null,
+        ): TrainingDashboardSnapshot {
+            if (error != null) dashboard.recordError(progress?.completedSteps, error)
+            dashboard.recordPhase(phase, progress?.completedSteps)
+            return dashboard.snapshot(progress, terminalTiming)
+        }
         when (effectiveResult) {
             is TrainingBackendResult.Completed -> {
                 val invalid = finalValidationError
                 if (invalid != null) {
-                    publish(TrainingState(TrainingPhase.ERROR, message = invalid, timing = terminalTiming, lastCheckpoint = latestCheckpoint), runId)
+                    publish(TrainingState(TrainingPhase.ERROR, message = invalid, timing = terminalTiming, lastCheckpoint = latestCheckpoint, runtimeEvidence = terminalEvidence, dashboard = terminalDashboard(TrainingPhase.ERROR, latestProgress?.let { TrainingProgress(it.completedSteps, it.totalSteps, it.loss) }, invalid)), runId)
                 } else {
                     publish(
                         TrainingState(
@@ -296,6 +349,8 @@ class TrainingSession(
                             TrainingProgress(effectiveResult.finalProgress.completedSteps, request.totalSteps, effectiveResult.finalProgress.loss),
                             timing = terminalTiming,
                             lastCheckpoint = effectiveResult.finalProgress.checkpoint ?: latestCheckpoint,
+                            runtimeEvidence = terminalEvidence,
+                            dashboard = terminalDashboard(TrainingPhase.COMPLETED, TrainingProgress(effectiveResult.finalProgress.completedSteps, request.totalSteps, effectiveResult.finalProgress.loss)),
                         ),
                         runId,
                     )
@@ -304,7 +359,7 @@ class TrainingSession(
             is TrainingBackendResult.Cancelled -> {
                 val invalid = finalValidationError
                 if (invalid != null) {
-                    publish(TrainingState(TrainingPhase.ERROR, message = invalid, timing = terminalTiming, lastCheckpoint = latestCheckpoint), runId)
+                    publish(TrainingState(TrainingPhase.ERROR, message = invalid, timing = terminalTiming, lastCheckpoint = latestCheckpoint, runtimeEvidence = terminalEvidence, dashboard = terminalDashboard(TrainingPhase.ERROR, latestProgress?.let { TrainingProgress(it.completedSteps, it.totalSteps, it.loss) }, invalid)), runId)
                 } else {
                     publish(
                         TrainingState(
@@ -312,6 +367,8 @@ class TrainingSession(
                             effectiveResult.finalProgress?.let { TrainingProgress(it.completedSteps, request.totalSteps, it.loss) },
                             timing = terminalTiming,
                             lastCheckpoint = effectiveResult.finalProgress?.checkpoint ?: latestCheckpoint,
+                            runtimeEvidence = terminalEvidence,
+                            dashboard = terminalDashboard(TrainingPhase.INTERRUPTED, effectiveResult.finalProgress?.let { TrainingProgress(it.completedSteps, request.totalSteps, it.loss) }),
                         ),
                         runId,
                     )
@@ -323,6 +380,8 @@ class TrainingSession(
                     message = effectiveResult.reason,
                     timing = terminalTiming,
                     lastCheckpoint = latestCheckpoint,
+                    runtimeEvidence = terminalEvidence,
+                    dashboard = terminalDashboard(TrainingPhase.ERROR, latestProgress?.let { TrainingProgress(it.completedSteps, it.totalSteps, it.loss) }, effectiveResult.reason),
                 ),
                 runId,
             )
@@ -342,7 +401,16 @@ class TrainingSession(
         val accepted = synchronized(lock) {
             if (closed || activeRunId != runId || state.phase !in expected) false
             else {
-                state = state.copy(phase = phase, message = message)
+                val step = state.progress?.completedSteps
+                if (phase == TrainingPhase.TRAINING && TrainingPhase.PAUSED in expected && step != null) {
+                    dashboardRecorder.recordResume(step)
+                }
+                dashboardRecorder.recordPhase(phase, step)
+                state = state.copy(
+                    phase = phase,
+                    message = message,
+                    dashboard = dashboardRecorder.snapshot(state.progress, state.timing),
+                )
                 true
             }
         }
@@ -350,9 +418,14 @@ class TrainingSession(
         return accepted
     }
 
-    private fun progressValidationError(progress: TrainingBackendProgress, totalSteps: Int): String? = when {
+    private fun progressValidationError(
+        progress: TrainingBackendProgress,
+        totalSteps: Int,
+        minimumCompletedSteps: Int = 0,
+    ): String? = when {
         progress.totalSteps != totalSteps -> "native progress totalSteps does not match the request"
         progress.completedSteps !in 0..totalSteps -> "native progress step is outside the requested range"
+        progress.completedSteps < minimumCompletedSteps -> "native progress step is before the resume checkpoint"
         progress.loss != null && !progress.loss.isFinite() -> "native progress loss is non-finite"
         progress.currentStepMs != null && progress.currentStepMs < 0L -> "native current step timing is negative"
         progress.averageStepMs != null && (!progress.averageStepMs.isFinite() || progress.averageStepMs < 0.0) -> "native average step timing is invalid"
@@ -370,7 +443,11 @@ class TrainingSession(
         runtimeEvidence: TrainingRuntimeEvidence?,
         requireTargetReached: Boolean,
     ): String? {
-        progressValidationError(progress, request.totalSteps)?.let { return it }
+        progressValidationError(
+            progress,
+            request.totalSteps,
+            request.resumeFrom?.completedStep ?: 0,
+        )?.let { return it }
         if (requireTargetReached && progress.completedSteps != request.totalSteps) {
             return "training completed before reaching the requested target step"
         }
@@ -485,7 +562,24 @@ class TrainingSession(
             if (runtimeEvidence != null && progressEvidence != null && runtimeEvidence != progressEvidence) null
             else runtimeEvidence ?: progressEvidence
         }
-        is TrainingBackendResult.Failed -> null
+        is TrainingBackendResult.Failed -> runtimeEvidence
+    }
+
+    /**
+     * Re-check the session phase at the publication boundary. A progress
+     * callback may already be in flight while pause() changes the state; that
+     * callback remains useful as history but must never overwrite PAUSED.
+     */
+    private fun publishProgress(next: TrainingState, runId: Long): Boolean {
+        val accepted = synchronized(lock) {
+            if (closed || activeRunId != runId || state.phase !in progressAcceptingPhases) false
+            else {
+                state = next
+                true
+            }
+        }
+        if (accepted) notifyListeners()
+        return accepted
     }
 
     private fun publish(next: TrainingState, runId: Long? = null): Boolean {
@@ -776,6 +870,8 @@ class StandaloneTrainingRepository(
             canPause = session.canPause(),
             canResume = session.canResume() ||
                 (state.phase !in activePhases && compatible != null),
+            modelConfig = config,
+            dashboard = state.dashboard,
         )
     }
 

@@ -30,6 +30,46 @@ Only one process-wide training session may execute at once. A second start is
 rejected with a structured `Failed` terminal summary; it must not attach to or
 cancel the active native run.
 
+## Compose training dashboard
+
+The standalone screen is a PhoneLM-specific Jetpack Compose dashboard built
+with stable Material 3 1.4 APIs. It uses a black, high-contrast surface
+hierarchy, an expanded shape scale, large progress typography, a fixed action
+dock, dynamic Android 12+ accent colors, and measured-value animation. The
+dedicated Material 3 Expressive alpha theme/motion APIs are intentionally not
+used, so experimental APIs do not escape into the application theme.
+
+The screen is split into a training hero, observed training state, compute
+activity history, fused/Adam/host performance, loss history, model/dataset
+identity, a human event timeline, expandable structured diagnostics, and a
+terminal summary. The external patch-manager screen in the design brief was
+used only as an information-hierarchy reference. PhoneLM's Compose components,
+state model, layout, colors, charts, and action semantics are original and do
+not reuse its code or component structure.
+
+`TrainingDashboardRecorder` belongs to the application-scoped session rather
+than the Activity. Consequently loss/activity history, event ordering, and
+terminal summary survive Activity recreation without creating a second worker.
+It stores at most 512 observed history points and 256 human events. It never
+interpolates loss, step, activity, timing, or memory. Missing observations stay
+unavailable in the UI.
+
+Native progress telemetry is emitted at the first step, every eight completed
+steps, checkpoint completion, final step, and interruption. The eight-step UI
+cadence is independent from the production checkpoint interval (250 steps) and
+does not change training math, graph execution, optimizer state, checkpoint
+format, or the production preset. Interval timing remains weighted by
+`timing_sample_steps`. The Activity coalesces ordinary callbacks to the latest
+state over a 125 ms window; phase changes, checkpoints, and terminal states
+bypass that window. This bounds Compose/main-thread work without predicting
+intermediate values or delaying lifecycle-critical events.
+
+Process memory is the Android process PSS observation. Its relatively expensive
+read is cached for one second while process CPU time is sampled at each accepted
+progress boundary. HTP activity remains the ratio of measured QNN execute wall
+time to the corresponding observation-window wall time. It is not NPU, DSP,
+device, or hardware utilization.
+
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
 prevents a standalone Stop from cancelling a benchmark-owned native run; the

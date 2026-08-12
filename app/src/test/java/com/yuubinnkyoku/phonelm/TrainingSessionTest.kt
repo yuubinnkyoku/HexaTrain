@@ -2,8 +2,10 @@ package com.yuubinnkyoku.phonelm
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,6 +49,10 @@ class TrainingSessionTest {
         assertEquals(2, result.progress?.completedSteps)
         assertEquals(9L, result.timing?.htpActivity?.durationMs)
         assertEquals(0L, result.timing?.cpuProcessDeltaMs)
+        assertEquals(true, result.runtimeEvidence?.qnnReturnCodeSuccess)
+        assertEquals(true, result.runtimeEvidence?.outputTensorsFinite)
+        assertEquals(false, result.runtimeEvidence?.cpuFallback)
+        assertEquals(0, result.dashboard.runStartStep)
         session.close()
     }
 
@@ -96,6 +102,54 @@ class TrainingSessionTest {
         assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 3)))
         assertTrue(finished.await(2, TimeUnit.SECONDS))
         assertTrue(session.snapshot().message!!.contains("moved backwards"))
+        session.close()
+    }
+
+    @Test fun resumedProgressCannotMoveBeforeCheckpointStep() {
+        val finished = CountDownLatch(1)
+        val identity = "dataset-identity"
+        val checkpoint = TrainingCheckpointMetadata(
+            uri = "native-checkpoint:resume:5",
+            completedStep = 5,
+            modelConfig = TrainingModelConfig.NICOPEDIA_L19,
+            format = TrainingPlan.NICOPEDIA_L19.checkpointFormat,
+            formatVersion = TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion,
+            finite = true,
+            createdAtMs = 1,
+            datasetIdentity = identity,
+        )
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    onProgress(
+                        TrainingBackendProgress(
+                            4,
+                            request.totalSteps,
+                            0.5f,
+                            runtimeEvidence = TrainingRuntimeEvidence(true, true, false),
+                        ),
+                    )
+                    return TrainingBackendResult.Cancelled()
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.ERROR) finished.countDown() }
+        assertTrue(
+            session.start(
+                TrainingRequest(
+                    TrainingModelConfig.NICOPEDIA_L19,
+                    TrainingDataset("content://dataset", identity = identity),
+                    totalSteps = 10,
+                    resumeFrom = checkpoint,
+                ),
+            ),
+        )
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertTrue(session.snapshot().message!!.contains("before the resume checkpoint"))
         session.close()
     }
 
@@ -225,6 +279,153 @@ class TrainingSessionTest {
         assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 2)))
         assertTrue(finished.await(2, TimeUnit.SECONDS))
         assertEquals(TimingBackend.UNAVAILABLE, session.snapshot().timing?.aggregate?.average?.forward?.backend)
+        session.close()
+    }
+
+    @Test fun rejectedCurrentHtpEvidenceDoesNotReusePreviousActivityWindow() {
+        val finished = CountDownLatch(1)
+        val goodEvidence = TrainingRuntimeEvidence(true, true, false)
+        val nonFiniteEvidence = TrainingRuntimeEvidence(true, false, false)
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    onProgress(
+                        TrainingBackendProgress(
+                            1, request.totalSteps, 0.5f,
+                            htpActivity = HtpActivityWindow(0, 10, executeDurationMs = 5.0),
+                            runtimeEvidence = goodEvidence,
+                        ),
+                    )
+                    onProgress(
+                        TrainingBackendProgress(
+                            2, request.totalSteps, 0.4f,
+                            htpActivity = HtpActivityWindow(10, 20, executeDurationMs = 5.0),
+                            runtimeEvidence = nonFiniteEvidence,
+                        ),
+                    )
+                    return TrainingBackendResult.Cancelled()
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.INTERRUPTED) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 3)))
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        val terminal = session.snapshot()
+        assertNull(terminal.timing?.htpActivity)
+        assertNull(terminal.dashboard.activityHistory.last().htpObservationRatioPercent)
+        assertNull(terminal.runtimeEvidence)
+        assertEquals(false, terminal.dashboard.eventTimeline.last { it.type == TrainingDashboardEventType.TENSOR_FINITE }.message.toBoolean())
+        session.close()
+    }
+
+    @Test fun failedTerminalDoesNotReuseEarlierSuccessfulEvidence() {
+        val finished = CountDownLatch(1)
+        val goodEvidence = TrainingRuntimeEvidence(true, true, false)
+        val failedEvidence = TrainingRuntimeEvidence(false, null, false, error = "graph execute failed")
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    onProgress(TrainingBackendProgress(1, request.totalSteps, 0.5f, runtimeEvidence = goodEvidence))
+                    return TrainingBackendResult.Failed("QNN execution failed", runtimeEvidence = failedEvidence)
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.ERROR) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 2)))
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        val terminal = session.snapshot()
+        assertNull(terminal.timing?.htpActivity)
+        assertEquals(false, terminal.runtimeEvidence?.qnnReturnCodeSuccess)
+        assertNull(terminal.runtimeEvidence?.outputTensorsFinite)
+        assertEquals(failedEvidence, terminal.dashboard.runtimeEvidence)
+        session.close()
+    }
+
+    @Test fun mismatchedCompletedTerminalDoesNotReuseEarlierSuccessfulEvidence() {
+        val finished = CountDownLatch(1)
+        val goodEvidence = TrainingRuntimeEvidence(true, true, false)
+        val conflictingEvidence = TrainingRuntimeEvidence(true, false, false)
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    onProgress(TrainingBackendProgress(1, request.totalSteps, 0.5f, runtimeEvidence = goodEvidence))
+                    return TrainingBackendResult.Completed(
+                        finalProgress = TrainingBackendProgress(
+                            request.totalSteps,
+                            request.totalSteps,
+                            0.25f,
+                            runtimeEvidence = goodEvidence,
+                        ),
+                        runtimeEvidence = conflictingEvidence,
+                    )
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.ERROR) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 2)))
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertNull(session.snapshot().runtimeEvidence)
+        assertNull(session.snapshot().dashboard.runtimeEvidence)
+        session.close()
+    }
+
+    @Test fun inFlightProgressCannotOverwritePausedState() {
+        val cpuReadBlocked = CountDownLatch(1)
+        val releaseCpuRead = CountDownLatch(1)
+        val callbackReturned = CountDownLatch(1)
+        val releaseBackend = CountDownLatch(1)
+        val finished = CountDownLatch(1)
+        val reads = AtomicInteger()
+        val evidence = TrainingRuntimeEvidence(true, true, false)
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override val supportsPause = true
+                override val supportsResume = true
+                override val hasCompatibleResumeCheckpoint = true
+                override fun pause() = true
+                override fun resume() = true
+                override fun requestStop() = Unit
+                override fun run(
+                    request: TrainingRequest,
+                    onProgress: (TrainingBackendProgress) -> Unit,
+                ): TrainingBackendResult {
+                    onProgress(TrainingBackendProgress(1, request.totalSteps, 0.5f, runtimeEvidence = evidence))
+                    onProgress(TrainingBackendProgress(2, request.totalSteps, 0.4f, runtimeEvidence = evidence))
+                    callbackReturned.countDown()
+                    releaseBackend.await(2, TimeUnit.SECONDS)
+                    return TrainingBackendResult.Cancelled(runtimeEvidence = evidence)
+                }
+            },
+            cpuMetrics = CpuProcessMetricSource {
+                if (reads.incrementAndGet() == 3) {
+                    cpuReadBlocked.countDown()
+                    releaseCpuRead.await(2, TimeUnit.SECONDS)
+                }
+                CpuProcessMetrics(100)
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.INTERRUPTED) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 3)))
+        assertTrue(cpuReadBlocked.await(2, TimeUnit.SECONDS))
+        assertTrue(session.pause())
+        assertEquals(TrainingPhase.PAUSED, session.snapshot().phase)
+        releaseCpuRead.countDown()
+        assertTrue(callbackReturned.await(2, TimeUnit.SECONDS))
+        assertEquals(TrainingPhase.PAUSED, session.snapshot().phase)
+        releaseBackend.countDown()
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
         session.close()
     }
 
