@@ -319,3 +319,52 @@ formal `verify_local.ps1 -WithQairt` was attempted after these changes but did
 not complete within the 904-second execution ceiling, so formal verification
 is incomplete and must not be reported as PASS.  This does not replace the
 successful targeted QNN Android build/APK audit or complete host-test result.
+
+## D32/FFN32 real training (2026-08-12)
+
+After the D24/FFN48 extension to 8000 steps, the D32/FFN32 candidate
+(L19/H2/T32/V256/B8/LR0.003, seed 1) was trained on device from a fresh model
+with fresh run ids.  The previously recorded "D32 responsiveness failure" from
+the 320-step screen did not reproduce under the headless runner: the candidate
+completed 0 -> 1000 -> 2000 -> 4000 -> 8000 steps with resumes at 1000, 2250,
+and 4000.  Two intermediate silent process exits occurred (the 0->1000 run's
+cpu_replay tail at 21:53 and the 2000->4000 segment at step 2250); both were
+resumed from the last checkpoint without retraining and without code changes.
+`ApplicationExitInfo` (`dumpsys activity exit-info`) records those exits as
+`USER REQUESTED / FORCE STOP / finished inst` with importance 125 (foreground
+equivalent), no `REASON_LOW_MEMORY`, and no native signal; no tombstone or
+dropbox entry matched.  During the final 4000->8000 segment the process held
+importance `fg` (curAdj=0, oom_score_adj=0) continuously with RSS ~330 MB and
+MemAvailable 7.4-8.3 GB, and no foreground service and no notification were
+active (the headless runner forbids `liveUpdateNotification` for nicopedia
+suites; the instrumentation process keeps foreground importance by itself).
+
+Final step-8000 comparison, all evaluated on the same 64+64 chunks:
+
+| metric | D16/FFN32 (prod, step8000) | D24/FFN48 (step8000) | D32/FFN32 (step8000) |
+| --- | ---: | ---: | ---: |
+| val NLL (host) | 2.136394989 | 2.054628 | 2.049198327 |
+| dev NLL (host) | 2.452805378 | 2.377130 | 2.383947098 |
+| val top1 | 0.436035 | 0.447266 | 0.461426 |
+| dev top1 | 0.355957 | 0.366943 | 0.370117 |
+| HTP eval val NLL | n/a | 2.0545 | 2.0492 |
+| HTP eval dev NLL | n/a | 2.3772 | 2.3839 |
+| QNN executes (final segment) | n/a | 18000/18000 | 52000/52000 |
+| QNN return / finite / fallback | n/a | true/true/false | true/true/false |
+| training wall ms/step (final segment) | n/a | 568.9 | 617.6 |
+
+D16/FFN32 was re-evaluated at 64+64 chunks from the existing step-8000
+checkpoint (device `20260812-141652-965` copy, parameter hash
+`ef79f369204ffe8b`), no retraining.  All three configurations now share the
+same 64+64 chunk evaluation condition.  D24 and D32 both improve on the
+production D16/FFN32 held-out NLL; D32 is marginally better on validation and
+D24 marginally better on development, with D32's val top1/dev top1 highest.
+HTP/CPU eval parity remains at ~6e-5 abs NLL for all models.
+
+Generation/parity at D32 step8000 (fixed `logits_max_abs_error <= 0.02` gate,
+unchanged): 7/20 prefixes rejected, AR 4/8 candidate-full, but all prefixes
+finite, QNN success, no fallback, cosine similarity 0.9999987, and argmax
+matches where reported.  The reject count exceeds the fixed 0.02 threshold the
+same way D24 did at high step counts; the threshold was not changed and no
+generation was produced (`generated_byte_count=0`).  This is recorded as a
+quality shortfall, not a code regression.
