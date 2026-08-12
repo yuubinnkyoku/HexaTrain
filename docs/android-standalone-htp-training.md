@@ -30,6 +30,74 @@ Only one process-wide training session may execute at once. A second start is
 rejected with a structured `Failed` terminal summary; it must not attach to or
 cancel the active native run.
 
+## Compose training dashboard
+
+The standalone screen is a PhoneLM-specific Jetpack Compose dashboard built
+with Material 3 Expressive 1.5.0-alpha18. This is the newest verified line
+compatible with the project's compileSdk 36.1 / AGP 8.13 toolchain. Alpha19+
+pulls the Compose 1.12 generation, while the newest currently published
+alpha25 artifact explicitly requires SDK 37 / AGP 9.1. It uses
+`MaterialExpressiveTheme`, the expressive motion scheme, the official
+`HorizontalFloatingToolbar`, and a restrained determinate wavy progress
+indicator. Experimental opt-in is localized to the training
+UI entrypoints. The dashboard keeps a black, high-contrast surface hierarchy,
+semantic telemetry accents, monospace numeric values, dynamic Android 12+
+colors, and restrained phase/progress motion.
+
+The screen combines a compact training hero, current compute observations,
+fused/Adam/step performance, a loss trace, latest checkpoint/event, and primary
+actions in its fixed overview. Model/dataset identity, cumulative performance,
+the human event timeline, structured diagnostics, and terminal summary are
+available in the on-demand details sheet. The external patch-manager screen in the design brief was
+used only as an information-hierarchy reference. PhoneLM's Compose components,
+state model, layout, colors, charts, and action semantics are original and do
+not reuse its code or component structure.
+
+`TrainingDashboardRecorder` belongs to the application-scoped session rather
+than the Activity. Consequently loss/activity history, event ordering, and
+terminal summary survive Activity recreation without creating a second worker.
+It stores at most 512 observed history points and 256 human events. It never
+interpolates loss, step, activity, timing, or memory. Missing observations stay
+unavailable in the UI.
+
+Native progress telemetry is emitted at the first step, every eight completed
+steps, checkpoint completion, final step, and interruption. The eight-step UI
+cadence is independent from the production checkpoint interval (250 steps) and
+does not change training math, graph execution, optimizer state, checkpoint
+format, or the production preset. Interval timing remains weighted by
+`timing_sample_steps`. The Activity coalesces ordinary callbacks to the latest
+state over a 125 ms window; phase changes, checkpoints, and terminal states
+bypass that window. This bounds Compose/main-thread work without predicting
+intermediate values or delaying lifecycle-critical events.
+
+Process memory is the Android process PSS observation. Its relatively expensive
+read is cached for one second while process CPU time is sampled at each accepted
+progress boundary. HTP activity remains the ratio of measured QNN execute wall
+time to the corresponding observation-window wall time. It is not NPU, DSP,
+device, or hardware utilization.
+
+The portrait overview is a fixed, non-scrolling monitoring surface. It keeps
+phase, progress, loss/ETA, HTP observation ratio, process CPU, current fused
+and Adam timing, process PSS/elapsed/average-step/checkpoint-age summaries, a
+compact loss trace, latest checkpoint/important event, and primary actions
+visible together. The important-event presentation suppresses routine phase
+transitions but never invents an event. Model/dataset metadata, cumulative timing, the most
+recent 50 retained events, summary, and raw diagnostics are available on demand in a scrolling
+Material 3 bottom sheet. Height and font scale select accessible, compact,
+standard, or comfortable density without changing telemetry values or lifecycle
+behavior. The accessible tier preserves the fixed overview and required actions
+at 2.0 font scale by omitting secondary summary rows; complete values remain in
+the details sheet.
+
+The hero's step line maps the session phase to target-step availability instead
+of treating every missing target as an error. Before a run (IDLE) the line reads
+"Ready"; during an active run a missing target is fail-closed ("Step target
+unavailable"); an ERROR state surfaces the repository message rather than
+blaming the target; terminal states without progress render as unavailable
+without implying an error. This keeps fresh launches and dataset/model selection
+out of the error presentation while preserving fail-closed behavior whenever an
+active run actually needs a target.
+
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
 prevents a standalone Stop from cancelling a benchmark-owned native run; the

@@ -71,4 +71,37 @@ class TrainingTimingTest {
         assertEquals(4.0, snapshot.average?.fusedForwardBackward?.qnnExecuteMs ?: -1.0, 1e-6)
         assertEquals(8L, snapshot.htpExecuteCount)
     }
+
+    @Test fun missingCurrentSampleDoesNotReusePreviousTiming() {
+        val accumulator = TimingAccumulator()
+        accumulator.add(
+            TrainingTimingSample(
+                fusedForwardBackward = PhaseTiming(TimingBackend.HTP, qnnExecuteMs = 4.0, qnnExecuteCount = 1),
+            ),
+        )
+        accumulator.add(null)
+        val snapshot = accumulator.snapshot()
+        assertNull(snapshot.current)
+        assertEquals(4.0, snapshot.average?.fusedForwardBackward?.qnnExecuteMs ?: -1.0, 1e-6)
+        assertEquals(4.0, snapshot.cumulative?.fusedForwardBackward?.qnnExecuteMs ?: -1.0, 1e-6)
+    }
+
+    @Test fun unavailableEvidenceMakesMixedAggregateFailClosed() {
+        val accumulator = TimingAccumulator()
+        accumulator.add(
+            TrainingTimingSample(
+                fusedForwardBackward = PhaseTiming(TimingBackend.HTP, qnnExecuteMs = 4.0, qnnExecuteCount = 1),
+            ),
+        )
+        accumulator.add(
+            TrainingTimingSample(
+                fusedForwardBackward = PhaseTiming(TimingBackend.UNAVAILABLE),
+            ),
+        )
+        val snapshot = accumulator.snapshot()
+        assertEquals(TimingBackend.UNAVAILABLE, snapshot.current?.fusedForwardBackward?.backend)
+        assertEquals(TimingBackend.UNAVAILABLE, snapshot.average?.fusedForwardBackward?.backend)
+        assertNull(snapshot.average?.fusedForwardBackward?.qnnExecuteMs)
+        assertEquals(TimingBackend.UNAVAILABLE, snapshot.cumulative?.fusedForwardBackward?.backend)
+    }
 }

@@ -1,26 +1,30 @@
 package com.yuubinnkyoku.phonelm
 
-import android.app.Activity
-import android.app.AlertDialog
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
-import android.widget.Button
-import android.widget.ProgressBar
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.yuubinnkyoku.phonelm.ui.training.TrainingDashboardApp
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * UI-only entry point for the standalone HTP training session.  Session ownership is
- * application-scoped so an Activity recreation reattaches to the in-progress session
- * instead of creating a second worker.
+ * Compose entry point for the application-scoped standalone training session.
+ * The repository, including its foreground-service lifecycle, deliberately
+ * remains outside this Activity so recreation only reconnects the UI.
  */
-class StandaloneTrainingActivity : Activity() {
+class StandaloneTrainingActivity : ComponentActivity() {
     private lateinit var repository: StandaloneTrainingRepository
     private var subscription: AutoCloseable? = null
     private val subscriptionLock = Any()
@@ -29,47 +33,41 @@ class StandaloneTrainingActivity : Activity() {
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "PhoneLM-training-ui-io").apply { isDaemon = true }
     }
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val uiDispatchLock = Any()
+    private var pendingUiUpdate: PendingUiUpdate? = null
+    @Volatile private var lastDeliveredState: TrainingUiState? = null
+    private var uiUpdateScheduled = false
+    private var composeState by mutableStateOf<TrainingUiState?>(null)
 
-    private lateinit var overview: TextView
-    private lateinit var timing: TextView
-    private lateinit var activity: TextView
-    private lateinit var checkpoint: TextView
-    private lateinit var error: TextView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var datasetUri: TextView
-    private lateinit var selectDataset: Button
-    private lateinit var start: Button
-    private lateinit var stop: Button
-    private lateinit var pause: Button
-    private lateinit var resume: Button
-    private lateinit var startOver: Button
+    private val deliverUiUpdate = Runnable {
+        val update = synchronized(uiDispatchLock) {
+            val next = pendingUiUpdate ?: return@Runnable
+            pendingUiUpdate = null
+            uiUpdateScheduled = false
+            next
+        }
+        if (isCurrentGeneration(update.generation)) {
+            lastDeliveredState = update.state
+            composeState = update.state
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingStart = savedInstanceState?.getBoolean(KEY_PENDING_START, false) ?: false
-        setContentView(R.layout.activity_standalone_training)
-
         repository = StandaloneTrainingRepositoryRegistry.get(applicationContext)
-        overview = findViewById(R.id.trainingOverviewText)
-        timing = findViewById(R.id.trainingTimingText)
-        activity = findViewById(R.id.trainingActivityText)
-        checkpoint = findViewById(R.id.trainingCheckpointText)
-        error = findViewById(R.id.trainingErrorText)
-        progressBar = findViewById(R.id.trainingProgressBar)
-        datasetUri = findViewById(R.id.trainingDatasetUriText)
-        selectDataset = findViewById(R.id.selectTrainingDatasetButton)
-        start = findViewById(R.id.startTrainingButton)
-        stop = findViewById(R.id.stopTrainingButton)
-        pause = findViewById(R.id.pauseTrainingButton)
-        resume = findViewById(R.id.resumeTrainingButton)
-        startOver = findViewById(R.id.startOverTrainingButton)
-
-        selectDataset.setOnClickListener(::openDatasetPicker)
-        start.setOnClickListener { startTrainingAfterNotificationCheck() }
-        stop.setOnClickListener { ioExecutor.execute { repository.stop() } }
-        pause.setOnClickListener { ioExecutor.execute { repository.pause() } }
-        resume.setOnClickListener { ioExecutor.execute { repository.resume() } }
-        startOver.setOnClickListener { confirmStartOver() }
+        setContent {
+            TrainingDashboardApp(
+                state = composeState,
+                onSelectDataset = ::openDatasetPicker,
+                onStart = ::startTrainingAfterNotificationCheck,
+                onStop = { ioExecutor.execute { repository.stop() } },
+                onPause = { ioExecutor.execute { repository.pause() } },
+                onResume = { ioExecutor.execute { repository.resume() } },
+                onStartOver = ::confirmStartOver,
+            )
+        }
     }
 
     override fun onStart() {
@@ -99,6 +97,11 @@ class StandaloneTrainingActivity : Activity() {
             pendingStartGeneration = null
             subscription.also { subscription = null }
         }
+        synchronized(uiDispatchLock) {
+            mainHandler.removeCallbacks(deliverUiUpdate)
+            uiUpdateScheduled = false
+            pendingUiUpdate = null
+        }
         old?.close()
         super.onStop()
     }
@@ -119,35 +122,21 @@ class StandaloneTrainingActivity : Activity() {
         val selectionToken = repository.nextDatasetSelectionToken()
         ioExecutor.execute {
             try {
-                // The SAF adapter persists and validates the grant on this IO
-                // executor, keeping permission and full cache inspection out
-                // of the Activity callback/UI thread.
                 if (!isCurrentGeneration(callbackGeneration)) return@execute
                 val selected = repository.selectDataset(
                     TrainingDataset(uri.toString(), displayName(uri)),
                     selectionToken,
                 )
-                runOnUiThread {
-                    if (!isCurrentGeneration(callbackGeneration)) return@runOnUiThread
-                    if (!selected) toast(getString(R.string.training_dataset_access_failed))
-                }
-            } catch (_: SecurityException) {
-                runOnUiThread {
-                    if (isCurrentGeneration(callbackGeneration)) {
-                        toast(getString(R.string.training_dataset_access_failed))
-                    }
+                if (!selected) postIfCurrent(callbackGeneration) {
+                    toast(getString(R.string.training_dataset_access_failed))
                 }
             } catch (_: Throwable) {
-                runOnUiThread {
-                    if (isCurrentGeneration(callbackGeneration)) {
-                        toast(getString(R.string.training_dataset_access_failed))
-                    }
-                }
+                postIfCurrent(callbackGeneration) { toast(getString(R.string.training_dataset_access_failed)) }
             }
         }
     }
 
-    private fun openDatasetPicker(@Suppress("UNUSED_PARAMETER") button: android.view.View) {
+    private fun openDatasetPicker() {
         startActivityForResult(
             Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -165,44 +154,38 @@ class StandaloneTrainingActivity : Activity() {
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.training_start_over_confirm) { _, _ ->
                 ioExecutor.execute {
-                    val started = repository.startOver()
-                    if (!started) runOnUiThread { toast("Training is still active or the dataset is unavailable") }
+                    if (!repository.startOver()) postIfCurrentCurrent { toast(START_FAILURE_MESSAGE) }
                 }
             }
             .show()
     }
 
+    /** Coalesce worker-thread callbacks; phase/checkpoint/terminal transitions bypass the 125 ms window. */
     private fun render(state: TrainingUiState) {
         val generation = synchronized(subscriptionLock) {
             if (!activityStarted) return
             subscriptionGeneration
         }
         if (isFinishing || isDestroyed) return
-        runOnUiThread {
-            if (!isCurrentGeneration(generation)) return@runOnUiThread
-            overview.text = "Training overview: ${state.overview}"
-            timing.text = timingText(state)
-            activity.text = activityText(state)
-            checkpoint.text = checkpointText(state)
-            progressBar.progress = state.progress?.let { (it.fraction * 100.0f).toInt() } ?: 0
-            datasetUri.text = state.datasetDisplayName?.let { name ->
-                "$name\n${state.datasetUri}"
-            } ?: state.datasetUri
-                ?: getString(R.string.training_dataset_not_selected)
-            error.text = state.message.orEmpty()
-            start.isEnabled = state.canStart
-            stop.isEnabled = state.canStop
-            pause.isEnabled = state.canPause
-            resume.isEnabled = state.canResume
-            startOver.isEnabled = state.phase !in activePhases && state.phase != TrainingPhase.IDLE
-            selectDataset.isEnabled = state.phase !in activePhases
+        val immediate = state.phase != lastDeliveredState?.phase ||
+            state.phase in terminalPhases ||
+            state.lastCheckpoint != lastDeliveredState?.lastCheckpoint
+        synchronized(uiDispatchLock) {
+            pendingUiUpdate = PendingUiUpdate(state, generation)
+            if (immediate) {
+                mainHandler.removeCallbacks(deliverUiUpdate)
+                uiUpdateScheduled = true
+                mainHandler.post(deliverUiUpdate)
+            } else if (!uiUpdateScheduled) {
+                uiUpdateScheduled = true
+                mainHandler.postDelayed(deliverUiUpdate, UI_COALESCE_MS)
+            }
         }
     }
 
     private fun isCurrentGeneration(generation: Long): Boolean =
-        synchronized(subscriptionLock) {
-            activityStarted && subscriptionGeneration == generation
-        } && !isFinishing && !isDestroyed
+        synchronized(subscriptionLock) { activityStarted && subscriptionGeneration == generation } &&
+            !isFinishing && !isDestroyed
 
     private fun startTrainingAfterNotificationCheck() {
         val generation = synchronized(subscriptionLock) {
@@ -216,21 +199,15 @@ class StandaloneTrainingActivity : Activity() {
                 if (!activityStarted || subscriptionGeneration != generation) return
                 pendingStartGeneration = generation
             }
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             pendingStart = true
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             return
         }
-        ioExecutor.execute {
-            if (!isCurrentGeneration(generation)) return@execute
-            if (!repository.start()) runOnUiThread {
-                if (isCurrentGeneration(generation)) {
-                    toast("Training could not be started; check dataset and native HTP availability")
-                }
-            }
-        }
+        startOnIo(generation)
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_NOTIFICATIONS || !pendingStart) return
         val generation = synchronized(subscriptionLock) {
@@ -239,31 +216,31 @@ class StandaloneTrainingActivity : Activity() {
             pendingStartGeneration = null
             subscriptionGeneration
         }
-        // Notification permission is not training evidence; a denial leaves the
-        // run UI usable but the foreground notification may be hidden by Android.
-        ioExecutor.execute {
-            if (!isCurrentGeneration(generation)) return@execute
-            if (!repository.start()) runOnUiThread {
-                if (isCurrentGeneration(generation)) {
-                    toast("Training could not be started; check dataset and native HTP availability")
-                }
-            }
-        }
+        // A denial may hide the notification; it is not training evidence and does not block a user-run session.
+        startOnIo(generation)
+    }
+
+    private fun startOnIo(generation: Long) = ioExecutor.execute {
+        if (!isCurrentGeneration(generation)) return@execute
+        // repository.start invokes the lifecycle's foreground-service start before it starts the worker.
+        if (!repository.start()) postIfCurrent(generation) { toast(START_FAILURE_MESSAGE) }
     }
 
     private fun displayName(uri: Uri): String? = runCatching {
-        contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index < 0) null else cursor.getString(index)
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (!cursor.moveToFirst() || nameColumn < 0) null else cursor.getString(nameColumn)
         }
     }.getOrNull()
+
+    private fun postIfCurrent(generation: Long, block: () -> Unit) {
+        mainHandler.post { if (isCurrentGeneration(generation)) block() }
+    }
+
+    private fun postIfCurrentCurrent(block: () -> Unit) {
+        val generation = synchronized(subscriptionLock) { subscriptionGeneration }
+        postIfCurrent(generation, block)
+    }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(KEY_PENDING_START, pendingStart)
@@ -275,33 +252,23 @@ class StandaloneTrainingActivity : Activity() {
             activityStarted = false
             pendingStartGeneration = null
         }
+        synchronized(uiDispatchLock) { mainHandler.removeCallbacks(deliverUiUpdate) }
         ioExecutor.shutdownNow()
         super.onDestroy()
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
-    private fun timingText(state: TrainingUiState): String = state.timingText
-
-    private fun activityText(state: TrainingUiState): String = state.activityText
-
-    private fun checkpointText(state: TrainingUiState): String =
-        "CHECKPOINT\n${state.checkpointText}" +
-            state.lastCheckpoint?.let { "\nfinite=${it.finite}" }.orEmpty()
-
     private companion object {
         const val REQUEST_OPEN_DATASET = 121
         const val REQUEST_NOTIFICATIONS = 122
         const val KEY_PENDING_START = "standalone_training_pending_start"
-        val activePhases = setOf(
-            TrainingPhase.PREPARING,
-            TrainingPhase.INITIALIZING_HTP,
-            TrainingPhase.TRAINING,
-            TrainingPhase.SAVING_CHECKPOINT,
-            TrainingPhase.PAUSED,
-        )
+        const val UI_COALESCE_MS = 125L
+        const val START_FAILURE_MESSAGE = "Training could not be started; check dataset and native HTP availability"
+        val terminalPhases = setOf(TrainingPhase.COMPLETED, TrainingPhase.ERROR, TrainingPhase.INTERRUPTED)
     }
 
+    private data class PendingUiUpdate(val state: TrainingUiState, val generation: Long)
     private var pendingStart = false
     private var pendingStartGeneration: Long? = null
 }
