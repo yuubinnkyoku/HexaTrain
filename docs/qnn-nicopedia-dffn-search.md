@@ -212,6 +212,56 @@ measured 255.9 HTP execute ms/step (fused plus Adam cumulative time divided by
 bytes with 63 valid UTF-8 bytes and one invalid byte; the short-period loop
 fraction was 1.0, so generation was technically healthy but visibly repetitive.
 
+## D24/FFN48 real-training extension to 8000 steps (2026-08-12)
+
+After the resume-to-1250 milestone, D24/FFN48 (T32, seed 1, L19/H2, B8,
+LR 0.003) was extended 1250 -> 2000 -> 4000 -> 8000 with NPRTCKPTV2 resume and
+250-step checkpoints.  Segments: 1250->2000 (RunId d24-1250-2000-20260812f,
+fresh install after a device reboot), 2000->4000 (d24-2000-4000-20260812a),
+4000->8000 (d24-4000-8000-20260812a, one 6500-step crash mid-segment with
+checkpoints preserved, then resume 6500->8000 as d24-6500-8000-20260812a).
+Every completed segment reported status=SUCCESS, all steps finite, QNN return
+success, zero graph-execute failures, CPU fallback=false, and no non-finite
+tensors.  Total 8000-step run: 18,000/18,000 QNN executes in the last
+segment; training_step_ms 568.9 (fused+Adam QNN time 58.98+99.82 s over 1500
+steps).  Checkpoints are retained at every 250-step multiple from 250 to 8000
+under build/reports/nicopedia-htp-training (all 1,236,265 bytes).
+
+Host held-out evaluation (htp_checkpoint_eval, 64+64 chunks) trajectory:
+
+| step | validation NLL | development NLL | validation top1 |
+| --- | ---: | ---: | ---: |
+| 1000 | 2.2248 | 2.6392 | 0.4165 |
+| 2000 | 2.1802 | 2.5833 | 0.4136 |
+| 4000 | 2.1306 | 2.4627 | 0.4326 |
+| 6000 | 2.1413 | 2.4191 | 0.4409 |
+| 6500 | 2.1058 | 2.4052 | 0.4482 |
+| 8000 | 2.0546 | 2.3771 | 0.4526 |
+
+HTP-native eval at 8000 (64+64 chunks, 128/128 executes, zero failures,
+finite=true, CPU fallback=false): validation NLL 2.054537, development NLL
+2.377239, matching the host CPU values within 7e-5.  The 8000-step model
+improves on the production D16/FFN32 step-8000 reference on validation
+(2.0545 vs 2.1684) but remains behind on development (2.3772 vs 2.1469);
+the two references were recorded under different evaluation conditions
+(full-cap vs 64+64 chunks), so the cross-configuration comparison is
+indicative only.
+
+Generation parity at 8000: PARITY_GATE_REJECTED again.  All 20 prefixes and
+all 8 AR steps keep argmax and top-5 fully aligned between CPU and HTP, with
+no non-finite tensors, QNN success and no fallback; the rejection is caused
+by logits_max_abs_error exceeding the fixed 2e-2 threshold on an increasing
+number of prefixes (1 at 2000, 6 at 4000, 11 at 8000, worst 0.088 at 8000),
+while relative error stays around 0.2% of the CPU logits scale which itself
+grows as the model becomes more decisive.  Thresholds were not changed; this
+is recorded as a precision-margin observation, not a generation collapse.
+
+Runtime notes: mid-run `Process crashed` recurred once at step ~6500 after
+~26 minutes of training with no Java crash, tombstone, or logcat evidence
+(same silent-kill signature as the earlier D24/D32 attempts); checkpoints
+were pulled before resuming and the run completed on retry.  This is
+consistent with the device-state hypothesis but not conclusive.
+
 The first D32/FFN32 real-training attempt did not produce a checkpoint or native
 report.  The instrumentation ended with `Process crashed` while the headless
 status remained RUNNING; read-only recovery then observed a PhoneLM process and
