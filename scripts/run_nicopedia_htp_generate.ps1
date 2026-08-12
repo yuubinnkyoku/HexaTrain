@@ -16,6 +16,8 @@ param(
     [string]$Model = '',                 # L6 | L19 (required)
     [int]$Seed = 0,                      # L6: 1/2/4, L19: 1
     [int]$Tokens = 32,                   # context window length (8..256; 32 = legacy T32 behavior)
+    [int]$Dimension = 16,
+    [int]$FeedForwardDimension = 32,
     [string]$Prompt = '',                # arbitrary Japanese text
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
     [int]$MaxNewBytes = 64,              # 1..1024
@@ -52,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
-$tokenTag = if ($Tokens -eq 32) { '' } else { "-t$Tokens" }
+$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
 
 $reportRoot = Join-Path $root 'build\reports\nicopedia-htp-generation'
 $trainingRoot = Join-Path $root 'build\reports\nicopedia-htp-training'
@@ -146,6 +148,7 @@ function Get-SafeUtf8Display([byte[]]$Bytes) {
 
 function Invoke-SelfTest {
     if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
+    if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }
     # Safe display mirrors the C++ core (lossless \xNN escapes).
     $cases = @(
         @{ Bytes = [byte[]](0x68, 0x69); Expect = 'hi' },
@@ -272,6 +275,8 @@ if ($Model -ne 'L6' -and $Model -ne 'L19') { throw "MODEL_INVALID: Model must be
 $layers = if ($Model -eq 'L19') { 19 } else { 6 }
 if ($Seed -lt 1 -or $Seed -gt 99999) { throw 'SEED_INVALID: Seed must be in 1..99999' }
 if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'TOKENS_INVALID: Tokens must be in 8..256' }
+if ($Dimension -lt 2 -or $Dimension -gt 256 -or ($Dimension % 2) -ne 0) { throw 'DIMENSION_INVALID: Dimension must be even and in 2..256' }
+if ($FeedForwardDimension -lt 2 -or $FeedForwardDimension -gt 1024) { throw 'FFN_INVALID: FeedForwardDimension must be in 2..1024' }
 if ($CheckpointStep -lt 1 -or $CheckpointStep -gt 999999) {
     throw 'CHECKPOINT_STEP_INVALID: CheckpointStep must be in 1..999999'
 }
@@ -317,13 +322,14 @@ if ($promptBytes.Length -gt $Tokens) {
 }
 
 # Checkpoint + approved anchor (fail-closed before any device work).
-# The checkpoint file name embeds the step and, for non-32 contexts, the
-# token window (htp-seed<S>-l<L>[-t<T>]-step<N>.ckpt); the device re-validates
-# the step and tokens from the file name and the expected checkpoint_step
-# intent, so a stale or mismatched file cannot pass.
-$checkpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $layers -Tokens $Tokens -Step $CheckpointStep
+# The checkpoint file name embeds the step and, for non-anchor configurations,
+# the token window plus D/FFN identity
+# (htp-seed<S>-l<L>-t<T>-d<D>-f<FFN>-step<N>.ckpt); the device re-validates
+# the full header identity and expected checkpoint_step intent, so a stale or
+# mismatched file cannot pass.
+$checkpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
 $checkpoint = Join-Path $trainingRoot $checkpointName
-$anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers$tokenTag-steps$CheckpointStep-result.txt"
+$anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt"
 if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf)) { throw "CHECKPOINT_MISSING: $checkpoint" }
 $anchorHash = ''
 if ($GatePolicy -ne 'htp-native') {
@@ -341,8 +347,8 @@ if ($GatePolicy -ne 'htp-native') {
 # Legacy/candidate generation keeps its existing parity behavior unchanged.
 if ($GatePolicy -eq 'htp-native') {
     if ($PollLimit -lt 1 -or $PollSeconds -lt 1 -or $ProgressEverySeconds -lt 1) { throw 'POLL_CONFIGURATION_INVALID' }
-    if (-not $TrainingReportPath) { $TrainingReportPath = Join-Path $trainingRoot "seed$Seed-l$layers$tokenTag-steps$CheckpointStep-result.txt" }
-    if (-not $EvalReportPath) { $EvalReportPath = Join-Path $root "build\reports\nicopedia-htp-eval\seed$Seed-l$layers$tokenTag-step$CheckpointStep-htp.txt" }
+    if (-not $TrainingReportPath) { $TrainingReportPath = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt" }
+    if (-not $EvalReportPath) { $EvalReportPath = Join-Path $root "build\reports\nicopedia-htp-eval\seed$Seed-l$layers$modelTag-step$CheckpointStep-htp.txt" }
     if (-not (Test-Path -LiteralPath $EvalReportPath -PathType Leaf)) { throw "HTP_NATIVE_EVAL_HEALTH_MISSING: $EvalReportPath" }
     $trainingHealth = $null
     if (Test-Path -LiteralPath $TrainingReportPath -PathType Leaf) {
@@ -359,7 +365,7 @@ if ($GatePolicy -eq 'htp-native') {
     $cpuHealth = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $cpuEvalPath -Raw)
     $anchorHash = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalHealth -CpuHealth $cpuHealth -TrainingHealth $trainingHealth
     $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
-    if ($checkpointHeader.Magic -ne 'NPRTCKPTV2' -or $checkpointHeader.Seed -ne $Seed -or $checkpointHeader.Layers -ne $layers -or $checkpointHeader.Heads -ne 2 -or $checkpointHeader.Step -ne $CheckpointStep) {
+    if ($checkpointHeader.Magic -ne 'NPRTCKPTV2' -or $checkpointHeader.Seed -ne $Seed -or $checkpointHeader.Layers -ne $layers -or $checkpointHeader.Heads -ne 2 -or $checkpointHeader.Tokens -ne $Tokens -or $checkpointHeader.Dimension -ne $Dimension -or $checkpointHeader.FeedForward -ne $FeedForwardDimension -or $checkpointHeader.Step -ne $CheckpointStep) {
         throw 'HTP_NATIVE_CHECKPOINT_IDENTITY_REJECTED'
     }
     $anchorSource = if ($null -ne $trainingHealth) { 'training-report' } else { 'full-cap-eval-cpu' }
@@ -437,7 +443,7 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
     -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-generate' -RunId $RunId `
-    -Arguments @{ seed = $Seed; layers = $layers; tokens = $Tokens; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
+    -Arguments @{ seed = $Seed; layers = $layers; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
     -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
     -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "generation-step-$CheckpointStep" `
@@ -468,6 +474,13 @@ if ($result -notmatch '(?m)^status=SUCCESS$') {
     Write-Host 'AUDIT_ONLY: device status != SUCCESS — parity metrics recorded'
 }
 if ($result -notmatch '(?m)^cpu_fallback=false$') { throw 'DEVICE_CPU_FALLBACK_DETECTED' }
+$deviceDimensionMatch = [regex]::Match($result, '(?m)^model_dimension=(\d+)$')
+$deviceFfnMatch = [regex]::Match($result, '(?m)^feed_forward_dimension=(\d+)$')
+if (-not $deviceDimensionMatch.Success -or -not $deviceFfnMatch.Success -or
+    [int]$deviceDimensionMatch.Groups[1].Value -ne $Dimension -or
+    [int]$deviceFfnMatch.Groups[1].Value -ne $FeedForwardDimension) {
+    throw 'DEVICE_MODEL_IDENTITY_MISMATCH'
+}
 $deviceHashMatch = [regex]::Match($result, '(?m)^checkpoint_parameter_hash=(fnv1a64:[0-9a-f]{16})$')
 if (-not $deviceHashMatch.Success) { throw 'DEVICE_PARAMETER_HASH_MISSING' }
 if ($deviceHashMatch.Groups[1].Value -ne $anchorHash) {
@@ -598,7 +611,7 @@ $annotated = $result.TrimEnd() + "`n" +
     "host_htp_context_graph_splitting=$HtpContextGraphSplitting`n" +
     "host_htp_native_tensor_fp16=$nativeFp16Expected`n" +
     "private_serial_recorded_for_identity_only=true`n"
-$canonicalReportFile = Join-Path $reportRoot "seed$Seed-l$layers$tokenTag-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
+$canonicalReportFile = Join-Path $reportRoot "seed$Seed-l$layers$modelTag-$($Mode.ToLowerInvariant())-step$CheckpointStep-max$MaxNewBytes-result.txt"
 # Keep the legacy canonical name for aggregate exporters, but also preserve a
 # run-scoped private copy so multiple prompts with the same numeric config do
 # not destroy one another's raw evidence.  The `.private.txt` suffix is

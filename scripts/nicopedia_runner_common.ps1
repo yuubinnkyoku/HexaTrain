@@ -308,10 +308,10 @@ function Assert-PhoneLmHealthReport {
         [ValidateSet('training', 'eval', 'generation')][string]$Kind = 'eval'
     )
     $map = Get-PhoneLmKeyValueMap $Text
-    foreach ($key in @('status', 'cpu_fallback', 'nan_detected', 'inf_detected', 'graph_execute_count', 'api_trace_graph_execute_attempt_count', 'api_trace_graph_execute_success_count', 'api_trace_graph_execute_failure_count', 'api_trace_last_qnn_result', 'api_trace_effective_result', 'api_trace_cpu_backend_initialized', 'api_trace_fallback_attempted', 'api_trace_fallback_succeeded')) {
+    foreach ($key in @('status', 'cpu_fallback', 'nan_detected', 'inf_detected', 'qnn_return_code_success', 'output_tensors_finite', 'graph_execute_count', 'api_trace_graph_execute_attempt_count', 'api_trace_graph_execute_success_count', 'api_trace_graph_execute_failure_count', 'api_trace_last_qnn_result', 'api_trace_effective_result', 'api_trace_cpu_backend_initialized', 'api_trace_fallback_attempted', 'api_trace_fallback_succeeded')) {
         if (-not $map.Contains($key)) { throw "REPORT_FIELD_MISSING: $Kind $key" }
     }
-    if ($map.status -ne 'SUCCESS' -or $map.cpu_fallback -ne 'false' -or $map.nan_detected -ne 'false' -or $map.inf_detected -ne 'false') { throw "REPORT_HEALTH_REJECTED: $Kind" }
+    if ($map.status -ne 'SUCCESS' -or $map.cpu_fallback -ne 'false' -or $map.nan_detected -ne 'false' -or $map.inf_detected -ne 'false' -or $map.qnn_return_code_success -ne 'true' -or $map.output_tensors_finite -ne 'true') { throw "REPORT_HEALTH_REJECTED: $Kind" }
     $attempts = 0L; $successes = 0L; $failures = 0L; $graphs = 0L
     if (-not [long]::TryParse($map.api_trace_graph_execute_attempt_count, [ref]$attempts) -or $attempts -le 0) { throw "REPORT_QNN_ATTEMPT_INVALID: $Kind" }
     if (-not [long]::TryParse($map.api_trace_graph_execute_success_count, [ref]$successes) -or $successes -ne $attempts) { throw "REPORT_QNN_SUCCESS_INVALID: $Kind" }
@@ -423,18 +423,23 @@ function Get-PhoneLmCheckpointName {
         [Parameter(Mandatory = $true)][int]$Seed,
         [Parameter(Mandatory = $true)][int]$Layers,
         [Parameter(Mandatory = $true)][int]$Tokens,
+        [Parameter(Mandatory = $false)][int]$Dimension = 16,
+        [Parameter(Mandatory = $false)][int]$FeedForwardDimension = 32,
         [Parameter(Mandatory = $true)][int]$Step
     )
-    # Legacy name for the canonical 32-token context; the -t<T> variant marks
-    # every non-32 context so T32 baselines and T64 artifacts stay distinct.
-    if ($Tokens -eq 32) { return "htp-seed$Seed-l$Layers-step$Step.ckpt" }
-    return "htp-seed$Seed-l$Layers-t$Tokens-step$Step.ckpt"
+    # The canonical anchor retains its legacy name. Every non-anchor model
+    # identity carries T/D/FFN tags, so resume and evaluation cannot silently
+    # select an incompatible checkpoint.
+    if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) {
+        return "htp-seed$Seed-l$Layers-step$Step.ckpt"
+    }
+    return "htp-seed$Seed-l$Layers-t$Tokens-d$Dimension-f$FeedForwardDimension-step$Step.ckpt"
 }
 
 function Get-PhoneLmCheckpointNames {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package, [Parameter(Mandatory = $true)][string]$RemoteDir)
     $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'run-as', $Package, 'ls', '-1', $RemoteDir)
-    return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+(-t\d+)?-step\d+\.ckpt$' } | Sort-Object -Unique)
+    return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+(-t\d+-d\d+-f\d+)?-step\d+\.ckpt$' } | Sort-Object -Unique)
 }
 
 function Wait-PhoneLmResult {

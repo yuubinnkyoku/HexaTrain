@@ -308,6 +308,30 @@ void testGraphShapeValidator() {
       require(nicopediaL19.parameterElements == 48320,
               "Nicopedia L19 parameter element count is not 48320");
     }
+    // Width-search contract: the generalized graph shape validator must also
+    // accept the joint research candidate T32/D32/FFN64/L19/H2 and account
+    // for its widened FFN matrices, rather than silently assuming FFN32.
+    {
+      TransformerTopologyConfig wide{32, 32, 64, 19, 2, 256};
+      wide.parameterElements =
+          19 * (4 * 32 * 32 + 4 * 32 + 2 * 32 * 64) + 2 * 256 * 32;
+      wide.optimizerElements = 2 * wide.parameterElements;
+      std::vector<TransformerLayerTopology> topology;
+      for (std::size_t i = 0; i < 19; ++i) {
+        auto layer = makeLayer(i, 32, 32, 2);
+        layer.ffnW1 = {32, 64};
+        layer.ffnW2 = {64, 32};
+        layer.dFfnW1 = {32, 64};
+        layer.dFfnW2 = {64, 32};
+        layer.parameterElements = 4 * 32 * 32 + 4 * 32 + 2 * 32 * 64;
+        layer.optimizerElements = 2 * layer.parameterElements;
+        topology.push_back(std::move(layer));
+      }
+      require(validateTransformerTopology(wide, topology).ok,
+              "shape validator rejected Nicopedia T32/D32/FFN64/L19/H2 topology");
+      require(wide.parameterElements == 174464,
+              "Nicopedia D32/FFN64 parameter element count is not 174464");
+    }
     auto twoByTwo = requireTopology(2, 2);
     TransformerTopologyConfig twoByTwoConfig{8, 16, 32, 2, 2, 32};
     twoByTwoConfig.parameterElements = 2 * (4 * 16 * 16 + 4 * 16 + 2 * 16 * 32) + 2 * 32 * 16;

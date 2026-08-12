@@ -247,6 +247,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.batchSize = batchSize;
     config.dimension = dimension;
     config.hiddenDimension = hiddenDimension;
+    // The Nicopedia HTP path reads its FFN width separately so its checkpoint
+    // identity does not borrow generic-MNN semantics at the call site.
+    config.feedForwardDimension = hiddenDimension;
     config.outputDimension = outputDimension;
     config.steps = steps;
     config.warmupSteps = warmupSteps;
@@ -366,6 +369,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jlong seed,
     jint layers,
     jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
     jint maxNewBytes,
     jstring generateMode,
     jfloat temperature,
@@ -431,8 +436,16 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     phonelm::tiny_lm::Config config;
     config.vocabularySize = 256;
     config.tokens = static_cast<uint32_t>(tokens);
-    config.dimension = 16;
-    config.feedForwardDimension = 32;
+    if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
+        feedForwardDimension < 2 || feedForwardDimension > 1024) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=dimension/feed_forward_dimension out of supported range\n");
+    }
+    config.dimension = static_cast<uint32_t>(dimension);
+    config.feedForwardDimension = static_cast<uint32_t>(feedForwardDimension);
     config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
     config.numHeads = 2;
     phonelm::TrainingConfig trainingConfig;
@@ -501,6 +514,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     jint layers,
     jint heads,
     jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
     jint checkpointStep,
     jint validationChunks,
     jint developmentChunks) {
@@ -523,6 +538,14 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
             "error=checkpoint_dir_required\n");
     }
+    if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
+        feedForwardDimension < 2 || feedForwardDimension > 1024) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=dimension/feed_forward_dimension out of supported range\n");
+    }
     // 256 is the cache context range max; out-of-range falls back to the
     // legacy T=32.
     if (tokens < 1 || tokens > 256) tokens = 32;
@@ -530,6 +553,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     config.seed = static_cast<std::uint64_t>(seed);
     config.epochs = layers > 0 ? layers : 6;
     config.measuredSteps = heads > 0 ? heads : 2;
+    config.dimension = dimension;
+    config.feedForwardDimension = feedForwardDimension;
     config.sampleCount = tokens;
     config.diagnosticResumeStep = checkpointStep;
     config.steps = validationChunks > 0 ? validationChunks : 8192;

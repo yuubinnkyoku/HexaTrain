@@ -404,6 +404,9 @@ int main(int argc, char** argv) {
     std::cout << std::setprecision(10)
               << "htp_checkpoint_eval\nseed=" << checkpoint.seed
               << "\nlayers=" << checkpoint.config.numLayers
+              << "\ndimension=" << checkpoint.config.dimension
+              << "\nfeed_forward_dimension="
+              << checkpoint.config.feedForwardDimension
               << "\nstep=" << checkpoint.step
               << "\nparameter_hash=fnv1a64:" << std::hex << std::setw(16)
               << std::setfill('0') << parameterHash(checkpoint.parameters) << std::dec

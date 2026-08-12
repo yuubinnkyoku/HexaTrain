@@ -19,6 +19,9 @@ struct TrainingConfig {
     int batchSize = 8;
     int dimension = 128;
     int hiddenDimension = 128;
+    // Nicopedia HTP's FFN width.  Kept separate from hiddenDimension, which
+    // belongs to the existing generic MNN experiment configuration.
+    int feedForwardDimension = 32;
     int outputDimension = 64;
     int steps = 100;
     int warmupSteps = 0;

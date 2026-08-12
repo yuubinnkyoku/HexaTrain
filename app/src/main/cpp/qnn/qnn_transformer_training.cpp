@@ -5234,13 +5234,19 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
   else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
 }
 
-// Checkpoint file naming: T==32 keeps the legacy
-// htp-seed<S>-l<L>-step<N>.ckpt (byte-identical to historical runs); any
-// other T gains the -t<T> segment: htp-seed<S>-l<L>-t<T>-step<N>.ckpt.
+// Checkpoint file naming: the production anchor T32/D16/FFN32 keeps the
+// legacy htp-seed<S>-l<L>-step<N>.ckpt name.  Every other configuration
+// includes all shape-bearing identity fields so two research configurations
+// cannot replace or mistakenly resume one another's checkpoint.
 std::string nprtCheckpointName(uint32_t seed, uint32_t layers,
-                               uint32_t tokens, uint32_t step) {
+                               uint32_t tokens, uint32_t dimension,
+                               uint32_t feedForwardDimension, uint32_t step) {
   return "htp-seed" + std::to_string(seed) + "-l" + std::to_string(layers) +
-         (tokens == 32 ? "" : "-t" + std::to_string(tokens)) + "-step" +
+         ((tokens == 32 && dimension == 16 && feedForwardDimension == 32)
+              ? ""
+              : "-t" + std::to_string(tokens) + "-d" +
+                    std::to_string(dimension) + "-f" +
+                    std::to_string(feedForwardDimension)) + "-step" +
          std::to_string(step) + ".ckpt";
 }
 
@@ -5261,37 +5267,55 @@ static bool nprtParseCheckpointDigits(const std::string &digits,
 
 bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
                              uint32_t expectedLayers, uint32_t *step,
-                             uint32_t expectedTokens = 32) {
-  const std::string base = path.substr(path.find_last_of('/') + 1);
+                             uint32_t expectedTokens = 32,
+                             uint32_t expectedDimension = 16,
+                             uint32_t expectedFeedForwardDimension = 32) {
+  const std::string base = path.substr(path.find_last_of("/\\") + 1);
   const std::string stepMarker = "-step";
   const std::string suffix = ".ckpt";
   const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
                              std::to_string(expectedLayers) + stepMarker;
-  // Legacy name (no -t<T> segment) is accepted for every expectedTokens.
+  // The legacy name is exclusively the production anchor identity.
   if (base.size() > prefix.size() + suffix.size() &&
       base.compare(0, prefix.size(), prefix) == 0 &&
       base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+    if (expectedTokens != 32 || expectedDimension != 16 ||
+        expectedFeedForwardDimension != 32)
+      return false;
     return nprtParseCheckpointDigits(
         base.substr(prefix.size(), base.size() - prefix.size() - suffix.size()),
         step);
   }
-  // The -t<T>-step variant is accepted only when expectedTokens != 32 and
-  // only with T == expectedTokens; a mismatched or misplaced -t segment is
-  // rejected fail-closed.
-  if (expectedTokens == 32) return false;
+  // The extended name must carry and match T, D, and FFN exactly.
   const std::string tPrefix = "htp-seed" + std::to_string(expectedSeed) +
                               "-l" + std::to_string(expectedLayers) + "-t";
   if (base.size() <= tPrefix.size() ||
       base.compare(0, tPrefix.size(), tPrefix) != 0 ||
       base.compare(base.size() - suffix.size(), suffix.size(), suffix) != 0)
     return false;
-  const std::size_t stepPos = base.find(stepMarker, tPrefix.size());
-  if (stepPos == std::string::npos) return false;
-  uint32_t tokens = 0;
-  if (!nprtParseCheckpointDigits(
-          base.substr(tPrefix.size(), stepPos - tPrefix.size()), &tokens))
+  const std::size_t dPos = base.find("-d", tPrefix.size());
+  const std::size_t fPos = dPos == std::string::npos
+                               ? std::string::npos
+                               : base.find("-f", dPos + 2);
+  const std::size_t stepPos = fPos == std::string::npos
+                                  ? std::string::npos
+                                  : base.find(stepMarker, fPos + 2);
+  if (dPos == std::string::npos || fPos == std::string::npos ||
+      stepPos == std::string::npos)
     return false;
-  if (tokens != expectedTokens) return false;
+  uint32_t tokens = 0;
+  uint32_t dimension = 0;
+  uint32_t feedForwardDimension = 0;
+  if (!nprtParseCheckpointDigits(base.substr(tPrefix.size(), dPos - tPrefix.size()),
+                                 &tokens) ||
+      !nprtParseCheckpointDigits(base.substr(dPos + 2, fPos - dPos - 2),
+                                 &dimension) ||
+      !nprtParseCheckpointDigits(base.substr(fPos + 2, stepPos - fPos - 2),
+                                 &feedForwardDimension))
+    return false;
+  if (tokens != expectedTokens || dimension != expectedDimension ||
+      feedForwardDimension != expectedFeedForwardDimension)
+    return false;
   return nprtParseCheckpointDigits(
       base.substr(stepPos + stepMarker.size(),
                   base.size() - stepPos - stepMarker.size() - suffix.size()),
@@ -5664,11 +5688,13 @@ std::string nicopediaHtpGeneration(
            "error=gate_policy must be legacy, candidate, or htp-native\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
-                               layers, &expectedStep, config.tokens)) {
+                               layers, &expectedStep, config.tokens,
+                               config.dimension, config.feedForwardDimension)) {
     const std::string variant =
-        config.tokens == 32
+        config.tokens == 32 && config.dimension == 16 &&
+                config.feedForwardDimension == 32
             ? "htp-seed<seed>-l<layers>-step<step>.ckpt"
-            : "htp-seed<seed>-l<layers>-t<tokens>-step<step>.ckpt";
+            : "htp-seed<seed>-l<layers>-t<tokens>-d<dimension>-f<ffn>-step<step>.ckpt";
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FILENAME\n"
            "error=checkpoint filename must be " +
@@ -6182,6 +6208,8 @@ std::string nicopediaHtpGeneration(
                          ? "\nfailure_classification=HTP_NATIVE_HEALTH"
                          : "\nfailure_classification=PARITY_GATE_REJECTED"))
          << "\nmodel=L" << layers << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nmodel_dimension=" << config.dimension
+         << "\nfeed_forward_dimension=" << config.feedForwardDimension
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
@@ -6243,6 +6271,15 @@ std::string nicopediaHtpGeneration(
                               : "n/a")
           << "\nhtp_native_qnn_success="
           << (htpNativeQnnSuccess ? "true" : "false")
+          // Keep QNN return status and application-visible tensor finiteness
+          // independent: either one can fail without implying the other.
+          << "\nqnn_return_code_success="
+          << (htpNativeQnnSuccess ? "true" : "false")
+          << "\noutput_tensors_finite="
+          << ((htpNativeGenerationLogitsFinite &&
+               htpNativeGenerationProbabilitiesFinite)
+                  ? "true"
+                  : "false")
           << "\nhtp_native_prefix_logits_finite="
           << (htpNativePrefixLogitsFinite ? "true" : "false")
           << "\nhtp_native_prefix_probabilities_finite="
@@ -6430,10 +6467,11 @@ std::string nicopediaHtpDivergenceLocalization(
            "error=diagnostic_layer_index out of range\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
-                               layers, &expectedStep))
+                               layers, &expectedStep, config.tokens,
+                               config.dimension, config.feedForwardDimension))
     return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FILENAME\n"
-           "error=checkpoint filename must be htp-seed<seed>-l<layers>-step<step>.ckpt\n";
+           "error=checkpoint filename must include T/D/FFN outside the T32/D16/FFN32 anchor\n";
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
@@ -6770,6 +6808,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     const std::string resumePath =
         cachePath + "/" +
         nprtCheckpointName(static_cast<uint32_t>(seed), layers, config.tokens,
+                           config.dimension, config.feedForwardDimension,
                            resumeStep);
     LoadedNprtCheckpoint loaded;
     try {
@@ -7053,7 +7092,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       const std::string intervalPath =
           cachePath + "/" +
           nprtCheckpointName(static_cast<uint32_t>(seed), layers,
-                             config.tokens, step);
+                             config.tokens, config.dimension,
+                             config.feedForwardDimension, step);
       const bool written = nprtSaveCheckpointV2(
           intervalPath, config, uint32_t(seed), step, current, currentFirst,
           currentSecond);
@@ -7196,7 +7236,14 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   // Scratch retains the established loss-decrease assertion.  A resumed
   // segment is a continuation diagnostic: a noisy endpoint must not turn an
   // otherwise finite, fully-checkpointed segment into a health failure.
+  const auto &trainingApiTrace = runtime.apiTrace();
+  const bool trainingQnnReturnCodeSuccess =
+      runtime.metrics().graphExecuteCount > 0 &&
+      trainingApiTrace.graphExecuteFailureCount == 0 &&
+      trainingApiTrace.graphExecuteLastResult == 0 &&
+      trainingApiTrace.lastQnnResult == 0;
   const bool ok = !interrupted && step0Ok && allFinite && finalFinite &&
+                  trainingQnnReturnCodeSuccess &&
                   (!fromScratch || lossDecreased) &&
                   lastCompletedStep == steps;
   if (!curve.empty()) {
@@ -7216,6 +7263,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   const std::string checkpointPath =
       cachePath + "/" +
       nprtCheckpointName(static_cast<uint32_t>(seed), layers, config.tokens,
+                         config.dimension, config.feedForwardDimension,
                          lastCompletedStep);
   bool checkpointWritten = false;
   std::ifstream checkpointPresent(checkpointPath, std::ios::binary);
@@ -7245,11 +7293,23 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                      "NPRTCKPTV2 atomic final write failed", runtime);
     ++checkpointCount;
   }
+  std::uint64_t checkpointBytes = 0;
+  {
+    std::ifstream checkpointSize(checkpointPath, std::ios::binary | std::ios::ate);
+    const std::streamoff size = checkpointSize.good()
+        ? static_cast<std::streamoff>(checkpointSize.tellg())
+        : std::streamoff(-1);
+    if (size > 0) checkpointBytes = static_cast<std::uint64_t>(size);
+  }
   std::ostringstream report;
   report << std::setprecision(10)
          << "NICOPEDIA_HTP\ntest=nicopedia_real_text_htp_training\nstatus="
          << (interrupted ? "CANCELLED" : (ok ? "SUCCESS" : "FAILED"))
          << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nmodel_dimension=" << config.dimension
+         << "\nfeed_forward_dimension=" << config.feedForwardDimension
+         << "\nmodel_config_identity=T" << config.tokens << "_D"
+         << config.dimension << "_FFN" << config.feedForwardDimension
          << "\nsteps=" << steps << "\nbatch_size=" << batchSize
          << "\nlearning_rate=" << lr
          << "\nresume_from_step=" << resumeStep
@@ -7257,6 +7317,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nresume_checkpoint_hash=" << resumeCheckpointHash
          << "\ncheckpoint_interval=" << checkpointInterval
          << "\ncheckpoint_count=" << checkpointCount
+         << "\ncheckpoint_bytes=" << checkpointBytes
          << "\ncache_context=" << cache.context
          << "\ncache_vocabulary=" << cache.vocabulary
          << "\ncache_record_count=" << cache.records.size()
@@ -7322,7 +7383,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nadam_qnn_us=" << adamQnnUs
          << "\nhost_overhead_us=" << hostOverheadUs
          << "\nqnn_return_code_success="
-         << (runtime.metrics().graphExecuteCount > 0 ? "true" : "false")
+         << (trainingQnnReturnCodeSuccess ? "true" : "false")
          << "\noutput_tensors_finite="
          << (allQnnOutputsFinite ? "true" : "false")
          << "\nbackend=HTP\nstop_requested="
@@ -7382,6 +7443,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
       dir + "/" +
       nprtCheckpointName(static_cast<uint32_t>(seed),
                          static_cast<uint32_t>(layers), config.tokens,
+                         config.dimension, config.feedForwardDimension,
                          checkpointStep);
   LoadedNprtCheckpoint loaded;
   try {
@@ -7458,10 +7520,18 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
         result.finite = false;
         return result;
       }
+      const auto finiteVector = [](const std::vector<float> &values) {
+        return std::all_of(values.begin(), values.end(),
+                           [](float value) { return std::isfinite(value); });
+      };
       bool chunkFinite =
-          std::isfinite(output.loss) &&
-          std::all_of(output.logits.begin(), output.logits.end(),
-                      [](float value) { return std::isfinite(value); });
+          std::isfinite(output.loss) && finiteVector(output.output) &&
+          finiteVector(output.logits) && finiteVector(output.probabilities) &&
+          finiteVector(output.dOutput) && finiteVector(output.dLogits) &&
+          finiteVector(output.embeddedInput) &&
+          finiteVector(output.dEmbeddedInput) && finiteParams(output.gradients);
+      for (const auto &layerInput : output.layerInputGradients)
+        chunkFinite = chunkFinite && finiteVector(layerInput);
       ++result.chunks;
       graphLossSum += output.loss;
       if (!chunkFinite) {
@@ -7535,8 +7605,15 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
   const double evaluationMsPerChunk =
       evaluatedChunks > 0.0 ? evaluationSeconds * 1000.0 / evaluatedChunks : 0.0;
   const bool evalFinite = validationResult.finite && developmentResult.finite;
+  const auto &evaluationApiTrace = runtime.apiTrace();
+  const bool evaluationQnnReturnCodeSuccess =
+      runtime.metrics().graphExecuteCount > 0 &&
+      evaluationApiTrace.graphExecuteFailureCount == 0 &&
+      evaluationApiTrace.graphExecuteLastResult == 0 &&
+      evaluationApiTrace.lastQnnResult == 0;
   const bool ok =
-      evalFinite && validationResult.nonfiniteChunks == 0 &&
+      evalFinite && evaluationQnnReturnCodeSuccess &&
+      validationResult.nonfiniteChunks == 0 &&
       developmentResult.nonfiniteChunks == 0 &&
       validationResult.chunks == validationLimit &&
       developmentResult.chunks == developmentLimit;
@@ -7545,6 +7622,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "NICOPEDIA_HTP_EVAL\ntest=nicopedia_real_text_htp_eval\nstatus="
          << (ok ? "SUCCESS" : "FAILED")
          << "\nseed=" << seed << "\nlayers=" << layers << "\nheads=" << heads
+         << "\nmodel_dimension=" << config.dimension
+         << "\nfeed_forward_dimension=" << config.feedForwardDimension
           << "\ncheckpoint_step=" << checkpointStep
           << "\ncheckpoint_format="
           << (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")
@@ -7576,6 +7655,9 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\ndevelopment_nonfinite_chunks="
          << developmentResult.nonfiniteChunks
           << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+          << "\nqnn_return_code_success="
+          << (evaluationQnnReturnCodeSuccess ? "true" : "false")
+          << "\noutput_tensors_finite=" << (evalFinite ? "true" : "false")
           << "\nevaluation_total_seconds=" << evaluationSeconds
           << "\nevaluation_ms_per_chunk=" << evaluationMsPerChunk
          << "\nevaluation_math_responsibility=HTP"
@@ -7595,8 +7677,13 @@ std::string runTinyTransformerTrainingExperiment(
     config.vocabularySize = 256;
     config.tokens = static_cast<uint32_t>(
         trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
-    config.dimension = 16;
-    config.feedForwardDimension = 32;
+    config.dimension = static_cast<uint32_t>(trainingConfig.dimension > 0
+                                                 ? trainingConfig.dimension
+                                                 : 16);
+    config.feedForwardDimension = static_cast<uint32_t>(
+        trainingConfig.feedForwardDimension > 0
+            ? trainingConfig.feedForwardDimension
+            : 32);
     config.numLayers =
         static_cast<uint32_t>(trainingConfig.epochs > 0 ? trainingConfig.epochs : 6);
     config.numHeads =
@@ -7661,8 +7748,13 @@ std::string runTinyTransformerTrainingExperiment(
     config.vocabularySize = 256;
     config.tokens = static_cast<uint32_t>(
         trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
-    config.dimension = 16;
-    config.feedForwardDimension = 32;
+    config.dimension = static_cast<uint32_t>(trainingConfig.dimension > 0
+                                                 ? trainingConfig.dimension
+                                                 : 16);
+    config.feedForwardDimension = static_cast<uint32_t>(
+        trainingConfig.feedForwardDimension > 0
+            ? trainingConfig.feedForwardDimension
+            : 32);
     config.numLayers =
         static_cast<uint32_t>(trainingConfig.epochs > 0 ? trainingConfig.epochs : 6);
     config.numHeads =

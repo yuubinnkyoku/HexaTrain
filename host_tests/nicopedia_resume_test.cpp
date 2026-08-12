@@ -524,6 +524,38 @@ int main() {
       std::cerr << "tokens mismatch must be rejected fail-closed\n";
       ++failures;
     }
+
+    // D and FFN are checkpoint identity fields too.  A research checkpoint
+    // must never be resumed under a same-T/L/H configuration with a different
+    // embedding or FFN width.
+    bool dimensionRejected = false;
+    {
+      Config wrongDimension = config;
+      wrongDimension.dimension = config.dimension + 2;
+      try {
+        loadCheckpoint(v2Path, wrongDimension, seed, 12, /*requireAdam=*/true);
+      } catch (const std::runtime_error& error) {
+        dimensionRejected = std::string(error.what()) == "CONFIG_MISMATCH";
+      }
+    }
+    if (!dimensionRejected) {
+      std::cerr << "dimension mismatch must be rejected fail-closed\n";
+      ++failures;
+    }
+    bool ffnRejected = false;
+    {
+      Config wrongFfn = config;
+      wrongFfn.feedForwardDimension = config.feedForwardDimension + 8;
+      try {
+        loadCheckpoint(v2Path, wrongFfn, seed, 12, /*requireAdam=*/true);
+      } catch (const std::runtime_error& error) {
+        ffnRejected = std::string(error.what()) == "CONFIG_MISMATCH";
+      }
+    }
+    if (!ffnRejected) {
+      std::cerr << "FFN mismatch must be rejected fail-closed\n";
+      ++failures;
+    }
   } catch (const std::exception& error) {
     std::cerr << "nicopedia_resume_test_error=" << error.what() << '\n';
     return 1;

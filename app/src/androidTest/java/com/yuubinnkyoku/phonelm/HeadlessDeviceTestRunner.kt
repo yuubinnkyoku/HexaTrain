@@ -219,6 +219,8 @@ class HeadlessDeviceTestRunner {
         val layers: Int,
         val heads: Int,
         val tokens: Int,
+        val dimension: Int,
+        val feedForwardDimension: Int,
         val steps: Int,
         val batchSize: Int,
         val resumeStep: Int,
@@ -245,6 +247,8 @@ class HeadlessDeviceTestRunner {
         val layers = intArgument(arguments, "layers", 19, 1..100)
         val heads = intArgument(arguments, "heads", 2, 1..32)
         val tokens = intArgument(arguments, "tokens", 32, 8..256)
+        val dimension = intArgument(arguments, "dimension", 16, 2..256)
+        val feedForwardDimension = intArgument(arguments, "feedForwardDimension", 32, 2..1024)
         val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
         val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
         val resumeStep = intArgument(arguments, "resumeStep", 0, 0..100_000)
@@ -267,6 +271,7 @@ class HeadlessDeviceTestRunner {
 
         require(layers == 19) { "$suite requires layers=19" }
         require(heads == 2) { "$suite requires heads=2" }
+        require(dimension % heads == 0) { "$suite requires dimension divisible by heads" }
         if (suite == "nicopedia-long-training") {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
             require(steps in 1..8_000) { "nicopedia-long-training hard ceiling is step 8000" }
@@ -280,6 +285,8 @@ class HeadlessDeviceTestRunner {
             layers = layers,
             heads = heads,
             tokens = tokens,
+            dimension = dimension,
+            feedForwardDimension = feedForwardDimension,
             steps = steps,
             batchSize = batchSize,
             resumeStep = resumeStep,
@@ -344,12 +351,19 @@ class HeadlessDeviceTestRunner {
         return directory
     }
 
-    private fun nicopediaCheckpointName(seed: Long, layers: Int, tokens: Int, step: Int): String =
-        if (tokens == 32) {
-            // Legacy T32 naming: no t-variant, byte-identical to historical artifacts.
+    private fun nicopediaCheckpointName(
+        seed: Long,
+        layers: Int,
+        tokens: Int,
+        dimension: Int,
+        feedForwardDimension: Int,
+        step: Int,
+    ): String =
+        if (tokens == 32 && dimension == 16 && feedForwardDimension == 32) {
+            // Canonical anchor naming remains byte-identical to historical artifacts.
             "htp-seed${seed}-l${layers}-step${step}.ckpt"
         } else {
-            "htp-seed${seed}-l${layers}-t${tokens}-step${step}.ckpt"
+            "htp-seed${seed}-l${layers}-t${tokens}-d${dimension}-f${feedForwardDimension}-step${step}.ckpt"
         }
 
     private fun requiredInputFile(directory: File, name: String): File {
@@ -371,13 +385,13 @@ class HeadlessDeviceTestRunner {
         val directory = nicopediaInputDirectory(context, runId)
         requiredInputFile(directory, "train_pilot.bin")
         if (config.resumeStep > 0) {
-            requiredInputFile(directory, nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.resumeStep))
+            requiredInputFile(directory, nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.resumeStep))
         }
         return NativeBridge.nativeRunExecutionMode(
             executionMode = ExecutionMode.QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA.nativeCode,
             batchSize = config.batchSize,
-            dimension = 16,
-            hiddenDimension = 32,
+            dimension = config.dimension,
+            hiddenDimension = config.feedForwardDimension,
             outputDimension = 256,
             steps = config.steps,
             warmupSteps = 0,
@@ -408,7 +422,7 @@ class HeadlessDeviceTestRunner {
         val config = parseNicopediaArguments(arguments, "nicopedia-eval")
         val directory = nicopediaInputDirectory(context, runId)
         requiredInputFile(directory,
-            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.checkpointStep))
+            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.checkpointStep))
         requiredInputFile(directory, "validation.bin")
         requiredInputFile(directory, "development.bin")
         return NativeBridge.nativeRunNicopediaEvaluate(
@@ -417,6 +431,8 @@ class HeadlessDeviceTestRunner {
             layers = config.layers,
             heads = config.heads,
             tokens = config.tokens,
+            dimension = config.dimension,
+            feedForwardDimension = config.feedForwardDimension,
             checkpointStep = config.checkpointStep,
             validationChunks = config.validationChunks,
             developmentChunks = config.developmentChunks,
@@ -431,7 +447,7 @@ class HeadlessDeviceTestRunner {
         val config = parseNicopediaArguments(arguments, "nicopedia-generate")
         val directory = nicopediaInputDirectory(context, runId)
         val checkpoint = requiredInputFile(directory,
-            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.checkpointStep))
+            nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.checkpointStep))
         val prompt = requiredInputFile(directory, "prompt.bin")
         return NativeBridge.nativeRunNicopediaGenerate(
             checkpointPath = checkpoint.absolutePath,
@@ -439,6 +455,8 @@ class HeadlessDeviceTestRunner {
             seed = config.seed,
             layers = config.layers,
             tokens = config.tokens,
+            dimension = config.dimension,
+            feedForwardDimension = config.feedForwardDimension,
             maxNewBytes = config.maxNewBytes,
             generateMode = config.generateMode,
             temperature = config.temperature,
@@ -538,6 +556,8 @@ class HeadlessDeviceTestRunner {
             seed = 1L,
             layers = 19,
             tokens = 32,
+            dimension = 16,
+            feedForwardDimension = 32,
             // If the unchanged legacy gate unexpectedly passes, this is the
             // preregistered fixed Greedy generation (64 bytes). On the known
             // reject path no generation executes and the count remains zero.
@@ -570,8 +590,14 @@ class HeadlessDeviceTestRunner {
                 else -> false
             }
             val fallbackOk = Regex("(?m)^cpu_fallback=false$").containsMatchIn(report)
-            val finiteOk = !Regex("(?m)^(?:nan_detected|inf_detected)=true$").containsMatchIn(report)
-            return statusOk && prefixOk && fallbackOk && finiteOk
+            // Keep QNN return-code success and application-visible tensor
+            // finiteness as independent, explicit gates.  Older reports that
+            // only inferred finiteness from nan/inf fields must not silently
+            // pass a research run.
+            val qnnReturnOk = Regex("(?m)^qnn_return_code_success=true$").containsMatchIn(report)
+            val tensorFiniteOk = Regex("(?m)^output_tensors_finite=true$").containsMatchIn(report)
+            val finiteDiagnosticsOk = !Regex("(?m)^(?:nan_detected|inf_detected)=true$").containsMatchIn(report)
+            return statusOk && prefixOk && fallbackOk && qnnReturnOk && tensorFiniteOk && finiteDiagnosticsOk
         }
         val values = report.lineSequence()
             .mapNotNull { line -> line.split('=', limit = 2).takeIf { it.size == 2 } }
