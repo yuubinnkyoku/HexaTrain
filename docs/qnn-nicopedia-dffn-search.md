@@ -368,3 +368,23 @@ matches where reported.  The reject count exceeds the fixed 0.02 threshold the
 same way D24 did at high step counts; the threshold was not changed and no
 generation was produced (`generated_byte_count=0`).  This is recorded as a
 quality shortfall, not a code regression.
+
+### D24/FFN48 three-seed aggregation (step8000, 64+64 chunks)
+
+D24/FFN48 was retrained on seeds 2 and 3 to separate seed variance from the
+model-comparison gap.  All three seeds completed 0 -> 8000 with resumes and
+remained finite, QNN-successful, and CPU-fallback-free.  Final host 64+64
+held-out values:
+
+| seed | val NLL | dev NLL | val top1 | final_parameter_hash |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 2.054603261 | 2.377130966 | 0.452637 | 4ddd1ef2b307e177 |
+| 2 | 2.071054465 | 2.3668981 | 0.449707 | c513b9e2348cc12a |
+| 3 | 2.063319565 | 2.381110425 | 0.446777 | 06ad0c94d5bbc0a7 |
+
+Seed dispersion is small: val mean 2.063, std 0.00823, range 0.0165; dev mean
+2.375, std 0.00733, range 0.0142.  This establishes that D24 vs D16 is a real
+model gap (val +0.073, dev +0.078, ~9x the seed std) while D24 vs D32 is not
+resolvable from seed variance alone (val diff 0.0138, dev diff 0.0089, within
+the seed range).  Ranking D24 and D32 is therefore not justified; both clearly
+outperform the production D16/FFN32 width.
