@@ -250,7 +250,10 @@ fun TrainingDashboard(state: TrainingUiState, onSelectDataset: () -> Unit, onSta
 @Composable fun TrainingSummaryCard(state: TrainingUiState) = DashboardCard("Training summary") {
     MetricRow("Final loss", state.progress?.loss?.let(::loss) ?: "—")
     MetricRow("Elapsed", state.timing?.elapsedMs?.let(::duration) ?: "—", "run wall / observed step ${state.dashboard.averageStepWallTimeMs?.let(::duration) ?: "—"}")
-    MetricRow("Checkpoints", state.dashboard.checkpointCount.toString(), "last observed HTP ratio ${state.dashboard.activityHistory.lastOrNull()?.htpObservationRatioPercent?.let(::percent) ?: "—"}")
+    val lastObservedHtpRatio = state.dashboard.activityHistory
+        .lastOrNull { it.htpObservationRatioPercent != null }
+        ?.htpObservationRatioPercent
+    MetricRow("Checkpoints", state.dashboard.checkpointCount.toString(), "last observed HTP ratio ${lastObservedHtpRatio?.let(::percent) ?: "—"}")
     MetricRow("Peak process PSS", state.dashboard.peakMemoryBytes?.let(::bytes) ?: "—")
 }
 
