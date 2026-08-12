@@ -38,7 +38,8 @@ using Layer = phonelm::qnn::TinyTransformerLayerParameters;
 
 namespace {
 
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+// FNV-1a 64-bit offset basis 0xCBF29CE484222325 = 14695981039346656037.
+constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 struct CacheRecord {

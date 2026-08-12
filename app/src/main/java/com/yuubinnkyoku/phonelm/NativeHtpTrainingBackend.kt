@@ -39,7 +39,9 @@ internal object NicopediaCacheInspector {
     private const val MAGIC = "NPRTBYTEV1\n"
     private const val MAX_RECORDS = 10_000_000L
     internal const val MAX_BYTES = 1_536L * 1024L * 1024L
-    private const val FNV_OFFSET = -3750763034362895579L // 1469598103934665603u
+    // FNV-1a 64-bit offset basis 0xCBF29CE484222325 = 14695981039346656037,
+    // stored as signed long: -3750763034362895579.
+    private const val FNV_OFFSET = -3750763034362895579L
     private const val FNV_PRIME = 1099511628211L
 
     fun inspectFile(file: File, expected: TrainingModelConfig): NicopediaCacheInspection =

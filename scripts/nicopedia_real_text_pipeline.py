@@ -32,7 +32,8 @@ ORDER_SALT = b"PhoneLM/Nicopedia/subset/v1\0"
 EXPECTED_HEADER = ["pg_id", "pg_title", "pg_view_title", "pg_yomi", "pg_category", "pg_created"]
 EXPECTED_BODY = ["pg_id", "txt_text", "pg_rev_created"]
 VALID_CATEGORIES = {"a", "i", "l", "o", "v"}
-FNV_OFFSET = 1469598103934665603
+# FNV-1a 64-bit offset basis 0xCBF29CE484222325 = 14695981039346656037.
+FNV_OFFSET = 14695981039346656037
 FNV_PRIME = 1099511628211
 BLOCK_TAGS = {
     "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
