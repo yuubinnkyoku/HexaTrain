@@ -39,10 +39,11 @@ dock, dynamic Android 12+ accent colors, and measured-value animation. The
 dedicated Material 3 Expressive alpha theme/motion APIs are intentionally not
 used, so experimental APIs do not escape into the application theme.
 
-The screen is split into a training hero, observed training state, compute
-activity history, fused/Adam/host performance, loss history, model/dataset
-identity, a human event timeline, expandable structured diagnostics, and a
-terminal summary. The external patch-manager screen in the design brief was
+The screen combines a compact training hero, current compute observations,
+fused/Adam/step performance, a loss trace, latest checkpoint/event, and primary
+actions in its fixed overview. Model/dataset identity, cumulative performance,
+the human event timeline, structured diagnostics, and terminal summary are
+available in the on-demand details sheet. The external patch-manager screen in the design brief was
 used only as an information-hierarchy reference. PhoneLM's Compose components,
 state model, layout, colors, charts, and action semantics are original and do
 not reuse its code or component structure.
@@ -69,6 +70,14 @@ read is cached for one second while process CPU time is sampled at each accepted
 progress boundary. HTP activity remains the ratio of measured QNN execute wall
 time to the corresponding observation-window wall time. It is not NPU, DSP,
 device, or hardware utilization.
+
+The portrait overview is a fixed, non-scrolling monitoring surface. It keeps
+phase, progress, loss/ETA, HTP observation ratio, process CPU, current fused
+and Adam timing, a compact loss trace, latest checkpoint/event, and primary
+actions visible together. Model/dataset metadata, cumulative timing, the most
+recent 50 retained events, summary, and raw diagnostics are available on demand in a scrolling
+Material 3 bottom sheet. Height and font scale select compact, standard, or
+comfortable density without changing telemetry values or lifecycle behavior.
 
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
