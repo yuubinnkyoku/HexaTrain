@@ -197,9 +197,7 @@ steps 250, 500, 750, and 1000.  Its host wrapper stopped during the diagnostic
 CPU replay tail after step 1000 because no new checkpoint arrived for the
 600-second watchdog window; this is not a native/QNN failure.  The checkpoints
 were recovered before any rerun and all headers matched T32/D24/FFN48/L19/H2/
-V256/seed 1.  Host checkpoint evaluation was finite at every point; validation
-NLL moved 3.408663 (step 250) to 3.160144 (step 1000), and development NLL
-moved 2.870006 to 2.468762 (CPU evaluator, one chunk per split).
+V256/seed 1.  Host checkpoint evaluation was finite at every point; the training-run diagnostic tail evaluated one chunk per split (CPU evaluator), so validation NLL moved 3.408663 (step 250) to 3.160144 (step 1000) and development NLL moved 2.870006 to 2.468762 under that 1+1-chunk condition.  On the dedicated held-out evaluation at step 1000 with identical inputs, host and HTP agree: 64+64 chunks give host validation 2.224771 vs HTP 2.224831 (delta 6.0e-05) and host development 2.639204 vs HTP 2.639192 (delta 1.2e-05), checkpoint_parameter_hash fnv1a64:f31295e03606f4ce, cache hashes fnv1a64:00fa2577fe03d1e5 / fnv1a64:f3914ae3cfd17464, 128/128 QNN success, finite true, fallback false.  The large apparent gap between the 1-chunk tail (3.16) and the 64-chunk HTP (2.22) is therefore an intended evaluation-condition difference (chunk count and first-chunk variance), not a CPU/HTP implementation or numerical divergence.  Full-cap host evaluation at 8192+16384 chunks gives validation 2.355019 and development 2.335255 for the same checkpoint, confirming the same condition dependence.
 
 A controlled resume from step 1000 to 1250 then reached `PASSED/complete` and
 produced a new 1,236,265-byte V2 checkpoint.  The resume report recorded
