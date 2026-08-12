@@ -280,7 +280,8 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    progress?.let { "${it.completedSteps} / ${it.totalSteps} steps" } ?: "Step target unavailable",
+                    stepTargetLine(state.phase, state.progress, state.message)
+                        ?: if (state.phase == TrainingPhase.IDLE) "Ready" else "—",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = TelemetryFontFamily,

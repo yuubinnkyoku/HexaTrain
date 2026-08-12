@@ -5,6 +5,7 @@ import com.yuubinnkyoku.phonelm.TrainingDashboardEvent
 import com.yuubinnkyoku.phonelm.TrainingDashboardEventType
 import com.yuubinnkyoku.phonelm.TrainingLossHistoryEntry
 import com.yuubinnkyoku.phonelm.TrainingPhase
+import com.yuubinnkyoku.phonelm.TrainingProgress
 
 /** Pure layout policy so portrait overview density can be verified on the JVM. */
 internal enum class TrainingOverviewDensity(
@@ -33,6 +34,33 @@ internal fun currentHtpObservationRatio(history: List<TrainingActivityHistoryEnt
 
 internal fun currentProcessCpuPercent(history: List<TrainingActivityHistoryEntry>): Double? =
     history.lastOrNull()?.processCpuPercent
+
+/**
+ * Maps the session phase and target-step availability to the hero's step line.
+ *
+ * A missing target is normal before a run (IDLE/READY) and after a terminal
+ * state; it is only fail-closed while a run is active, where progress must
+ * always carry a target. ERROR surfaces the repository message instead of
+ * pretending the cause is a missing target.
+ */
+internal fun stepTargetLine(
+    phase: TrainingPhase,
+    progress: TrainingProgress?,
+    message: String?,
+): String? = when {
+    phase == TrainingPhase.ERROR -> message?.takeIf { it.isNotBlank() } ?: "Training error"
+    progress != null -> "${progress.completedSteps} / ${progress.totalSteps} steps"
+    phase in stepTargetRequiredPhases -> "Step target unavailable"
+    else -> null
+}
+
+private val stepTargetRequiredPhases = setOf(
+    TrainingPhase.PREPARING,
+    TrainingPhase.INITIALIZING_HTP,
+    TrainingPhase.TRAINING,
+    TrainingPhase.SAVING_CHECKPOINT,
+    TrainingPhase.PAUSED,
+)
 
 /** Primary action shown in the expressive toolbar for a given session state. */
 internal enum class TrainingToolbarPrimaryAction {

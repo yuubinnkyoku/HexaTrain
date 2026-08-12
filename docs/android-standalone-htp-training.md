@@ -89,6 +89,15 @@ behavior. The accessible tier preserves the fixed overview and required actions
 at 2.0 font scale by omitting secondary summary rows; complete values remain in
 the details sheet.
 
+The hero's step line maps the session phase to target-step availability instead
+of treating every missing target as an error. Before a run (IDLE) the line reads
+"Ready"; during an active run a missing target is fail-closed ("Step target
+unavailable"); an ERROR state surfaces the repository message rather than
+blaming the target; terminal states without progress render as unavailable
+without implying an error. This keeps fresh launches and dataset/model selection
+out of the error presentation while preserving fail-closed behavior whenever an
+active run actually needs a target.
+
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
 prevents a standalone Stop from cancelling a benchmark-owned native run; the

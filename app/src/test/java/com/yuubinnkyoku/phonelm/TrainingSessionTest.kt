@@ -436,4 +436,44 @@ class TrainingSessionTest {
         assertTrue(repository.snapshot().canStart)
         repository.close()
     }
+
+    @Test fun staleHeadlessStatusIsNeverRestoredAsGuiActiveTraining() {
+        // The GUI repository owns its own in-process session and must not be
+        // influenced by a stale headless status.json (RUNNING + dead PID) left
+        // on disk by the instrumented headless runner.
+        val repository = StandaloneTrainingRepository()
+        val state = repository.snapshot()
+        assertEquals(TrainingPhase.IDLE, state.phase)
+        assertNull(state.progress)
+        assertFalse(state.canStop)
+        assertFalse(state.canPause)
+        repository.close()
+    }
+
+    @Test fun missingRequiredTargetDuringRunFailsClosed() {
+        // An active run whose progress loses its target is malformed and must
+        // never be presented as a valid run.
+        val finished = CountDownLatch(1)
+        val session = TrainingSession(
+            backend = object : TrainingBackend {
+                override fun requestStop() = Unit
+                override fun run(request: TrainingRequest, onProgress: (TrainingBackendProgress) -> Unit): TrainingBackendResult {
+                    onProgress(
+                        TrainingBackendProgress(
+                            completedSteps = 1,
+                            totalSteps = 0,
+                            loss = 0.5f,
+                            runtimeEvidence = TrainingRuntimeEvidence(true, true, false),
+                        ),
+                    )
+                    return TrainingBackendResult.Cancelled()
+                }
+            },
+        )
+        session.setListener { if (it.phase == TrainingPhase.ERROR) finished.countDown() }
+        assertTrue(session.start(TrainingRequest(TrainingModelConfig.NICOPEDIA_L19, TrainingDataset("content://dataset"), 2)))
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertTrue(session.snapshot().message!!.contains("totalSteps"))
+        session.close()
+    }
 }

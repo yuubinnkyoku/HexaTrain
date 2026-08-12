@@ -3,6 +3,7 @@ package com.yuubinnkyoku.phonelm
 import com.yuubinnkyoku.phonelm.ui.training.TrainingOverviewDensity
 import com.yuubinnkyoku.phonelm.ui.training.currentHtpObservationRatio
 import com.yuubinnkyoku.phonelm.ui.training.currentProcessCpuPercent
+import com.yuubinnkyoku.phonelm.ui.training.stepTargetLine
 import com.yuubinnkyoku.phonelm.ui.training.TrainingToolbarPrimaryAction
 import com.yuubinnkyoku.phonelm.ui.training.checkpointAgeMs
 import com.yuubinnkyoku.phonelm.ui.training.latestImportantEvent
@@ -58,6 +59,65 @@ class TrainingOverviewLayoutTest {
         assertEquals(TrainingToolbarPrimaryAction.PAUSE, trainingToolbarPrimaryAction(TrainingPhase.TRAINING, false, true, true, false))
         assertEquals(TrainingToolbarPrimaryAction.RESUME, trainingToolbarPrimaryAction(TrainingPhase.PAUSED, false, true, false, true))
         assertEquals(TrainingToolbarPrimaryAction.START, trainingToolbarPrimaryAction(TrainingPhase.IDLE, true, false, false, false))
+    }
+
+    @Test fun freshIdleWithoutTargetIsNotAnError() {
+        // Fresh launch / dataset not selected: no target is expected, and the
+        // hero must not surface "Step target unavailable".
+        assertNull(stepTargetLine(TrainingPhase.IDLE, progress = null, message = null))
+        assertNull(stepTargetLine(TrainingPhase.IDLE, progress = null, message = "stale"))
+    }
+
+    @Test fun runningWithoutTargetFailsClosed() {
+        assertEquals(
+            "Step target unavailable",
+            stepTargetLine(TrainingPhase.TRAINING, progress = null, message = null),
+        )
+        assertEquals(
+            "Step target unavailable",
+            stepTargetLine(TrainingPhase.INITIALIZING_HTP, progress = null, message = null),
+        )
+        assertEquals(
+            "Step target unavailable",
+            stepTargetLine(TrainingPhase.PAUSED, progress = null, message = null),
+        )
+    }
+
+    @Test fun runningWithValidTargetShowsProgress() {
+        assertEquals(
+            "16 / 8000 steps",
+            stepTargetLine(TrainingPhase.TRAINING, TrainingProgress(16, 8_000), null),
+        )
+    }
+
+    @Test fun errorWithoutTargetSurfacesRepositoryMessageInstead() {
+        assertEquals(
+            "HTP training backend is unavailable: no JNI backend has been configured",
+            stepTargetLine(
+                TrainingPhase.ERROR,
+                progress = null,
+                message = "HTP training backend is unavailable: no JNI backend has been configured",
+            ),
+        )
+        assertEquals("Training error", stepTargetLine(TrainingPhase.ERROR, progress = null, message = null))
+    }
+
+    @Test fun errorWithProgressStillSurfacesRepositoryMessage() {
+        // A terminal validation error retains the last progress; the error
+        // itself must still take precedence over the step count.
+        assertEquals(
+            "HTP training backend is unavailable: no JNI backend has been configured",
+            stepTargetLine(
+                TrainingPhase.ERROR,
+                progress = TrainingProgress(16, 8_000),
+                message = "HTP training backend is unavailable: no JNI backend has been configured",
+            ),
+        )
+    }
+
+    @Test fun terminalStatesWithoutTargetAreNotFailClosed() {
+        assertNull(stepTargetLine(TrainingPhase.COMPLETED, progress = null, message = null))
+        assertNull(stepTargetLine(TrainingPhase.INTERRUPTED, progress = null, message = null))
     }
 
     @Test fun latestImportantEventSkipsNoisyPhaseTransitionsAndFailsClosed() {

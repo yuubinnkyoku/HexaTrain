@@ -51,6 +51,84 @@ class TrainingDashboardComposeTest {
         compose.onNodeWithText("Info").assertIsDisplayed()
     }
 
+    @Test fun freshIdleWithoutTargetDoesNotShowStepTargetUnavailableError() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = TrainingUiState(
+                    phase = TrainingPhase.IDLE,
+                    progress = null,
+                    overview = "Idle",
+                    overviewText = "Idle",
+                    message = null,
+                    timing = null,
+                    timingText = "Unavailable",
+                    htpActivity = null,
+                    activityText = "HTP activity is an observation ratio, not hardware utilization.",
+                    lastCheckpoint = null,
+                    checkpointText = "Unavailable",
+                    datasetUri = null,
+                    datasetDisplayName = null,
+                    canStart = false,
+                    canStop = false,
+                    canPause = false,
+                    canResume = false,
+                    modelConfig = TrainingModelConfig.NICOPEDIA_L19,
+                    dashboard = TrainingDashboardSnapshot(),
+                ),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("Step target unavailable").assertDoesNotExist()
+        compose.onNodeWithText("Ready").assertIsDisplayed()
+        compose.onNodeWithText("Select").assertIsDisplayed()
+    }
+
+    @Test fun runningWithValidTargetShowsStepsAndNotReady() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState(),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("16 / 8000 steps").assertIsDisplayed()
+        compose.onNodeWithText("Step target unavailable").assertDoesNotExist()
+    }
+
+    @Test fun errorWithoutTargetShowsRepositoryMessage() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = TrainingUiState(
+                    phase = TrainingPhase.ERROR,
+                    progress = null,
+                    overview = "Error",
+                    overviewText = "Error",
+                    message = "HTP training backend is unavailable: no JNI backend has been configured",
+                    timing = null,
+                    timingText = "Unavailable",
+                    htpActivity = null,
+                    activityText = "HTP activity is an observation ratio, not hardware utilization.",
+                    lastCheckpoint = null,
+                    checkpointText = "Unavailable",
+                    datasetUri = "content://test/dataset",
+                    datasetDisplayName = "dataset.txt",
+                    canStart = false,
+                    canStop = false,
+                    canPause = false,
+                    canResume = false,
+                    modelConfig = TrainingModelConfig.NICOPEDIA_L19,
+                    dashboard = TrainingDashboardSnapshot(),
+                ),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("HTP training backend is unavailable: no JNI backend has been configured")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Step target unavailable").assertDoesNotExist()
+    }
+
     private fun trainingState() = TrainingUiState(
         phase = TrainingPhase.TRAINING,
         progress = TrainingProgress(16, 8_000, 1.25f),
