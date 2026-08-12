@@ -327,6 +327,10 @@ $traceSelfTest = & $NicopediaCpuGenerateExecutable --trace-self-test
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia CPU trace self-test failed"
 }
+$checkpointV2SelfTest = & $NicopediaCpuGenerateExecutable --checkpoint-v2-self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia CPU generation NPRTCKPTV2 self-test failed"
+}
 # Self-test against the checked-in L19 seed-1 step-320 checkpoint with the
 # same prompts used by the HTP generation milestone.
 $selfTestCkpt = Join-Path $Root "build\reports\nicopedia-htp-training\htp-seed1-l19-step320.ckpt"

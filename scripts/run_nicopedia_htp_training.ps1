@@ -30,6 +30,7 @@ param(
   [int]$CheckpointInterval = 250,
   [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
   [switch]$BuildInstallOnly,
+  [switch]$OneUpdateProbe,
   [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
@@ -61,6 +62,9 @@ if ($SelfTest) {
 }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 if ($Steps -lt 1 -or $Steps -gt 8000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..8000' }
+if ($OneUpdateProbe -and $Steps -ne 1) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_STEPS_1' }
+if ($OneUpdateProbe -and $BatchSize -ne 8) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_BATCH_8' }
+if ($OneUpdateProbe -and $ResumeStep -ne 0) { throw 'NICOPEDIA_DFFN_PROBE_DOES_NOT_SUPPORT_RESUME' }
 if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens must be in 8..256' }
 if ($Dimension -lt 2 -or $Dimension -gt 256 -or ($Dimension % 2) -ne 0) { throw 'NICOPEDIA_DIMENSION_INVALID: Dimension must be even and in 2..256' }
 if ($FeedForwardDimension -lt 2 -or $FeedForwardDimension -gt 1024) { throw 'NICOPEDIA_FFN_INVALID: FeedForwardDimension must be in 2..1024' }
@@ -108,7 +112,14 @@ if (-not $SkipInstall) {
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
   Adb @('install', '-r', $apk) | Out-Null
   Adb @('install', '-r', '-t', $testApk) | Out-Null
+  # `adb install -r` can restore a retained task and start the app process.
+  # Re-establish the headless baseline before instrumentation; this does not
+  # clear app data or weaken the later activity/focus invariant.
+  Adb @('shell', 'am', 'force-stop', $package) | Out-Null
+  Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
 }
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
 if ($BuildInstallOnly) {
   Write-Host "build_install_only=SUCCESS apk=$apk test_apk=$testApk"
   exit 0
@@ -153,9 +164,11 @@ $checkpointProgress = [ordered]@{
   LastProgressUtc = [DateTime]::UtcNow
 }
 try {
+  $suite = if ($OneUpdateProbe) { 'nicopedia-dffn-probe' } else { 'nicopedia-long-training' }
+  $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
-  -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-long-training' -RunId $RunId `
-  -Arguments @{ seed = $Seed; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; steps = $Steps; batchSize = $BatchSize; resumeStep = $ResumeStep; checkpointInterval = $CheckpointInterval } `
+  -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
+  -Arguments @{ seed = $Seed; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -166,10 +179,14 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
     $phase = [regex]::Match($status, '"current_phase"\s*:\s*"([^"]*)"').Groups[1].Value
     $done = [regex]::Match($status, '"completed_tests"\s*:\s*(\d+)').Groups[1].Value
     $total = [regex]::Match($status, '"total_tests"\s*:\s*(\d+)').Groups[1].Value
-    $ckpts = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)
-    Update-PhoneLmCheckpointProgress -State $checkpointProgress -CheckpointCount $ckpts.Count `
-      -NowUtc ([DateTime]::UtcNow) -StallSeconds $CheckpointStallSeconds
-    Write-Host "progress phase=training elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total checkpoint_count=$($ckpts.Count)"
+    if ($OneUpdateProbe) {
+      Write-Host "progress phase=probe elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total"
+    } else {
+      $ckpts = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)
+      Update-PhoneLmCheckpointProgress -State $checkpointProgress -CheckpointCount $ckpts.Count `
+        -NowUtc ([DateTime]::UtcNow) -StallSeconds $CheckpointStallSeconds
+      Write-Host "progress phase=training elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total checkpoint_count=$($ckpts.Count)"
+    }
   } `
   -ConditionAction {
     param($elapsed)
@@ -181,6 +198,12 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
     if ((Get-PhoneLmTopPackage -Adb $adb -Device $device) -eq $package) { throw 'FOCUS_TAKEOVER_DETECTED' }
   }
 $result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -Device $device -Package $package
+# Preserve the private probe report before lifecycle assertions fail the host
+# wrapper.  This is needed to classify an activity/focus invariant violation
+# while retaining the native graph/QNN evidence; it is never committed.
+if ($OneUpdateProbe) {
+  $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt") -Encoding utf8
+}
 Assert-PhoneLmHeadlessNoActivity -Text $result
 $deviceCompleted = $waited.StatusJson -match '"status"\s*:\s*"PASSED"' -and $result -match '(?m)^status=SUCCESS\s*$'
 if (-not $deviceCompleted) {
@@ -196,7 +219,17 @@ if (-not $deviceCompleted) {
 if ($waited.ProcessExitCode -ne 0) {
   Write-Host "WARN INSTRUMENTATION_EXIT_NONZERO_AFTER_DEVICE_COMPLETION code=$($waited.ProcessExitCode) (device run PASSED; wrapper exit treated as host transport artifact)"
 }
-$reportMap = Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $Steps -Kind training
+$reportMap = if ($OneUpdateProbe) {
+  $probeMap = Get-PhoneLmKeyValueMap -Text $result
+  foreach ($key in @('status', 'qnn_return_code_success', 'output_tensors_finite', 'cpu_fallback', 'nan_detected', 'inf_detected', 'graph_execute_count', 'api_trace_graph_execute_attempt_count', 'api_trace_graph_execute_success_count', 'api_trace_graph_execute_failure_count', 'api_trace_last_qnn_result', 'api_trace_effective_result', 'api_trace_cpu_backend_initialized', 'api_trace_fallback_attempted', 'api_trace_fallback_succeeded')) {
+    if (-not $probeMap.Contains($key)) { throw "PROBE_REPORT_FIELD_MISSING: $key" }
+  }
+  if ($probeMap.status -ne 'SUCCESS' -or $probeMap.qnn_return_code_success -ne 'true' -or $probeMap.output_tensors_finite -ne 'true' -or $probeMap.cpu_fallback -ne 'false' -or $probeMap.nan_detected -ne 'false' -or $probeMap.inf_detected -ne 'false') { throw 'PROBE_REPORT_HEALTH_REJECTED' }
+  if ($probeMap.api_trace_last_qnn_result -ne '0' -or $probeMap.api_trace_effective_result -ne '0' -or $probeMap.api_trace_cpu_backend_initialized -ne 'false' -or $probeMap.api_trace_fallback_attempted -ne 'false' -or $probeMap.api_trace_fallback_succeeded -ne 'false') { throw 'PROBE_REPORT_QNN_HEALTH_REJECTED' }
+  $probeMap
+} else {
+  Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $Steps -Kind training
+}
 if (-not $reportMap.Contains('model_dimension') -or -not $reportMap.Contains('feed_forward_dimension') -or
     [int]$reportMap.model_dimension -ne $Dimension -or [int]$reportMap.feed_forward_dimension -ne $FeedForwardDimension) {
   throw 'TRAINING_REPORT_MODEL_IDENTITY_MISMATCH'
@@ -223,6 +256,11 @@ $annotated = $result.TrimEnd() + "`n" +
 # reattach check; it is stripped by the public exporter.
 $annotated | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt") -Encoding utf8
 $annotated | Add-Content -LiteralPath (Join-Path $reportRoot "device-identity-private.txt") -Encoding utf8
+if ($OneUpdateProbe) {
+  Write-Host "PASS NICOPEDIA_DFFN_PROBE seed=$Seed layers=$Layers dimension=$Dimension ffn=$FeedForwardDimension"
+  Write-Host "Reports: $reportRoot"
+  return
+}
 # Pull every interval NPRTCKPTV2 checkpoint and the loss curve back to
 # build/reports. Both stay out of the public bundle and out of git.
 $checkpointNames = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)

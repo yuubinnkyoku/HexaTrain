@@ -15,6 +15,12 @@ std::string runTransformerExperiment(ExecutionMode mode);
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,
     const LogSink& progress, std::atomic_bool* stopRequested = nullptr);
+// Research-only Nicopedia width probe.  This path prepares the HTP training
+// and Adam graphs and executes exactly one B=8 optimizer update; it does not
+// create a checkpoint and is never used by the production UI or long runner.
+std::string runNicopediaHtpOneUpdateProbe(
+    const tiny_lm::Config& config, const TrainingConfig& trainingConfig,
+    const LogSink& progress, std::atomic_bool* stopRequested = nullptr);
 // Nicopedia byte-level generation on the HTP graph (device-side loop).
 // `checkpointPath`/`promptPath` are app-private files; the checkpoint is the
 // NPRTCKPTV1 private checkpoint written by the HTP training milestone and its

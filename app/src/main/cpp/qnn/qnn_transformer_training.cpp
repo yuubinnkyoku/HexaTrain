@@ -5253,11 +5253,16 @@ bool finiteTrainingOutputs(const TinyTransformerTrainingOutputs &output) {
   const bool finiteLayers = std::all_of(
       output.layerInputGradients.begin(), output.layerInputGradients.end(),
       [](const std::vector<float> &values) { return finite(values); });
+  const bool finiteTaps = std::all_of(
+      output.taps.begin(), output.taps.end(),
+      [](const TinyTransformerTrainingTapOutput &tap) {
+        return finite(tap.values);
+      });
   return std::isfinite(output.loss) && finite(output.output) &&
          finite(output.dOutput) && finite(output.embeddedInput) &&
          finite(output.logits) && finite(output.probabilities) &&
          finite(output.dLogits) && finite(output.dEmbeddedInput) &&
-         finiteLayers && finiteParams(output.gradients) &&
+          finiteLayers && finiteTaps && finiteParams(output.gradients) &&
          finiteParams(output.next);
 }
 
@@ -7425,6 +7430,252 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   return report.str();
 }
 }  // namespace
+
+std::string runNicopediaHtpOneUpdateProbe(
+    const tiny_lm::Config &config, const TrainingConfig &trainingConfig,
+    const LogSink &progress, std::atomic_bool *stopRequested) {
+  // This deliberately bypasses nicopediaHtpTraining: the normal path has a
+  // step-0 comparison, an 8-step trajectory, CPU replay, and checkpoint I/O.
+  // The probe is a bounded graph/execute diagnostic for width screening only.
+  Runtime runtime;
+  bool runtimeInitialized = false;
+  bool trainingPrepared = false;
+  bool adamPrepared = false;
+  bool qnnReturnSuccess = false;
+  bool outputsFinite = false;
+  bool gradientFinite = false;
+  bool updatedParametersFinite = false;
+  bool updatedMomentsFinite = false;
+  std::uint64_t fusedExecuteCount = 0, adamExecuteCount = 0;
+  std::uint64_t trainingFinalizeCount = 0, adamFinalizeCount = 0;
+  double firstExecuteUs = 0.0;
+  double meanLoss = 0.0;
+  const auto emit = [&](const char *status, const char *phase,
+                        const std::string &error, double wallMs,
+                        std::uint64_t graphExecuteCount) {
+    std::ostringstream report;
+    report << std::setprecision(10)
+           << "NICOPEDIA_DFFN_PROBE\ntest=nicopedia_dffn_one_update\nstatus="
+           << status << "\nphase=" << phase << "\nseed="
+           << trainingConfig.seed << "\nlayers=" << config.numLayers
+           << "\nheads=" << config.numHeads << "\ncontext_tokens="
+           << config.tokens << "\nvocabulary_size=" << config.vocabularySize
+           << "\nmodel_dimension=" << config.dimension
+           << "\nfeed_forward_dimension=" << config.feedForwardDimension
+           << "\nbatch_size=" << trainingConfig.batchSize
+           << "\nlearning_rate=" << trainingConfig.learningRate
+           << "\nsteps=1\ncheckpoint_written=false\ncheckpoint_format=n/a"
+           << "\nparameter_element_count="
+           << tiny_lm::parameterElementCount(
+                  tiny_lm::initialParameters(config,
+                                             static_cast<std::uint32_t>(
+                                                 trainingConfig.seed)))
+           << "\ntraining_graph_prepared="
+           << (trainingPrepared ? "true" : "false")
+           << "\nadam_graph_prepared=" << (adamPrepared ? "true" : "false")
+           << "\ngraph_finalize_training_count=" << trainingFinalizeCount
+           << "\ngraph_finalize_adam_count=" << adamFinalizeCount
+           << "\nfused_forward_backward_execute_count=" << fusedExecuteCount
+           << "\nadam_execute_count=" << adamExecuteCount
+           << "\ngraph_execute_count=" << graphExecuteCount
+           << "\nfirst_execute_us=" << firstExecuteUs
+           << "\ntraining_step_ms=" << wallMs
+           << "\nmean_loss=" << meanLoss
+           << "\nqnn_return_code_success="
+           << (qnnReturnSuccess ? "true" : "false")
+           << "\noutput_tensors_finite="
+           << (outputsFinite ? "true" : "false")
+           << "\ngradient_accumulation_finite="
+           << (gradientFinite ? "true" : "false")
+           << "\nupdated_parameters_finite="
+           << (updatedParametersFinite ? "true" : "false")
+           << "\nupdated_moments_finite="
+           << (updatedMomentsFinite ? "true" : "false")
+           << "\nall_steps_finite="
+           << ((outputsFinite && gradientFinite && updatedParametersFinite &&
+                updatedMomentsFinite)
+                   ? "true"
+                   : "false")
+           << "\nfinal_finite="
+           << ((updatedParametersFinite && updatedMomentsFinite) ? "true"
+                                                                  : "false")
+           << "\ncompleted_steps="
+           << ((std::string(status) == "SUCCESS") ? "1" : "0")
+           << "\nfinal_parameter_hash=n/a\nbackend=HTP\nbackend_requested=HTP"
+           << "\nbackend_actual=HTP\ncpu_fallback=false\nnan_detected="
+           << ((!outputsFinite || !gradientFinite || !updatedParametersFinite ||
+                !updatedMomentsFinite)
+                   ? "true"
+                   : "false")
+           << "\ninf_detected="
+           << ((!outputsFinite || !gradientFinite || !updatedParametersFinite ||
+                !updatedMomentsFinite)
+                   ? "true"
+                   : "false")
+           << "\nerror=" << (error.empty() ? "none" : error) << '\n';
+    if (runtimeInitialized)
+      report << runtime.apiTraceSummary() << runtime.diagnostics();
+    else
+      report << "api_trace_version=uninitialized\n"
+             << "api_trace_backend_requested=HTP\n"
+             << "api_trace_graph_execute_attempt_count=0\n"
+             << "api_trace_graph_execute_success_count=0\n"
+             << "api_trace_graph_execute_failure_count=0\n"
+             << "api_trace_last_qnn_result=-1\n"
+             << "api_trace_effective_result=-1\n"
+             << "api_trace_cpu_backend_initialized=false\n"
+             << "api_trace_fallback_attempted=false\n"
+             << "api_trace_fallback_succeeded=false\n"
+             << "api_trace_runtime_backend_build_id=uninitialized\n";
+    return report.str();
+  };
+
+  const auto phase = [&](const char *name) {
+    if (progress) progress(std::string("phase=") + name + "\nstep=1\nsteps=1");
+  };
+  const std::string cacheDir = trainingConfig.diagnosticCheckpointDir;
+  if (cacheDir.empty())
+    return emit("FAILED", "configuration", "cache_path_required", 0.0, 0);
+  if (config.tokens != 32 || config.vocabularySize != 256 ||
+      config.numLayers != 19 || config.numHeads != 2 ||
+      trainingConfig.batchSize != 8 || trainingConfig.learningRate != 0.003f)
+    return emit("FAILED", "configuration", "fixed_probe_identity_required", 0.0,
+                0);
+  if (trainingConfig.seed == 0 || trainingConfig.seed > 99999)
+    return emit("FAILED", "configuration", "seed_out_of_range", 0.0, 0);
+  std::string error;
+  if (!tiny_lm::validateConfig(config, &error))
+    return emit("FAILED", "configuration", "config_invalid=" + error, 0.0, 0);
+  NprtCache cache;
+  try {
+    cache = loadNprtCache(cacheDir + "/train_pilot.bin");
+  } catch (const std::exception &exception) {
+    return emit("FAILED", "cache_load", exception.what(), 0.0, 0);
+  }
+  if (cache.context != config.tokens || cache.vocabulary != config.vocabularySize)
+    return emit("FAILED", "cache_load", "cache_config_mismatch", 0.0, 0);
+  if (cache.records.size() < static_cast<std::size_t>(trainingConfig.batchSize))
+    return emit("FAILED", "cache_load", "cache_batch_capacity_mismatch", 0.0, 0);
+
+  const Params shape = tiny_lm::initialParameters(
+      config, static_cast<std::uint32_t>(trainingConfig.seed));
+  const std::uint32_t elements = static_cast<std::uint32_t>(
+      tiny_lm::parameterElementCount(shape));
+  const std::uint32_t chunk = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+      elements, phonelm::transformer::kMaximumAdamChunkElements));
+  if (elements == 0 || chunk == 0)
+    return emit("FAILED", "configuration", "parameter_registry_empty", 0.0, 0);
+
+  const auto started = std::chrono::steady_clock::now();
+  phase("prepare_begin");
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  if (!runtime.initialize(QnnBackendKind::HTP, error))
+    return emit("FAILED", "prepare_begin", error, 0.0, 0);
+  runtimeInitialized = true;
+  const std::uint64_t finalizeBefore = runtime.metrics().graphFinalizeCount;
+  if (!runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          config.numHeads))
+    return emit("FAILED", "prepare_begin", error, 0.0,
+                runtime.metrics().graphExecuteCount);
+  trainingPrepared = true;
+  trainingFinalizeCount = runtime.metrics().graphFinalizeCount - finalizeBefore;
+  if (!runtime.prepareAdamOptimizer(chunk, error))
+    return emit("FAILED", "prepare_begin", error, 0.0,
+                runtime.metrics().graphExecuteCount);
+  adamPrepared = true;
+  adamFinalizeCount =
+      runtime.metrics().graphFinalizeCount - finalizeBefore - trainingFinalizeCount;
+  phase("prepare_done");
+
+  Params current = shape;
+  Params first = zeroLanguageParameters(current);
+  Params second = first;
+  Params gradientAccum = zeroLanguageParameters(current);
+  double lossSum = 0.0;
+  outputsFinite = true;
+  gradientFinite = true;
+  const auto order = nprtTrainingOrder(cache.records.size(), 1, 8);
+  std::uint64_t executeBefore = runtime.metrics().graphExecuteCount;
+  phase("first_execute_begin");
+  for (std::uint32_t batch = 0; batch < 8; ++batch) {
+    if (stopRequested && stopRequested->load())
+      return emit("FAILED", "first_execute_begin", "stop_requested", 0.0,
+                  runtime.metrics().graphExecuteCount);
+    const auto batchData = nprtBatch(config, cache, order[batch]);
+    TinyTransformerTrainingOutputs output;
+    const auto executeStarted = std::chrono::steady_clock::now();
+    if (!runtime.executeTinyTransformerTraining(
+            batchData.input, batchData.target, current, 0.0f, output, error))
+      return emit("FAILED", "first_execute_begin", error, 0.0,
+                  runtime.metrics().graphExecuteCount);
+    if (batch == 0)
+      firstExecuteUs = std::chrono::duration<double, std::micro>(
+                           std::chrono::steady_clock::now() - executeStarted)
+                           .count();
+    ++fusedExecuteCount;
+    lossSum += output.loss;
+    const bool finiteOutput = finiteTrainingOutputs(output);
+    outputsFinite = outputsFinite && finiteOutput;
+    const auto accumRegistry = tiny_lm::parameterRegistry(gradientAccum);
+    const auto outputRegistry = tiny_lm::parameterRegistry(output.gradients);
+    if (accumRegistry.size() != outputRegistry.size())
+      return emit("FAILED", "first_execute_done", "gradient_registry_mismatch",
+                  0.0, runtime.metrics().graphExecuteCount);
+    for (std::size_t i = 0; i < accumRegistry.size(); ++i) {
+      auto &accum = *const_cast<std::vector<float> *>(accumRegistry[i].values);
+      const auto &values = *outputRegistry[i].values;
+      for (std::size_t j = 0; j < accum.size(); ++j)
+        accum[j] += values[j] * (1.0f / 8.0f);
+    }
+    gradientFinite = gradientFinite && finiteParams(output.gradients);
+  }
+  phase("first_execute_done");
+  meanLoss = lossSum / 8.0;
+  gradientFinite = gradientFinite && finiteParams(gradientAccum);
+  phase("adam_begin");
+  AdamOptimizerOutputs raw;
+  Params next, firstNext, secondNext;
+  if (!executeLanguageAdam(runtime, current, gradientAccum, first, second,
+                           trainingConfig.learningRate, 1, 1.0f, next,
+                           firstNext, secondNext, &raw, error, chunk))
+    return emit("FAILED", "adam_begin", error, 0.0,
+                runtime.metrics().graphExecuteCount);
+  adamExecuteCount = runtime.metrics().graphExecuteCount - executeBefore -
+                     fusedExecuteCount;
+  const auto finiteRaw = finite(raw.firstMomentNext) && finite(raw.secondMomentNext) &&
+                         finite(raw.firstMomentHat) && finite(raw.secondMomentHat) &&
+                         finite(raw.secondRoot) && finite(raw.denominator) &&
+                         finite(raw.dividedUpdate) && finite(raw.normalizedUpdate) &&
+                         finite(raw.scaledUpdate) && finite(raw.weightNext);
+  updatedParametersFinite = finiteParams(next) && finiteRaw;
+  updatedMomentsFinite = finiteParams(firstNext) && finiteParams(secondNext) && finiteRaw;
+  phase("adam_done");
+  const auto &trace = runtime.apiTrace();
+  qnnReturnSuccess = runtime.metrics().graphExecuteCount > 0 &&
+                     trace.graphExecuteSuccessCount ==
+                         runtime.metrics().graphExecuteCount &&
+                     trace.graphExecuteFailureCount == 0 &&
+                     trace.graphExecuteLastResult == 0 && trace.lastQnnResult == 0;
+  outputsFinite = outputsFinite && gradientFinite && updatedParametersFinite &&
+                  updatedMomentsFinite;
+  const double wallMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
+  const bool ok = qnnReturnSuccess && outputsFinite;
+  // Keep the phase markers and all health fields in the returned report; the
+  // runner writes this as private evidence and never creates a checkpoint.
+  const std::string report = emit(ok ? "SUCCESS" : "FAILED", "adam_done",
+                                  ok ? "none" : "probe_health_rejected",
+                                  wallMs, runtime.metrics().graphExecuteCount);
+  return report;
+}
 
 namespace {
 // HTP-native held-out evaluation: teacher-forces validation/development

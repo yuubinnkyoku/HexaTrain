@@ -54,6 +54,16 @@ class HeadlessDeviceTestRunner {
         }
         acquired.lease.use {
             HeadlessActivityCounters.reset()
+            // Keep phase-boundary snapshots in the private headless report.
+            // They distinguish an activity caused by process/environment
+            // preparation from one that arrives while native work is active,
+            // without weakening the zero-activity invariant.
+            fun activitySnapshot(phase: String): String =
+                "activity_snapshot_${phase}=create:${HeadlessActivityCounters.create.get()}," +
+                    "resume:${HeadlessActivityCounters.resume.get()}," +
+                    "became_top:${HeadlessActivityCounters.becameTop.get()}," +
+                    "focus_takeover:${HeadlessActivityCounters.focusTakeover.get()}"
+            val activitySnapshots = mutableListOf(activitySnapshot("after_reset"))
             val started = System.currentTimeMillis()
             var reportPath = ""
             var phase = "initializing"
@@ -72,6 +82,7 @@ class HeadlessDeviceTestRunner {
             try {
                 wakeLock.acquire(4 * 60 * 60 * 1000L)
                 QnnEnvironment.prepare(context)
+                activitySnapshots += activitySnapshot("after_environment_prepare")
                 phase = "native"
                 test = suite
                 currentPhase.set(phase)
@@ -146,12 +157,15 @@ class HeadlessDeviceTestRunner {
                         }
                     }
                 }
+                activitySnapshots += activitySnapshot("before_native")
                 val report = try {
                     when {
                         suite == "nicopedia-parity" ->
                             runNicopediaParity(context, arguments, runId)
                         suite == "nicopedia-long-training" ->
                             runNicopediaLongTraining(context, arguments, runId, progressCallback)
+                        suite == "nicopedia-dffn-probe" ->
+                            runNicopediaDffnProbe(context, arguments, runId, progressCallback)
                         suite == "nicopedia-eval" ->
                             runNicopediaEvaluate(context, arguments, runId)
                         suite == "nicopedia-generate" ->
@@ -178,6 +192,7 @@ class HeadlessDeviceTestRunner {
                     heartbeat.interrupt()
                     heartbeat.join(5_000L)
                 }
+                activitySnapshots += activitySnapshot("after_native")
                 notification?.onProgress(RunProgress.Completed(null))
                 reportPath = state.writeReport(runId, report)
                 val success = isSuccessfulSuiteResult(suite, report, splitForSuite(suite, arguments)) ||
@@ -198,6 +213,7 @@ class HeadlessDeviceTestRunner {
                     "\nheadless_test_mode=$testMode" +
                     "\nbackend_requested=HTP" +
                     "\nlive_update_notification_enabled=$liveUpdateNotification" +
+                    "\n" + activitySnapshots.joinToString("\n") +
                     fallbackAnnotation + "\n"
                 reportPath = state.writeReport(runId, appended)
                 state.write(HeadlessStatus(runId, suite, if (success && countersOk) "PASSED" else "FAILED", "complete", test, 2, 2,
@@ -276,6 +292,11 @@ class HeadlessDeviceTestRunner {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
             require(steps in 1..8_000) { "nicopedia-long-training hard ceiling is step 8000" }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
+        }
+        if (suite == "nicopedia-dffn-probe") {
+            require(batchSize == 8) { "nicopedia-dffn-probe requires batchSize=8" }
+            require(steps == 1) { "nicopedia-dffn-probe requires steps=1" }
+            require(resumeStep == 0) { "nicopedia-dffn-probe does not resume checkpoints" }
         }
         if (suite == "nicopedia-eval" || suite == "nicopedia-generate") {
             require(checkpointStep >= 1) { "$suite requires checkpointStep >= 1" }
@@ -439,6 +460,29 @@ class HeadlessDeviceTestRunner {
         )
     }
 
+    private fun runNicopediaDffnProbe(
+        context: Context,
+        arguments: android.os.Bundle,
+        runId: String,
+        progressCallback: ProgressCallback,
+    ): String {
+        val config = parseNicopediaArguments(arguments, "nicopedia-dffn-probe")
+        val directory = nicopediaInputDirectory(context, runId)
+        requiredInputFile(directory, "train_pilot.bin")
+        return NativeBridge.nativeRunNicopediaOneUpdateProbe(
+            cacheDir = directory.absolutePath,
+            seed = config.seed,
+            layers = config.layers,
+            heads = config.heads,
+            tokens = config.tokens,
+            dimension = config.dimension,
+            feedForwardDimension = config.feedForwardDimension,
+            batchSize = config.batchSize,
+            learningRate = 0.003f,
+            progressCallback = progressCallback,
+        )
+    }
+
     private fun runNicopediaGenerate(
         context: Context,
         arguments: android.os.Bundle,
@@ -585,6 +629,7 @@ class HeadlessDeviceTestRunner {
             if (suite !in NICOPEDIA_SUITES) return statusOk
             val prefixOk = when (suite) {
                 "nicopedia-long-training" -> report.startsWith("NICOPEDIA_HTP\n")
+                "nicopedia-dffn-probe" -> report.startsWith("NICOPEDIA_DFFN_PROBE\n")
                 "nicopedia-eval" -> report.startsWith("NICOPEDIA_HTP_EVAL\n")
                 "nicopedia-generate" -> report.startsWith("NICOPEDIA_HTP_GENERATION\n")
                 else -> false
@@ -708,6 +753,7 @@ class HeadlessDeviceTestRunner {
     private companion object {
         val NICOPEDIA_SUITES = setOf(
             "nicopedia-long-training",
+            "nicopedia-dffn-probe",
             "nicopedia-eval",
             "nicopedia-generate",
         )

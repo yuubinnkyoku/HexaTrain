@@ -442,6 +442,26 @@ function Get-PhoneLmCheckpointNames {
     return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+(-t\d+-d\d+-f\d+)?-step\d+\.ckpt$' } | Sort-Object -Unique)
 }
 
+function Assert-PhoneLmInstalledApkMatches {
+    param(
+        [Parameter(Mandatory = $true)][string]$Adb,
+        [Parameter(Mandatory = $true)][string]$Device,
+        [Parameter(Mandatory = $true)][string]$Package,
+        [Parameter(Mandatory = $true)][string]$LocalApk
+    )
+    if (-not (Test-Path -LiteralPath $LocalApk -PathType Leaf)) { throw 'APK_PROVENANCE_LOCAL_MISSING' }
+    $pathResult = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'pm', 'path', $Package)
+    $paths = @($pathResult.Output | Where-Object { $_ -match '^package:(/data/app/[^\s]+/base\.apk)$' })
+    if ($paths.Count -ne 1) { throw 'APK_PROVENANCE_INSTALLED_PATH_INVALID' }
+    [void]($paths[0] -match '^package:(/data/app/[^\s]+/base\.apk)$')
+    $remotePath = $Matches[1]
+    $hashResult = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'sha256sum', $remotePath)
+    if ($hashResult.Text -notmatch '(?i)^([0-9a-f]{64})\s+') { throw 'APK_PROVENANCE_INSTALLED_HASH_INVALID' }
+    $installedHash = $Matches[1].ToLowerInvariant()
+    $localHash = (Get-FileHash -LiteralPath $LocalApk -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedHash -ne $localHash) { throw 'APK_PROVENANCE_INSTALLED_HASH_MISMATCH' }
+}
+
 function Wait-PhoneLmResult {
     param(
         [Parameter(Mandatory = $true)][string]$Adb,

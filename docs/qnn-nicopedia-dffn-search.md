@@ -69,6 +69,55 @@ device was force-stopped only after that explicit safety condition.  Thermal
 status remained normal and battery health/level remained good; thermal was
 recorded, not used as a quality cutoff.
 
+## Screening-basis normalization (2026-08-12)
+
+The host `CHECKPOINT_MAGIC` failure was a fixture/reader version mismatch, not
+a corrupt device checkpoint.  `nicopedia_cpu_generate` accepted only the
+`NPRTCKPTV1` magic while the canonical device writer now emits
+`NPRTCKPTV2`.  The host reader now accepts both versions and, for V2, consumes
+and validates the Adam first- and second-moment registries (count, name,
+shape, and finiteness).  A temporary V2 self-test fixture is deleted by the
+test and never becomes research evidence.  The complete `run_host_tests.ps1`
+sequence passes with this reader.
+
+A dedicated `nicopedia-dffn-probe` path was added for width diagnosis.  It
+does not call the normal long-training function, so it omits its step-0
+comparison, fixed eight-step trajectory, CPU replay, and checkpoint tail.  It
+prepares the same L19/H2/T32 training and Adam graphs, executes one B8 update
+(eight fused forward/backward executes plus the required Adam chunks), and
+reports graph preparation, QNN returns, all application-visible tensor
+finiteness, updated parameter/moment finiteness, CPU fallback, and phase
+progress independently.  The normal training and resume paths retain their
+existing behavior.
+
+The attempted D32/F32 probe did not reach native graph preparation.  The first
+attempt found an AndroidX lifecycle binary mismatch because the installed
+main APK did not match the freshly audited research APK.  Read-only inspection
+then found a different PhoneLM UI build actively running
+`StandaloneTrainingActivity` and its foreground service; the device-side main
+APK was replaced again after a direct verified install.  The probe therefore
+stopped at the concurrent-run/provenance preflight and D32 was not retried.
+This is infrastructure evidence, not a D32 QNN or numeric failure.
+
+The same observation substantially raises confidence that the earlier
+D16/FFN64 activity/focus failure was external UI/task interference rather
+than width-dependent native behavior: its native work had already completed
+all 3,609 QNN executes successfully and finitely before the lifecycle gate
+failed.  The runner now records activity counters at reset, environment
+prepare, before native, and after native.  It also force-stops only the target
+package after an install (without clearing data), preserves the zero-activity
+gate, and verifies SHA-256 equality for both installed main and test APKs
+before instrumentation.  A concurrent GUI run remains a hard stop.
+
+Because that independently owned UI training was still active, no fresh
+anchor/candidate re-screen was run in this normalization pass.  In particular,
+there are no new NLL, execute-time, wall-time, checkpoint-size, or generation
+measurements to combine with the earlier table.  The next device session must
+start with an exclusive, provenance-clean one-update D32/F32 probe.  If it
+fails in graph preparation or QNN execute, the next bounded probe is
+D24/FFN48; if D32/F32 is healthy, use short matched screens for D16/FFN32,
+D16/FFN64, D24/FFN48, and D32/FFN32 before any multiple-seed extension.
+
 For context, the previously recorded long anchor (8,000 steps, a different
 run length) is val NLL 2.168420875 and dev NLL 2.146852226 at about 490 ms per
 step.  It is not mixed with the 320-step screen comparison above.
@@ -105,11 +154,10 @@ failure, then repeat
 the four-way screen with fresh anchor and multiple seeds before any 4,000-step
 promotion.
 
-The formal gate was started with the pinned QAIRT arguments and a successful
-QNN Android build/APK audit for the then-current source.  The broad host-test portion
-exceeded the tool execution ceiling after many diagnostic suites; targeted
-`qnn_sdk_independent_test` (including the D32/FFN64 shape contract) and
-`nicopedia_resume_test` both passed.  The legacy `nicopedia_cpu_generate`
-host fixture still expects an NPRTCKPTV1 file while the current research
-artifact is NPRTCKPTV2, so that full host sequence is recorded as incomplete,
-not as a pass.
+For the normalization changes, fixed-QAIRT `assembleDebug` and
+`assembleDebugAndroidTest`, APK ABI/hash/path audit, the runner/probe
+self-tests, and the complete `run_host_tests.ps1` sequence passed.  The final
+formal `verify_local.ps1 -WithQairt` was attempted after these changes but did
+not complete within the 904-second execution ceiling, so formal verification
+is incomplete and must not be reported as PASS.  This does not replace the
+successful targeted QNN Android build/APK audit or complete host-test result.

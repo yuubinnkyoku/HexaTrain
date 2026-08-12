@@ -413,7 +413,11 @@ if (-not $SkipInstall) {
     if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
     Adb @('install', '-r', $apk) | Out-Null
     Adb @('install', '-r', '-t', $testApk) | Out-Null
+    Adb @('shell', 'am', 'force-stop', $package) | Out-Null
+    Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
 }
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
 
 # Stage checkpoint + prompt under the run-scoped headless input directory.
 $remoteDir = "files/headless-input/$RunId"
