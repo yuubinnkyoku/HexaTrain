@@ -4,7 +4,6 @@ import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,12 +12,12 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -26,16 +25,31 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingToolbarDefaults
+import androidx.compose.material3.HorizontalFloatingToolbar
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,17 +57,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -71,9 +83,11 @@ import com.yuubinnkyoku.phonelm.TrainingOperationPhase
 import com.yuubinnkyoku.phonelm.TrainingPhase
 import com.yuubinnkyoku.phonelm.TrainingProgress
 import com.yuubinnkyoku.phonelm.TrainingRuntimeEvidence
+import com.yuubinnkyoku.phonelm.TrainingTiming
 import com.yuubinnkyoku.phonelm.TrainingUiState
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TrainingDashboardApp(
     state: TrainingUiState?,
@@ -87,12 +101,24 @@ fun TrainingDashboardApp(
     val context = LocalContext.current
     val base = phoneLmDarkScheme()
     val colors = if (Build.VERSION.SDK_INT >= 31) dynamicDarkColorScheme(context).copy(
+        primary = base.primary,
+        onPrimary = base.onPrimary,
+        primaryContainer = base.primaryContainer,
+        onPrimaryContainer = base.onPrimaryContainer,
+        secondary = base.secondary,
+        onSecondary = base.onSecondary,
+        secondaryContainer = base.secondaryContainer,
+        onSecondaryContainer = base.onSecondaryContainer,
+        tertiary = base.tertiary,
+        onTertiary = base.onTertiary,
+        error = base.error,
         background = base.background,
         surface = base.surface,
         surfaceVariant = base.surfaceVariant,
     ) else base
-    MaterialTheme(
+    MaterialExpressiveTheme(
         colorScheme = colors,
+        motionScheme = MotionScheme.expressive(),
         typography = MaterialTheme.typography.copy(
             displaySmall = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Black),
             headlineSmall = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
@@ -113,9 +139,35 @@ fun TrainingDashboardApp(
 }
 
 private fun phoneLmDarkScheme(): ColorScheme = darkColorScheme(
-    primary = Color(0xFFB7C4FF), onPrimary = Color(0xFF08164D), secondary = Color(0xFFBCE9DD),
+    primary = Color(0xFF9BEAFF), onPrimary = Color(0xFF003640),
+    primaryContainer = Color(0xFF103C46), onPrimaryContainer = Color(0xFFC4F3FF),
+    secondary = Color(0xFFE3B7FF), onSecondary = Color(0xFF3A1454),
+    secondaryContainer = Color(0xFF263D2B), onSecondaryContainer = Color(0xFFB9F2BF),
+    tertiary = Color(0xFFFFD28A), onTertiary = Color(0xFF432C00),
     surface = Color(0xFF111318), surfaceVariant = Color(0xFF20232B), background = Color(0xFF090B10),
     onSurface = Color(0xFFE3E5ED), onSurfaceVariant = Color(0xFFC3C6D1), error = Color(0xFFFFB4AB),
+)
+
+private val TelemetryFontFamily = FontFamily.Monospace
+
+/** Semantic roles keep the console palette meaningful while still following Material colors. */
+private data class TrainingSemanticColors(
+    val qnn: Color,
+    val cpu: Color,
+    val loss: Color,
+    val checkpoint: Color,
+    val warning: Color,
+    val unavailable: Color,
+)
+
+@Composable
+private fun trainingSemanticColors() = TrainingSemanticColors(
+    qnn = MaterialTheme.colorScheme.primary,
+    cpu = MaterialTheme.colorScheme.tertiary,
+    loss = MaterialTheme.colorScheme.secondary,
+    checkpoint = MaterialTheme.colorScheme.onSecondaryContainer,
+    warning = MaterialTheme.colorScheme.error,
+    unavailable = MaterialTheme.colorScheme.onSurfaceVariant,
 )
 
 @Composable
@@ -123,7 +175,7 @@ private fun TrainingLoading() = Box(Modifier.fillMaxSize().padding(24.dp)) {
     Text("Connecting to training session…")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TrainingDashboard(
     state: TrainingUiState,
@@ -138,12 +190,19 @@ fun TrainingDashboard(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Surface(
-                modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            Box(
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 CompactActionDock(
-                    state, onSelectDataset, onStart, onStop, onPause, onResume,
+                    state,
+                    onSelectDataset,
+                    onStart,
+                    onStop,
+                    onPause,
+                    onResume,
+                    onStartOver,
                     onDetails = { detailsVisible = true },
                 )
             }
@@ -177,10 +236,18 @@ private fun TrainingOverview(state: TrainingUiState, density: TrainingOverviewDe
     ) {
         CompactTrainingHero(state, density)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-            ActivityMetric("HTP activity", currentHtpObservationRatio(state.dashboard.activityHistory)?.let(::percent) ?: "—", "QNN wall / observation · not utilization", Modifier.weight(1f), density)
+            ActivityMetric(
+                "HTP activity",
+                currentHtpObservationRatio(state.dashboard.activityHistory)?.let(::percent) ?: "—",
+                "wall/obs ≠ utilization",
+                Modifier.weight(1f),
+                density,
+                "HTP activity is QNN execute wall time divided by its observation window; it is not hardware utilization.",
+            )
             ActivityMetric("CPU activity", currentProcessCpuPercent(state.dashboard.activityHistory)?.let(::percent) ?: "—", "process CPU", Modifier.weight(1f), density)
         }
         CompactPerformanceGrid(state, density)
+        if (density != TrainingOverviewDensity.ACCESSIBLE) CompactTelemetryStrip(state, density)
         CompactLossCard(
             state.dashboard,
             Modifier.fillMaxWidth().weight(1f).defaultMinSize(minHeight = density.graphMinimumHeightDp.dp),
@@ -190,8 +257,10 @@ private fun TrainingOverview(state: TrainingUiState, density: TrainingOverviewDe
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOverviewDensity) {
+    val semantic = trainingSemanticColors()
     val target = when (state.phase) {
         TrainingPhase.ERROR -> MaterialTheme.colorScheme.errorContainer
         TrainingPhase.TRAINING -> MaterialTheme.colorScheme.primaryContainer
@@ -205,7 +274,7 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
             Column(Modifier.weight(1f)) {
                 Text(
                     compactPhaseLabel(state.phase, density),
-                    style = if (density == TrainingOverviewDensity.COMPACT) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium,
+                    style = if (density in compactDensityTiers) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -214,6 +283,7 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
                     progress?.let { "${it.completedSteps} / ${it.totalSteps} steps" } ?: "Step target unavailable",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = TelemetryFontFamily,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -222,18 +292,24 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
                 progress?.let { String.format(Locale.ROOT, "%.1f%%", it.fraction * 100f) } ?: "—",
                 fontSize = density.heroPercentSp.sp,
                 fontWeight = FontWeight.Black,
+                fontFamily = TelemetryFontFamily,
+                color = when (state.phase) {
+                    TrainingPhase.ERROR -> semantic.warning
+                    TrainingPhase.COMPLETED -> semantic.checkpoint
+                    else -> semantic.qnn
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         val fraction by animateFloatAsState(progress?.fraction ?: 0f, label = "training progress")
-        Box(
-            Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(99.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .semantics { progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f) },
-        ) {
-            Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
-        }
+        LinearWavyProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier.fillMaxWidth().height(8.dp),
+            color = semantic.qnn,
+            trackColor = MaterialTheme.colorScheme.surface,
+            amplitude = { if (state.phase == TrainingPhase.TRAINING) 0.35f else 0f },
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             InlineMetric("Loss", progress?.loss?.let(::loss) ?: "—", Modifier.weight(1f))
             InlineMetric("ETA", state.dashboard.etaMs?.let(::duration) ?: "—", Modifier.weight(1f), end = true)
@@ -242,75 +318,188 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
 }
 
 @Composable
-private fun ActivityMetric(label: String, value: String, qualifier: String, modifier: Modifier, density: TrainingOverviewDensity) =
-    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density, modifier) {
+private fun ActivityMetric(
+    label: String,
+    value: String,
+    qualifier: String,
+    modifier: Modifier,
+    density: TrainingOverviewDensity,
+    semanticDescription: String? = null,
+) = DenseCard(
+    MaterialTheme.colorScheme.surfaceVariant,
+    density,
+    if (semanticDescription == null) modifier else modifier.semantics { contentDescription = semanticDescription },
+) {
+        val semantic = trainingSemanticColors()
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            value,
+            style = if (density == TrainingOverviewDensity.ACCESSIBLE) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Black,
+            fontFamily = TelemetryFontFamily,
+            color = if (label.startsWith("HTP")) semantic.qnn else semantic.cpu,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Text(qualifier, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 
 @Composable
 private fun CompactPerformanceGrid(state: TrainingUiState, density: TrainingOverviewDensity) {
     val current = state.timing?.aggregate?.current
+    val semantic = trainingSemanticColors()
     DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PerformanceCell(if (density == TrainingOverviewDensity.COMPACT) "F+B" else "Fwd + Bwd", phaseMs(current?.entries()?.get(TrainingOperationPhase.FUSED_FORWARD_BACKWARD)), Modifier.weight(1f))
-            PerformanceCell("Adam", phaseMs(current?.entries()?.get(TrainingOperationPhase.ADAM)), Modifier.weight(1f))
-            PerformanceCell("Step", state.dashboard.currentStepWallTimeMs?.let(::duration) ?: "—", Modifier.weight(1f))
+            PerformanceCell(if (density in compactDensityTiers) "F+B" else "Fwd + Bwd", phaseMs(current?.entries()?.get(TrainingOperationPhase.FUSED_FORWARD_BACKWARD)), Modifier.weight(1f), semantic.qnn, density)
+            PerformanceCell("Adam", phaseMs(current?.entries()?.get(TrainingOperationPhase.ADAM)), Modifier.weight(1f), semantic.loss, density)
+            PerformanceCell("Step", state.dashboard.currentStepWallTimeMs?.let(::duration) ?: "—", Modifier.weight(1f), semantic.cpu, density)
         }
     }
 }
 
 @Composable
-private fun PerformanceCell(label: String, value: String, modifier: Modifier) = Column(modifier) {
+private fun PerformanceCell(label: String, value: String, modifier: Modifier, valueColor: Color, density: TrainingOverviewDensity) = Column(modifier) {
     Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(value, style = if (density == TrainingOverviewDensity.ACCESSIBLE) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, fontFamily = TelemetryFontFamily, color = valueColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+@Composable
+private fun CompactTelemetryStrip(state: TrainingUiState, density: TrainingOverviewDensity) {
+    val semantic = trainingSemanticColors()
+    val memory = state.dashboard.currentMemoryBytes?.let(::bytes) ?: "—"
+    val elapsed = state.timing?.elapsedMs?.let(::duration) ?: "—"
+    val average = state.dashboard.averageStepWallTimeMs?.let(::duration) ?: "—"
+    val checkpoint = state.lastCheckpoint?.createdAtMs?.let { createdAt ->
+        checkpointAgeMs(System.currentTimeMillis(), createdAt)?.let(::duration)
+    } ?: "—"
+    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CompactTelemetryItem("PSS", memory, semantic.cpu, Modifier.weight(1f))
+            CompactTelemetryItem("ELAPSED", elapsed, MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+            CompactTelemetryItem("AVG STEP", average, semantic.loss, Modifier.weight(1f))
+            if (density != TrainingOverviewDensity.COMPACT) {
+                CompactTelemetryItem("CKPT AGE", checkpoint, semantic.checkpoint, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactTelemetryItem(label: String, value: String, valueColor: Color, modifier: Modifier) = Column(
+    modifier,
+    horizontalAlignment = Alignment.Start,
+) {
+    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(value, style = MaterialTheme.typography.labelMedium, fontFamily = TelemetryFontFamily, color = valueColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
 private fun CompactLossCard(snapshot: TrainingDashboardSnapshot, modifier: Modifier, density: TrainingOverviewDensity) =
     DenseCard(MaterialTheme.colorScheme.surfaceVariant, density, modifier, fillHeight = true) {
         val values = snapshot.lossHistory
-        val primary = MaterialTheme.colorScheme.primary
+        val summary = summarizeLoss(values)
+        val semantic = trainingSemanticColors()
+        val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
+        val historyLineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Loss trend", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(values.lastOrNull()?.let { "${loss(it.loss)} · step ${it.step}" } ?: "No samples", style = MaterialTheme.typography.labelSmall)
+            Text("Loss trend", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = semantic.loss)
+            Text(
+                summary.latest?.let { "${loss(it.loss)} · step ${it.step}" } ?: "No samples",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = TelemetryFontFamily,
+                color = if (summary.latest == null) semantic.unavailable else semantic.loss,
+            )
+        }
+        if (density != TrainingOverviewDensity.ACCESSIBLE) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("min ${summary.minimum?.let(::loss) ?: "—"}", style = MaterialTheme.typography.labelSmall, fontFamily = TelemetryFontFamily, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("max ${summary.maximum?.let(::loss) ?: "—"}", style = MaterialTheme.typography.labelSmall, fontFamily = TelemetryFontFamily, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("n=${values.size}", style = MaterialTheme.typography.labelSmall, fontFamily = TelemetryFontFamily, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Canvas(
             Modifier.fillMaxWidth().weight(1f).semantics {
-                contentDescription = "Compact loss history with ${values.size} observed samples"
+                contentDescription = summary.latest?.let {
+                    "Loss history with ${values.size} observed samples; latest ${loss(it.loss)} at step ${it.step}"
+                } ?: "Loss history with no observed samples"
             },
         ) {
-            if (values.size < 2) return@Canvas
+            if (values.isEmpty()) return@Canvas
             val min = values.minOf { it.loss }
             val max = values.maxOf { it.loss }
-            val range = (max - min).takeIf { it > 0f } ?: 1f
+            val range = max - min
             fun point(index: Int) = Offset(
-                index.toFloat() / values.lastIndex * size.width,
-                size.height - ((values[index].loss - min) / range * size.height),
+                if (values.lastIndex == 0) size.width / 2f else index.toFloat() / values.lastIndex * size.width,
+                if (range > 0f) size.height - ((values[index].loss - min) / range * size.height) else size.height / 2f,
             )
-            for (index in 1..values.lastIndex) drawLine(Color(0xFF68708A), point(index - 1), point(index), 2f, StrokeCap.Round)
+            for (row in 1..3) {
+                val y = size.height * row / 4f
+                drawLine(gridColor, Offset(0f, y), Offset(size.width, y), 1f)
+            }
+            for (column in 1..3) {
+                val x = size.width * column / 4f
+                drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), 1f)
+            }
+            if (values.size == 1) {
+                drawCircle(semantic.loss, radius = 5f, center = point(0))
+                return@Canvas
+            }
+            for (index in 1..values.lastIndex) drawLine(historyLineColor, point(index - 1), point(index), 2f, StrokeCap.Round)
             val recentStart = (values.size - minOf(values.size, 48)).coerceAtLeast(1)
-            for (index in recentStart..values.lastIndex) drawLine(primary, point(index - 1), point(index), 4f, StrokeCap.Round)
+            for (index in recentStart..values.lastIndex) drawLine(semantic.loss, point(index - 1), point(index), 4f, StrokeCap.Round)
+            drawCircle(semantic.loss, radius = 5f, center = point(values.lastIndex))
         }
     }
 
 @Composable
 private fun LatestStatusRow(state: TrainingUiState, density: TrainingOverviewDensity) =
     DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
-        val event = state.dashboard.eventTimeline.lastOrNull()
+        val semantic = trainingSemanticColors()
+        val event = latestImportantEvent(state.dashboard.eventTimeline)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(0.42f)) {
                 Text("Checkpoint", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(state.lastCheckpoint?.completedStep?.let { "Step $it" } ?: "—", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    state.lastCheckpoint?.completedStep?.let { "Step $it" } ?: "—",
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TelemetryFontFamily,
+                    color = if (state.lastCheckpoint == null) semantic.unavailable else semantic.checkpoint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Column(Modifier.weight(0.58f)) {
-                Text("Latest event", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(event?.let { eventDescription(it).first } ?: "No events", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Important event", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    event?.let { eventDescription(it).first } ?: "—",
+                    fontWeight = FontWeight.Bold,
+                    color = eventColor(event, semantic),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                event?.step?.takeIf { density != TrainingOverviewDensity.ACCESSIBLE }?.let { step ->
+                    Text("step $step", style = MaterialTheme.typography.labelSmall, fontFamily = TelemetryFontFamily, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
 
+private fun eventColor(event: TrainingDashboardEvent?, semantic: TrainingSemanticColors): Color = when (event?.type) {
+    TrainingDashboardEventType.ERROR,
+    TrainingDashboardEventType.QNN_RETURN,
+    TrainingDashboardEventType.TENSOR_FINITE,
+    TrainingDashboardEventType.CPU_FALLBACK,
+    -> semantic.warning
+    TrainingDashboardEventType.CHECKPOINT -> semantic.checkpoint
+    TrainingDashboardEventType.RESUME -> semantic.qnn
+    null, TrainingDashboardEventType.PHASE -> semantic.unavailable
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CompactActionDock(
     state: TrainingUiState,
@@ -319,26 +508,136 @@ private fun CompactActionDock(
     onStop: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
+    onStartOver: () -> Unit,
     onDetails: () -> Unit,
 ) {
-    val compactContentPadding = if (LocalDensity.current.fontScale >= 1.2f) {
-        PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+    val primary = trainingToolbarPrimaryAction(
+        phase = state.phase,
+        canStart = state.canStart,
+        canStop = state.canStop,
+        canPause = state.canPause,
+        canResume = state.canResume,
+    ).toToolbarAction()
+    val fontScale = LocalDensity.current.fontScale
+    val compactPadding = if (fontScale >= 1.2f) {
+        PaddingValues(horizontal = 8.dp, vertical = 4.dp)
     } else {
-        ButtonDefaults.ContentPadding
+        PaddingValues(horizontal = 10.dp, vertical = 6.dp)
     }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val semantic = trainingSemanticColors()
+    val secondarySelect = state.phase !in activePhases && primary != ToolbarAction.SELECT
+    HorizontalFloatingToolbar(
+        expanded = true,
+        modifier = Modifier.fillMaxWidth(),
+        colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(26.dp),
+        leadingContent = {
+            if (state.canStop) {
+                ToolbarActionButton(ToolbarAction.STOP, onStop, primary = false, compactPadding, semantic, fontScale >= 1.2f)
+            } else if (secondarySelect) {
+                ToolbarActionButton(ToolbarAction.SELECT, onSelectDataset, primary = false, compactPadding, semantic, fontScale >= 1.2f)
+            }
+        },
+        trailingContent = {
+            if (primary != ToolbarAction.DETAILS) {
+                ToolbarActionButton(ToolbarAction.DETAILS, onDetails, primary = false, compactPadding, semantic, fontScale >= 1.2f)
+            }
+        },
     ) {
-        when {
-            state.canStop -> Button(onClick = onStop, modifier = Modifier.weight(1.25f), contentPadding = compactContentPadding) { Text("Stop", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            state.canResume -> Button(onClick = onResume, modifier = Modifier.weight(1.25f), contentPadding = compactContentPadding) { Text("Resume", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            state.canStart -> Button(onClick = onStart, modifier = Modifier.weight(1.25f), contentPadding = compactContentPadding) { Text("Start", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            else -> Button(onClick = onSelectDataset, enabled = state.phase !in activePhases, modifier = Modifier.weight(1.25f), contentPadding = compactContentPadding) { Text("Select", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        ToolbarActionButton(
+            action = primary,
+            onClick = when (primary) {
+                ToolbarAction.PAUSE -> onPause
+                ToolbarAction.RESUME -> onResume
+                ToolbarAction.START -> onStart
+                ToolbarAction.START_OVER -> onStartOver
+                ToolbarAction.SELECT -> onSelectDataset
+                ToolbarAction.DETAILS -> onDetails
+                ToolbarAction.STOP -> onStop
+            },
+            primary = true,
+            compactPadding = compactPadding,
+            semantic = semantic,
+            compactLabel = fontScale >= 1.2f,
+        )
+    }
+}
+
+private enum class ToolbarAction {
+    STOP,
+    PAUSE,
+    RESUME,
+    START,
+    START_OVER,
+    SELECT,
+    DETAILS,
+}
+
+private fun TrainingToolbarPrimaryAction.toToolbarAction() = when (this) {
+    TrainingToolbarPrimaryAction.PAUSE -> ToolbarAction.PAUSE
+    TrainingToolbarPrimaryAction.RESUME -> ToolbarAction.RESUME
+    TrainingToolbarPrimaryAction.START -> ToolbarAction.START
+    TrainingToolbarPrimaryAction.START_OVER -> ToolbarAction.START_OVER
+    TrainingToolbarPrimaryAction.SELECT -> ToolbarAction.SELECT
+    TrainingToolbarPrimaryAction.DETAILS -> ToolbarAction.DETAILS
+}
+
+@Composable
+private fun ToolbarActionButton(
+    action: ToolbarAction,
+    onClick: () -> Unit,
+    primary: Boolean,
+    compactPadding: PaddingValues,
+    semantic: TrainingSemanticColors,
+    compactLabel: Boolean,
+) {
+    val icon = when (action) {
+        ToolbarAction.STOP -> Icons.Default.Stop
+        ToolbarAction.PAUSE -> Icons.Default.Pause
+        ToolbarAction.RESUME -> Icons.Default.PlayArrow
+        ToolbarAction.START -> Icons.Default.PlayArrow
+        ToolbarAction.START_OVER -> Icons.Default.Refresh
+        ToolbarAction.SELECT -> Icons.Default.FolderOpen
+        ToolbarAction.DETAILS -> Icons.Default.Info
+    }
+    val label = when (action) {
+        ToolbarAction.STOP -> "Stop"
+        ToolbarAction.PAUSE -> "Pause"
+        ToolbarAction.RESUME -> "Resume"
+        ToolbarAction.START -> "Start"
+        ToolbarAction.START_OVER -> if (compactLabel) "Restart" else "Start over"
+        ToolbarAction.SELECT -> "Select"
+        ToolbarAction.DETAILS -> if (compactLabel) "Info" else "Details"
+    }
+    val contentColor = when (action) {
+        ToolbarAction.STOP -> semantic.warning
+        ToolbarAction.SELECT, ToolbarAction.DETAILS -> MaterialTheme.colorScheme.onSurface
+        else -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    val buttonContent: @Composable () -> Unit = {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    if (primary) {
+        Button(
+            onClick = onClick,
+            contentPadding = compactPadding,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = contentColor,
+            ),
+        ) {
+            buttonContent()
         }
-        OutlinedButton(onClick = onPause, enabled = state.canPause, modifier = Modifier.weight(1f), contentPadding = compactContentPadding) { Text("Pause", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        OutlinedButton(onClick = onDetails, modifier = Modifier.weight(1f), contentPadding = compactContentPadding) { Text("Details", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    } else {
+        TextButton(
+            onClick = onClick,
+            contentPadding = compactPadding,
+            colors = ButtonDefaults.textButtonColors(contentColor = contentColor),
+        ) {
+            buttonContent()
+        }
     }
 }
 
@@ -391,7 +690,10 @@ private fun TrainingEventTimeline(events: List<TrainingDashboardEvent>) = Detail
     if (events.size > visibleEvents.size) Text("Showing latest ${visibleEvents.size} of ${events.size} events.")
     visibleEvents.asReversed().forEach { event ->
         val (title, detail) = eventDescription(event)
-        Text("$title${event.step?.let { " · step $it" }.orEmpty()}", fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, fontWeight = FontWeight.Bold)
+            event.step?.let { Text("step $it", fontWeight = FontWeight.Bold, fontFamily = TelemetryFontFamily) }
+        }
         detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
 }
@@ -444,12 +746,12 @@ private fun DenseCard(
     content: @Composable ColumnScope.() -> Unit,
 ) = Card(
     colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = RoundedCornerShape(if (density == TrainingOverviewDensity.COMPACT) 16.dp else 20.dp),
+    shape = RoundedCornerShape(if (density in compactDensityTiers) 16.dp else 20.dp),
     modifier = modifier.fillMaxWidth(),
 ) {
     Column(
         (if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()).padding(density.cardPaddingDp.dp),
-        verticalArrangement = Arrangement.spacedBy(if (density == TrainingOverviewDensity.COMPACT) 3.dp else 5.dp),
+        verticalArrangement = Arrangement.spacedBy(if (density in compactDensityTiers) 3.dp else 5.dp),
         content = content,
     )
 }
@@ -472,7 +774,7 @@ private fun InlineMetric(label: String, value: String, modifier: Modifier, end: 
     horizontalArrangement = if (end) Arrangement.End else Arrangement.Start,
 ) {
     Text("$label ", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1)
+    Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, fontFamily = TelemetryFontFamily, maxLines = 1)
 }
 
 @Composable
@@ -481,7 +783,7 @@ private fun MetricRow(label: String, value: String, detail: String? = null) = Ro
 ) {
     Text(label, modifier = Modifier.weight(0.45f), color = MaterialTheme.colorScheme.onSurfaceVariant)
     Column(modifier = Modifier.weight(0.55f), horizontalAlignment = Alignment.End) {
-        Text(value, fontWeight = FontWeight.Bold, textAlign = TextAlign.End)
+        Text(value, fontWeight = FontWeight.Bold, fontFamily = TelemetryFontFamily, textAlign = TextAlign.End)
         detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End) }
     }
 }
@@ -509,14 +811,15 @@ private fun eventDescription(event: TrainingDashboardEvent): Pair<String, String
     com.yuubinnkyoku.phonelm.TrainingDashboardEventType.CHECKPOINT -> "Checkpoint saved" to null
     com.yuubinnkyoku.phonelm.TrainingDashboardEventType.RESUME -> "Training resumed" to null
     com.yuubinnkyoku.phonelm.TrainingDashboardEventType.ERROR -> "Training error" to event.message
-    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.QNN_RETURN -> "QNN return code" to if (event.message == "true") "success" else "failure"
-    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.TENSOR_FINITE -> "Tensor finite check" to if (event.message == "true") "finite" else "non-finite"
-    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.CPU_FALLBACK -> "CPU fallback" to if (event.message == "true") "observed" else "not observed"
+    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.QNN_RETURN -> "QNN return code" to if (event.message.equals("true", ignoreCase = true)) "success" else "failure"
+    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.TENSOR_FINITE -> "Tensor finite check" to if (event.message.equals("true", ignoreCase = true)) "finite" else "non-finite"
+    com.yuubinnkyoku.phonelm.TrainingDashboardEventType.CPU_FALLBACK -> "CPU fallback" to if (event.message.equals("true", ignoreCase = true)) "observed" else "not observed"
 }
 private val activePhases = setOf(
     TrainingPhase.PREPARING, TrainingPhase.INITIALIZING_HTP, TrainingPhase.TRAINING,
     TrainingPhase.SAVING_CHECKPOINT, TrainingPhase.PAUSED,
 )
+private val compactDensityTiers = setOf(TrainingOverviewDensity.ACCESSIBLE, TrainingOverviewDensity.COMPACT)
 private val terminalPhases = setOf(TrainingPhase.COMPLETED, TrainingPhase.ERROR, TrainingPhase.INTERRUPTED)
 
 @Preview(name = "Portrait 360 × 800", widthDp = 360, heightDp = 800, showBackground = true)
@@ -530,13 +833,45 @@ private fun TrainingOverviewPreview() {
     )
 }
 
-private fun previewTrainingState() = TrainingUiState(
-    phase = TrainingPhase.TRAINING,
+@Preview(name = "Paused state", widthDp = 360, heightDp = 800, showBackground = true)
+@Composable
+private fun TrainingPausedPreview() = PreviewState(previewTrainingState(TrainingPhase.PAUSED))
+
+@Preview(name = "Ready state", widthDp = 360, heightDp = 800, showBackground = true)
+@Composable
+private fun TrainingReadyPreview() = PreviewState(previewTrainingState(TrainingPhase.IDLE))
+
+@Preview(name = "Complete state", widthDp = 360, heightDp = 800, showBackground = true)
+@Composable
+private fun TrainingCompletePreview() = PreviewState(previewTrainingState(TrainingPhase.COMPLETED))
+
+@Preview(name = "Missing telemetry", widthDp = 360, heightDp = 800, showBackground = true)
+@Composable
+private fun TrainingMissingTelemetryPreview() = PreviewState(previewTrainingState(TrainingPhase.TRAINING, telemetryMissing = true))
+
+@Preview(name = "Warning state", widthDp = 360, heightDp = 800, showBackground = true)
+@Composable
+private fun TrainingWarningPreview() = PreviewState(previewTrainingState(TrainingPhase.ERROR, warning = true))
+
+@Composable
+private fun PreviewState(state: TrainingUiState) {
+    TrainingDashboardApp(
+        state = state,
+        onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+    )
+}
+
+private fun previewTrainingState(
+    phase: TrainingPhase = TrainingPhase.TRAINING,
+    telemetryMissing: Boolean = false,
+    warning: Boolean = false,
+) = TrainingUiState(
+    phase = phase,
     progress = TrainingProgress(3_248, 8_000, 0.842731f),
     overview = "Training",
     overviewText = "Training",
     message = null,
-    timing = null,
+    timing = if (telemetryMissing) null else TrainingTiming(0L, 3_258_000L, currentStepMs = 388L, averageStepMs = 398.9),
     timingText = "Unavailable",
     htpActivity = null,
     activityText = "HTP activity is an observation ratio, not hardware utilization.",
@@ -544,17 +879,31 @@ private fun previewTrainingState() = TrainingUiState(
     checkpointText = "step 3,000",
     datasetUri = null,
     datasetDisplayName = "nicopedia.txt",
-    canStart = false,
-    canStop = true,
-    canPause = false,
-    canResume = false,
+    canStart = phase == TrainingPhase.IDLE || phase == TrainingPhase.COMPLETED,
+    canStop = phase == TrainingPhase.TRAINING || phase == TrainingPhase.SAVING_CHECKPOINT,
+    canPause = phase == TrainingPhase.TRAINING,
+    canResume = phase == TrainingPhase.PAUSED,
     modelConfig = TrainingModelConfig.NICOPEDIA_L19,
     dashboard = TrainingDashboardSnapshot(
         lossHistory = listOf(1.12f, 1.03f, 0.98f, 0.91f, 0.88f, 0.84f).mapIndexed { index, value ->
             TrainingLossHistoryEntry(3_208 + index * 8, value)
         },
-        activityHistory = listOf(TrainingActivityHistoryEntry(3_248, 67.4, 18.2)),
-        eventTimeline = listOf(TrainingDashboardEvent(TrainingDashboardEventType.CHECKPOINT, 3_000, "checkpoint saved")),
+        activityHistory = listOf(
+            TrainingActivityHistoryEntry(
+                3_248,
+                htpObservationRatioPercent = if (telemetryMissing) null else 67.4,
+                processCpuPercent = if (telemetryMissing) null else 18.2,
+                processMemoryBytes = if (telemetryMissing) null else 284L * 1_048_576L,
+            ),
+        ),
+        eventTimeline = if (warning) {
+            listOf(TrainingDashboardEvent(TrainingDashboardEventType.ERROR, 3_248, "QNN output unavailable"))
+        } else {
+            listOf(TrainingDashboardEvent(TrainingDashboardEventType.CHECKPOINT, 3_000, "checkpoint saved"))
+        },
         etaMs = 418_000,
+        averageStepWallTimeMs = if (telemetryMissing) null else 398.9,
+        currentStepWallTimeMs = if (telemetryMissing) null else 388L,
+        currentMemoryBytes = if (telemetryMissing) null else 284L * 1_048_576L,
     ),
 )

@@ -33,11 +33,16 @@ cancel the active native run.
 ## Compose training dashboard
 
 The standalone screen is a PhoneLM-specific Jetpack Compose dashboard built
-with stable Material 3 1.4 APIs. It uses a black, high-contrast surface
-hierarchy, an expanded shape scale, large progress typography, a fixed action
-dock, dynamic Android 12+ accent colors, and measured-value animation. The
-dedicated Material 3 Expressive alpha theme/motion APIs are intentionally not
-used, so experimental APIs do not escape into the application theme.
+with Material 3 Expressive 1.5.0-alpha18. This is the newest verified line
+compatible with the project's compileSdk 36.1 / AGP 8.13 toolchain. Alpha19+
+pulls the Compose 1.12 generation, while the newest currently published
+alpha25 artifact explicitly requires SDK 37 / AGP 9.1. It uses
+`MaterialExpressiveTheme`, the expressive motion scheme, the official
+`HorizontalFloatingToolbar`, and a restrained determinate wavy progress
+indicator. Experimental opt-in is localized to the training
+UI entrypoints. The dashboard keeps a black, high-contrast surface hierarchy,
+semantic telemetry accents, monospace numeric values, dynamic Android 12+
+colors, and restrained phase/progress motion.
 
 The screen combines a compact training hero, current compute observations,
 fused/Adam/step performance, a loss trace, latest checkpoint/event, and primary
@@ -73,11 +78,16 @@ device, or hardware utilization.
 
 The portrait overview is a fixed, non-scrolling monitoring surface. It keeps
 phase, progress, loss/ETA, HTP observation ratio, process CPU, current fused
-and Adam timing, a compact loss trace, latest checkpoint/event, and primary
-actions visible together. Model/dataset metadata, cumulative timing, the most
+and Adam timing, process PSS/elapsed/average-step/checkpoint-age summaries, a
+compact loss trace, latest checkpoint/important event, and primary actions
+visible together. The important-event presentation suppresses routine phase
+transitions but never invents an event. Model/dataset metadata, cumulative timing, the most
 recent 50 retained events, summary, and raw diagnostics are available on demand in a scrolling
-Material 3 bottom sheet. Height and font scale select compact, standard, or
-comfortable density without changing telemetry values or lifecycle behavior.
+Material 3 bottom sheet. Height and font scale select accessible, compact,
+standard, or comfortable density without changing telemetry values or lifecycle
+behavior. The accessible tier preserves the fixed overview and required actions
+at 2.0 font scale by omitting secondary summary rows; complete values remain in
+the details sheet.
 
 The Android benchmark adapter and standalone adapter share a small Kotlin
 `NativeRunArbiter` before entering the legacy process-global JNI bridge. This
