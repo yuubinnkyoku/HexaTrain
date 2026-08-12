@@ -54,6 +54,8 @@ if ($SelfTest) {
   if ($inactiveDecision.active -or @($inactiveDecision.reasons) -notcontains 'CACHED_PROCESS_ONLY' -or @($inactiveDecision.reasons) -notcontains 'INACTIVE_TASK_ONLY') { throw 'SELFTEST_CACHED_PROCESS_FALSE_POSITIVE' }
   $heartbeatEvidence = $inactiveEvidence.Clone(); $heartbeatEvidence.status_state = 'active'; $heartbeatDecision = Resolve-PhoneLmRunConflict $heartbeatEvidence
   if (-not $heartbeatDecision.active -or @($heartbeatDecision.reasons) -notcontains 'ACTIVE_HEARTBEAT') { throw 'SELFTEST_ACTIVE_HEARTBEAT_NOT_BLOCKED' }
+  $staleEvidence = $inactiveEvidence.Clone(); $staleEvidence.status_state = 'stale'; $staleDecision = Resolve-PhoneLmRunConflict $staleEvidence
+  if ($staleDecision.active -or @($staleDecision.reasons) -notcontains 'STALE_HEARTBEAT_ONLY') { throw 'SELFTEST_STALE_HEARTBEAT_FALSE_POSITIVE' }
   $fgsEvidence = $inactiveEvidence.Clone(); $fgsEvidence.fgs_present = $true; $fgsDecision = Resolve-PhoneLmRunConflict $fgsEvidence
   if (-not $fgsDecision.active -or @($fgsDecision.reasons) -notcontains 'ACTIVE_FGS') { throw 'SELFTEST_ACTIVE_FGS_NOT_BLOCKED' }
   $activityEvidence = $inactiveEvidence.Clone(); $activityEvidence.activity_active = $true; $activityDecision = Resolve-PhoneLmRunConflict $activityEvidence

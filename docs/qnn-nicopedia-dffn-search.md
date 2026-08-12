@@ -179,6 +179,58 @@ For context, the previously recorded long anchor (8,000 steps, a different
 run length) is val NLL 2.168420875 and dev NLL 2.146852226 at about 490 ms per
 step.  It is not mixed with the interrupted 32-step screen above.
 
+## Real-training follow-up (2026-08-12)
+
+After the interrupted short-screen work, the clean gate was corrected so that
+an inactive terminal status, stopped heartbeat, cached PhoneLM process, and
+non-visible task history are recorded as inactive evidence rather than an
+automatic `RUN_ALREADY_ACTIVE`.  A live heartbeat, test-process run lock,
+foreground service, resumed/focused PhoneLM activity, or unknown/contradictory
+state still fails closed.  The gate records reasons such as
+`STALE_HEARTBEAT_ONLY`, `CACHED_PROCESS_ONLY`, `INACTIVE_TASK_ONLY`,
+`ACTIVE_HEARTBEAT`, and `ACTIVE_ACTIVITY`; true/false/unknown self-test cases
+pass.  The headless wait also ignores only a stale foreign status marker before
+the new run identity appears; a live foreign marker remains an identity error.
+
+The first fresh D24/FFN48 run reached and retained NPRTCKPTV2 checkpoints at
+steps 250, 500, 750, and 1000.  Its host wrapper stopped during the diagnostic
+CPU replay tail after step 1000 because no new checkpoint arrived for the
+600-second watchdog window; this is not a native/QNN failure.  The checkpoints
+were recovered before any rerun and all headers matched T32/D24/FFN48/L19/H2/
+V256/seed 1.  Host checkpoint evaluation was finite at every point; validation
+NLL moved 3.408663 (step 250) to 3.160144 (step 1000), and development NLL
+moved 2.870006 to 2.468762 (CPU evaluator, one chunk per split).
+
+A controlled resume from step 1000 to 1250 then reached `PASSED/complete` and
+produced a new 1,236,265-byte V2 checkpoint.  The resume report recorded
+`resume_from_step=1000`, 3,000/3,000 QNN executes, zero failures, finite=true,
+QNN return success=true, and CPU fallback=false.  Its short segment began at
+NLL 2.418257 and ended at 2.536023, so that segment alone is not a monotonic
+quality claim.  The 64+64-chunk HTP evaluation at step 1000 was independently
+healthy (validation NLL 2.224831, development NLL 2.639192, 128/128 executes,
+zero failures, finite=true, CPU fallback=false).  The resumed training report
+measured 255.9 HTP execute ms/step (fused plus Adam cumulative time divided by
+250) and 821.7 steady-state wall ms/step.  Greedy HTP generation produced 64
+bytes with 63 valid UTF-8 bytes and one invalid byte; the short-period loop
+fraction was 1.0, so generation was technically healthy but visibly repetitive.
+
+The first D32/FFN32 real-training attempt did not produce a checkpoint or native
+report.  The instrumentation ended with `Process crashed` while the headless
+status remained RUNNING; read-only recovery then observed a PhoneLM process and
+`StandaloneTrainingActivity` resumed/focused.  No QNN return, finite, graph,
+OOM, or checkpoint evidence was available, and the run is therefore not
+classified as a D32 model failure.  A post-recovery retry was first blocked by
+installed/local APK hash mismatch, and a subsequent clean-gate read observed
+the PhoneLM activity active again.  No install, force-stop, or automatic D32
+retry was performed while that activity was active.  The remaining hypotheses
+are runner/transport/lifecycle/provenance interference and, separately,
+unobserved native latency or graph/DSP behavior; none is established here.
+
+This follow-up is not a matched winner study and uses one seed only.  D24 is a
+valid intermediate training/eval/resume path, but no wider configuration is
+promoted to production.  D32 requires a new controlled device window with
+matching APKs and no active activity before another real-training attempt.
+
 ## Checkpoint and identity safety
 
 The canonical anchor keeps its historical filename.  Every non-anchor research filename

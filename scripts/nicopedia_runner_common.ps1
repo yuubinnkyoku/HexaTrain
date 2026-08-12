@@ -216,6 +216,7 @@ function Get-PhoneLmRunEvidence {
     $statusText = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
     $statusState = 'none'
     $statusUncertain = $false
+    $statusHeartbeatAgeMs = $null
     if (-not [string]::IsNullOrWhiteSpace($statusText)) {
         try {
             $status = $statusText | ConvertFrom-Json
@@ -226,8 +227,12 @@ function Get-PhoneLmRunEvidence {
             if ($statusState -eq 'active') {
                 if ($null -eq $status.last_heartbeat -or [int64]$status.last_heartbeat -le 0) { $statusUncertain = $true }
                 else {
-                    $ageMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$status.last_heartbeat
-                    if ($ageMs -gt 120000) { $statusUncertain = $true }
+                    $statusHeartbeatAgeMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$status.last_heartbeat
+                    # A stopped heartbeat is not proof of an active run.  The
+                    # process/task/service/activity evidence below still gates
+                    # the decision; stale status alone is retained as an
+                    # auditable inactive reason and never treated as success.
+                    if ($statusHeartbeatAgeMs -gt 120000) { $statusState = 'stale' }
                 }
             }
         } catch { $statusUncertain = $true }
@@ -251,6 +256,7 @@ function Get-PhoneLmRunEvidence {
     [pscustomobject][ordered]@{
         status_state = $statusState
         status_uncertain = [bool]$statusUncertain
+        status_heartbeat_age_ms = $statusHeartbeatAgeMs
         process_present = [bool]$processPresent
         test_process_present = [bool]$testProcessPresent
         fgs_present = [bool]$fgsPresent
@@ -279,6 +285,7 @@ function Resolve-PhoneLmRunConflict {
         return [pscustomobject][ordered]@{ active = $true; reasons = @($activeReasons | Select-Object -Unique) }
     }
     $inactiveReasons = [System.Collections.Generic.List[string]]::new()
+    if ($Evidence.status_state -eq 'stale') { [void]$inactiveReasons.Add('STALE_HEARTBEAT_ONLY') }
     if ($Evidence.process_present) { [void]$inactiveReasons.Add('CACHED_PROCESS_ONLY') }
     if ($Evidence.task_present) { [void]$inactiveReasons.Add('INACTIVE_TASK_ONLY') }
     if ($inactiveReasons.Count -eq 0) { [void]$inactiveReasons.Add('CLEAN_NO_ACTIVE_EVIDENCE') }
@@ -299,8 +306,15 @@ function Assert-PhoneLmNoExistingRun {
 
 function Assert-PhoneLmNoExistingHeadlessRun {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package)
-    $status = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
-    if ($status -match '"status"\s*:\s*"(STARTING|RUNNING)"') { throw 'RUN_ALREADY_ACTIVE: headless single-flight status is live' }
+    # Use the same evidence-based gate as the process/task check.  A stale
+    # STARTING/RUNNING marker after an owned timeout is not itself an active
+    # session; live heartbeat, lock, service, focused activity, or unknown
+    # state still fails closed.
+    $evidence = Get-PhoneLmRunEvidence -Adb $Adb -Device $Device -Package $Package
+    $decision = Resolve-PhoneLmRunConflict -Evidence $evidence
+    $reason = ($decision.reasons -join ',')
+    Write-Host "headless_single_flight_gate=$(-not $decision.active) reasons=$reason status=$($evidence.status_state) heartbeat_age_ms=$($evidence.status_heartbeat_age_ms)"
+    if ($decision.active) { throw "RUN_ALREADY_ACTIVE: $reason" }
 }
 
 function Assert-PhoneLmHeadlessInputFresh {
@@ -680,8 +694,12 @@ function Wait-PhoneLmHeadlessStatus {
                         # Ignore that record only until this run is first seen;
                         # a foreign live status, or any identity change after the
                         # expected run appeared, is always fatal.
-                        if ($seenExpectedStatus -or
-                            $lastStatus -match '"status"\s*:\s*"(STARTING|RUNNING)"') {
+                        $foreignLive = $lastStatus -match '"status"\s*:\s*"(STARTING|RUNNING)"'
+                        $foreignHeartbeatStale = $false
+                        if ($foreignLive -and $lastStatus -match '"last_heartbeat"\s*:\s*(\d+)') {
+                            $foreignHeartbeatStale = ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$Matches[1]) -gt 120000
+                        }
+                        if ($seenExpectedStatus -or ($foreignLive -and -not $foreignHeartbeatStale)) {
                             throw 'HEADLESS_STATUS_IDENTITY_MISMATCH'
                         }
                         $lastStatus = ''
