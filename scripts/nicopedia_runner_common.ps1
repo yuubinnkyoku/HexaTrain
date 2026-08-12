@@ -183,15 +183,115 @@ function Get-PhoneLmThermalBatteryState {
     }
 }
 
-function Assert-PhoneLmNoExistingRun {
+function Get-PhoneLmActivityEvidence {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package)
-    foreach ($processPackage in @($Package, "$Package.test")) {
-        $pidResult = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'pidof', $processPackage) -AllowFailure
-        if ($pidResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($pidResult.Text)) { throw "RUN_ALREADY_ACTIVE: process exists ($processPackage)" }
+    $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'dumpsys', 'activity', 'activities') -AllowFailure
+    if ($result.ExitCode -ne 0) {
+        if ($result.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($result.Classification): activity preflight interrupted" }
+        return [pscustomobject][ordered]@{ known = $false; active = $false; task_present = $false; top_package = 'UNKNOWN'; resumed_package = 'UNKNOWN'; focused_package = 'UNKNOWN' }
+    }
+    $text = $result.Text
+    $escaped = [regex]::Escape($Package)
+    $top = [regex]::Match($text, '(?im)^\s*topResumedActivity=.*?\bu\d+\s+([^/\s]+)/')
+    $resumed = [regex]::Match($text, '(?im)^\s*(?:mResumedActivity|ResumedActivity):.*?\bu\d+\s+([^/\s]+)/')
+    $focused = [regex]::Match($text, '(?im)^\s*m(?:CurrentFocus|FocusedWindow)=Window\{.*?\s([^/\s]+)/')
+    $topPackage = if ($top.Success) { $top.Groups[1].Value } elseif ($resumed.Success) { $resumed.Groups[1].Value } elseif ($focused.Success) { $focused.Groups[1].Value } else { 'UNKNOWN' }
+    $resumedPackage = if ($resumed.Success) { $resumed.Groups[1].Value } else { 'UNKNOWN' }
+    $focusedPackage = if ($focused.Success) { $focused.Groups[1].Value } else { 'UNKNOWN' }
+    $activityKnown = $top.Success -or $resumed.Success -or $focused.Success -or $text -match '(?im)^\s*m(?:CurrentFocus|FocusedWindow)='
+    $taskPresent = $text -match "(?im)^\s*\*?\s*Task\{[^\r\n]*\bA=[^:\s]+:$escaped\b" -or $text -match "(?im)^\s*packageName=$escaped(?:$|\s)"
+    $active = @($topPackage, $resumedPackage, $focusedPackage) -contains $Package
+    [pscustomobject][ordered]@{
+        known = [bool]$activityKnown
+        active = [bool]$active
+        task_present = [bool]$taskPresent
+        top_package = $topPackage
+        resumed_package = $resumedPackage
+        focused_package = $focusedPackage
+    }
+}
+
+function Get-PhoneLmRunEvidence {
+    param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package)
+    $statusText = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
+    $statusState = 'none'
+    $statusUncertain = $false
+    if (-not [string]::IsNullOrWhiteSpace($statusText)) {
+        try {
+            $status = $statusText | ConvertFrom-Json
+            if ($null -eq $status.status) { $statusUncertain = $true }
+            elseif ([string]$status.status -in @('STARTING', 'RUNNING')) { $statusState = 'active' }
+            elseif ([string]$status.status -in @('PASSED', 'FAILED')) { $statusState = 'terminal' }
+            else { $statusUncertain = $true }
+            if ($statusState -eq 'active') {
+                if ($null -eq $status.last_heartbeat -or [int64]$status.last_heartbeat -le 0) { $statusUncertain = $true }
+                else {
+                    $ageMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$status.last_heartbeat
+                    if ($ageMs -gt 120000) { $statusUncertain = $true }
+                }
+            }
+        } catch { $statusUncertain = $true }
+    }
+    $processPresent = $false
+    $testProcessPresent = $false
+    foreach ($process in @([pscustomobject]@{ name = $Package; field = 'main' }, [pscustomobject]@{ name = "$Package.test"; field = 'test' })) {
+        $pidResult = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'pidof', $process.name) -AllowFailure
         if ($pidResult.ExitCode -ne 0 -and $pidResult.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($pidResult.Classification): process preflight interrupted" }
+        if ($pidResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($pidResult.Text)) {
+            if ($process.field -eq 'main') { $processPresent = $true } else { $testProcessPresent = $true }
+        }
     }
     $serviceResult = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'dumpsys', 'activity', 'services', $Package) -AllowFailure
-    if ($serviceResult.ExitCode -eq 0 -and $serviceResult.Text -match '(?i)ServiceRecord|foreground service|isForeground=true') { throw 'RUN_ALREADY_ACTIVE: service lifecycle exists' }
+    if ($serviceResult.ExitCode -ne 0 -and $serviceResult.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($serviceResult.Classification): service preflight interrupted" }
+    $serviceUncertain = $serviceResult.ExitCode -ne 0
+    $serviceText = $serviceResult.Text
+    $fgsPresent = $serviceResult.ExitCode -eq 0 -and $serviceText -match '(?i)isForeground\s*=\s*true|foreground\s+service|foreground=true'
+    $servicePresent = $serviceResult.ExitCode -eq 0 -and $serviceText -match '(?i)ServiceRecord|serviceRecord'
+    $activity = Get-PhoneLmActivityEvidence -Adb $Adb -Device $Device -Package $Package
+    [pscustomobject][ordered]@{
+        status_state = $statusState
+        status_uncertain = [bool]$statusUncertain
+        process_present = [bool]$processPresent
+        test_process_present = [bool]$testProcessPresent
+        fgs_present = [bool]$fgsPresent
+        service_present = [bool]$servicePresent
+        service_uncertain = [bool]$serviceUncertain
+        activity_known = [bool]$activity.known
+        activity_active = [bool]$activity.active
+        task_present = [bool]$activity.task_present
+        top_package = [string]$activity.top_package
+        resumed_package = [string]$activity.resumed_package
+        focused_package = [string]$activity.focused_package
+    }
+}
+
+function Resolve-PhoneLmRunConflict {
+    param([Parameter(Mandatory = $true)]$Evidence)
+    $activeReasons = [System.Collections.Generic.List[string]]::new()
+    if ($Evidence.status_state -eq 'active') { [void]$activeReasons.Add('ACTIVE_HEARTBEAT') }
+    if ($Evidence.test_process_present) { [void]$activeReasons.Add('ACTIVE_RUN_LOCK') }
+    if ($Evidence.fgs_present) { [void]$activeReasons.Add('ACTIVE_FGS') }
+    if ($Evidence.service_present -and -not $Evidence.fgs_present) { [void]$activeReasons.Add('ACTIVE_SERVICE') }
+    if ($Evidence.activity_active) { [void]$activeReasons.Add('ACTIVE_ACTIVITY') }
+    if ($Evidence.status_uncertain -or $Evidence.service_uncertain -or -not $Evidence.activity_known) { [void]$activeReasons.Add('RUN_STATE_UNCERTAIN') }
+    if ($Evidence.process_present -and $Evidence.status_state -eq 'none') { [void]$activeReasons.Add('RUN_STATE_UNCERTAIN') }
+    if ($activeReasons.Count -gt 0) {
+        return [pscustomobject][ordered]@{ active = $true; reasons = @($activeReasons | Select-Object -Unique) }
+    }
+    $inactiveReasons = [System.Collections.Generic.List[string]]::new()
+    if ($Evidence.process_present) { [void]$inactiveReasons.Add('CACHED_PROCESS_ONLY') }
+    if ($Evidence.task_present) { [void]$inactiveReasons.Add('INACTIVE_TASK_ONLY') }
+    if ($inactiveReasons.Count -eq 0) { [void]$inactiveReasons.Add('CLEAN_NO_ACTIVE_EVIDENCE') }
+    [pscustomobject][ordered]@{ active = $false; reasons = @($inactiveReasons | Select-Object -Unique) }
+}
+
+function Assert-PhoneLmNoExistingRun {
+    param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package)
+    $evidence = Get-PhoneLmRunEvidence -Adb $Adb -Device $Device -Package $Package
+    $decision = Resolve-PhoneLmRunConflict -Evidence $evidence
+    $reason = ($decision.reasons -join ',')
+    Write-Host "clean_gate=$(-not $decision.active) reasons=$reason status=$($evidence.status_state) process=$($evidence.process_present) test_process=$($evidence.test_process_present) fgs=$($evidence.fgs_present) activity=$($evidence.activity_active) task=$($evidence.task_present) top=$($evidence.top_package)"
+    if ($decision.active) { throw "RUN_ALREADY_ACTIVE: $reason" }
     # device-test-result.txt is an ephemeral legacy marker.  A terminal or
     # partial marker is safe to clear only after the live process/service and
     # headless single-flight checks above have passed; callers clear it next.
@@ -531,8 +631,14 @@ function Get-PhoneLmTopPackage {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device)
     $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'dumpsys', 'activity', 'activities') -AllowFailure
     if ($result.ExitCode -ne 0) { if ($result.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($result.Classification): focus sampling interrupted" }; return 'UNKNOWN' }
-    $match = [regex]::Match($result.Text, '(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/')
-    if ($match.Success) { return $match.Groups[1].Value }
+    foreach ($pattern in @(
+        '(?im)^\s*topResumedActivity=.*?\bu\d+\s+([^/\s]+)/',
+        '(?im)^\s*(?:mResumedActivity|ResumedActivity):.*?\bu\d+\s+([^/\s]+)/',
+        '(?im)^\s*m(?:CurrentFocus|FocusedWindow)=Window\{.*?\s([^/\s]+)/'
+    )) {
+        $match = [regex]::Match($result.Text, $pattern)
+        if ($match.Success) { return $match.Groups[1].Value }
+    }
     return 'UNKNOWN'
 }
 

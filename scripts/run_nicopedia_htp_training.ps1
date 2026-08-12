@@ -49,6 +49,17 @@ if ($SelfTest) {
       $candidateName -ne 'htp-seed1-l19-t32-d32-f64-step320.ckpt' -or
       $canonicalName -eq $candidateName) { throw 'SELFTEST_CHECKPOINT_MODEL_IDENTITY' }
   if ($CheckpointInterval -lt 1 -or $PollSeconds -lt 1 -or $PollLimit -lt 1 -or $ProgressEverySeconds -lt 1 -or $CheckpointStallSeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
+  $inactiveEvidence = @{ status_state = 'terminal'; status_uncertain = $false; process_present = $true; test_process_present = $false; fgs_present = $false; service_present = $false; service_uncertain = $false; activity_known = $true; activity_active = $false; task_present = $true }
+  $inactiveDecision = Resolve-PhoneLmRunConflict $inactiveEvidence
+  if ($inactiveDecision.active -or @($inactiveDecision.reasons) -notcontains 'CACHED_PROCESS_ONLY' -or @($inactiveDecision.reasons) -notcontains 'INACTIVE_TASK_ONLY') { throw 'SELFTEST_CACHED_PROCESS_FALSE_POSITIVE' }
+  $heartbeatEvidence = $inactiveEvidence.Clone(); $heartbeatEvidence.status_state = 'active'; $heartbeatDecision = Resolve-PhoneLmRunConflict $heartbeatEvidence
+  if (-not $heartbeatDecision.active -or @($heartbeatDecision.reasons) -notcontains 'ACTIVE_HEARTBEAT') { throw 'SELFTEST_ACTIVE_HEARTBEAT_NOT_BLOCKED' }
+  $fgsEvidence = $inactiveEvidence.Clone(); $fgsEvidence.fgs_present = $true; $fgsDecision = Resolve-PhoneLmRunConflict $fgsEvidence
+  if (-not $fgsDecision.active -or @($fgsDecision.reasons) -notcontains 'ACTIVE_FGS') { throw 'SELFTEST_ACTIVE_FGS_NOT_BLOCKED' }
+  $activityEvidence = $inactiveEvidence.Clone(); $activityEvidence.activity_active = $true; $activityDecision = Resolve-PhoneLmRunConflict $activityEvidence
+  if (-not $activityDecision.active -or @($activityDecision.reasons) -notcontains 'ACTIVE_ACTIVITY') { throw 'SELFTEST_ACTIVE_ACTIVITY_NOT_BLOCKED' }
+  $unknownEvidence = $inactiveEvidence.Clone(); $unknownEvidence.activity_known = $false; $unknownDecision = Resolve-PhoneLmRunConflict $unknownEvidence
+  if (-not $unknownDecision.active -or @($unknownDecision.reasons) -notcontains 'RUN_STATE_UNCERTAIN') { throw 'SELFTEST_UNKNOWN_STATE_NOT_BLOCKED' }
   if (-not ("status=SUCCESS`n" -match '(?m)^status=(SUCCESS|FAILED)\s*$')) { throw 'SELFTEST_TERMINAL_STATUS' }
   $progressState = [ordered]@{ Count = 0; LastProgressUtc = [DateTime]::UtcNow }
   Update-PhoneLmCheckpointProgress -State $progressState -CheckpointCount 1 -NowUtc ([DateTime]::UtcNow) -StallSeconds 1
