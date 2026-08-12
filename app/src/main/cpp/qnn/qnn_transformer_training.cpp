@@ -7449,6 +7449,8 @@ std::string runNicopediaHtpOneUpdateProbe(
   std::uint64_t fusedExecuteCount = 0, adamExecuteCount = 0;
   std::uint64_t trainingFinalizeCount = 0, adamFinalizeCount = 0;
   double firstExecuteUs = 0.0;
+  double fusedExecuteUs = 0.0, adamExecuteUs = 0.0;
+  std::array<double, 8> fusedBatchExecuteUs{};
   double meanLoss = 0.0;
   const auto emit = [&](const char *status, const char *phase,
                         const std::string &error, double wallMs,
@@ -7478,6 +7480,15 @@ std::string runNicopediaHtpOneUpdateProbe(
            << "\nfused_forward_backward_execute_count=" << fusedExecuteCount
            << "\nadam_execute_count=" << adamExecuteCount
            << "\ngraph_execute_count=" << graphExecuteCount
+           << "\nexpected_fused_forward_backward_execute_count=8"
+           << "\nexpected_adam_execute_count="
+           << ((tiny_lm::parameterElementCount(
+                    tiny_lm::initialParameters(
+                        config, static_cast<std::uint32_t>(trainingConfig.seed))) +
+                phonelm::transformer::kMaximumAdamChunkElements - 1) /
+               phonelm::transformer::kMaximumAdamChunkElements)
+           << "\nfused_forward_backward_qnn_us=" << fusedExecuteUs
+           << "\nadam_qnn_us=" << adamExecuteUs
            << "\nfirst_execute_us=" << firstExecuteUs
            << "\ntraining_step_ms=" << wallMs
            << "\nmean_loss=" << meanLoss
@@ -7610,6 +7621,7 @@ std::string runNicopediaHtpOneUpdateProbe(
                   runtime.metrics().graphExecuteCount);
     const auto batchData = nprtBatch(config, cache, order[batch]);
     TinyTransformerTrainingOutputs output;
+    const std::size_t metricBefore = runtime.metrics().executeUs.size();
     const auto executeStarted = std::chrono::steady_clock::now();
     if (!runtime.executeTinyTransformerTraining(
             batchData.input, batchData.target, current, 0.0f, output, error))
@@ -7619,6 +7631,12 @@ std::string runNicopediaHtpOneUpdateProbe(
       firstExecuteUs = std::chrono::duration<double, std::micro>(
                            std::chrono::steady_clock::now() - executeStarted)
                            .count();
+    const auto &executeMetrics = runtime.metrics().executeUs;
+    if (executeMetrics.size() != metricBefore + 1)
+      return emit("FAILED", "fused_execute", "execute_metric_count_mismatch",
+                  0.0, runtime.metrics().graphExecuteCount);
+    fusedBatchExecuteUs[batch] = executeMetrics.back();
+    fusedExecuteUs += fusedBatchExecuteUs[batch];
     ++fusedExecuteCount;
     lossSum += output.loss;
     const bool finiteOutput = finiteTrainingOutputs(output);
@@ -7635,6 +7653,14 @@ std::string runNicopediaHtpOneUpdateProbe(
         accum[j] += values[j] * (1.0f / 8.0f);
     }
     gradientFinite = gradientFinite && finiteParams(output.gradients);
+    if (progress) {
+      std::ostringstream batchProgress;
+      batchProgress << "phase=fused_execute_" << batch
+                    << "_done\nstep=1\nsteps=1\nqnn_result=0"
+                    << "\nfused_execute_count=" << fusedExecuteCount
+                    << "\nfused_execute_us=" << fusedBatchExecuteUs[batch];
+      progress(batchProgress.str());
+    }
   }
   phase("first_execute_done");
   meanLoss = lossSum / 8.0;
@@ -7642,6 +7668,7 @@ std::string runNicopediaHtpOneUpdateProbe(
   phase("adam_begin");
   AdamOptimizerOutputs raw;
   Params next, firstNext, secondNext;
+  const std::size_t adamMetricBefore = runtime.metrics().executeUs.size();
   if (!executeLanguageAdam(runtime, current, gradientAccum, first, second,
                            trainingConfig.learningRate, 1, 1.0f, next,
                            firstNext, secondNext, &raw, error, chunk))
@@ -7649,6 +7676,12 @@ std::string runNicopediaHtpOneUpdateProbe(
                 runtime.metrics().graphExecuteCount);
   adamExecuteCount = runtime.metrics().graphExecuteCount - executeBefore -
                      fusedExecuteCount;
+  const auto &adamMetrics = runtime.metrics().executeUs;
+  if (adamMetrics.size() != adamMetricBefore + adamExecuteCount)
+    return emit("FAILED", "adam_done", "adam_metric_count_mismatch", 0.0,
+                runtime.metrics().graphExecuteCount);
+  for (std::size_t i = adamMetricBefore; i < adamMetrics.size(); ++i)
+    adamExecuteUs += adamMetrics[i];
   const auto finiteRaw = finite(raw.firstMomentNext) && finite(raw.secondMomentNext) &&
                          finite(raw.firstMomentHat) && finite(raw.secondMomentHat) &&
                          finite(raw.secondRoot) && finite(raw.denominator) &&

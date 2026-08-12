@@ -11,11 +11,11 @@ param(
     [ValidateSet('Plan', 'Screen', 'Extended', 'Final')][string]$Phase = 'Plan',
     [switch]$AllowTier3Research,
     [switch]$SelfTest,
-    [int]$ScreenSteps = 320,
+    [int]$ScreenSteps = 32,
     [int]$ExtendedSteps = 1000,
     [int]$FinalSteps = 4000,
     [int[]]$ExtendedSeeds = @(1, 2, 4),
-    [int]$CheckpointInterval = 320,
+    [int]$CheckpointInterval = 32,
     [int]$ValidationChunks = 512,
     [int]$DevelopmentChunks = 512,
     [int]$MaxNewBytes = 64,
@@ -59,9 +59,9 @@ $script:researchBuildPerformed = $false
 $script:researchInstallPerformed = $false
 $candidates = @(
     [pscustomobject]@{ id = 'anchor-d16-f32'; dimension = 16; feed_forward_dimension = 32; family = 'anchor' },
-    [pscustomobject]@{ id = 'd32-f32'; dimension = 32; feed_forward_dimension = 32; family = 'dimension_only' },
     [pscustomobject]@{ id = 'd16-f64'; dimension = 16; feed_forward_dimension = 64; family = 'ffn_only' },
-    [pscustomobject]@{ id = 'd32-f64'; dimension = 32; feed_forward_dimension = 64; family = 'dimension_and_ffn' }
+    [pscustomobject]@{ id = 'd24-f48'; dimension = 24; feed_forward_dimension = 48; family = 'intermediate_joint' },
+    [pscustomobject]@{ id = 'd32-f32'; dimension = 32; feed_forward_dimension = 32; family = 'dimension_only' }
 )
 
 function Get-ModelEstimate {
@@ -297,7 +297,10 @@ function Invoke-FreshBuildInstall {
 }
 function Invoke-ResearchSegment($Candidate, [int]$Seed, [int]$Steps, [string]$Stage, [int]$ResumeStep = 0, [switch]$FullCapEval) {
     Assert-PhaseApkIdentity
-    $tag = "$($Candidate.id)-s$Seed-$Stage"
+    # Bind every device input directory to this experiment.  Candidate-only
+    # run IDs collide with retained private app data from earlier screens and
+    # must fail closed rather than being deleted or silently reused.
+    $tag = "$($script:experimentId.Substring(0, 8))-$($Candidate.id)-s$Seed-$Stage"
     $skipBuildThisRun = $SkipBuild -or $script:researchBuildPerformed
     $skipInstallThisRun = $SkipInstall -or $script:researchInstallPerformed
     & $TrainingRunner -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -Seed $Seed -Layers $fixed.layers -Tokens $fixed.tokens -BatchSize $fixed.batch_size -Steps $Steps -ResumeStep $ResumeStep -CheckpointInterval ([Math]::Min($CheckpointInterval, $Steps)) -Dimension $Candidate.dimension -FeedForwardDimension $Candidate.feed_forward_dimension -RunId $tag -SkipBuild:$skipBuildThisRun -SkipInstall:$skipInstallThisRun
@@ -323,6 +326,11 @@ function Invoke-ResearchSegment($Candidate, [int]$Seed, [int]$Steps, [string]$St
     [void](Get-NonNegativeReportNumber $train 'fused_forward_backward_qnn_us' 'TRAIN')
     [void](Get-NonNegativeReportNumber $train 'adam_qnn_us' 'TRAIN')
     [void](Get-NonNegativeReportNumber $train 'training_step_ms' 'TRAIN')
+    $initialNll = Get-NonNegativeReportNumber $train 'first_loss' 'TRAIN'
+    $finalNll = Get-NonNegativeReportNumber $train 'last_loss' 'TRAIN'
+    foreach ($key in @('api_trace_graph_execute_attempt_count', 'api_trace_graph_execute_failure_count', 'activity_create_count', 'activity_resume_count', 'focus_takeover_count')) {
+        if (-not $train.ContainsKey($key)) { throw "RESEARCH_TRAIN_FIELD_MISSING: $key" }
+    }
     $estimate = Get-ModelEstimate $Candidate
     foreach ($key in @('parameter_element_count', 'resource_estimator_parameter_elements')) {
         if (-not $train.ContainsKey($key)) { throw "RESEARCH_TRAIN_PARAMETER_FIELD_MISSING: $key" }
@@ -339,7 +347,10 @@ function Invoke-ResearchSegment($Candidate, [int]$Seed, [int]$Steps, [string]$St
     $completed = Get-NonNegativeReportNumber $train 'completed_steps' 'TRAIN'
     if ([Math]::Floor($completed) -ne $completed -or $completed -ne $Steps) { throw "RESEARCH_TRAINING_COMPLETED_STEPS_INVALID: $tag" }
     $htpExecuteMs = (([double]$train.fused_forward_backward_qnn_us + [double]$train.adam_qnn_us) / 1000.0) / $completed
-    [pscustomobject][ordered]@{ candidate = $Candidate.id; stage = $Stage; seed = $Seed; steps = $Steps; dimension = $Candidate.dimension; feed_forward_dimension = $Candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = $measuredParameterCount; checkpoint_parameter_count = $checkpointParameterCount; parameter_count_verified = $true; status_success = $health.status_success -and $evalHealth.status_success; qnn_return_success = $health.qnn_return_success -and $evalHealth.qnn_return_success; tensors_finite = $health.tensors_finite -and $evalHealth.tensors_finite; cpu_fallback = $health.cpu_fallback -or $evalHealth.cpu_fallback; validation_nll = $eval.validation_nll; development_nll = $eval.development_nll; htp_execute_ms = $htpExecuteMs; step_wall_ms = $train.training_step_ms; checkpoint_bytes = (Get-Item -LiteralPath $checkpoint).Length; generation = 'not_run'; failure = '' }
+    $deltaNll = $initialNll - $finalNll
+    $wallSeconds = ([double]$train.training_step_ms * $completed) / 1000.0
+    $htpSeconds = ($htpExecuteMs * $completed) / 1000.0
+    [pscustomobject][ordered]@{ candidate = $Candidate.id; stage = $Stage; seed = $Seed; steps = $Steps; dimension = $Candidate.dimension; feed_forward_dimension = $Candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = $measuredParameterCount; checkpoint_parameter_count = $checkpointParameterCount; parameter_count_verified = $true; status_success = $health.status_success -and $evalHealth.status_success; qnn_return_success = $health.qnn_return_success -and $evalHealth.qnn_return_success; tensors_finite = $health.tensors_finite -and $evalHealth.tensors_finite; cpu_fallback = $health.cpu_fallback -or $evalHealth.cpu_fallback; initial_training_nll = $initialNll; final_training_nll = $finalNll; delta_training_nll = $deltaNll; relative_training_nll_reduction = $(if ($initialNll -gt 0) { $deltaNll / $initialNll } else { 0.0 }); delta_nll_per_wall_second = $(if ($wallSeconds -gt 0) { $deltaNll / $wallSeconds } else { 0.0 }); delta_nll_per_htp_second = $(if ($htpSeconds -gt 0) { $deltaNll / $htpSeconds } else { 0.0 }); validation_nll = $eval.validation_nll; development_nll = $eval.development_nll; htp_execute_ms = $htpExecuteMs; step_wall_ms = $train.training_step_ms; qnn_execute_count = $train.api_trace_graph_execute_attempt_count; qnn_failure_count = $train.api_trace_graph_execute_failure_count; checkpoint_bytes = (Get-Item -LiteralPath $checkpoint).Length; activity_create_count = $train.activity_create_count; activity_resume_count = $train.activity_resume_count; focus_takeover_count = $train.focus_takeover_count; generation = 'not_run'; failure = '' }
 }
 function Test-SafeCandidateFailure([string]$Message) {
     return $Message -notmatch '(?i)(RESEARCH_|FOCUS_TAKEOVER|HEADLESS_ACTIVITY_INVARIANT_FAILED|ACTIVITY_LAUNCHED|ACTIVITY_CREATE|ACTIVITY_RESUME|NON_HEADLESS|THERMAL_ABORT|THERMAL_STATUS_UNAVAILABLE|EMERGENCY|SHUTDOWN|ADB_TRANSPORT|ADB_TIMEOUT|ADB_COMMAND_FAILURE|ADB_UNAVAILABLE|ADB_INSTALL|INSTALL_FAILED|DEVICE_UNRESPONSIVE|UNRESPONSIVE|TIMEOUT|HANG|IDENTITY_MISMATCH|HEADLESS_STATUS_IDENTITY|HEADLESS_HEARTBEAT_STALE|HEADLESS_TIMEOUT|HEADLESS_REPORT_PATH|RUN_ALREADY_ACTIVE|RUN_ID_REUSE|RESULT_MARKER_CLEAR_FAILED|ADB_NO_ONLINE_DEVICE|ADB_STABLE_IDENTITY|PHYSICAL_DEVICE_REQUIRED|PREFLIGHT|PACKAGE_NOT|APK_|APK\s+BUILD\s+FAILED|QAIRT_|BUILD_ID|FIRMWARE|BATTERY_|TRANSPORT_FAILURE|INSTRUMENTATION_EXIT_FAILURE|INSTRUMENTATION\s+BUILD\s+FAILED|BUILD_FAILED|BUILD\s+FAILED|GRADLE|RUNNER_FAILED|CHECKPOINT_PULL|HOST_CHECKPOINT_EVALUATOR|VALIDATION_CACHE_MISSING|PRIVATE_CACHE_MISSING|DEVELOPMENT_CACHE_MISSING|CHECKPOINT_MISSING|CHECKPOINT_INTERVAL_MISSING|CHECKPOINT_RESUME_FORMAT_INVALID|RUN_ID_INVALID|POLL_CONFIGURATION_INVALID)'
@@ -347,7 +358,7 @@ function Test-SafeCandidateFailure([string]$Message) {
 function Invoke-GenerationQuality($Candidate, [int]$Seed, [int]$Steps) {
     # This is headless generation only; it neither starts the final test nor
     # exports generated bytes.  The private runner report remains under build/.
-    & $GenerationRunner -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -Model L19 -Seed $Seed -Tokens $fixed.tokens -Dimension $Candidate.dimension -FeedForwardDimension $Candidate.feed_forward_dimension -CheckpointStep $Steps -Prompt '研究用生成確認' -MaxNewBytes $MaxNewBytes -Mode Greedy -GatePolicy htp-native -RunId "$($Candidate.id)-s$Seed-final-generate" -SkipBuild:$true -SkipInstall:$true
+    & $GenerationRunner -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -Model L19 -Seed $Seed -Tokens $fixed.tokens -Dimension $Candidate.dimension -FeedForwardDimension $Candidate.feed_forward_dimension -CheckpointStep $Steps -Prompt '研究用生成確認' -MaxNewBytes $MaxNewBytes -Mode Greedy -GatePolicy htp-native -RunId "$($script:experimentId.Substring(0, 8))-$($Candidate.id)-s$Seed-generate" -SkipBuild:$true -SkipInstall:$true
     if ($LASTEXITCODE -ne 0) { throw "RESEARCH_GENERATION_RUNNER_FAILED: $($Candidate.id) seed=$Seed" }
     $tag = if ($Candidate.dimension -eq 16 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { "-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)" }
     $path = Join-Path $root "build\reports\nicopedia-htp-generation\seed$Seed-l19$tag-greedy-step$Steps-max$MaxNewBytes-result.txt"
@@ -358,6 +369,7 @@ function Invoke-GenerationQuality($Candidate, [int]$Seed, [int]$Steps) {
 }
 
 if ($SelfTest) {
+    if (($candidates.id -join ',') -ne 'anchor-d16-f32,d16-f64,d24-f48,d32-f32' -or $ScreenSteps -ne 32 -or $CheckpointInterval -ne 32) { throw 'SELFTEST_SCREEN_CONTRACT' }
     $anchor = Get-ModelEstimate $candidates[0]
     if ($anchor.parameter_count -ne 48320 -or $anchor.checkpoint_payload_estimate_bytes -ne 3 * $anchor.parameter_bytes_fp32) { throw 'SELFTEST_ESTIMATE' }
     $temp = Join-Path $env:TEMP ('phonelm-dffn-search-' + [guid]::NewGuid().ToString('N'))
@@ -410,7 +422,7 @@ if ($Phase -eq 'Screen') {
         } catch {
             if (-not (Test-SafeCandidateFailure $_.Exception.Message)) { throw }
             $estimate = Get-ModelEstimate $candidate
-            $row = [pscustomobject][ordered]@{ candidate = $candidate.id; stage = 'screen'; seed = 1; steps = $ScreenSteps; dimension = $candidate.dimension; feed_forward_dimension = $candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = ''; checkpoint_parameter_count = ''; parameter_count_verified = $false; status_success = $false; qnn_return_success = $false; tensors_finite = $false; cpu_fallback = $false; validation_nll = ''; development_nll = ''; htp_execute_ms = ''; step_wall_ms = ''; checkpoint_bytes = ''; generation = 'not_run'; generated_byte_count = ''; generated_valid_utf8_bytes = ''; generated_invalid_utf8_bytes = ''; failure = $_.Exception.Message }
+            $row = [pscustomobject][ordered]@{ candidate = $candidate.id; stage = 'screen'; seed = 1; steps = $ScreenSteps; dimension = $candidate.dimension; feed_forward_dimension = $candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = ''; checkpoint_parameter_count = ''; parameter_count_verified = $false; status_success = $false; qnn_return_success = $false; tensors_finite = $false; cpu_fallback = $false; initial_training_nll = ''; final_training_nll = ''; delta_training_nll = ''; relative_training_nll_reduction = ''; delta_nll_per_wall_second = ''; delta_nll_per_htp_second = ''; validation_nll = ''; development_nll = ''; htp_execute_ms = ''; step_wall_ms = ''; qnn_execute_count = ''; qnn_failure_count = ''; checkpoint_bytes = ''; activity_create_count = ''; activity_resume_count = ''; focus_takeover_count = ''; generation = 'not_run'; generated_byte_count = ''; generated_valid_utf8_bytes = ''; generated_invalid_utf8_bytes = ''; failure = $_.Exception.Message }
             Write-Warning "screen candidate $($candidate.id) rejected: $($_.Exception.Message)"
         }
         $screen += $row
@@ -432,7 +444,7 @@ $extendedPath = Join-Path $ReportRoot 'extended-summary.csv'
 if ($Phase -eq 'Extended') {
     Assert-PhaseApkIdentity
     if ((Test-Path -LiteralPath $extendedPath -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $ReportRoot 'extended-summary.meta.json') -PathType Leaf)) { throw 'RESEARCH_REPORT_ROOT_REUSE: extended evidence already exists' }
-    $extended = @(); foreach ($candidateId in $survivors.candidate) { $candidate = $candidates | Where-Object id -eq $candidateId; foreach ($seed in $ExtendedSeeds) { try { $extended += Invoke-ResearchSegment $candidate $seed $ExtendedSteps 'extended' } catch { if (-not (Test-SafeCandidateFailure $_.Exception.Message)) { throw }; $estimate = Get-ModelEstimate $candidate; $extended += [pscustomobject][ordered]@{ candidate = $candidate.id; stage = 'extended'; seed = $seed; steps = $ExtendedSteps; dimension = $candidate.dimension; feed_forward_dimension = $candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = ''; checkpoint_parameter_count = ''; parameter_count_verified = $false; status_success = $false; qnn_return_success = $false; tensors_finite = $false; cpu_fallback = $false; validation_nll = ''; development_nll = ''; htp_execute_ms = ''; step_wall_ms = ''; checkpoint_bytes = ''; generation = 'not_run'; failure = $_.Exception.Message }; Write-Warning "extended candidate $($candidate.id) seed=$seed rejected: $($_.Exception.Message)" } } }
+    $extended = @(); foreach ($candidateId in $survivors.candidate) { $candidate = $candidates | Where-Object id -eq $candidateId; foreach ($seed in $ExtendedSeeds) { try { $extended += Invoke-ResearchSegment $candidate $seed $ExtendedSteps 'extended' } catch { if (-not (Test-SafeCandidateFailure $_.Exception.Message)) { throw }; $estimate = Get-ModelEstimate $candidate; $extended += [pscustomobject][ordered]@{ candidate = $candidate.id; stage = 'extended'; seed = $seed; steps = $ExtendedSteps; dimension = $candidate.dimension; feed_forward_dimension = $candidate.feed_forward_dimension; parameter_count = $estimate.parameter_count; measured_parameter_count = ''; checkpoint_parameter_count = ''; parameter_count_verified = $false; status_success = $false; qnn_return_success = $false; tensors_finite = $false; cpu_fallback = $false; initial_training_nll = ''; final_training_nll = ''; delta_training_nll = ''; relative_training_nll_reduction = ''; delta_nll_per_wall_second = ''; delta_nll_per_htp_second = ''; validation_nll = ''; development_nll = ''; htp_execute_ms = ''; step_wall_ms = ''; qnn_execute_count = ''; qnn_failure_count = ''; checkpoint_bytes = ''; activity_create_count = ''; activity_resume_count = ''; focus_takeover_count = ''; generation = 'not_run'; failure = $_.Exception.Message }; Write-Warning "extended candidate $($candidate.id) seed=$seed rejected: $($_.Exception.Message)" } } }
     $extended | Export-Csv -NoTypeInformation -Encoding utf8 -LiteralPath $extendedPath
     Write-EvidenceMetadata 'extended' $extendedPath
 } elseif (Test-Path -LiteralPath $extendedPath -PathType Leaf) {

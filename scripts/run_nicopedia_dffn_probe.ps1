@@ -88,6 +88,9 @@ function Classify-Probe([hashtable]$Fields, [string]$RunnerError, [string]$Parti
     if ($RunnerError -match '(?i)RUN_ALREADY_ACTIVE|APK_PROVENANCE|RUN_ID_REUSE|PHYSICAL_DEVICE_REQUIRED|THERMAL_STATUS_UNAVAILABLE|BATTERY_|QAIRT_') {
         return [ordered]@{ classification = 'RUNNER_PREFLIGHT_OR_PROVENANCE'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'none'; reason = 'A safety, provenance, or concurrent-run preflight rejected execution before native graph work.' }
     }
+    if (-not [string]::IsNullOrWhiteSpace($RunnerError)) {
+        return [ordered]@{ classification = 'RUNNER_FAILURE'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'none'; reason = 'The runner failed without a more specific safe classification; retained native evidence is not accepted as the current run.' }
+    }
     if ($null -eq $Fields -or $Fields.Count -eq 0) {
         return [ordered]@{ classification = 'NO_NATIVE_REPORT'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'none'; reason = 'No terminal native report was retained; do not infer graph or tensor health.' }
     }
@@ -105,7 +108,7 @@ function Classify-Probe([hashtable]$Fields, [string]$RunnerError, [string]$Parti
         (Get-FieldValue $Fields 'cpu_fallback') -ne 'false') {
         return [ordered]@{ classification = 'HTP_HEALTH_REJECTED'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'd24-f48'; reason = 'QNN return, finite tensor, and fallback evidence must all pass independently.' }
     }
-    return [ordered]@{ classification = 'ONE_STEP_HEALTHY'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'd32-f64'; reason = 'D32/F32 completed one verified HTP update; proceed to the joint candidate screening once.' }
+    return [ordered]@{ classification = 'ONE_STEP_HEALTHY'; phase = $phase; heartbeat = $heartbeat; retry_d32 = $false; next_candidate = 'matched-screen'; reason = 'D32/F32 completed one verified HTP update; proceed to the fixed four-candidate matched screening once.' }
 }
 
 if ($SelfTest) {
@@ -123,6 +126,7 @@ if ($SelfTest) {
         if ((Classify-Probe @{} '' $partial).classification -ne 'NO_NATIVE_REPORT') { throw 'DFFN_PROBE_SELFTEST_NO_REPORT' }
         if ((Classify-Probe @{} 'ADB_TRANSPORT_FAILURE' $partial).classification -ne 'ADB_TRANSPORT_OR_DEVICE') { throw 'DFFN_PROBE_SELFTEST_TRANSPORT' }
         if ((Classify-Probe @{} 'RUN_ALREADY_ACTIVE' $partial).classification -ne 'RUNNER_PREFLIGHT_OR_PROVENANCE') { throw 'DFFN_PROBE_SELFTEST_PREFLIGHT' }
+        if ((Classify-Probe $healthy 'RUNNER_EXIT_1' $partial).classification -ne 'RUNNER_FAILURE') { throw 'DFFN_PROBE_SELFTEST_GENERIC_RUNNER_FAILURE' }
         $runner = Join-Path $temp 'runner.ps1'
         'param([switch]$OneUpdateProbe) # nicopedia-dffn-probe' | Set-Content -LiteralPath $runner -Encoding utf8
         Assert-NativeOneUpdateProbeContract $runner
@@ -158,11 +162,24 @@ $apk = Join-Path $root 'app\build\outputs\apk\debug\app-debug.apk'
     -ReportPath (Join-Path $ReportRoot "$RunId-apk-audit-private.txt")
 if ($LASTEXITCODE -ne 0) { throw 'DFFN_PROBE_APK_AUDIT_FAILED' }
 $runnerError = ''
+$priorResult = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+    $item = Get-Item -LiteralPath $resultPath
+    [ordered]@{ last_write_utc = $item.LastWriteTimeUtc; length = $item.Length; sha256 = (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash }
+} else { $null }
 $startedUtc = [DateTime]::UtcNow
 try {
     & $runner -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -OneUpdateProbe -Seed 1 -Layers 19 -Tokens 32 -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -BatchSize 8 -Steps 1 -CheckpointInterval 1 -CheckpointStallSeconds $CheckpointStallSeconds -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds 10 -RunId $RunId -SkipBuild
     if ($LASTEXITCODE -ne 0) { $runnerError = "RUNNER_EXIT_$LASTEXITCODE" }
 } catch { $runnerError = $_.Exception.Message }
+$currentResult = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+    $item = Get-Item -LiteralPath $resultPath
+    [ordered]@{ last_write_utc = $item.LastWriteTimeUtc; length = $item.Length; sha256 = (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash }
+} else { $null }
+if ($null -eq $currentResult -or $currentResult.last_write_utc -lt $startedUtc.AddSeconds(-1) -or
+    ($null -ne $priorResult -and $currentResult.last_write_utc -eq $priorResult.last_write_utc -and
+        $currentResult.length -eq $priorResult.length -and $currentResult.sha256 -eq $priorResult.sha256)) {
+    if ([string]::IsNullOrWhiteSpace($runnerError)) { $runnerError = 'PROBE_RESULT_NOT_FRESH' }
+}
 $fields = Get-Fields $resultPath
 $diagnosis = [ordered]@{
     schema = 'PHONELM_NICOPEDIA_DFFN_PROBE_V1'
@@ -187,4 +204,4 @@ $diagnosis = [ordered]@{
 }
 $diagnosis | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $ReportRoot "$RunId-diagnosis.json") -Encoding utf8
 if ($diagnosis.classification.classification -ne 'ONE_STEP_HEALTHY') { throw "DFFN_PROBE_FAILED_CLOSED: $($diagnosis.classification.classification)" }
-Write-Host "DFFN_PROBE_PASS classification=ONE_STEP_HEALTHY next_candidate=d32-f64"
+Write-Host "DFFN_PROBE_PASS classification=ONE_STEP_HEALTHY next_candidate=matched-screen"

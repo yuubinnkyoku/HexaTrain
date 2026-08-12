@@ -226,6 +226,19 @@ $reportMap = if ($OneUpdateProbe) {
   }
   if ($probeMap.status -ne 'SUCCESS' -or $probeMap.qnn_return_code_success -ne 'true' -or $probeMap.output_tensors_finite -ne 'true' -or $probeMap.cpu_fallback -ne 'false' -or $probeMap.nan_detected -ne 'false' -or $probeMap.inf_detected -ne 'false') { throw 'PROBE_REPORT_HEALTH_REJECTED' }
   if ($probeMap.api_trace_last_qnn_result -ne '0' -or $probeMap.api_trace_effective_result -ne '0' -or $probeMap.api_trace_cpu_backend_initialized -ne 'false' -or $probeMap.api_trace_fallback_attempted -ne 'false' -or $probeMap.api_trace_fallback_succeeded -ne 'false') { throw 'PROBE_REPORT_QNN_HEALTH_REJECTED' }
+  foreach ($key in @('training_graph_prepared', 'adam_graph_prepared', 'graph_finalize_training_count', 'graph_finalize_adam_count', 'graph_execute_count', 'expected_fused_forward_backward_execute_count', 'fused_forward_backward_execute_count', 'expected_adam_execute_count', 'adam_execute_count')) {
+    if (-not $probeMap.Contains($key)) { throw "PROBE_REPORT_FIELD_MISSING: $key" }
+  }
+  $fusedCount = [int]$probeMap.fused_forward_backward_execute_count
+  $adamCount = [int]$probeMap.adam_execute_count
+  if ($probeMap.training_graph_prepared -ne 'true' -or $probeMap.adam_graph_prepared -ne 'true' -or
+      [int]$probeMap.graph_finalize_training_count -ne 1 -or [int]$probeMap.graph_finalize_adam_count -ne 1) { throw 'PROBE_REPORT_GRAPH_PREPARE_REJECTED' }
+  if ($fusedCount -ne [int]$probeMap.expected_fused_forward_backward_execute_count -or
+      $adamCount -ne [int]$probeMap.expected_adam_execute_count -or
+      [int]$probeMap.graph_execute_count -ne ($fusedCount + $adamCount) -or
+      [int]$probeMap.api_trace_graph_execute_attempt_count -ne [int]$probeMap.graph_execute_count -or
+      [int]$probeMap.api_trace_graph_execute_success_count -ne [int]$probeMap.graph_execute_count -or
+      [int]$probeMap.api_trace_graph_execute_failure_count -ne 0) { throw 'PROBE_REPORT_EXECUTE_COUNT_MISMATCH' }
   $probeMap
 } else {
   Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $Steps -Kind training

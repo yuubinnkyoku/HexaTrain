@@ -99,11 +99,12 @@ APK was replaced again after a direct verified install.  The probe therefore
 stopped at the concurrent-run/provenance preflight and D32 was not retried.
 This is infrastructure evidence, not a D32 QNN or numeric failure.
 
-The same observation substantially raises confidence that the earlier
-D16/FFN64 activity/focus failure was external UI/task interference rather
-than width-dependent native behavior: its native work had already completed
-all 3,609 QNN executes successfully and finitely before the lifecycle gate
-failed.  The runner now records activity counters at reset, environment
+The same observation leaves external UI/task interference as a live
+hypothesis for the earlier D16/FFN64 activity/focus failure, but does not
+distinguish it from other post-run lifecycle causes.  What is independently
+established is narrower: its native work had already completed all 3,609 QNN
+executes successfully and finitely before the lifecycle gate failed.  The
+runner now records activity counters at reset, environment
 prepare, before native, and after native.  It also force-stops only the target
 package after an install (without clearing data), preserves the zero-activity
 gate, and verifies SHA-256 equality for both installed main and test APKs
@@ -118,9 +119,65 @@ fails in graph preparation or QNN execute, the next bounded probe is
 D24/FFN48; if D32/F32 is healthy, use short matched screens for D16/FFN32,
 D16/FFN64, D24/FFN48, and D32/FFN32 before any multiple-seed extension.
 
+## Clean D32 probe and attempted 32-step matched screen
+
+On the next clean-device window, D32/FFN32 completed the dedicated one-update
+probe.  The fixed-QAIRT build and APK audit passed, the installed main and test
+APK hashes matched their local artifacts, and all activity/focus snapshots
+were zero.  Both the L19 training graph and Adam graph prepared and finalized.
+All eight fused B8 forward/backward executes and all five Adam chunks returned
+successfully: QNN attempts/successes were 13/13, failures were zero, the last
+and effective QNN results were zero, every checked output/gradient/updated
+parameter/moment was finite, and CPU fallback was false.  Aggregate QNN time
+was 72.077 ms for the eight fused executes and 167.014 ms for the five Adam
+chunks.  This one update refutes an unconditional D32/L19 graph-construction,
+first-execute, B8-update, or application-visible finite failure under this
+exact state; it does not exclude a later long-run hang, watchdog interaction,
+or unobserved DSP-internal memory pressure.
+
+The previous AndroidX `Lifecycle.Event.Companion` crash was not reproduced
+after a controlled build/install of a mutually matching main/test APK pair.
+That old failure occurred before the test body/native entry while the device
+held artifacts from another build.  No production dependency was upgraded;
+the non-reproduction with a provenance-matched pair is consistent with a
+stale/mismatched instrumentation artifact, but does not identify the exact
+Android class-loading cause.  In either case it is not D32 native evidence.
+
+A new private 32-step experiment was then preregistered with the fixed
+candidate order D16/FFN32, D16/FFN64, D24/FFN48, D32/FFN32 and a unique
+experiment-bound device run ID.  The anchor completed training, 128+128-chunk
+held-out evaluation, and the short generation diagnostic.  D16/FFN64 completed
+training and wrote a verified checkpoint.  Its evaluation preflight then
+failed closed with `RUN_ALREADY_ACTIVE`; a read-only post-failure inspection
+found a PhoneLM process and a non-visible MainActivity task while another
+launcher remained top.  This host observation was not retained as a separate
+raw device artifact, so it identifies the invalid run boundary but does not by
+itself prove who launched the Activity.  The D16/FFN64 training report's
+reset, environment, before-native, and after-native snapshots were all zero,
+which confines the observed process/task mismatch to after that recorded
+native/run boundary.  The eval preflight rejected the live process and stopped
+the entire phase without force-stopping it.  D24/FFN48 and D32/FFN32 were
+therefore not started, and the attempt is not a complete matched set.
+
+The valid-but-incomplete native measurements are retained only to diagnose the
+interrupted set; they are not mixed with the earlier 320-step evidence and do
+not select a winner:
+
+| candidate | valid scope | initial/final training NLL | delta / relative | HTP ms/step | wall ms/step | delta/wall-s | delta/HTP-s | checkpoint | QNN | finite/fallback |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| D16/FFN32 | train + eval + generation | 5.545779 / 3.507030 | 2.038749 / 36.76% | 205.19 | 1108.58 | 0.0575 | 0.3105 | 596,137 | 401/401, failures 0 | true / false |
+| D16/FFN64 | training only; eval not started | 5.583708 / 3.477986 | 2.105722 / 37.71% | 260.71 | 1483.08 | 0.0444 | 0.2524 | 829,609 | 441/441, failures 0 | true / false |
+| D24/FFN48 | not run | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| D32/FFN32 | matched screen not run; one-update probe healthy | n/a | n/a | n/a | n/a | n/a | n/a | no probe checkpoint | 13/13, failures 0 | true / false |
+
+For the anchor, held-out validation/development NLL was 3.471694/4.326000.
+The D16/FFN64 held-out values are intentionally absent because its evaluation
+never started.  No multiple-seed or longer training is justified until one
+clean four-candidate matched set completes.
+
 For context, the previously recorded long anchor (8,000 steps, a different
 run length) is val NLL 2.168420875 and dev NLL 2.146852226 at about 490 ms per
-step.  It is not mixed with the 320-step screen comparison above.
+step.  It is not mixed with the interrupted 32-step screen above.
 
 ## Checkpoint and identity safety
 
@@ -145,14 +202,15 @@ anchor remains the next production candidate: it is the only configuration
 with a complete non-invasive screen, held-out NLL, and generation evidence in
 this run.  Generation promotion also requires the explicit UTF-8 guard above;
 the anchor's short-period-loop fraction of 1.0 is recorded as a quality
-shortfall, not treated as proof of useful text.  The FFN-only result suggests a roughly 1.33x steady-state training-loop wall
-step-time, 1.30x HTP execute-time, and 1.39x checkpoint-size cost before its
-headless safety failure; the D32 graph needs a
-separate memory/graph investigation before another Tier 3 attempt.  A future
-search should first diagnose and resolve the activity/headless invariant
-failure, then repeat
-the four-way screen with fresh anchor and multiple seeds before any 4,000-step
-promotion.
+shortfall, not treated as proof of useful text.  The FFN-only result suggests
+a roughly 1.34x steady-state training-loop wall step-time, 1.27x HTP
+execute-time, and 1.39x checkpoint-size cost, but its held-out evaluation was
+invalidated by the later live-process preflight.  The D32 one-update probe
+establishes graph construction and one B8 optimizer update only; it does not
+establish 32-step throughput or long-run stability.  A future search should
+start only after the device is clean, then repeat the four-way 32-step set
+from a fresh experiment root.  Multiple seeds and any 4,000-step promotion
+remain unjustified until that matched set completes.
 
 For the normalization changes, fixed-QAIRT `assembleDebug` and
 `assembleDebugAndroidTest`, APK ABI/hash/path audit, the runner/probe
