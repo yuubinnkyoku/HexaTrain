@@ -3,8 +3,9 @@
 This is a research-only record for the dedicated `codex/nicopedia-dffn-search`
 worktree.  The production Nicopedia L19 preset and UI remain T32/D16/FFN32.
 No final-test split was opened.  Device runs used the pinned QAIRT 2.48.40.260702
-Build ID 2.48.40.260702151143 and the HTP backend; CPU replay is a diagnostic
-tail, not a substitute for HTP execution.
+Build ID 2.48.40.260702151143 and the HTP backend; the research harness requires
+a fresh build/install and read-only APK audit before Tier 3 work.  CPU replay
+is a diagnostic tail, not a substitute for HTP execution.
 
 ## Design
 
@@ -16,7 +17,7 @@ grid was deliberately small:
 | --- | ---: | ---: | ---: | --- |
 | anchor | 16 | 32 | 48,320 | completed |
 | D-only | 32 | 32 | 135,552 | dropped: terminal/ADB responsiveness degraded before a report |
-| FFN-only | 16 | 64 | 67,776 | native training finite, but headless correctness failed (`ACTIVITY_LAUNCHED`) |
+| FFN-only | 16 | 64 | 67,776 | native training finite, but the headless activity/focus invariant failed |
 | D+FFN | 32 | 64 | 174,464 | not started after the reproducible D32 responsiveness failure |
 
 Parameter count uses
@@ -25,19 +26,25 @@ Parameter count uses
 with the NPRTCKPTV2 header and registry overhead measured separately.
 
 The screening cutoffs are fail-closed: nonzero QNN return, non-finite
-application tensors, CPU fallback, failed headless status, more than 2x the
+application tensors, CPU fallback, or candidate-local failed status, more than 2x the
 same-run anchor step time, or more than 4x the same-run anchor checkpoint size
-drops a candidate.  Extended (1,000 steps, seeds 1/2/4) and final (4,000-step
+drops a candidate.  Activity/focus, transport, thermal, battery, build, and
+identity/preflight failures stop the phase rather than becoming candidate rows.
+Generation must also be healthy, with valid/invalid UTF-8
+byte counts no worse than the anchor; short-period-loop is retained as a
+diagnostic rather than a sole promotion gate.  Extended (1,000 steps, seeds 1/2/4) and final (4,000-step
 resume plus full-cap held-out evaluation and headless generation) phases are
 implemented in `scripts/run_nicopedia_dffn_search.ps1`, but were not promoted
 because no non-anchor screen candidate passed the safety/quality gates.
+If a candidate reaches Final, the harness runs a matched anchor control at the
+same final step count and seed set before interpreting the candidate result.
 
 ## Screen measurements
 
 The completed anchor screen was one seed and 320 HTP steps, followed by 512
 validation and 512 development chunks and a 64-byte greedy generation check.
 
-| candidate | val NLL | dev NLL | HTP execute ms/step | end-to-end wall ms/step | checkpoint bytes | QNN return | tensors finite | CPU fallback | generation |
+| candidate | val NLL | dev NLL | HTP execute ms/step | steady-state training-loop wall ms/step | checkpoint bytes | QNN return | tensors finite | CPU fallback | generation |
 | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
 | T32/D16/FFN32 | 2.805991517 | 2.923729841 | 168.675704 | 501.536799 | 596,137 | true | true | false | health true; 63/64 valid UTF-8 bytes; short-period-loop fraction 1.0 |
 | T32/D32/FFN32 | n/a | n/a | n/a | n/a | not terminal | not established | not established | not run |
@@ -45,13 +52,16 @@ validation and 512 development chunks and a 64-byte greedy generation check.
 | T32/D32/FFN64 | n/a | n/a | n/a | n/a | not run | not run | not run | not run |
 
 HTP execute time is `(fused_forward_backward_qnn_us + adam_qnn_us) /
-completed_steps`; wall time also includes host accumulation and checkpoint I/O.
+completed_steps`; the reported wall time is the steady-state training loop
+average (host accumulation and checkpoint I/O included, initialization and
+diagnostic replay excluded).
 The FFN-only native report had 3,609 graph executes, zero graph-execute
 failures, last QNN result 0, all training outputs finite, and no fallback.  The
 overall device runner nevertheless failed its non-invasive headless gate:
 `activity_create_count=1`, `focus_takeover_count=1`, and an `AssertionError`
-was raised during the CPU replay tail.  Its held-out NLL and generation were
-therefore intentionally not promoted or used as a model-quality result.
+was raised by the activity/headless invariant after the native work (the CPU
+replay itself completed).  Its held-out NLL and generation were therefore
+intentionally not promoted or used as a model-quality result.
 
 The D32-only run produced no terminal report.  Its heartbeat stopped while the
 native phase was still active and ADB shell calls became unresponsive; the
@@ -65,28 +75,38 @@ step.  It is not mixed with the 320-step screen comparison above.
 
 ## Checkpoint and identity safety
 
-The canonical anchor keeps its historical filename.  Every research filename
+The canonical anchor keeps its historical filename.  Every non-anchor research filename
 contains `-t<T>-d<D>-f<FFN>-step<N>.ckpt`; header validation, generation,
 evaluation, resume, and host decoding all compare T/D/FFN/L/H/V/seed/step and
 reject mismatches.  QNN return-code success and tensor finiteness are emitted
 as independent fields.  Raw checkpoints, prompts, device identifiers, and
 logcat remain under ignored `build/` paths and are not part of this document.
+The legacy divergence-localization debug intent remains anchor-only; the width
+search uses the generalized training/eval/generation headless paths instead.
+Continuation phases require a fresh fixed-QAIRT build/install and bind the
+screen, extended, and final CSV to the experiment id, source/dirty-tree
+fingerprint, main and androidTest APK hashes, private train/validation/
+development cache hashes, and phase step/seed/chunk identity.  A reused report
+directory or changed artifact is rejected fail-closed.
 
 ## Decision
 
 No wider configuration is recommended for production from this screen.  The
 anchor remains the next production candidate: it is the only configuration
 with a complete non-invasive screen, held-out NLL, and generation evidence in
- this run.  The FFN-only result suggests a roughly 1.33x end-to-end wall
- step-time, 1.30x HTP execute-time, and 1.39x checkpoint-size cost before its
- headless safety failure; the D32 graph needs a
+this run.  Generation promotion also requires the explicit UTF-8 guard above;
+the anchor's short-period-loop fraction of 1.0 is recorded as a quality
+shortfall, not treated as proof of useful text.  The FFN-only result suggests a roughly 1.33x steady-state training-loop wall
+step-time, 1.30x HTP execute-time, and 1.39x checkpoint-size cost before its
+headless safety failure; the D32 graph needs a
 separate memory/graph investigation before another Tier 3 attempt.  A future
-search should first fix the activity-counter/recents interaction, then repeat
+search should first diagnose and resolve the activity/headless invariant
+failure, then repeat
 the four-way screen with fresh anchor and multiple seeds before any 4,000-step
 promotion.
 
-The final formal gate was started with the pinned QAIRT arguments and the
-already successful QNN Android build/APK audit.  The broad host-test portion
+The formal gate was started with the pinned QAIRT arguments and a successful
+QNN Android build/APK audit for the then-current source.  The broad host-test portion
 exceeded the tool execution ceiling after many diagnostic suites; targeted
 `qnn_sdk_independent_test` (including the D32/FFN64 shape contract) and
 `nicopedia_resume_test` both passed.  The legacy `nicopedia_cpu_generate`

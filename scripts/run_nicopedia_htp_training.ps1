@@ -29,6 +29,7 @@ param(
   [int]$ResumeStep = 0,
   [int]$CheckpointInterval = 250,
   [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
+  [switch]$BuildInstallOnly,
   [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
@@ -107,6 +108,10 @@ if (-not $SkipInstall) {
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
   Adb @('install', '-r', $apk) | Out-Null
   Adb @('install', '-r', '-t', $testApk) | Out-Null
+}
+if ($BuildInstallOnly) {
+  Write-Host "build_install_only=SUCCESS apk=$apk test_apk=$testApk"
+  exit 0
 }
 # Stage the private tokenized pilot input under the app files directory.
 $remoteDir = "files/headless-input/$RunId"
@@ -222,7 +227,13 @@ $annotated | Add-Content -LiteralPath (Join-Path $reportRoot "device-identity-pr
 # build/reports. Both stay out of the public bundle and out of git.
 $checkpointNames = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)
 $expectedSteps = @()
-$firstExpected = if ($ResumeStep -gt 0) { $ResumeStep + $CheckpointInterval } else { $CheckpointInterval }
+# Checkpoints are emitted on absolute step multiples.  A resumed segment may
+# start between two multiples (for example 1000 -> 4000 with interval 320),
+# so begin at the first multiple strictly above ResumeStep rather than adding
+# an interval to the resume point.
+$firstExpected = if ($ResumeStep -gt 0) {
+  ([Math]::Floor($ResumeStep / [double]$CheckpointInterval) + 1) * $CheckpointInterval
+} else { $CheckpointInterval }
 for ($s = $firstExpected; $s -le $Steps; $s += $CheckpointInterval) { $expectedSteps += $s }
 if ($expectedSteps -notcontains $Steps) { $expectedSteps += $Steps }
 foreach ($expected in $expectedSteps) {

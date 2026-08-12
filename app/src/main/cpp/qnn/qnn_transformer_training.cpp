@@ -5249,6 +5249,17 @@ std::string nprtCheckpointName(uint32_t seed, uint32_t layers,
                     std::to_string(feedForwardDimension)) + "-step" +
          std::to_string(step) + ".ckpt";
 }
+bool finiteTrainingOutputs(const TinyTransformerTrainingOutputs &output) {
+  const bool finiteLayers = std::all_of(
+      output.layerInputGradients.begin(), output.layerInputGradients.end(),
+      [](const std::vector<float> &values) { return finite(values); });
+  return std::isfinite(output.loss) && finite(output.output) &&
+         finite(output.dOutput) && finite(output.embeddedInput) &&
+         finite(output.logits) && finite(output.probabilities) &&
+         finite(output.dLogits) && finite(output.dEmbeddedInput) &&
+         finiteLayers && finiteParams(output.gradients) &&
+         finiteParams(output.next);
+}
 
 // Shared digit validation for the step segment (and, in the -t<T> variant,
 // the token segment): 1..6 ASCII digits parsing to a value in 1..999999,
@@ -5773,6 +5784,7 @@ std::string nicopediaHtpGeneration(
   bool htpNativeArProbabilitiesFinite = true;
   bool htpNativeGenerationLogitsFinite = true;
   bool htpNativeGenerationProbabilitiesFinite = true;
+  bool htpNativeApplicationTensorsFinite = true;
   bool samplingHealth = true;
   bool samplingLogitsFinite = true;
   bool samplingWeightsFinite = true;
@@ -5804,6 +5816,8 @@ std::string nicopediaHtpGeneration(
            << (htpNativeGenerationLogitsFinite ? "true" : "false")
            << "\nhtp_native_generation_probabilities_finite="
            << (htpNativeGenerationProbabilitiesFinite ? "true" : "false")
+           << "\nhtp_native_application_tensors_finite="
+           << (htpNativeApplicationTensorsFinite ? "true" : "false")
            << "\nsampling_health=" << (samplingHealth ? "true" : "false")
            << "\nsampling_failure_count=" << samplingFailureCount
            << "\nsampling_logits_finite="
@@ -5870,6 +5884,7 @@ std::string nicopediaHtpGeneration(
     if (!runtime.executeTinyTransformerTraining(
             windowInput(prefixContext), zeros, loaded.parameters, 0.0f,
             htpStep, error)) {
+      htpNativeApplicationTensorsFinite = false;
       htpNativePrefixLogitsFinite =
           htpNativePrefixLogitsFinite && !htpStep.logits.empty() &&
           finite(htpStep.logits);
@@ -5878,6 +5893,9 @@ std::string nicopediaHtpGeneration(
           !htpStep.probabilities.empty() && finite(htpStep.probabilities);
       return generationExecuteFailure("nicopedia_generate_parity", error);
     }
+    const bool prefixOutputFinite = finiteTrainingOutputs(htpStep);
+    htpNativeApplicationTensorsFinite =
+        htpNativeApplicationTensorsFinite && prefixOutputFinite;
     const bool prefixLogitsFinite = !htpStep.logits.empty() && finite(htpStep.logits);
     const bool prefixProbabilitiesFinite =
         !htpStep.probabilities.empty() && finite(htpStep.probabilities);
@@ -5885,7 +5903,8 @@ std::string nicopediaHtpGeneration(
         htpNativePrefixLogitsFinite && prefixLogitsFinite;
     htpNativePrefixProbabilitiesFinite =
         htpNativePrefixProbabilitiesFinite && prefixProbabilitiesFinite;
-    if (htpNativePolicy && (!prefixLogitsFinite || !prefixProbabilitiesFinite))
+    if (htpNativePolicy && (!prefixOutputFinite || !prefixLogitsFinite ||
+                            !prefixProbabilitiesFinite))
       return htpNativeFailure("fixed_prefix", "non-finite HTP logits/probabilities");
     htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
                                          htpStep.logits.begin(),
@@ -5973,6 +5992,7 @@ std::string nicopediaHtpGeneration(
     if (!runtime.executeTinyTransformerTraining(
             windowInput(htpContext), zeros, loaded.parameters, 0.0f, htpStep,
             error)) {
+      htpNativeApplicationTensorsFinite = false;
       htpNativeArLogitsFinite = htpNativeArLogitsFinite &&
                                !htpStep.logits.empty() && finite(htpStep.logits);
       htpNativeArProbabilitiesFinite =
@@ -5980,13 +6000,17 @@ std::string nicopediaHtpGeneration(
           finite(htpStep.probabilities);
       return generationExecuteFailure("nicopedia_generate_ar", error);
     }
+    const bool arOutputFinite = finiteTrainingOutputs(htpStep);
+    htpNativeApplicationTensorsFinite =
+        htpNativeApplicationTensorsFinite && arOutputFinite;
     const bool arLogitsFinite = !htpStep.logits.empty() && finite(htpStep.logits);
     const bool arProbabilitiesFinite =
         !htpStep.probabilities.empty() && finite(htpStep.probabilities);
     htpNativeArLogitsFinite = htpNativeArLogitsFinite && arLogitsFinite;
     htpNativeArProbabilitiesFinite =
         htpNativeArProbabilitiesFinite && arProbabilitiesFinite;
-    if (htpNativePolicy && (!arLogitsFinite || !arProbabilitiesFinite))
+    if (htpNativePolicy && (!arOutputFinite || !arLogitsFinite ||
+                            !arProbabilitiesFinite))
       return htpNativeFailure("autoregressive_parity",
                               "non-finite HTP logits/probabilities");
     htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
@@ -6078,7 +6102,7 @@ std::string nicopediaHtpGeneration(
   const bool htpNativeGate =
       htpNativeQnnSuccess && htpNativePrefixLogitsFinite &&
       htpNativePrefixProbabilitiesFinite && htpNativeArLogitsFinite &&
-      htpNativeArProbabilitiesFinite;
+      htpNativeArProbabilitiesFinite && htpNativeApplicationTensorsFinite;
   const bool generationGate =
       htpNativePolicy
           ? htpNativeGate
@@ -6096,6 +6120,7 @@ std::string nicopediaHtpGeneration(
       if (!runtime.executeTinyTransformerTraining(
                windowInput(generateContext), zeros, loaded.parameters, 0.0f,
                htpStep, error)) {
+        htpNativeApplicationTensorsFinite = false;
         htpNativeGenerationLogitsFinite =
             htpNativeGenerationLogitsFinite && !htpStep.logits.empty() &&
             finite(htpStep.logits);
@@ -6120,6 +6145,8 @@ std::string nicopediaHtpGeneration(
           !htpStep.probabilities.empty() && finite(htpStep.probabilities);
       htpNativeGenerationProbabilitiesFinite =
           htpNativeGenerationProbabilitiesFinite && generationProbabilitiesFinite;
+      htpNativeApplicationTensorsFinite =
+          htpNativeApplicationTensorsFinite && finiteTrainingOutputs(htpStep);
       if (!rowFinite)
         return htpNativePolicy
                    ? htpNativeFailure("generation_loop",
@@ -6188,7 +6215,8 @@ std::string nicopediaHtpGeneration(
       nicopedia_gen::generationAggregates(generated);
   const bool htpNativeHealth =
       htpNativeGate && htpNativeGenerationLogitsFinite &&
-      htpNativeGenerationProbabilitiesFinite && samplingHealth;
+      htpNativeGenerationProbabilitiesFinite &&
+      htpNativeApplicationTensorsFinite && samplingHealth;
   const bool reportGenerationGate =
       htpNativePolicy ? htpNativeHealth : generationGate;
   // Row-level logit/probability finiteness is enforced fail-closed inside the
@@ -6277,7 +6305,8 @@ std::string nicopediaHtpGeneration(
           << (htpNativeQnnSuccess ? "true" : "false")
           << "\noutput_tensors_finite="
           << ((htpNativeGenerationLogitsFinite &&
-               htpNativeGenerationProbabilitiesFinite)
+               htpNativeGenerationProbabilitiesFinite &&
+               htpNativeApplicationTensorsFinite)
                   ? "true"
                   : "false")
           << "\nhtp_native_prefix_logits_finite="
@@ -7040,10 +7069,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
         ++fusedQnnExecuteCount;
       }
       lossSum += htpGradient.loss;
-      const bool outputFinite =
-          std::isfinite(htpGradient.loss) && finite(htpGradient.logits) &&
-          finite(htpGradient.probabilities) && finite(htpGradient.dLogits) &&
-          finiteParams(htpGradient.gradients);
+      const bool outputFinite = finiteTrainingOutputs(htpGradient);
       allQnnOutputsFinite = allQnnOutputsFinite && outputFinite;
       stepFinite = stepFinite && outputFinite;
       const auto registry = tiny_lm::parameterRegistry(gradientAccum);
@@ -7239,6 +7265,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   const auto &trainingApiTrace = runtime.apiTrace();
   const bool trainingQnnReturnCodeSuccess =
       runtime.metrics().graphExecuteCount > 0 &&
+      trainingApiTrace.graphExecuteSuccessCount ==
+          runtime.metrics().graphExecuteCount &&
       trainingApiTrace.graphExecuteFailureCount == 0 &&
       trainingApiTrace.graphExecuteLastResult == 0 &&
       trainingApiTrace.lastQnnResult == 0;
@@ -7608,6 +7636,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
   const auto &evaluationApiTrace = runtime.apiTrace();
   const bool evaluationQnnReturnCodeSuccess =
       runtime.metrics().graphExecuteCount > 0 &&
+      evaluationApiTrace.graphExecuteSuccessCount ==
+          runtime.metrics().graphExecuteCount &&
       evaluationApiTrace.graphExecuteFailureCount == 0 &&
       evaluationApiTrace.graphExecuteLastResult == 0 &&
       evaluationApiTrace.lastQnnResult == 0;
@@ -7628,9 +7658,11 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
           << "\ncheckpoint_format="
           << (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")
           << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
+          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
           << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
           << "\ncontext_tokens=" << config.tokens
-         << "\nvalidation_cache=" << validation.contentHash
+          << "\nvocabulary_size=" << config.vocabularySize
+          << "\nvalidation_cache=" << validation.contentHash
          << "\ndevelopment_cache=" << development.contentHash
          << "\nvalidation_chunks=" << validationResult.chunks
          << "\ndevelopment_chunks=" << developmentResult.chunks
