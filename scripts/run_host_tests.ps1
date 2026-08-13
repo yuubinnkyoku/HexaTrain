@@ -249,15 +249,13 @@ if ($LASTEXITCODE -ne 0) {
 
 # CI uses a deterministic synthetic Japanese fixture; the licensed corpus and
 # all private token/checkpoint artifacts remain outside the repository.
-# Resolve pwsh explicitly: $PSHOME may point at Windows PowerShell when this
-# script runs under a different shell.
-$pwshCandidates = @(
-    (Join-Path $PSHOME "pwsh.exe"),
-    (Join-Path (Split-Path -Parent $PSHOME) "PowerShell\7\pwsh.exe"),
-    (Get-Command pwsh -ErrorAction SilentlyContinue).Source
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-if (-not $pwshCandidates) { throw "PWSH_NOT_FOUND" }
-$pwshExe = @($pwshCandidates)[0]
+# Resolve pwsh explicitly: $PSHOME may point at Windows PowerShell, which does
+# not contain pwsh.exe. Prefer the real executable from PATH.
+$pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+if (-not $pwshCmd -or -not (Test-Path -LiteralPath $pwshCmd.Source)) {
+    throw "PWSH_NOT_FOUND: pwsh.exe (PowerShell 7+) is not on PATH"
+}
+$pwshExe = $pwshCmd.Source
 & $pwshExe -NoProfile -File (Join-Path $Root "scripts\run_nicopedia_real_text_pilot.ps1") -SelfTest
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia real-text pipeline self-tests failed"
@@ -326,6 +324,10 @@ if ($LASTEXITCODE -ne 0) {
 $traceSelfTest = & $NicopediaCpuGenerateExecutable --trace-self-test
 if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia CPU trace self-test failed"
+}
+$checkpointV2SelfTest = & $NicopediaCpuGenerateExecutable --checkpoint-v2-self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia CPU generation NPRTCKPTV2 self-test failed"
 }
 # Self-test against the checked-in L19 seed-1 step-320 checkpoint with the
 # same prompts used by the HTP generation milestone.

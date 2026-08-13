@@ -20,6 +20,9 @@ data class TrainingState(
     val message: String? = null,
     val timing: TrainingTiming? = null,
     val lastCheckpoint: TrainingCheckpointMetadata? = null,
+    /** Kept separate so UI never conflates QNN return success with tensor finiteness. */
+    val runtimeEvidence: TrainingRuntimeEvidence? = null,
+    val dashboard: TrainingDashboardSnapshot = TrainingDashboardSnapshot(),
 ) {
     val isTerminal: Boolean get() = phase in setOf(TrainingPhase.COMPLETED, TrainingPhase.ERROR, TrainingPhase.INTERRUPTED)
 }
@@ -43,6 +46,8 @@ data class TrainingUiState(
     val canStop: Boolean,
     val canPause: Boolean,
     val canResume: Boolean,
+    val modelConfig: TrainingModelConfig,
+    val dashboard: TrainingDashboardSnapshot,
 )
 
 fun interface TrainingStateListener {

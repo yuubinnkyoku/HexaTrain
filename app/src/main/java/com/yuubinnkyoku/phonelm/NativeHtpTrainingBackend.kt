@@ -266,6 +266,28 @@ internal fun classifyNativeTrainingPhase(nativePhase: String): TrainingPhase? = 
     else -> error("unknown native phase")
 }
 
+/** Builds an observation ratio only when both QNN execute timings were actually reported. */
+internal fun observedHtpActivityWindow(
+    observationWallUs: Double?,
+    fusedExecuteUs: Double?,
+    adamExecuteUs: Double?,
+    fusedExecuteCount: Long?,
+    adamExecuteCount: Long?,
+): HtpActivityWindow? {
+    val wallUs = observationWallUs?.takeIf { it.isFinite() && it > 0.0 } ?: return null
+    val fusedUs = fusedExecuteUs?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
+    val adamUs = adamExecuteUs?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
+    val executeCount = if (fusedExecuteCount != null && adamExecuteCount != null) {
+        fusedExecuteCount + adamExecuteCount
+    } else null
+    return HtpActivityWindow(
+        startedAtMs = 0L,
+        endedAtMs = kotlin.math.ceil(wallUs / 1000.0).toLong().coerceAtLeast(1L),
+        executeDurationMs = (fusedUs + adamUs) / 1000.0,
+        executeCount = executeCount,
+    )
+}
+
 /** Production adapter over the existing synchronous JNI mode-100 entrypoint. */
 class NativeHtpTrainingBackend(
     private val context: Context,
@@ -471,16 +493,19 @@ class NativeHtpTrainingBackend(
         val fusedUs = optionalDouble(fields, "fused_forward_backward_qnn_us")
         val adamUs = optionalDouble(fields, "adam_qnn_us")
         val hostUs = optionalDouble(fields, "host_overhead_us")
-        val fusedCount = optionalLong(fields, "fused_qnn_execute_count") ?: 0L
-        val adamCount = optionalLong(fields, "adam_qnn_execute_count") ?: 0L
-        require(fusedCount >= 0L && adamCount >= 0L) { "native execute count is negative" }
+        val fusedCount = optionalLong(fields, "fused_qnn_execute_count")
+        val adamCount = optionalLong(fields, "adam_qnn_execute_count")
+        require(fusedCount == null || fusedCount >= 0L) { "native fused execute count is negative" }
+        require(adamCount == null || adamCount >= 0L) { "native Adam execute count is negative" }
         val checkpointIoUs = optionalDouble(fields, "checkpoint_io_us")
         val sample = TrainingTimingSample(
-            fusedForwardBackward = fusedUs?.let {
-                PhaseTiming(TimingBackend.HTP, it / 1000.0 / timingWeight, (fusedCount / timingWeight).coerceAtLeast(0L))
+            fusedForwardBackward = fusedCount?.let { count -> fusedUs?.let {
+                PhaseTiming(TimingBackend.HTP, it / 1000.0 / timingWeight, count / timingWeight)
+            }
             },
-            adam = adamUs?.let {
-                PhaseTiming(TimingBackend.HTP, it / 1000.0 / timingWeight, (adamCount / timingWeight).coerceAtLeast(0L))
+            adam = adamCount?.let { count -> adamUs?.let {
+                PhaseTiming(TimingBackend.HTP, it / 1000.0 / timingWeight, count / timingWeight)
+            }
             },
             host = hostUs?.let { PhaseTiming(TimingBackend.CPU, hostMs = it / 1000.0 / timingWeight) },
         ).takeIf { it.entries().isNotEmpty() }
@@ -491,18 +516,19 @@ class NativeHtpTrainingBackend(
         if (phase == TrainingPhase.SAVING_CHECKPOINT && checkpoint == null) {
             error("native checkpoint event has no verified NPRTCKPTV2 metadata")
         }
-        val qnnExecute = fusedCount + adamCount
-        val observationWallMs = fields.double("observation_wall_us")?.div(1000.0)
-        val executeMs = (fusedUs ?: 0.0) + (adamUs ?: 0.0)
         val evidence = runtimeEvidence(fields)
         onProgress(
             TrainingBackendProgress(
                 completedSteps = step,
                 totalSteps = total,
                 loss = loss,
-                htpActivity = observationWallMs?.takeIf { it > 0.0 }?.let {
-                    HtpActivityWindow(0L, kotlin.math.ceil(it).toLong().coerceAtLeast(1L), executeMs / 1000.0, qnnExecute)
-                },
+                htpActivity = observedHtpActivityWindow(
+                    observationWallUs = fields.double("observation_wall_us"),
+                    fusedExecuteUs = fusedUs,
+                    adamExecuteUs = adamUs,
+                    fusedExecuteCount = fusedCount,
+                    adamExecuteCount = adamCount,
+                ),
                 checkpoint = checkpoint,
                 phase = phase,
                 currentStepMs = optionalDouble(fields, "step_wall_us")?.div(1000.0)?.toLong(),
@@ -586,6 +612,7 @@ class NativeHtpTrainingBackend(
             "CANCELLED" -> TrainingBackendResult.Cancelled(finalProgress, runtimeEvidence = evidence)
             else -> TrainingBackendResult.Failed(
                 fields.string("error") ?: fields.string("failure_classification") ?: "native training returned $status",
+                runtimeEvidence = evidence,
             )
         }
     }

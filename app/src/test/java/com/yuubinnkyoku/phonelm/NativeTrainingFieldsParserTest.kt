@@ -2,6 +2,7 @@ package com.yuubinnkyoku.phonelm
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -44,5 +45,16 @@ class NativeTrainingFieldsParserTest {
     fun hostScratchReplayIsIgnoredRatherThanReportedAsHtpPhase() {
         assertEquals(null, classifyNativeTrainingPhase("cpu_replay"))
         assertEquals(TrainingPhase.TRAINING, classifyNativeTrainingPhase("training"))
+    }
+
+    @Test
+    fun observationWallWithoutBothExecuteTimingsRemainsUnavailable() {
+        assertNull(observedHtpActivityWindow(10_000.0, null, null, 1, 1))
+        assertNull(observedHtpActivityWindow(10_000.0, 2_000.0, null, 1, 1))
+        assertEquals(
+            30.0,
+            observedHtpActivityWindow(10_000.0, 2_000.0, 1_000.0, 1, 1)!!.activityPercent!!,
+            1e-6,
+        )
     }
 }

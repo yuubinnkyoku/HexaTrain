@@ -10,8 +10,13 @@ fun interface TrainingClock {
 data class CpuProcessMetrics(
     val processCpuTimeMs: Long,
     val threadCount: Int? = null,
+    /** Observed process PSS in bytes; null when the platform cannot read it. */
+    val memoryBytes: Long? = null,
 ) {
-    init { require(processCpuTimeMs >= 0) { "processCpuTimeMs must be non-negative" } }
+    init {
+        require(processCpuTimeMs >= 0) { "processCpuTimeMs must be non-negative" }
+        require(memoryBytes == null || memoryBytes >= 0L) { "process memory must be non-negative" }
+    }
 }
 
 /** Platform adapter boundary; an unavailable reading must be represented by null, never invented. */
@@ -137,6 +142,7 @@ class TimingAccumulator {
     private val counts = EnumMap<TrainingOperationPhase, Long>(TrainingOperationPhase::class.java)
     private val htpCounts = EnumMap<TrainingOperationPhase, Long>(TrainingOperationPhase::class.java)
     private val cpuCounts = EnumMap<TrainingOperationPhase, Long>(TrainingOperationPhase::class.java)
+    private val unavailableCounts = EnumMap<TrainingOperationPhase, Long>(TrainingOperationPhase::class.java)
     private var current: TrainingTimingSample? = null
     private var sampleCount = 0L
     private var htpExecuteTimeMs = 0.0
@@ -150,8 +156,10 @@ class TimingAccumulator {
 
     fun add(sample: TrainingTimingSample?, checkpointIoMs: Double? = null, sampleWeight: Long = 1L) {
         require(sampleWeight > 0L) { "timing sample weight must be positive" }
+        // Current means this native observation, not the last observation that
+        // happened to contain timing. Average/cumulative remain historical.
+        current = sample
         if (sample != null) {
-            current = sample
             sampleCount += sampleWeight
             sample.entries().forEach { (phase, timing) ->
                 val totals = sums.getOrPut(phase) { PhaseTimingTotals() }
@@ -159,7 +167,8 @@ class TimingAccumulator {
                 when (timing.backend) {
                     TimingBackend.HTP -> htpCounts[phase] = (htpCounts[phase] ?: 0L) + sampleWeight
                     TimingBackend.CPU -> cpuCounts[phase] = (cpuCounts[phase] ?: 0L) + sampleWeight
-                    TimingBackend.UNAVAILABLE -> Unit
+                    TimingBackend.UNAVAILABLE -> unavailableCounts[phase] =
+                        (unavailableCounts[phase] ?: 0L) + sampleWeight
                 }
                 timing.qnnExecuteMs?.let {
                     totals.qnnExecuteMs += it * sampleWeight
@@ -192,9 +201,10 @@ class TimingAccumulator {
                 val divisor = if (average) (counts[phase] ?: 1L).toDouble() else 1.0
                 val htpSamples = htpCounts[phase] ?: 0L
                 val cpuSamples = cpuCounts[phase] ?: 0L
-                val backend = if (htpSamples > 0L && cpuSamples == 0L) {
+                val unavailableSamples = unavailableCounts[phase] ?: 0L
+                val backend = if (htpSamples > 0L && cpuSamples == 0L && unavailableSamples == 0L) {
                     TimingBackend.HTP
-                } else if (cpuSamples > 0L && htpSamples == 0L) {
+                } else if (cpuSamples > 0L && htpSamples == 0L && unavailableSamples == 0L) {
                     TimingBackend.CPU
                 } else {
                     TimingBackend.UNAVAILABLE

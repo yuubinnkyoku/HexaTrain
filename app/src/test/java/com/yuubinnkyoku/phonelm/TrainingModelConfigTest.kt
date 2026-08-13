@@ -11,7 +11,7 @@ class TrainingModelConfigTest {
         assertEquals(19, config.layers)
         assertEquals(2, config.heads)
         assertEquals(32, config.tokens)
-        assertEquals(16, config.dimension)
+        assertEquals(32, config.dimension)
         assertEquals(32, config.feedForwardDimension)
         assertEquals(256, config.vocabularySize)
         assertEquals(8, config.batchSize)

@@ -48,7 +48,7 @@ data class TrainingModelConfig(
             layers = 19,
             heads = 2,
             tokens = 32,
-            dimension = 16,
+            dimension = 32,
             feedForwardDimension = 32,
             vocabularySize = 256,
             batchSize = 8,

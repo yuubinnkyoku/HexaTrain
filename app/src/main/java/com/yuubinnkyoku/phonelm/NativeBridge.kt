@@ -70,6 +70,8 @@ object NativeBridge {
         seed: Long,
         layers: Int,
         tokens: Int,
+        dimension: Int,
+        feedForwardDimension: Int,
         maxNewBytes: Int,
         generateMode: String,
         temperature: Float,
@@ -98,8 +100,24 @@ object NativeBridge {
         layers: Int,
         heads: Int,
         tokens: Int,
+        dimension: Int,
+        feedForwardDimension: Int,
         checkpointStep: Int,
         validationChunks: Int,
         developmentChunks: Int,
+    ): String
+
+    /** Research-only bounded D/FFN graph probe; never used by production UI. */
+    external fun nativeRunNicopediaOneUpdateProbe(
+        cacheDir: String,
+        seed: Long,
+        layers: Int,
+        heads: Int,
+        tokens: Int,
+        dimension: Int,
+        feedForwardDimension: Int,
+        batchSize: Int,
+        learningRate: Float,
+        progressCallback: ProgressCallback,
     ): String
 }

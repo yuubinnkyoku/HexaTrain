@@ -234,7 +234,8 @@ void testGraphShapeValidator() {
             "shape validator accepted head binding with incompatible scatter shape");
 
     const auto makeLayer = [](std::size_t layer, std::size_t tokens,
-                              std::size_t dimension, std::size_t heads) {
+                              std::size_t dimension, std::size_t heads,
+                              std::size_t feedForward = 32) {
         const std::size_t headDim = dimension / heads;
         TransformerLayerTopology topology{};
         topology.layerIndex = layer;
@@ -252,13 +253,13 @@ void testGraphShapeValidator() {
         topology.norm1Mean = topology.norm1Variance = topology.norm2Mean = topology.norm2Variance = {tokens, 1};
         topology.norm1Gamma = topology.norm1Beta = topology.norm2Gamma = topology.norm2Beta = {dimension};
         topology.wq = topology.wk = topology.wv = topology.wo = {dimension, dimension};
-        topology.ffnW1 = {dimension, 32};
-        topology.ffnW2 = {32, dimension};
+        topology.ffnW1 = {dimension, feedForward};
+        topology.ffnW2 = {feedForward, dimension};
         topology.dNorm1Gamma = topology.dNorm1Beta = topology.dNorm2Gamma = topology.dNorm2Beta = {dimension};
         topology.dWq = topology.dWk = topology.dWv = topology.dWo = {dimension, dimension};
-        topology.dFfnW1 = {dimension, 32};
-        topology.dFfnW2 = {32, dimension};
-        topology.parameterElements = 4 * dimension * dimension + 4 * dimension + 2 * dimension * 32;
+        topology.dFfnW1 = {dimension, feedForward};
+        topology.dFfnW2 = {feedForward, dimension};
+        topology.parameterElements = 4 * dimension * dimension + 4 * dimension + 2 * dimension * feedForward;
         topology.optimizerElements = 2 * topology.parameterElements;
         return topology;
     };
@@ -307,6 +308,33 @@ void testGraphShapeValidator() {
               "Nicopedia L6 parameter element count is not 20864");
       require(nicopediaL19.parameterElements == 48320,
               "Nicopedia L19 parameter element count is not 48320");
+    }
+    // Width-search contract: the generalized graph shape validator must accept
+    // both single-axis and joint D/FFN candidates, rather than silently
+    // assuming the anchor's FFN32 shapes.
+    {
+      const std::size_t widthCases[][3] = {
+          {32, 32, 135552}, {16, 64, 67776}, {32, 64, 174464}};
+      for (const auto& widthCase : widthCases) {
+        const std::size_t dimension = widthCase[0];
+        const std::size_t feedForward = widthCase[1];
+        TransformerTopologyConfig wide{
+            32, dimension, feedForward, 19, 2, 256};
+        wide.parameterElements =
+            19 * (4 * dimension * dimension + 4 * dimension +
+                  2 * dimension * feedForward) +
+            2 * 256 * dimension;
+        wide.optimizerElements = 2 * wide.parameterElements;
+        std::vector<TransformerLayerTopology> topology;
+        for (std::size_t i = 0; i < 19; ++i) {
+          topology.push_back(makeLayer(
+              i, 32, dimension, 2, feedForward));
+        }
+        require(validateTransformerTopology(wide, topology).ok,
+                "shape validator rejected Nicopedia width-search topology");
+        require(wide.parameterElements == widthCase[2],
+                "Nicopedia width-search parameter element count mismatch");
+      }
     }
     auto twoByTwo = requireTopology(2, 2);
     TransformerTopologyConfig twoByTwoConfig{8, 16, 32, 2, 2, 32};

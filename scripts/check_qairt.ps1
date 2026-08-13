@@ -57,8 +57,17 @@ function Convert-GradlePath([string]$Value) {
     return $result
 }
 
+# Resolve PowerShell 7 reliably; $PSHOME points at Windows PowerShell by default.
+function Resolve-PwshExe() {
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $cmd -or -not (Test-Path -LiteralPath $cmd.Source)) {
+        throw "pwsh.exe (PowerShell 7+) not found on PATH"
+    }
+    return $cmd.Source
+}
+
 if ($SelfTest) {
-    $pwshExe = Join-Path $PSHOME "pwsh.exe"
+    $pwshExe = Resolve-PwshExe
     $selfTestDir = Join-Path $env:TEMP ("phonelm-qairt-selftest-" + [Guid]::NewGuid().ToString("N"))
     $fakeRoot = Join-Path $selfTestDir "explicit\9.99.0.999999"
     $fakeDiscoveryRoot = Join-Path $selfTestDir "discovery\8.88.0.888888"

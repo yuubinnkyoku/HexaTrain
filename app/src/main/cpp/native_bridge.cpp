@@ -6,6 +6,7 @@
 #include <jni.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <mutex>
@@ -247,6 +248,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.batchSize = batchSize;
     config.dimension = dimension;
     config.hiddenDimension = hiddenDimension;
+    // The Nicopedia HTP path reads its FFN width separately so its checkpoint
+    // identity does not borrow generic-MNN semantics at the call site.
+    config.feedForwardDimension = hiddenDimension;
     config.outputDimension = outputDimension;
     config.steps = steps;
     config.warmupSteps = warmupSteps;
@@ -366,6 +370,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jlong seed,
     jint layers,
     jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
     jint maxNewBytes,
     jstring generateMode,
     jfloat temperature,
@@ -431,8 +437,16 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     phonelm::tiny_lm::Config config;
     config.vocabularySize = 256;
     config.tokens = static_cast<uint32_t>(tokens);
-    config.dimension = 16;
-    config.feedForwardDimension = 32;
+    if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
+        feedForwardDimension < 2 || feedForwardDimension > 1024) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=dimension/feed_forward_dimension out of supported range\n");
+    }
+    config.dimension = static_cast<uint32_t>(dimension);
+    config.feedForwardDimension = static_cast<uint32_t>(feedForwardDimension);
     config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
     config.numHeads = 2;
     phonelm::TrainingConfig trainingConfig;
@@ -501,6 +515,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     jint layers,
     jint heads,
     jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
     jint checkpointStep,
     jint validationChunks,
     jint developmentChunks) {
@@ -523,6 +539,14 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
             "error=checkpoint_dir_required\n");
     }
+    if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
+        feedForwardDimension < 2 || feedForwardDimension > 1024) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+            "error=dimension/feed_forward_dimension out of supported range\n");
+    }
     // 256 is the cache context range max; out-of-range falls back to the
     // legacy T=32.
     if (tokens < 1 || tokens > 256) tokens = 32;
@@ -530,6 +554,8 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     config.seed = static_cast<std::uint64_t>(seed);
     config.epochs = layers > 0 ? layers : 6;
     config.measuredSteps = heads > 0 ? heads : 2;
+    config.dimension = dimension;
+    config.feedForwardDimension = feedForwardDimension;
     config.sampleCount = tokens;
     config.diagnosticResumeStep = checkpointStep;
     config.steps = validationChunks > 0 ? validationChunks : 8192;
@@ -553,6 +579,140 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
                                         "failure_classification=JNI_EXCEPTION\n"
                                         "error=unknown");
         logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaOneUpdateProbe(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jstring cacheDir,
+    jlong seed,
+    jint layers,
+    jint heads,
+    jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
+    jint batchSize,
+    jfloat learningRate,
+    jobject progressCallback) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    beginNativeCall();
+
+    std::string directory;
+    if (cacheDir != nullptr) {
+        const char* chars = env->GetStringUTFChars(cacheDir, nullptr);
+        if (chars != nullptr) {
+            directory = chars;
+            env->ReleaseStringUTFChars(cacheDir, chars);
+        }
+    }
+    jmethodID progressMethod = nullptr;
+    if (progressCallback != nullptr) {
+        jclass callbackClass = env->GetObjectClass(progressCallback);
+        if (callbackClass != nullptr) {
+            progressMethod = env->GetMethodID(
+                callbackClass, "onNativeProgress", "(Ljava/lang/String;)V");
+            env->DeleteLocalRef(callbackClass);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            progressMethod = nullptr;
+        }
+    }
+    bool callbackEnabled = progressCallback != nullptr && progressMethod != nullptr;
+    auto sink = [&](const std::string& message) {
+        logcat(message);
+        if (!callbackEnabled) return;
+        jstring javaMessage = toJavaString(env, message);
+        if (javaMessage == nullptr) {
+            callbackEnabled = false;
+            return;
+        }
+        env->CallVoidMethod(progressCallback, progressMethod, javaMessage);
+        env->DeleteLocalRef(javaMessage);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            callbackEnabled = false;
+            logcat("progress_callback_error=true");
+        }
+    };
+
+    if (directory.empty()) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_DFFN_PROBE\ntest=nicopedia_dffn_one_update\n"
+            "status=FAILED\nphase=configuration\n"
+            "error=cache_path_required\nqnn_return_code_success=false\n"
+            "output_tensors_finite=false\ncpu_fallback=false\nnan_detected=false\n"
+            "inf_detected=false\ngraph_execute_count=0\n"
+            "api_trace_graph_execute_attempt_count=0\n"
+            "api_trace_graph_execute_success_count=0\n"
+            "api_trace_graph_execute_failure_count=0\n"
+            "api_trace_last_qnn_result=-1\napi_trace_effective_result=-1\n"
+            "api_trace_cpu_backend_initialized=false\n"
+            "api_trace_fallback_attempted=false\n"
+            "api_trace_fallback_succeeded=false\n");
+    }
+    if (tokens < 8 || tokens > 256 || dimension < 2 || dimension > 256 ||
+        (dimension % 2) != 0 || feedForwardDimension < 2 ||
+        feedForwardDimension > 1024 || layers < 1 || heads < 1 ||
+        batchSize < 1 || !std::isfinite(learningRate) || learningRate <= 0.0f) {
+        return toJavaString(
+            env,
+            "NICOPEDIA_DFFN_PROBE\ntest=nicopedia_dffn_one_update\n"
+            "status=FAILED\nphase=configuration\n"
+            "error=probe_configuration_invalid\nqnn_return_code_success=false\n"
+            "output_tensors_finite=false\ncpu_fallback=false\nnan_detected=false\n"
+            "inf_detected=false\ngraph_execute_count=0\n"
+            "api_trace_graph_execute_attempt_count=0\n"
+            "api_trace_graph_execute_success_count=0\n"
+            "api_trace_graph_execute_failure_count=0\n"
+            "api_trace_last_qnn_result=-1\napi_trace_effective_result=-1\n"
+            "api_trace_cpu_backend_initialized=false\n"
+            "api_trace_fallback_attempted=false\n"
+            "api_trace_fallback_succeeded=false\n");
+    }
+    phonelm::tiny_lm::Config config;
+    config.vocabularySize = 256;
+    config.tokens = static_cast<std::uint32_t>(tokens);
+    config.dimension = static_cast<std::uint32_t>(dimension);
+    config.feedForwardDimension = static_cast<std::uint32_t>(feedForwardDimension);
+    config.numLayers = static_cast<std::uint32_t>(layers);
+    config.numHeads = static_cast<std::uint32_t>(heads);
+    phonelm::TrainingConfig trainingConfig;
+    trainingConfig.seed = static_cast<std::uint64_t>(seed);
+    trainingConfig.batchSize = static_cast<int>(batchSize);
+    trainingConfig.learningRate = learningRate;
+    trainingConfig.sampleCount = tokens;
+    trainingConfig.epochs = layers;
+    trainingConfig.measuredSteps = heads;
+    trainingConfig.steps = 1;
+    trainingConfig.diagnosticCheckpointDir = directory;
+    try {
+        const auto report = phonelm::qnn::runNicopediaHtpOneUpdateProbe(
+            config, trainingConfig, sink, &gStopRequested);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string(
+            "NICOPEDIA_DFFN_PROBE\ntest=nicopedia_dffn_one_update\n"
+            "status=FAILED\nphase=exception\nqnn_return_code_success=false\n"
+            "output_tensors_finite=false\ncpu_fallback=false\n") +
+            "error=" + exception.what();
+        sink(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string(
+            "NICOPEDIA_DFFN_PROBE\ntest=nicopedia_dffn_one_update\n"
+            "status=FAILED\nphase=exception\nqnn_return_code_success=false\n"
+            "output_tensors_finite=false\ncpu_fallback=false\n"
+            "error=unknown");
+        sink(report);
         return toJavaString(env, report);
     }
 }

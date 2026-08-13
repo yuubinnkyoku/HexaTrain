@@ -31,6 +31,18 @@ class TrainingCheckpointTest {
         assertEquals(250, (result as TrainingCheckpointSelection.Selected).checkpoint.completedStep)
     }
 
+    @Test fun d16CheckpointIsNotMistakenlyResumedAsD32Default() {
+        val d16Config = TrainingModelConfig.NICOPEDIA_L19.copy(dimension = 16)
+        val d16Checkpoint = checkpoint(step = 250, config = d16Config)
+        val result = TrainingCheckpointCatalog.latestCompatible(
+            listOf(d16Checkpoint),
+            TrainingModelConfig.NICOPEDIA_L19,
+            "NPRTCKPTV2",
+            2,
+        )
+        assertTrue(result is TrainingCheckpointSelection.Incompatible)
+    }
+
     @Test fun incompatibleDatasetDoesNotFallBackToOlderCheckpoint() {
         val result = TrainingCheckpointCatalog.latestCompatible(
             listOf(checkpoint(500, datasetIdentity = "dataset-b"), checkpoint(250, datasetIdentity = "dataset-a")),
