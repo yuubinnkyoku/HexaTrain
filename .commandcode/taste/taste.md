@@ -6,3 +6,4 @@
 - 否定結果や「判定不能」でも、科学的に十分な停止条件を満たせば完了として報告してよい（無理に肯定・否定へ分類しない）。Confidence: 0.85
 - 実施していない分析・工程をPASS扱いせず、NOT_RUN / GATE_REJECTED 等として明示的に区別することを好む。Confidence: 0.85
 - 否定結果・「改善不能」の結論でも、候補ごとの改善量・残存誤差・原因の限界を定量化して報告する（「無理に通さない」）。Confidence: 0.8
+- 実学習の最終報告には、到達step・NLL推移・generation/parity・HTP/wall・QNN/finite/fallback・他configとの同条件比較・停止理由または完走結果を簡潔に含める。Confidence: 0.8

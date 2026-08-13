@@ -23,3 +23,10 @@
 - 改善の採用判定は単一fixture/metric（特定prefix等）だけでなく、全prefix・別checkpoint step・good prefixでの一般化（改善または非劣化）を要求し、特定fixtureへの過適合や「良い出力探し」をしない。Confidence: 0.85
 - 指定された不変条件（parity gate・checkpoint・追加training・参照実装）は変更せず、対象システム（HTP等）の数値経路自体を改善する。gate緩和・出力補正・温度補正・checkpoint修正など参照側に合わせる操作や、特定fixtureだけ通す特殊ケースを禁止する。Confidence: 0.9
 - 実装バグ修正とprecision mitigation（数値経路の改善）を明確に区別して報告する。Confidence: 0.7
+- 2つの評価経路（host vs HTP等）のNLL差を「未収束だから」で説明しない。checkpoint/parameter hash・dataset identity・chunk選択・chunk数・token範囲・context/window処理・masking・loss集計・denominator・reduction・入力生成を系統的に比較し、意図された評価条件差なのか実装差なのかを切り分ける。条件差なら明確に記録して無理に一致させず、同一入力・同一定義なのに差が出る場合のみ最小再現で切り分ける。Confidence: 0.9
+- 単一stepのvalidation NLLの小さな反転だけで過学習・収束と断定しない。development等他のsplitと学習曲線全体から判断する。Confidence: 0.9
+- 評価値は評価条件（chunk数・評価範囲等）に依存する（例: 1+1 chunksは64+64より分散が大きく値も異なる）。異なる条件の評価値を直接比較せず、評価条件を記録に明記する。Confidence: 0.85
+- 複数config（D16/D24/D32等）の比較評価は同一条件（64+64 chunks）を標準とし、未評価の既存checkpointは再学習せず同条件で再評価してから比較する。Confidence: 0.85
+- 数値parity gateの固定閾値（logits_max_abs等）超過だけで学習停止と判断しない。argmax・top-5・candidate decision・AR分岐・probability error・relative logits error・finiteを確認し、生成判断がCPU/HTPで一致していればrejectを記録したまま学習継続する。閾値自体は変更しない。Confidence: 0.85
+- 複数configの優位判定はseed間ばらつき（mean/median/range/std）と比較して行い、単一seedの差では優位を断定しない。結論は「A優位 / B優位 / 実質同等 / seed不足」のいずれかで分類する。Confidence: 0.8
+- fused実行（例: Forward+Loss+Backwardを1回のgraph executeで計測）を個別計測目的でgraph分割しない（実行性能を変えてしまう）。実測できない分割値は推定表示せず、UIラベル・説明文を実測の意味に合わせる。Confidence: 0.8
