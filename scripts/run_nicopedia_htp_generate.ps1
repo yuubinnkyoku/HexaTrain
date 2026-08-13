@@ -247,10 +247,9 @@ function Invoke-SelfTest {
         $checkpoint = Join-Path $ckRoot $step320Name
         $checkpoint1000 = Join-Path $ckRoot $step1000Name
         if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf) -or
-            -not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) {
+            -not (Test-Path -LiteralPath $anchor320 -PathType Leaf)) {
             throw 'SELFTEST_CHECKPOINT_STEP_320'
         }
-        $checkpoint1000 = Join-Path $ckRoot "htp-seed1-l19-step1000.ckpt"
         if (-not (Test-Path -LiteralPath $checkpoint1000 -PathType Leaf) -or
             -not (Test-Path -LiteralPath $anchor1000 -PathType Leaf)) {
             throw 'SELFTEST_CHECKPOINT_STEP_1000'

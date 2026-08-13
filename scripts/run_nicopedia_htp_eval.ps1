@@ -42,7 +42,7 @@ Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $Expe
 if ($SelfTest) {
   if ($PollLimit -lt 1 -or $PollSeconds -lt 1 -or $ProgressEverySeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
   if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
-  if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }
+  if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) { throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT: expected=D32/FFN32 actual=D$Dimension/FFN$FeedForwardDimension" }
   $sample = "status=SUCCESS`ncheckpoint_step=1000`n"
   if (-not ($sample -match '(?m)^status=SUCCESS\s*$')) { throw 'SELFTEST_TERMINAL_STATUS' }
   Write-Host 'run_nicopedia_htp_eval_self_test=PASS'
