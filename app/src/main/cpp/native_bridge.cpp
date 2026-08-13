@@ -6,10 +6,12 @@
 #include <jni.h>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <exception>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,78 @@ std::atomic_bool gRunning{false};
 std::mutex gStopStateMutex;
 bool gNativeCallEntered = false;
 bool gPendingStop = false;
+
+struct GenerationProgressSnapshot {
+    std::string phase = "idle";
+    uint32_t generatedBytes = 0;
+    uint32_t maxNewBytes = 0;
+    uint64_t qnnExecuteAttempts = 0;
+    uint64_t qnnExecuteSuccesses = 0;
+    uint64_t qnnExecuteFailures = 0;
+    bool cpuFallback = false;
+    bool finite = true;
+    std::string generatedHex;
+    std::chrono::steady_clock::time_point started{};
+};
+
+std::mutex gGenerationProgressMutex;
+GenerationProgressSnapshot gGenerationProgress;
+
+std::string progressField(const std::string& message, const char* key) {
+    const std::string prefix = std::string(key) + "=";
+    size_t offset = 0;
+    while (offset <= message.size()) {
+        const size_t end = message.find('\n', offset);
+        const std::string line = message.substr(offset, end - offset);
+        if (line.rfind(prefix, 0) == 0) return line.substr(prefix.size());
+        if (end == std::string::npos) break;
+        offset = end + 1;
+    }
+    return {};
+}
+
+uint64_t progressUnsigned(const std::string& message, const char* key,
+                          uint64_t fallback) {
+    const std::string value = progressField(message, key);
+    if (value.empty()) return fallback;
+    try { return std::stoull(value); } catch (...) { return fallback; }
+}
+
+void resetGenerationProgress(uint32_t maxNewBytes) {
+    std::lock_guard<std::mutex> lock(gGenerationProgressMutex);
+    gGenerationProgress = {};
+    gGenerationProgress.phase = "preparing";
+    gGenerationProgress.maxNewBytes = maxNewBytes;
+    gGenerationProgress.started = std::chrono::steady_clock::now();
+}
+
+void observeGenerationProgress(const std::string& message) {
+    std::lock_guard<std::mutex> lock(gGenerationProgressMutex);
+    const std::string phase = progressField(message, "phase");
+    if (!phase.empty()) gGenerationProgress.phase = phase;
+    gGenerationProgress.generatedBytes = static_cast<uint32_t>(progressUnsigned(
+        message, "generated_bytes", gGenerationProgress.generatedBytes));
+    gGenerationProgress.maxNewBytes = static_cast<uint32_t>(progressUnsigned(
+        message, "max_new_bytes", gGenerationProgress.maxNewBytes));
+    gGenerationProgress.qnnExecuteAttempts = progressUnsigned(
+        message, "qnn_execute_attempts", gGenerationProgress.qnnExecuteAttempts);
+    gGenerationProgress.qnnExecuteSuccesses = progressUnsigned(
+        message, "qnn_execute_successes", gGenerationProgress.qnnExecuteSuccesses);
+    gGenerationProgress.qnnExecuteFailures = progressUnsigned(
+        message, "qnn_execute_failures", gGenerationProgress.qnnExecuteFailures);
+    const std::string fallback = progressField(message, "cpu_fallback");
+    if (!fallback.empty()) gGenerationProgress.cpuFallback = fallback == "true";
+    const std::string finite = progressField(message, "finite");
+    if (!finite.empty()) gGenerationProgress.finite = finite == "true";
+    const std::string generatedHex = progressField(message, "generated_hex");
+    if (!generatedHex.empty() || gGenerationProgress.generatedBytes == 0)
+        gGenerationProgress.generatedHex = generatedHex;
+}
+
+void finishGenerationProgress(bool success) {
+    std::lock_guard<std::mutex> lock(gGenerationProgressMutex);
+    gGenerationProgress.phase = success ? "completed" : "failed";
+}
 
 void beginNativeCall() {
     std::lock_guard<std::mutex> lock(gStopStateMutex);
@@ -384,6 +458,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jint htpGraphAdvancedActivationFusion,
     jint htpContextGraphSplitting,
     jboolean htpNativeTensorFp16) {
+    resetGenerationProgress(static_cast<uint32_t>(maxNewBytes > 0 ? maxNewBytes : 64));
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return toJavaString(env, failedReport("a benchmark is already running"));
@@ -481,25 +556,54 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         static_cast<uint32_t>(htpContextGraphSplitting);
     generateConfig.htpNativeTensorFp16 = htpNativeTensorFp16 == JNI_TRUE;
 
-    auto sink = [&](const std::string& message) { logcat(message); };
+    auto sink = [&](const std::string& message) {
+        observeGenerationProgress(message);
+        logcat(message);
+    };
     try {
         const auto report = phonelm::qnn::runNicopediaHtpGeneration(
             config, checkpoint, prompt, trainingConfig, generateConfig, sink);
+        finishGenerationProgress(report.find("\nstatus=SUCCESS\n") != std::string::npos);
         logcat(report);
         return toJavaString(env, report);
     } catch (const std::exception& exception) {
+        finishGenerationProgress(false);
         const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
                                         "failure_classification=JNI_EXCEPTION\nerror=") +
                             exception.what();
         logcat(report);
         return toJavaString(env, report);
     } catch (...) {
+        finishGenerationProgress(false);
         const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
                                         "failure_classification=JNI_EXCEPTION\n"
                                         "error=unknown");
         logcat(report);
         return toJavaString(env, report);
     }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeGetNicopediaGenerationProgress(
+    JNIEnv* env,
+    jobject /* receiver */) {
+    std::lock_guard<std::mutex> lock(gGenerationProgressMutex);
+    const auto elapsedMs = gGenerationProgress.started.time_since_epoch().count() == 0
+        ? 0LL
+        : std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - gGenerationProgress.started).count();
+    std::ostringstream report;
+    report << "NICOPEDIA_GENERATION_PROGRESS\nphase=" << gGenerationProgress.phase
+           << "\ngenerated_bytes=" << gGenerationProgress.generatedBytes
+           << "\nmax_new_bytes=" << gGenerationProgress.maxNewBytes
+           << "\nelapsed_ms=" << elapsedMs
+           << "\nqnn_execute_attempts=" << gGenerationProgress.qnnExecuteAttempts
+           << "\nqnn_execute_successes=" << gGenerationProgress.qnnExecuteSuccesses
+           << "\nqnn_execute_failures=" << gGenerationProgress.qnnExecuteFailures
+           << "\ncpu_fallback=" << (gGenerationProgress.cpuFallback ? "true" : "false")
+           << "\nfinite=" << (gGenerationProgress.finite ? "true" : "false")
+           << "\ngenerated_hex=" << gGenerationProgress.generatedHex << '\n';
+    return toJavaString(env, report.str());
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL

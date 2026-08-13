@@ -35,6 +35,9 @@ interface TrainingCheckpointStore {
 
     /** Register a native-created checkpoint without exposing its path to UI state. */
     fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = false
+
+    /** App-private checkpoint payloads available for generation inspection. */
+    fun listNativeCheckpointPaths(): List<String> = emptyList()
 }
 
 class InMemoryTrainingCheckpointStore : TrainingCheckpointStore {

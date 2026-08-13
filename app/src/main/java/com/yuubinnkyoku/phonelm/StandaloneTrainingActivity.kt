@@ -77,6 +77,12 @@ class StandaloneTrainingActivity : ComponentActivity() {
                 onGenerationTopKChange = generationSession::updateTopK,
                 onGenerationSamplingSeedChange = generationSession::updateSamplingSeed,
                 onGenerationMaxNewBytesChange = generationSession::updateMaxNewBytes,
+                onGenerationCheckpointSelected = generationSession::selectCheckpoint,
+                onGenerationHistorySelected = generationSession::selectHistory,
+                onGenerationHistoryDetailClosed = generationSession::closeHistoryDetail,
+                onDeleteGenerationHistory = generationSession::deleteHistory,
+                onClearGenerationHistory = generationSession::clearHistory,
+                onUseGenerationHistoryAgain = generationSession::useHistoryAgain,
                 onGenerate = {
                     generationSession.generate(composeState?.phase in generationBlockingTrainingPhases)
                 },
@@ -206,7 +212,7 @@ class StandaloneTrainingActivity : ComponentActivity() {
         val immediate = state.phase != lastDeliveredState?.phase ||
             state.phase in terminalPhases ||
             state.lastCheckpoint != lastDeliveredState?.lastCheckpoint
-        if (state.lastCheckpoint != lastDeliveredState?.lastCheckpoint) generationSession.refreshCheckpoint()
+        if (state.lastCheckpoint != lastDeliveredState?.lastCheckpoint) generationSession.refreshCheckpoints()
         synchronized(uiDispatchLock) {
             pendingUiUpdate = PendingUiUpdate(state, generation)
             if (immediate) {

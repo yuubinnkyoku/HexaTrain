@@ -8,6 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 enum class GenerationMode { GREEDY, SAMPLE }
 
@@ -43,18 +44,40 @@ data class GenerationResult(
     val finite: Boolean,
     val generationGate: Boolean,
     val debugReport: String,
+    val qnnExecuteAttempts: Long = 0,
+    val qnnExecuteSuccesses: Long = 0,
+    val qnnExecuteFailures: Long = 0,
+)
+
+enum class GenerationPhase {
+    PREPARING,
+    CHECKPOINT_VALIDATION,
+    HTP_INITIALIZATION,
+    GRAPH_PREPARATION,
+    GENERATING,
+    COMPLETED,
+    FAILED,
+}
+
+data class GenerationProgress(
+    val phase: GenerationPhase,
+    val generatedBytes: Int = 0,
+    val maxNewBytes: Int,
+    val elapsedMs: Long = 0,
+    val qnnExecuteAttempts: Long = 0,
+    val qnnExecuteSuccesses: Long = 0,
+    val qnnExecuteFailures: Long = 0,
+    val cpuFallback: Boolean = false,
+    val finite: Boolean = true,
+    val displayText: String = "",
+    val rawBytes: ByteArray = byteArrayOf(),
 )
 
 sealed interface GenerationState {
     data object Idle : GenerationState
-    data object Running : GenerationState
+    data class Running(val progress: GenerationProgress) : GenerationState
     data class Success(val result: GenerationResult) : GenerationState
     data class Failed(val message: String, val debugReport: String? = null) : GenerationState
-}
-
-sealed interface GenerationCheckpointStatus {
-    data class Available(val checkpoint: TrainingCheckpointMetadata) : GenerationCheckpointStatus
-    data class Unavailable(val message: String = "No trained checkpoint") : GenerationCheckpointStatus
 }
 
 data class GenerationUiState(
@@ -64,9 +87,18 @@ data class GenerationUiState(
     val topKText: String = "32",
     val samplingSeedText: String = "1",
     val maxNewBytesText: String = "64",
-    val checkpoint: GenerationCheckpointStatus = GenerationCheckpointStatus.Unavailable(),
+    val checkpoints: List<GenerationCheckpoint> = emptyList(),
+    val selectedCheckpointPath: String? = null,
+    val requiredCheckpointHash: String? = null,
+    val checkpointLoading: Boolean = false,
+    val checkpointMessage: String? = "No usable checkpoint",
+    val checkpointWarning: String? = null,
     val execution: GenerationState = GenerationState.Idle,
+    val history: GenerationHistoryUiState = GenerationHistoryUiState(),
 ) {
+    val selectedCheckpoint: GenerationCheckpoint?
+        get() = checkpoints.firstOrNull { it.path == selectedCheckpointPath }
+
     fun requestOrNull(): GenerationRequest? {
         val request = GenerationRequest(
             prompt = prompt,
@@ -80,26 +112,40 @@ data class GenerationUiState(
     }
 
     val canGenerate: Boolean
-        get() = checkpoint is GenerationCheckpointStatus.Available &&
+        get() = selectedCheckpoint?.usable == true &&
             execution !is GenerationState.Running && requestOrNull() != null
 }
 
 interface GenerationBackend {
-    fun checkpointStatus(): GenerationCheckpointStatus
-    fun generate(request: GenerationRequest, checkpoint: TrainingCheckpointMetadata): GenerationResult
+    fun generate(
+        request: GenerationRequest,
+        checkpoint: GenerationCheckpoint,
+        onProgress: (GenerationProgress) -> Unit = {},
+    ): GenerationResult
 }
 
 private class GenerationBackendException(message: String, val report: String) : IllegalStateException(message)
 
 class GenerationSession(
     private val backend: GenerationBackend,
+    private val checkpointRepository: GenerationCheckpointRepository,
+    private val historyRepository: GenerationHistoryRepository = EmptyGenerationHistoryRepository,
+    private val losslessByteDisplay: LosslessByteDisplay = LosslessByteDisplay { bytes ->
+        String(bytes, Charsets.UTF_8)
+    },
     private val executor: Executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "PhoneLM-generation").apply { isDaemon = true }
     },
 ) : Closeable {
     private val lock = Any()
     private val listeners = CopyOnWriteArrayList<(GenerationUiState) -> Unit>()
-    private var state = GenerationUiState(checkpoint = backend.checkpointStatus())
+    private var checkpointRefreshInFlight = false
+    private var state = GenerationUiState()
+
+    init {
+        refreshCheckpoints()
+        refreshHistory()
+    }
 
     fun snapshot(): GenerationUiState = synchronized(lock) { state }
 
@@ -116,25 +162,147 @@ class GenerationSession(
     fun updateSamplingSeed(value: String) = update { copy(samplingSeedText = value) }
     fun updateMaxNewBytes(value: String) = update { copy(maxNewBytesText = value) }
 
-    fun refreshCheckpoint() = update { copy(checkpoint = backend.checkpointStatus()) }
+    fun selectHistory(id: String): Boolean {
+        val selected = synchronized(lock) {
+            if (state.history.items.none { it.record.id == id }) false
+            else {
+                state = state.copy(history = state.history.copy(selectedId = id))
+                true
+            }
+        }
+        if (selected) publish()
+        return selected
+    }
+
+    fun closeHistoryDetail() = update { copy(history = history.copy(selectedId = null)) }
+
+    fun deleteHistory(id: String) {
+        executor.execute {
+            val result = runCatching { historyRepository.delete(id) }
+            updateHistory(result.exceptionOrNull()?.message)
+        }
+    }
+
+    fun clearHistory() {
+        executor.execute {
+            val result = runCatching { historyRepository.clear() }
+            updateHistory(result.exceptionOrNull()?.message)
+        }
+    }
+
+    fun useHistoryAgain(id: String): Boolean {
+        val restored = synchronized(lock) {
+            val record = state.history.items.firstOrNull { it.record.id == id }?.record
+                ?: return@synchronized false
+            val originalCheckpoint = state.checkpoints.firstOrNull {
+                it.usable && it.parameterHash == record.checkpointParameterHash
+            }
+            state = state.copy(
+                prompt = String(record.promptBytes, Charsets.UTF_8),
+                mode = record.mode,
+                temperatureText = record.temperature.toString(),
+                topKText = record.topK.toString(),
+                samplingSeedText = record.samplingSeed.toString(),
+                maxNewBytesText = record.maxNewBytes.toString(),
+                selectedCheckpointPath = originalCheckpoint?.path,
+                requiredCheckpointHash = record.checkpointParameterHash,
+                checkpointMessage = null,
+                checkpointWarning = if (originalCheckpoint == null) {
+                    "Original checkpoint is no longer available"
+                } else null,
+                history = state.history.copy(selectedId = null),
+            )
+            true
+        }
+        if (restored) publish()
+        return restored
+    }
+
+    fun selectCheckpoint(path: String): Boolean {
+        val accepted = synchronized(lock) {
+            val candidate = state.checkpoints.firstOrNull { it.path == path && it.usable }
+                ?: return@synchronized false
+            state = state.copy(
+                selectedCheckpointPath = candidate.path,
+                requiredCheckpointHash = null,
+                checkpointMessage = null,
+                checkpointWarning = null,
+            )
+            true
+        }
+        if (accepted) publish()
+        return accepted
+    }
+
+    fun refreshCheckpoints() {
+        val shouldStart = synchronized(lock) {
+            if (checkpointRefreshInFlight || state.execution is GenerationState.Running) false
+            else {
+                checkpointRefreshInFlight = true
+                state = state.copy(checkpointLoading = true, checkpointMessage = "Checking checkpoints…")
+                true
+            }
+        }
+        if (!shouldStart) return
+        publish()
+        executor.execute {
+            val listed = runCatching { checkpointRepository.listCheckpoints() }.getOrDefault(emptyList())
+            synchronized(lock) {
+                checkpointRefreshInFlight = false
+                state = state.withCheckpointCandidates(listed)
+            }
+            publish()
+        }
+    }
+
+    fun refreshHistory() {
+        update { copy(history = history.copy(loading = true, message = null)) }
+        executor.execute { updateHistory(null) }
+    }
 
     fun generate(trainingActive: Boolean = false): Boolean {
         val accepted = synchronized(lock) {
-            val refreshed = state.copy(checkpoint = backend.checkpointStatus())
-            val request = refreshed.requestOrNull()
-            val checkpoint = (refreshed.checkpoint as? GenerationCheckpointStatus.Available)?.checkpoint
-            if (trainingActive || request == null || checkpoint == null || refreshed.execution is GenerationState.Running) {
-                state = refreshed
+            val request = state.requestOrNull()
+            val checkpoint = state.selectedCheckpoint
+            if (trainingActive || request == null || checkpoint?.usable != true || state.execution is GenerationState.Running) {
                 null
             } else {
-                state = refreshed.copy(execution = GenerationState.Running)
-                request to checkpoint
+                state = state.copy(
+                    execution = GenerationState.Running(
+                        GenerationProgress(GenerationPhase.PREPARING, maxNewBytes = request.maxNewBytes),
+                    ),
+                )
+                AcceptedGenerationRun(
+                    id = UUID.randomUUID().toString(),
+                    createdAtMs = System.currentTimeMillis(),
+                    request = request,
+                    checkpoint = checkpoint,
+                )
             }
         }
         publish()
         if (accepted == null) return false
         executor.execute {
-            val terminal = runCatching { backend.generate(accepted.first, accepted.second) }
+            val terminal = runCatching {
+                update {
+                    copy(
+                        execution = GenerationState.Running(
+                            GenerationProgress(
+                                GenerationPhase.CHECKPOINT_VALIDATION,
+                                maxNewBytes = accepted.request.maxNewBytes,
+                            ),
+                        ),
+                    )
+                }
+                val validated = checkpointRepository.validateCheckpoint(accepted.checkpoint).getOrThrow()
+                backend.generate(accepted.request, validated) { progress ->
+                    update {
+                        if (execution is GenerationState.Running) {
+                            copy(execution = GenerationState.Running(progress))
+                        } else this
+                    }
+                }
+            }
                 .fold(
                     onSuccess = { GenerationState.Success(it) },
                     onFailure = {
@@ -144,7 +312,17 @@ class GenerationSession(
                         )
                     },
                 )
-            update { copy(execution = terminal, checkpoint = backend.checkpointStatus()) }
+            val progress = (snapshot().execution as? GenerationState.Running)?.progress
+            val historyRecord = terminalHistoryRecord(accepted, terminal, progress)
+            val historyFailure = runCatching { historyRepository.insert(historyRecord) }.exceptionOrNull()?.message
+            val listed = runCatching { checkpointRepository.listCheckpoints() }.getOrDefault(emptyList())
+            val historyItems = loadHistoryItems()
+            update {
+                withCheckpointCandidates(listed).copy(
+                    execution = terminal,
+                    history = history.copy(items = historyItems, loading = false, message = historyFailure),
+                )
+            }
         }
         return true
     }
@@ -159,57 +337,160 @@ class GenerationSession(
         listeners.forEach { listener -> runCatching { listener(snapshot) } }
     }
 
+    private fun updateHistory(message: String?) {
+        val loaded = runCatching { loadHistoryItems() }
+        update {
+            val items = loaded.getOrDefault(history.items)
+            copy(
+                history = history.copy(
+                    items = items,
+                    selectedId = history.selectedId?.takeIf { id -> items.any { it.record.id == id } },
+                    loading = false,
+                    message = message ?: loaded.exceptionOrNull()?.message,
+                ),
+            )
+        }
+    }
+
+    private fun loadHistoryItems(): List<GenerationHistoryItem> = historyRepository.listNewestFirst().map { record ->
+        GenerationHistoryItem(
+            record = record,
+            promptText = losslessByteDisplay.display(record.promptBytes),
+            outputText = losslessByteDisplay.display(record.generatedBytes),
+        )
+    }
+
+    private fun terminalHistoryRecord(
+        run: AcceptedGenerationRun,
+        terminal: GenerationState,
+        progress: GenerationProgress?,
+    ): GenerationHistoryRecord {
+        val result = (terminal as? GenerationState.Success)?.result
+        val failure = terminal as? GenerationState.Failed
+        val failureFields = failure?.debugReport?.let { NativeTrainingFieldsParser.parse(it) }
+        val checkpoint = run.checkpoint
+        return GenerationHistoryRecord(
+            id = run.id,
+            createdAtMs = run.createdAtMs,
+            promptBytes = run.request.promptBytes,
+            mode = run.request.mode,
+            temperature = run.request.temperature,
+            topK = run.request.topK,
+            samplingSeed = run.request.samplingSeed,
+            maxNewBytes = run.request.maxNewBytes,
+            checkpointStep = checkpoint.step,
+            checkpointParameterHash = checkpoint.parameterHash!!,
+            vocabulary = 256,
+            tokens = checkpoint.tokens,
+            dimension = checkpoint.dimension,
+            feedForwardDimension = checkpoint.feedForwardDimension,
+            layers = checkpoint.layers,
+            heads = checkpoint.heads,
+            generatedBytes = result?.generatedBytes ?: progress?.rawBytes ?: byteArrayOf(),
+            elapsedMs = result?.elapsedMs ?: progress?.elapsedMs ?: 0,
+            backend = result?.backend ?: "HTP",
+            qnnExecuteAttempts = result?.qnnExecuteAttempts
+                ?: failureFields?.long("api_trace_graph_execute_attempt_count")
+                ?: progress?.qnnExecuteAttempts ?: 0,
+            qnnExecuteSuccesses = result?.qnnExecuteSuccesses
+                ?: failureFields?.long("api_trace_graph_execute_success_count")
+                ?: progress?.qnnExecuteSuccesses ?: 0,
+            qnnExecuteFailures = result?.qnnExecuteFailures
+                ?: failureFields?.long("api_trace_graph_execute_failure_count")
+                ?: progress?.qnnExecuteFailures ?: 0,
+            cpuFallback = result?.cpuFallback ?: failureFields?.bool("cpu_fallback")
+                ?: progress?.cpuFallback ?: false,
+            finite = result?.finite ?: failureFields?.bool("output_tensors_finite")
+                ?: failureFields?.bool("htp_native_application_tensors_finite")
+                ?: progress?.finite?.takeIf {
+                progress.phase == GenerationPhase.GENERATING
+            } ?: false,
+            status = if (result != null) GenerationHistoryStatus.SUCCESS else GenerationHistoryStatus.FAILED,
+            failureMessage = failure?.message,
+        )
+    }
+
+    private fun GenerationUiState.withCheckpointCandidates(candidates: List<GenerationCheckpoint>): GenerationUiState {
+        val sorted = GenerationCheckpointSelection.sorted(candidates)
+        val required = requiredCheckpointHash?.let { hash ->
+            sorted.firstOrNull { it.usable && it.parameterHash == hash }
+        }
+        val preserved = selectedCheckpointPath?.let { selected ->
+            sorted.firstOrNull { it.path == selected && it.usable }
+        }
+        val selected = if (requiredCheckpointHash != null) required else preserved ?: checkpointRepository.defaultCheckpoint(sorted)
+        val newerUnusable = selected?.let { chosen -> sorted.any { !it.usable && it.step > chosen.step } } == true
+        val originalMissing = requiredCheckpointHash != null && required == null
+        return copy(
+            checkpoints = sorted,
+            selectedCheckpointPath = selected?.path,
+            checkpointLoading = false,
+            checkpointMessage = if (selected == null && !originalMissing) "No usable checkpoint" else null,
+            checkpointWarning = when {
+                originalMissing -> "Original checkpoint is no longer available"
+                newerUnusable -> "Newer unusable checkpoint exists"
+                else -> null
+            },
+        )
+    }
+
     override fun close() {
         (executor as? ExecutorService)?.shutdown()
         listeners.clear()
     }
+
+    private data class AcceptedGenerationRun(
+        val id: String,
+        val createdAtMs: Long,
+        val request: GenerationRequest,
+        val checkpoint: GenerationCheckpoint,
+    )
 }
 
 class NativeHtpGenerationBackend(
     context: Context,
-    private val checkpointStore: TrainingCheckpointStore = AndroidTrainingCheckpointStore(context.applicationContext),
 ) : GenerationBackend {
     private val appContext = context.applicationContext
     private val promptDirectory = File(appContext.cacheDir, "generation-prompts")
 
-    override fun checkpointStatus(): GenerationCheckpointStatus {
-        val plan = TrainingPlan.NICOPEDIA_L19
-        val selection = TrainingCheckpointCatalog.latestCompatible(
-            checkpointStore.list(), plan.modelConfig, plan.checkpointFormat, plan.checkpointFormatVersion,
-        )
-        val selected = (selection as? TrainingCheckpointSelection.Selected)?.checkpoint
-        if (selected == null) {
-            val detail = (selection as? TrainingCheckpointSelection.Incompatible)?.reason
-            return GenerationCheckpointStatus.Unavailable(
-                if (detail == null) "No trained checkpoint" else "No trained checkpoint: $detail",
-            )
-        }
-        if (checkpointStore.resolveNativePath(selected) == null) {
-            return GenerationCheckpointStatus.Unavailable("No trained checkpoint: checkpoint payload is unavailable")
-        }
-        return GenerationCheckpointStatus.Available(selected)
-    }
-
-    override fun generate(request: GenerationRequest, checkpoint: TrainingCheckpointMetadata): GenerationResult {
+    override fun generate(
+        request: GenerationRequest,
+        checkpoint: GenerationCheckpoint,
+        onProgress: (GenerationProgress) -> Unit,
+    ): GenerationResult {
         request.validationError()?.let { error(it) }
         if (!BuildConfig.PHONELM_QNN_ENABLED) error("QNN HTP is disabled in this APK; CPU fallback is not permitted")
         val plan = TrainingPlan.NICOPEDIA_L19
-        require(checkpoint.modelConfig == plan.modelConfig && checkpoint.format == plan.checkpointFormat &&
-            checkpoint.formatVersion == plan.checkpointFormatVersion && checkpoint.finite) {
+        require(checkpoint.usable && checkpoint.tokens == plan.modelConfig.tokens &&
+            checkpoint.dimension == plan.modelConfig.dimension &&
+            checkpoint.feedForwardDimension == plan.modelConfig.feedForwardDimension &&
+            checkpoint.layers == plan.modelConfig.layers && checkpoint.heads == plan.modelConfig.heads &&
+            checkpoint.seed == plan.modelConfig.seed) {
             "checkpoint identity is incompatible with the production model"
         }
-        val checkpointPath = checkpointStore.resolveNativePath(checkpoint)
-            ?: error("No trained checkpoint: checkpoint payload is unavailable")
         check(promptDirectory.isDirectory || promptDirectory.mkdirs()) { "prompt staging directory is unavailable" }
         val promptFile = File(promptDirectory, "prompt-${UUID.randomUUID()}.bin")
         val owner = "generation:${UUID.randomUUID()}"
         if (!NativeRunArbiter.tryAcquire(owner)) error("Training or another native run is already active")
+        val progressPoller = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "PhoneLM-generation-progress").apply { isDaemon = true }
+        }
         try {
+            onProgress(GenerationProgress(GenerationPhase.HTP_INITIALIZATION, maxNewBytes = request.maxNewBytes))
             QnnEnvironment.prepare(appContext)
             promptFile.outputStream().use { it.write(request.promptBytes) }
+            progressPoller.scheduleAtFixedRate(
+                {
+                    runCatching { parseProgress(NativeBridge.nativeGetNicopediaGenerationProgress()) }
+                        .getOrNull()?.let(onProgress)
+                },
+                PROGRESS_POLL_MS,
+                PROGRESS_POLL_MS,
+                TimeUnit.MILLISECONDS,
+            )
             val config = plan.modelConfig
             val report = NativeBridge.nativeRunNicopediaGenerate(
-                checkpointPath = checkpointPath,
+                checkpointPath = checkpoint.path,
                 promptPath = promptFile.absolutePath,
                 seed = config.seed,
                 layers = config.layers,
@@ -230,7 +511,7 @@ class NativeHtpGenerationBackend(
                 htpNativeTensorFp16 = false,
             )
             return try {
-                parseReport(report)
+                parseReport(report, checkpoint.parameterHash!!)
             } catch (error: GenerationBackendException) {
                 throw error
             } catch (error: Throwable) {
@@ -240,12 +521,45 @@ class NativeHtpGenerationBackend(
                 )
             }
         } finally {
+            progressPoller.shutdownNow()
             runCatching { promptFile.delete() }
             NativeRunArbiter.release(owner)
         }
     }
 
-    internal fun parseReport(report: String): GenerationResult {
+    internal fun parseProgress(report: String): GenerationProgress {
+        val fields = NativeTrainingFieldsParser.parse(report)
+        val phase = when (fields.string("phase")) {
+            "preparing" -> GenerationPhase.PREPARING
+            "checkpoint_validation" -> GenerationPhase.CHECKPOINT_VALIDATION
+            "htp_initialization" -> GenerationPhase.HTP_INITIALIZATION
+            "graph_preparation" -> GenerationPhase.GRAPH_PREPARATION
+            "generating" -> GenerationPhase.GENERATING
+            "completed" -> GenerationPhase.COMPLETED
+            "failed" -> GenerationPhase.FAILED
+            else -> error("native generation progress phase is invalid")
+        }
+        val generated = fields.int("generated_bytes")?.coerceAtLeast(0) ?: 0
+        val max = fields.int("max_new_bytes")?.takeIf { it > 0 } ?: 1
+        val raw = decodeHex(fields.string("generated_hex").orEmpty())
+        require(raw.size == generated) { "live generated byte count differs from payload" }
+        val display = if (raw.isEmpty()) "" else String(NativeBridge.nativeSafeUtf8Display(raw), Charsets.UTF_8)
+        return GenerationProgress(
+            phase = phase,
+            generatedBytes = generated,
+            maxNewBytes = max,
+            elapsedMs = fields.long("elapsed_ms")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteAttempts = fields.long("qnn_execute_attempts")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteSuccesses = fields.long("qnn_execute_successes")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteFailures = fields.long("qnn_execute_failures")?.coerceAtLeast(0) ?: 0,
+            cpuFallback = fields.string("cpu_fallback") == "true",
+            finite = fields.string("finite") != "false",
+            displayText = display,
+            rawBytes = raw,
+        )
+    }
+
+    internal fun parseReport(report: String, expectedCheckpointHash: String): GenerationResult {
         val fields = NativeTrainingFieldsParser.parse(report)
         fun requireField(key: String, expected: String) {
             require(fields.string(key)?.removePrefix("v") == expected.removePrefix("v")) {
@@ -263,6 +577,7 @@ class NativeHtpGenerationBackend(
         requireField("checkpoint_header_layers", "19")
         requireField("checkpoint_header_heads", "2")
         requireField("checkpoint_finite", "true")
+        requireField("checkpoint_parameter_hash", expectedCheckpointHash)
         requireField("qnn_return_code_success", "true")
         requireField("output_tensors_finite", "true")
         requireField("cpu_fallback", "false")
@@ -288,6 +603,9 @@ class NativeHtpGenerationBackend(
             finite = true,
             generationGate = true,
             debugReport = report,
+            qnnExecuteAttempts = fields.long("api_trace_graph_execute_attempt_count")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteSuccesses = fields.long("api_trace_graph_execute_success_count")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteFailures = fields.long("api_trace_graph_execute_failure_count")?.coerceAtLeast(0) ?: 0,
         )
     }
 
@@ -298,6 +616,10 @@ class NativeHtpGenerationBackend(
                 ?: error("generated hex is malformed")
         }
     }
+
+    private companion object {
+        const val PROGRESS_POLL_MS = 150L
+    }
 }
 
 object GenerationSessionRegistry {
@@ -307,6 +629,23 @@ object GenerationSessionRegistry {
     fun get(applicationContext: Any): GenerationSession {
         require(applicationContext is Context) { "Android context is required" }
         val appContext = applicationContext.applicationContext
-        return sessions.getOrPut(appContext) { GenerationSession(NativeHtpGenerationBackend(appContext)) }
+        return sessions.getOrPut(appContext) {
+            val checkpointStore = AndroidTrainingCheckpointStore(appContext)
+            GenerationSession(
+                NativeHtpGenerationBackend(appContext),
+                AppPrivateGenerationCheckpointRepository(checkpointStore),
+                FileGenerationHistoryRepository(File(appContext.filesDir, "generation-history-v1.bin")),
+                LosslessByteDisplay { bytes ->
+                    if (bytes.isEmpty()) "" else String(NativeBridge.nativeSafeUtf8Display(bytes), Charsets.UTF_8)
+                },
+            )
+        }
     }
+}
+
+private object EmptyGenerationHistoryRepository : GenerationHistoryRepository {
+    override fun insert(record: GenerationHistoryRecord) = false
+    override fun listNewestFirst() = emptyList<GenerationHistoryRecord>()
+    override fun delete(id: String) = false
+    override fun clear() = Unit
 }

@@ -5621,6 +5621,7 @@ std::string nicopediaHtpGeneration(
     const std::string &promptPath, const TrainingConfig &trainingConfig,
     const nicopedia_gen::GenerateConfig &generateConfig,
     const LogSink &progress) {
+  if (progress) progress("phase=checkpoint_validation");
   const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
                        ? static_cast<int>(trainingConfig.seed)
                        : 1;
@@ -5724,8 +5725,11 @@ std::string nicopediaHtpGeneration(
   runtime.setOptions(options);
   std::string error;
   const auto initStarted = std::chrono::steady_clock::now();
-  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
-      !runtime.prepareTinyTransformerTraining(
+  if (progress) progress("phase=htp_initialization");
+  if (!runtime.initialize(QnnBackendKind::HTP, error))
+    return failure("nicopedia_generate_initialize", error, runtime);
+  if (progress) progress("phase=graph_preparation");
+  if (!runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
@@ -6088,6 +6092,22 @@ std::string nicopediaHtpGeneration(
   std::vector<std::uint8_t> generated;
   double generateSeconds = 0;
   if (generationGate) {
+    if (progress) {
+      const auto &trace = runtime.apiTrace();
+      std::ostringstream update;
+      update << "phase=generating\ngenerated_bytes=0\nmax_new_bytes="
+             << generateConfig.maxNewBytes
+             << "\nqnn_execute_attempts=" << trace.graphExecuteAttemptCount
+             << "\nqnn_execute_successes=" << trace.graphExecuteSuccessCount
+             << "\nqnn_execute_failures=" << trace.graphExecuteFailureCount
+             << "\ncpu_fallback="
+             << ((trace.cpuBackendInitialized || trace.fallbackAttempted ||
+                  trace.fallbackSucceeded) ? "true" : "false")
+             << "\nfinite="
+             << (htpNativeApplicationTensorsFinite ? "true" : "false")
+             << "\ngenerated_hex=";
+      progress(update.str());
+    }
     const auto generateStarted = std::chrono::steady_clock::now();
     auto generateContext = context;
     for (uint32_t step = 0; step < generateConfig.maxNewBytes; ++step) {
@@ -6173,9 +6193,21 @@ std::string nicopediaHtpGeneration(
       if (progress &&
           (step == 0 || (step + 1) % 16 == 0 ||
            step + 1 == generateConfig.maxNewBytes)) {
+        const auto &trace = runtime.apiTrace();
         std::ostringstream update;
-        update << "phase=generate\nbyte=" << (step + 1) << "/"
-               << generateConfig.maxNewBytes;
+        update << "phase=generating\ngenerated_bytes=" << (step + 1)
+               << "\nmax_new_bytes=" << generateConfig.maxNewBytes
+               << "\nqnn_execute_attempts=" << trace.graphExecuteAttemptCount
+               << "\nqnn_execute_successes=" << trace.graphExecuteSuccessCount
+               << "\nqnn_execute_failures=" << trace.graphExecuteFailureCount
+               << "\ncpu_fallback="
+               << ((trace.cpuBackendInitialized || trace.fallbackAttempted ||
+                    trace.fallbackSucceeded) ? "true" : "false")
+               << "\nfinite="
+               << ((htpNativeGenerationLogitsFinite &&
+                    htpNativeGenerationProbabilitiesFinite &&
+                    htpNativeApplicationTensorsFinite) ? "true" : "false")
+               << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated);
         progress(update.str());
       }
     }

@@ -1,6 +1,7 @@
 package com.yuubinnkyoku.phonelm.ui.training
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
@@ -18,13 +19,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +59,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,8 +82,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuubinnkyoku.phonelm.PhaseTiming
-import com.yuubinnkyoku.phonelm.GenerationCheckpointStatus
 import com.yuubinnkyoku.phonelm.GenerationMode
+import com.yuubinnkyoku.phonelm.GenerationHistoryItem
+import com.yuubinnkyoku.phonelm.GenerationHistoryStatus
+import com.yuubinnkyoku.phonelm.GenerationHistoryUiState
+import com.yuubinnkyoku.phonelm.GenerationPhase
+import com.yuubinnkyoku.phonelm.GenerationProgress
 import com.yuubinnkyoku.phonelm.GenerationState
 import com.yuubinnkyoku.phonelm.GenerationUiState
 import com.yuubinnkyoku.phonelm.TimingBackend
@@ -93,6 +104,11 @@ import com.yuubinnkyoku.phonelm.TrainingRuntimeEvidence
 import com.yuubinnkyoku.phonelm.TrainingTiming
 import com.yuubinnkyoku.phonelm.TrainingUiState
 import java.util.Locale
+import java.text.DateFormat
+import java.util.Date
+
+private enum class TopLevelDestination { TRAINING, GENERATION }
+private enum class GenerationView { GENERATE, HISTORY }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -111,8 +127,18 @@ fun TrainingDashboardApp(
     onGenerationTopKChange: (String) -> Unit = {},
     onGenerationSamplingSeedChange: (String) -> Unit = {},
     onGenerationMaxNewBytesChange: (String) -> Unit = {},
+    onGenerationCheckpointSelected: (String) -> Boolean = { false },
     onGenerate: () -> Unit = {},
+    onGenerationHistorySelected: (String) -> Boolean = { false },
+    onGenerationHistoryDetailClosed: () -> Unit = {},
+    onDeleteGenerationHistory: (String) -> Unit = {},
+    onClearGenerationHistory: () -> Unit = {},
+    onUseGenerationHistoryAgain: (String) -> Boolean = { false },
 ) {
+    var destination by remember { mutableStateOf(TopLevelDestination.TRAINING) }
+    BackHandler(enabled = destination == TopLevelDestination.GENERATION) {
+        destination = TopLevelDestination.TRAINING
+    }
     val context = LocalContext.current
     val base = phoneLmDarkScheme()
     val colors = if (Build.VERSION.SDK_INT >= 31) dynamicDarkColorScheme(context).copy(
@@ -146,13 +172,88 @@ fun TrainingDashboardApp(
         ),
     ) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            if (state == null) TrainingLoading() else TrainingDashboard(
-                state, generationState, onSelectDataset, onStart, onStop, onPause, onResume, onStartOver,
-                onGenerationPromptChange, onGenerationModeChange, onGenerationTemperatureChange,
-                onGenerationTopKChange, onGenerationSamplingSeedChange,
-                onGenerationMaxNewBytesChange, onGenerate,
-            )
+            Column(Modifier.fillMaxSize()) {
+                TopLevelDestinationBar(
+                    selected = destination,
+                    onSelected = { destination = it },
+                )
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    when (destination) {
+                        TopLevelDestination.TRAINING -> if (state == null) {
+                            TrainingLoading()
+                        } else {
+                            TrainingDashboard(
+                                state = state,
+                                onSelectDataset = onSelectDataset,
+                                onStart = onStart,
+                                onStop = onStop,
+                                onPause = onPause,
+                                onResume = onResume,
+                                onStartOver = onStartOver,
+                                generationRunning = generationState.execution is GenerationState.Running,
+                            )
+                        }
+                        TopLevelDestination.GENERATION -> GenerationScreen(
+                            generationState = generationState,
+                            trainingActive = state?.phase in activePhases,
+                            onPromptChange = onGenerationPromptChange,
+                            onModeChange = onGenerationModeChange,
+                            onTemperatureChange = onGenerationTemperatureChange,
+                            onTopKChange = onGenerationTopKChange,
+                            onSamplingSeedChange = onGenerationSamplingSeedChange,
+                            onMaxNewBytesChange = onGenerationMaxNewBytesChange,
+                            onCheckpointSelected = onGenerationCheckpointSelected,
+                            onGenerate = onGenerate,
+                            onHistorySelected = onGenerationHistorySelected,
+                            onHistoryDetailClosed = onGenerationHistoryDetailClosed,
+                            onDeleteHistory = onDeleteGenerationHistory,
+                            onClearHistory = onClearGenerationHistory,
+                            onUseHistoryAgain = onUseGenerationHistoryAgain,
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun TopLevelDestinationBar(
+    selected: TopLevelDestination,
+    onSelected: (TopLevelDestination) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .semantics { contentDescription = "Top-level navigation" },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TopLevelDestinationButton(
+            label = "Training",
+            selected = selected == TopLevelDestination.TRAINING,
+            onClick = { onSelected(TopLevelDestination.TRAINING) },
+            modifier = Modifier.weight(1f),
+        )
+        TopLevelDestinationButton(
+            label = "Generation",
+            selected = selected == TopLevelDestination.GENERATION,
+            onClick = { onSelected(TopLevelDestination.GENERATION) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun TopLevelDestinationButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier,
+) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) { Text(label) }
     }
 }
 
@@ -197,20 +298,13 @@ private fun TrainingLoading() = Box(Modifier.fillMaxSize().padding(24.dp)) {
 @Composable
 fun TrainingDashboard(
     state: TrainingUiState,
-    generationState: GenerationUiState = GenerationUiState(),
     onSelectDataset: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStartOver: () -> Unit,
-    onGenerationPromptChange: (String) -> Unit = {},
-    onGenerationModeChange: (GenerationMode) -> Unit = {},
-    onGenerationTemperatureChange: (String) -> Unit = {},
-    onGenerationTopKChange: (String) -> Unit = {},
-    onGenerationSamplingSeedChange: (String) -> Unit = {},
-    onGenerationMaxNewBytesChange: (String) -> Unit = {},
-    onGenerate: () -> Unit = {},
+    generationRunning: Boolean = false,
 ) {
     var detailsVisible by remember { mutableStateOf(false) }
     Scaffold(
@@ -230,7 +324,7 @@ fun TrainingDashboard(
                     onResume,
                     onStartOver,
                     onDetails = { detailsVisible = true },
-                    generationRunning = generationState.execution is GenerationState.Running,
+                    generationRunning = generationRunning,
                 )
             }
         },
@@ -248,12 +342,7 @@ fun TrainingDashboard(
     }
     if (detailsVisible) {
         ModalBottomSheet(onDismissRequest = { detailsVisible = false }) {
-            TrainingDetails(
-                state, generationState, onSelectDataset, onStartOver,
-                onGenerationPromptChange, onGenerationModeChange, onGenerationTemperatureChange,
-                onGenerationTopKChange, onGenerationSamplingSeedChange,
-                onGenerationMaxNewBytesChange, onGenerate,
-            )
+            TrainingDetails(state, onSelectDataset, onStartOver)
         }
     }
 }
@@ -682,35 +771,14 @@ private fun ToolbarActionButton(
 @Composable
 private fun TrainingDetails(
     state: TrainingUiState,
-    generationState: GenerationUiState,
     onSelectDataset: () -> Unit,
     onStartOver: () -> Unit,
-    onGenerationPromptChange: (String) -> Unit,
-    onGenerationModeChange: (GenerationMode) -> Unit,
-    onGenerationTemperatureChange: (String) -> Unit,
-    onGenerationTopKChange: (String) -> Unit,
-    onGenerationSamplingSeedChange: (String) -> Unit,
-    onGenerationMaxNewBytesChange: (String) -> Unit,
-    onGenerate: () -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Text("Training details", style = MaterialTheme.typography.headlineSmall) }
-        item {
-            GenerationCard(
-                generationState = generationState,
-                trainingActive = state.phase in activePhases,
-                onPromptChange = onGenerationPromptChange,
-                onModeChange = onGenerationModeChange,
-                onTemperatureChange = onGenerationTemperatureChange,
-                onTopKChange = onGenerationTopKChange,
-                onSamplingSeedChange = onGenerationSamplingSeedChange,
-                onMaxNewBytesChange = onGenerationMaxNewBytesChange,
-                onGenerate = onGenerate,
-            )
-        }
         if (state.phase in terminalPhases) item { TrainingSummaryCard(state) }
         item { ModelConfigCard(state.modelConfig, state.datasetDisplayName, state.datasetUri) }
         item { DetailedPerformanceCard(state) }
@@ -730,7 +798,7 @@ private fun TrainingDetails(
 }
 
 @Composable
-internal fun GenerationCard(
+internal fun GenerationScreen(
     generationState: GenerationUiState,
     trainingActive: Boolean,
     onPromptChange: (String) -> Unit = {},
@@ -739,10 +807,110 @@ internal fun GenerationCard(
     onTopKChange: (String) -> Unit = {},
     onSamplingSeedChange: (String) -> Unit = {},
     onMaxNewBytesChange: (String) -> Unit = {},
+    onCheckpointSelected: (String) -> Boolean = { false },
     onGenerate: () -> Unit = {},
-) = DetailCard("Generation") {
+    onHistorySelected: (String) -> Boolean = { false },
+    onHistoryDetailClosed: () -> Unit = {},
+    onDeleteHistory: (String) -> Unit = {},
+    onClearHistory: () -> Unit = {},
+    onUseHistoryAgain: (String) -> Boolean = { false },
+) {
+    var view by remember { mutableStateOf(GenerationView.GENERATE) }
     val running = generationState.execution is GenerationState.Running
-    val checkpointUnavailable = generationState.checkpoint as? GenerationCheckpointStatus.Unavailable
+    var checkpointMenuExpanded by remember { mutableStateOf(false) }
+    var showIncompatible by remember { mutableStateOf(false) }
+    val compatible = generationState.checkpoints.filter { it.usable }
+    val incompatible = generationState.checkpoints.filterNot { it.usable }
+    Column(Modifier.fillMaxSize().semantics { contentDescription = "Generation screen" }) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (view == GenerationView.GENERATE) {
+                Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("Generate") }
+            } else {
+                OutlinedButton(onClick = { view = GenerationView.GENERATE }, modifier = Modifier.weight(1f)) {
+                    Text("Generate")
+                }
+            }
+            if (view == GenerationView.HISTORY) {
+                Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("History") }
+            } else {
+                OutlinedButton(onClick = { view = GenerationView.HISTORY }, modifier = Modifier.weight(1f)) {
+                    Text("History")
+                }
+            }
+        }
+        if (view == GenerationView.GENERATE) {
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text("Generation", style = MaterialTheme.typography.headlineSmall)
+        }
+        item {
+            DetailCard("Model identity") {
+                Text("D32 / FFN32 / L19 / H2 / T32", fontFamily = TelemetryFontFamily)
+            }
+        }
+        item {
+            DetailCard("Generate on HTP") {
+    Text("Checkpoint", style = MaterialTheme.typography.labelLarge)
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { checkpointMenuExpanded = true },
+            enabled = !running && compatible.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                generationState.selectedCheckpoint?.label
+                    ?: generationState.checkpointMessage
+                    ?: "Select checkpoint",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Open checkpoint selector")
+        }
+        DropdownMenu(
+            expanded = checkpointMenuExpanded,
+            onDismissRequest = { checkpointMenuExpanded = false },
+        ) {
+            DropdownMenuItem(text = { Text("Compatible") }, enabled = false, onClick = {})
+            compatible.forEach { checkpoint ->
+                DropdownMenuItem(
+                    text = { Text(checkpoint.label) },
+                    onClick = {
+                        if (onCheckpointSelected(checkpoint.path)) checkpointMenuExpanded = false
+                    },
+                )
+            }
+        }
+    }
+    generationState.selectedCheckpoint?.let { checkpoint ->
+        Text(
+            "step ${checkpoint.step}\nD${checkpoint.dimension} / FFN${checkpoint.feedForwardDimension} / " +
+                "L${checkpoint.layers} / H${checkpoint.heads} / T${checkpoint.tokens}\nfinite",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+    generationState.checkpointMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    generationState.checkpointWarning?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+    if (incompatible.isNotEmpty()) {
+        TextButton(onClick = { showIncompatible = !showIncompatible }, enabled = !running) {
+            Text(if (showIncompatible) "Hide incompatible checkpoints" else "Show incompatible checkpoints")
+        }
+        if (showIncompatible) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Incompatible / diagnostic only", fontWeight = FontWeight.Bold)
+                    incompatible.forEach { Text(it.label, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+        }
+    }
     OutlinedTextField(
         value = generationState.prompt,
         onValueChange = onPromptChange,
@@ -801,7 +969,6 @@ internal fun GenerationCard(
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
-    checkpointUnavailable?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
     Button(
         onClick = onGenerate,
         enabled = generationState.canGenerate && !trainingActive,
@@ -809,16 +976,12 @@ internal fun GenerationCard(
     ) {
         Text("Generate on HTP")
     }
+    if (trainingActive) Text("Generation is unavailable while training is active")
     when (val execution = generationState.execution) {
         GenerationState.Idle -> Unit
-        GenerationState.Running -> Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            Text("Generating on HTP…")
-        }
+        is GenerationState.Running -> GenerationProgressCard(execution.progress)
         is GenerationState.Success -> {
+            Text("Completed", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(execution.result.displayText, fontFamily = TelemetryFontFamily)
             Text("${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · backend=${execution.result.backend}")
         }
@@ -829,6 +992,216 @@ internal fun GenerationCard(
             Column(Modifier.padding(12.dp)) {
                 Text("Generation failed", fontWeight = FontWeight.Bold)
                 Text(execution.message)
+            }
+        }
+    }
+            }
+        }
+    }
+        } else {
+            GenerationHistoryView(
+                history = generationState.history,
+                onSelected = onHistorySelected,
+                onCloseDetail = onHistoryDetailClosed,
+                onDelete = onDeleteHistory,
+                onClear = onClearHistory,
+                onUseAgain = { id ->
+                    if (onUseHistoryAgain(id)) view = GenerationView.GENERATE
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun GenerationHistoryView(
+    history: GenerationHistoryUiState,
+    onSelected: (String) -> Boolean,
+    onCloseDetail: () -> Unit,
+    onDelete: (String) -> Unit,
+    onClear: () -> Unit,
+    onUseAgain: (String) -> Unit,
+) {
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear generation history?") },
+            text = { Text("This deletes history records only. Checkpoints are not affected.") },
+            confirmButton = {
+                Button(onClick = {
+                    confirmClear = false
+                    onClear()
+                }) { Text("Clear history") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
+    }
+    val selected = history.selected
+    if (selected != null) {
+        GenerationHistoryDetail(
+            item = selected,
+            onBack = onCloseDetail,
+            onDelete = {
+                onDelete(selected.record.id)
+                onCloseDetail()
+            },
+            onUseAgain = { onUseAgain(selected.record.id) },
+        )
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().semantics { contentDescription = "Generation history" },
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Generation history", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = { confirmClear = true }, enabled = history.items.isNotEmpty()) {
+                    Text("Clear history")
+                }
+            }
+        }
+        history.message?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+        if (history.loading) item { CircularProgressIndicator(Modifier.size(24.dp)) }
+        if (!history.loading && history.items.isEmpty()) item { Text("No generation history") }
+        items(history.items, key = { it.record.id }) { item ->
+            Card(onClick = { onSelected(item.record.id) }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(formatHistoryTimestamp(item.record.createdAtMs), fontWeight = FontWeight.Bold)
+                    Text(quotedPreview(item.promptText), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (item.record.mode == GenerationMode.SAMPLE) {
+                            "Sample · T${item.record.temperature} · K${item.record.topK}"
+                        } else "Greedy",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "step${item.record.checkpointStep} · D${item.record.dimension}/FFN${item.record.feedForwardDimension}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(quotedPreview(item.outputText), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "${item.record.generatedBytes.size} bytes · ${item.record.elapsedMs} ms · ${item.record.backend}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        if (item.record.status == GenerationHistoryStatus.SUCCESS) "Success" else "Failed",
+                        color = if (item.record.status == GenerationHistoryStatus.SUCCESS) {
+                            MaterialTheme.colorScheme.primary
+                        } else MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenerationHistoryDetail(
+    item: GenerationHistoryItem,
+    onBack: () -> Unit,
+    onDelete: () -> Unit,
+    onUseAgain: () -> Unit,
+) {
+    val record = item.record
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().semantics { contentDescription = "Generation history detail" },
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            TextButton(onClick = onBack) { Text("Back to history") }
+        }
+        item { DetailCard("Prompt") { Text(item.promptText, fontFamily = TelemetryFontFamily) } }
+        item { DetailCard("Output") { Text(item.outputText, fontFamily = TelemetryFontFamily) } }
+        item {
+            DetailCard("Generation settings") {
+                MetricRow("Mode", record.mode.name.lowercase().replaceFirstChar(Char::uppercase))
+                MetricRow("Temperature", record.temperature.toString())
+                MetricRow("TopK", record.topK.toString())
+                MetricRow("SamplingSeed", record.samplingSeed.toString())
+                MetricRow("Max new bytes", record.maxNewBytes.toString())
+            }
+        }
+        item {
+            DetailCard("Checkpoint") {
+                MetricRow("Step", record.checkpointStep.toString())
+                MetricRow(
+                    "Model",
+                    "V${record.vocabulary} / T${record.tokens} / D${record.dimension} / " +
+                        "FFN${record.feedForwardDimension} / L${record.layers} / H${record.heads}",
+                )
+                MetricRow("Parameter hash", record.checkpointParameterHash)
+            }
+        }
+        item {
+            DetailCard("Runtime") {
+                MetricRow("Backend", record.backend)
+                MetricRow("Elapsed", "${record.elapsedMs} ms")
+                MetricRow("Generated bytes", record.generatedBytes.size.toString())
+                MetricRow("QNN attempts", record.qnnExecuteAttempts.toString())
+                MetricRow("QNN successes", record.qnnExecuteSuccesses.toString())
+                MetricRow("QNN failures", record.qnnExecuteFailures.toString())
+                MetricRow("CPU fallback", if (record.cpuFallback) "YES" else "NO")
+                MetricRow("Finite", if (record.finite) "YES" else "NO")
+                MetricRow("Status", record.status.name)
+                record.failureMessage?.let { MetricRow("Failure reason", it) }
+            }
+        }
+        item {
+            Button(onClick = onUseAgain, modifier = Modifier.fillMaxWidth()) { Text("Use settings again") }
+        }
+        item {
+            OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
+                Text("Delete this history entry")
+            }
+        }
+    }
+}
+
+private fun quotedPreview(value: String): String = "\"${value.replace("\n", " ").take(80)}\""
+
+private fun formatHistoryTimestamp(createdAtMs: Long): String =
+    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(createdAtMs))
+
+@Composable
+private fun GenerationProgressCard(progress: GenerationProgress) {
+    val phase = when (progress.phase) {
+        GenerationPhase.PREPARING -> "Preparing"
+        GenerationPhase.CHECKPOINT_VALIDATION -> "Checkpoint validation"
+        GenerationPhase.HTP_INITIALIZATION -> "HTP initialization"
+        GenerationPhase.GRAPH_PREPARATION -> "Graph preparation"
+        GenerationPhase.GENERATING -> "Generating"
+        GenerationPhase.COMPLETED -> "Completed"
+        GenerationPhase.FAILED -> "Failed"
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                if (progress.phase == GenerationPhase.GENERATING) "Generating on HTP" else phase,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text("${progress.generatedBytes} / ${progress.maxNewBytes} bytes", style = MaterialTheme.typography.headlineSmall)
+            val fraction = (progress.generatedBytes.toFloat() / progress.maxNewBytes.coerceAtLeast(1)).coerceIn(0f, 1f)
+            LinearWavyProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth().height(8.dp),
+                amplitude = { if (progress.phase == GenerationPhase.GENERATING) 0.35f else 0f },
+            )
+            MetricRow("Phase", phase)
+            MetricRow("Elapsed", "${progress.elapsedMs} ms")
+            MetricRow("Backend", "HTP")
+            MetricRow("QNN", "${progress.qnnExecuteSuccesses} / ${progress.qnnExecuteAttempts}")
+            if (progress.qnnExecuteFailures > 0) MetricRow("QNN failures", progress.qnnExecuteFailures.toString())
+            MetricRow("CPU fallback", if (progress.cpuFallback) "YES" else "NO")
+            MetricRow("Finite", if (progress.finite) "YES" else "NO")
+            if (progress.displayText.isNotEmpty()) {
+                Text("Live output", fontWeight = FontWeight.Bold)
+                Text(progress.displayText, fontFamily = TelemetryFontFamily)
             }
         }
     }

@@ -166,6 +166,17 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
         true
     }.getOrDefault(false)
 
+    override fun listNativeCheckpointPaths(): List<String> {
+        val root = checkpointDirectory.canonicalFile
+        return root.walkTopDown().filter { candidate ->
+            runCatching {
+                val canonical = candidate.canonicalFile
+                canonical.isFile && canonical.extension.equals("ckpt", ignoreCase = true) &&
+                    canonical.path.startsWith(root.path + java.io.File.separator)
+            }.getOrDefault(false)
+        }.map { it.canonicalPath }.toList()
+    }
+
     private fun nativePaths(): Map<String, String> = prefs.getStringSet(KEY_PATHS, emptySet()).orEmpty().mapNotNull { encoded ->
         runCatching {
             val separator = encoded.indexOf('=')

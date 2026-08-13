@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.yuubinnkyoku.phonelm.ui.training.TrainingDashboardApp
 import org.junit.Rule
 import org.junit.Test
@@ -127,6 +128,98 @@ class TrainingDashboardComposeTest {
         compose.onNodeWithText("HTP training backend is unavailable: no JNI backend has been configured")
             .assertIsDisplayed()
         compose.onNodeWithText("Step target unavailable").assertDoesNotExist()
+    }
+
+    @Test fun initialDestinationIsTrainingAndGenerationIsOneTapAway() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(phase = TrainingPhase.IDLE),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithContentDescription("Training overview, no scrolling").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Top-level navigation").assertIsDisplayed()
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithContentDescription("Generation screen").assertIsDisplayed()
+        compose.onNodeWithText("D32 / FFN32 / L19 / H2 / T32").assertIsDisplayed()
+    }
+
+    @Test fun generationDestinationReturnsToTraining() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(phase = TrainingPhase.IDLE),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("Training").performClick()
+        compose.onNodeWithContentDescription("Training overview, no scrolling").assertIsDisplayed()
+    }
+
+    @Test fun runningGenerationStateSurvivesDestinationSwitches() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(phase = TrainingPhase.IDLE),
+                generationState = GenerationUiState(
+                    execution = GenerationState.Running(
+                        GenerationProgress(
+                            phase = GenerationPhase.GENERATING,
+                            generatedBytes = 37,
+                            maxNewBytes = 64,
+                            elapsedMs = 420,
+                            displayText = "途中",
+                        ),
+                    ),
+                ),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("37 / 64 bytes").assertIsDisplayed()
+        compose.onNodeWithText("途中").assertIsDisplayed()
+        compose.onNodeWithText("Training").performClick()
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("37 / 64 bytes").assertIsDisplayed()
+        compose.onNodeWithText("420 ms").assertIsDisplayed()
+        compose.onNodeWithText("途中").assertIsDisplayed()
+    }
+
+    @Test fun completedGenerationResultSurvivesDestinationSwitches() {
+        val bytes = "answer".toByteArray()
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(phase = TrainingPhase.IDLE),
+                generationState = GenerationUiState(
+                    execution = GenerationState.Success(
+                        GenerationResult(bytes, "answer", bytes.size, 42, "HTP", "hash", false, true, true, "report"),
+                    ),
+                ),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("answer").assertIsDisplayed()
+        compose.onNodeWithText("Training").performClick()
+        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("answer").assertIsDisplayed()
+        compose.onNodeWithText("6 bytes · 42 ms · backend=HTP").assertIsDisplayed()
+    }
+
+    @Test fun trainingDetailsDoesNotContainGenerationEntry() {
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(phase = TrainingPhase.IDLE),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+            )
+        }
+
+        compose.onNodeWithText("Details").performClick()
+        compose.onNodeWithText("Training details").assertIsDisplayed()
+        compose.onNodeWithText("Open Generation").assertDoesNotExist()
     }
 
     private fun trainingState() = TrainingUiState(
