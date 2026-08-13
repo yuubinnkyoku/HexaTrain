@@ -1,0 +1,233 @@
+name: Temporary D32 checkpoint naming fix
+
+on:
+  push:
+    branches:
+      - codex/d32-checkpoint-naming-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply targeted D32 naming fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} occurrence(s), found {actual}: {old!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          # Shared PowerShell checkpoint/report contract.
+          replace(
+              'scripts/nicopedia_runner_common.ps1',
+              '[Parameter(Mandatory = $false)][int]$Dimension = 16,',
+              '[Parameter(Mandatory = $false)][int]$Dimension = 32,',
+          )
+          replace(
+              'scripts/nicopedia_runner_common.ps1',
+              'if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) {',
+              'if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) {',
+          )
+          replace(
+              'scripts/nicopedia_runner_common.ps1',
+              "    if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) { throw 'HEADLESS_REPORT_PATH_MISSING' }",
+              """    if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {
+        if ($StatusJson -match '\"status\"\\s*:\\s*\"FAILED\"') {
+            $failureMatch = [regex]::Match($StatusJson, '\"failure_code\"\\s*:\\s*\"([^\"]*)\"')
+            $phaseMatch = [regex]::Match($StatusJson, '\"current_phase\"\\s*:\\s*\"([^\"]*)\"')
+            $failureCode = if ($failureMatch.Success -and -not [string]::IsNullOrWhiteSpace($failureMatch.Groups[1].Value)) { $failureMatch.Groups[1].Value } else { 'UNKNOWN' }
+            $phase = if ($phaseMatch.Success -and -not [string]::IsNullOrWhiteSpace($phaseMatch.Groups[1].Value)) { $phaseMatch.Groups[1].Value } else { 'UNKNOWN' }
+            throw \"HEADLESS_DEVICE_FAILED_WITHOUT_REPORT: failure_code=$failureCode phase=$phase\"
+        }
+        throw 'HEADLESS_REPORT_PATH_MISSING'
+    }""",
+          )
+
+          # Production runners now default/tag around T32/D32/FFN32.
+          replace('scripts/run_nicopedia_htp_generate.ps1', '    [int]$Dimension = 16,', '    [int]$Dimension = 32,')
+          replace(
+              'scripts/run_nicopedia_htp_generate.ps1',
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+          )
+          replace(
+              'scripts/run_nicopedia_htp_generate.ps1',
+              "    if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }",
+              """    if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }
+    $canonicalName = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 32 -FeedForwardDimension 32 -Step 8000
+    $d16Name = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 16 -FeedForwardDimension 32 -Step 8000
+    if ($canonicalName -ne 'htp-seed1-l19-step8000.ckpt' -or
+        $d16Name -ne 'htp-seed1-l19-t32-d16-f32-step8000.ckpt') {
+        throw 'SELFTEST_CHECKPOINT_MODEL_IDENTITY'
+    }""",
+          )
+
+          replace('scripts/run_nicopedia_htp_training.ps1', '  [int]$Dimension = 16,', '  [int]$Dimension = 32,')
+          replace(
+              'scripts/run_nicopedia_htp_training.ps1',
+              '  if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT" }',
+              '  if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) { throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT" }',
+          )
+          replace(
+              'scripts/run_nicopedia_htp_training.ps1',
+              '  $canonicalName = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 16 -FeedForwardDimension 32 -Step 320',
+              '  $canonicalName = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 32 -FeedForwardDimension 32 -Step 320',
+          )
+          replace(
+              'scripts/run_nicopedia_htp_training.ps1',
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+          )
+
+          replace('scripts/run_nicopedia_htp_eval.ps1', '  [int]$Dimension = 16,', '  [int]$Dimension = 32,')
+          replace(
+              'scripts/run_nicopedia_htp_eval.ps1',
+              "  if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }",
+              "  if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }",
+          )
+          replace(
+              'scripts/run_nicopedia_htp_eval.ps1',
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+              "$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { \"-t$Tokens-d$Dimension-f$FeedForwardDimension\" }",
+          )
+
+          # C++ reader must agree with the already-D32 writer.
+          replace(
+              'app/src/main/cpp/qnn/qnn_transformer_training.cpp',
+              '                             uint32_t expectedDimension = 16,',
+              '                             uint32_t expectedDimension = 32,',
+          )
+          replace(
+              'app/src/main/cpp/qnn/qnn_transformer_training.cpp',
+              '    if (expectedTokens != 32 || expectedDimension != 16 ||',
+              '    if (expectedTokens != 32 || expectedDimension != 32 ||',
+          )
+
+          # Legacy D16 parity remains a research configuration, so make its name explicit.
+          replace(
+              'app/src/androidTest/java/com/yuubinnkyoku/phonelm/HeadlessDeviceTestRunner.kt',
+              '        // Parity is the fixed T32 contract: legacy checkpoint name and tokens=32.\n        val checkpoint = File(inputDirectory, "htp-seed1-l19-step1000.ckpt")',
+              '        // Parity is a fixed T32/D16/FFN32 research contract, so its checkpoint is explicitly tagged.\n        val checkpoint = File(inputDirectory, "htp-seed1-l19-t32-d16-f32-step1000.ckpt")',
+          )
+          replace(
+              'scripts/run_qnn_headless_tests.ps1',
+              '    $checkpointTarget = "$relativeDirectory/htp-seed1-l19-step1000.ckpt"',
+              '    $checkpointTarget = "$relativeDirectory/htp-seed1-l19-t32-d16-f32-step1000.ckpt"',
+          )
+
+          # D/FFN research search must not keep treating D16 as the untagged production anchor.
+          replace(
+              'scripts/run_nicopedia_dffn_search.ps1',
+              '$checkpointName = if ($Candidate.dimension -eq 16 -and $Candidate.feed_forward_dimension -eq 32) { "htp-seed$Seed-l19-step$Steps.ckpt" } else { "htp-seed$Seed-l19-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)-step$Steps.ckpt" }',
+              '$checkpointName = if ($Candidate.dimension -eq 32 -and $Candidate.feed_forward_dimension -eq 32) { "htp-seed$Seed-l19-step$Steps.ckpt" } else { "htp-seed$Seed-l19-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)-step$Steps.ckpt" }',
+          )
+          replace(
+              'scripts/run_nicopedia_dffn_search.ps1',
+              "$configTag = if ($Candidate.dimension -eq 16 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { \"-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)\" }",
+              "$configTag = if ($Candidate.dimension -eq 32 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { \"-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)\" }",
+          )
+          replace(
+              'scripts/run_nicopedia_dffn_search.ps1',
+              "$tag = if ($Candidate.dimension -eq 16 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { \"-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)\" }",
+              "$tag = if ($Candidate.dimension -eq 32 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { \"-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)\" }",
+          )
+          PY
+
+      - name: Check parser contract from production C++ implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('app/src/main/cpp/qnn/qnn_transformer_training.cpp').read_text(encoding='utf-8')
+          start = src.index('static bool nprtParseCheckpointDigits')
+          end = src.index('\n\nstruct LoadedNprtCheckpoint', start)
+          body = src[start:end]
+          test = r'''#include <cstdint>
+          #include <cstdlib>
+          #include <iostream>
+          #include <string>
+          ''' + body + r'''
+          int main() {
+            uint32_t step = 0;
+            auto require = [](bool ok, const char* what) {
+              if (!ok) { std::cerr << what << "\n"; std::exit(1); }
+            };
+            require(nprtParseCheckpointStep("htp-seed1-l19-step8000.ckpt", 1, 19, &step) && step == 8000,
+                    "D32 canonical untagged must be accepted by default");
+            step = 0;
+            require(nprtParseCheckpointStep("htp-seed1-l19-t32-d16-f32-step8000.ckpt", 1, 19, &step, 32, 16, 32) && step == 8000,
+                    "D16 explicitly tagged must be accepted");
+            step = 0;
+            require(!nprtParseCheckpointStep("htp-seed1-l19-step8000.ckpt", 1, 19, &step, 32, 16, 32),
+                    "D16 untagged / D32-as-D16 must be rejected");
+            require(!nprtParseCheckpointStep("htp-seed1-l19-t32-d16-f64-step8000.ckpt", 1, 19, &step, 32, 16, 32),
+                    "FFN mismatch must be rejected");
+            require(!nprtParseCheckpointStep("htp-seed1-l19-t64-d32-f32-step8000.ckpt", 1, 19, &step, 32, 32, 32),
+                    "token mismatch must be rejected");
+            require(!nprtParseCheckpointStep("htp-seed1-l19-t32-d24-f32-step8000.ckpt", 1, 19, &step, 32, 32, 32),
+                    "dimension mismatch must be rejected");
+            return 0;
+          }
+          '''
+          Path('/tmp/nprt_checkpoint_parser_test.cpp').write_text(test, encoding='utf-8')
+          PY
+          g++ -std=c++20 -O2 /tmp/nprt_checkpoint_parser_test.cpp -o /tmp/nprt_checkpoint_parser_test
+          /tmp/nprt_checkpoint_parser_test
+
+      - name: Run focused PowerShell self-tests
+        shell: pwsh
+        run: |
+          $qairt = 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
+          $buildId = '2.48.40.260702151143'
+          ./scripts/run_nicopedia_htp_generate.ps1 -QairtSdkRoot $qairt -ExpectedBuildId $buildId -SelfTest
+          ./scripts/run_nicopedia_htp_training.ps1 -QairtSdkRoot $qairt -ExpectedBuildId $buildId -SelfTest
+          ./scripts/run_nicopedia_htp_eval.ps1 -QairtSdkRoot $qairt -ExpectedBuildId $buildId -SelfTest
+          . ./scripts/nicopedia_runner_common.ps1
+          try {
+            Get-PhoneLmHeadlessReport -StatusJson '{"status":"FAILED","failure_code":"IllegalArgumentException","current_phase":"native","report_relative_path":""}' -Adb 'unused' -Device 'unused' -Package 'unused'
+            throw 'SELFTEST_EXPECTED_HEADLESS_FAILURE'
+          } catch {
+            if ($_.Exception.Message -ne 'HEADLESS_DEVICE_FAILED_WITHOUT_REPORT: failure_code=IllegalArgumentException phase=native') { throw }
+          }
+
+      - name: Static contract audit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          common = Path('scripts/nicopedia_runner_common.ps1').read_text(encoding='utf-8')
+          gen = Path('scripts/run_nicopedia_htp_generate.ps1').read_text(encoding='utf-8')
+          cpp = Path('app/src/main/cpp/qnn/qnn_transformer_training.cpp').read_text(encoding='utf-8')
+          kt = Path('app/src/androidTest/java/com/yuubinnkyoku/phonelm/HeadlessDeviceTestRunner.kt').read_text(encoding='utf-8')
+          assert '$Dimension -eq 32 -and $FeedForwardDimension -eq 32' in common
+          assert '[int]$Dimension = 32' in gen
+          assert 'uint32_t expectedDimension = 32' in cpp
+          assert 'expectedDimension != 32' in cpp
+          assert 'if (tokens == 32 && dimension == 32 && feedForwardDimension == 32)' in kt
+          assert 'htp-seed1-l19-t32-d16-f32-step1000.ckpt' in kt
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Commit fixed sources and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/_temp_d32_checkpoint_fix.yml
+          git config user.name 'openai-codex[bot]'
+          git config user.email 'openai-codex[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: align Nicopedia D32 checkpoint naming'
+          git push origin HEAD:codex/d32-checkpoint-naming-fix
