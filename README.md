@@ -1,4 +1,4 @@
-# PhoneLM
+# HexaTrain
 
 QAIRT 2.48のQNN HTP上で、2層ReLU MLPの学習stepに必要な数値演算を明示的なgraphとして実行するAndroid実験です。
 
