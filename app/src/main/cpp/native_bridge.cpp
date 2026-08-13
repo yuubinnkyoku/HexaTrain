@@ -502,6 +502,27 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     }
 }
 
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeSafeUtf8Display(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jbyteArray bytes) {
+    if (!bytes) return env->NewByteArray(0);
+    const jsize size = env->GetArrayLength(bytes);
+    std::vector<uint8_t> input(static_cast<size_t>(size));
+    if (size > 0) {
+        env->GetByteArrayRegion(bytes, 0, size,
+                                reinterpret_cast<jbyte*>(input.data()));
+        if (env->ExceptionCheck()) return nullptr;
+    }
+    const std::string display = phonelm::nicopedia_gen::safeUtf8Display(input);
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(display.size()));
+    if (!result || display.empty()) return result;
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(display.size()),
+                            reinterpret_cast<const jbyte*>(display.data()));
+    return result;
+}
+
 // HTP-native held-out evaluation: loads the fixed checkpoint step from the
 // app-private directory (NPRTCKPTV1 or NPRTCKPTV2) together with
 // validation.bin / development.bin caches and teacher-forces them through

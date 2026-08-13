@@ -26,7 +26,9 @@ import java.util.concurrent.Executors
  */
 class StandaloneTrainingActivity : ComponentActivity() {
     private lateinit var repository: StandaloneTrainingRepository
+    private lateinit var generationSession: GenerationSession
     private var subscription: AutoCloseable? = null
+    private var generationSubscription: AutoCloseable? = null
     private val subscriptionLock = Any()
     @Volatile private var activityStarted = false
     private var subscriptionGeneration = 0L
@@ -39,6 +41,7 @@ class StandaloneTrainingActivity : ComponentActivity() {
     @Volatile private var lastDeliveredState: TrainingUiState? = null
     private var uiUpdateScheduled = false
     private var composeState by mutableStateOf<TrainingUiState?>(null)
+    private var generationComposeState by mutableStateOf(GenerationUiState())
 
     private val deliverUiUpdate = Runnable {
         val update = synchronized(uiDispatchLock) {
@@ -57,15 +60,26 @@ class StandaloneTrainingActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingStart = savedInstanceState?.getBoolean(KEY_PENDING_START, false) ?: false
         repository = StandaloneTrainingRepositoryRegistry.get(applicationContext)
+        generationSession = GenerationSessionRegistry.get(applicationContext)
         setContent {
             TrainingDashboardApp(
                 state = composeState,
+                generationState = generationComposeState,
                 onSelectDataset = ::openDatasetPicker,
                 onStart = ::startTrainingAfterNotificationCheck,
                 onStop = { ioExecutor.execute { repository.stop() } },
                 onPause = { ioExecutor.execute { repository.pause() } },
                 onResume = { ioExecutor.execute { repository.resume() } },
                 onStartOver = ::confirmStartOver,
+                onGenerationPromptChange = generationSession::updatePrompt,
+                onGenerationModeChange = generationSession::updateMode,
+                onGenerationTemperatureChange = generationSession::updateTemperature,
+                onGenerationTopKChange = generationSession::updateTopK,
+                onGenerationSamplingSeedChange = generationSession::updateSamplingSeed,
+                onGenerationMaxNewBytesChange = generationSession::updateMaxNewBytes,
+                onGenerate = {
+                    generationSession.generate(composeState?.phase in generationBlockingTrainingPhases)
+                },
             )
         }
     }
@@ -88,6 +102,26 @@ class StandaloneTrainingActivity : ComponentActivity() {
             }
             if (!keep) candidate.close()
         }
+        val generationCandidate = generationSession.subscribe { next ->
+            // Keep controlled TextFields synchronous with onValueChange on the
+            // main thread. Posting even main-thread edits can briefly feed an
+            // old String back to the IME and commit/reset an active Japanese
+            // composition. Native completion still crosses to main safely.
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                if (isCurrentGeneration(generation)) generationComposeState = next
+            } else {
+                mainHandler.post {
+                    if (isCurrentGeneration(generation)) generationComposeState = next
+                }
+            }
+        }
+        synchronized(subscriptionLock) {
+            if (activityStarted && generation == subscriptionGeneration) {
+                generationSubscription = generationCandidate
+            } else {
+                generationCandidate.close()
+            }
+        }
     }
 
     override fun onStop() {
@@ -97,6 +131,8 @@ class StandaloneTrainingActivity : ComponentActivity() {
             pendingStartGeneration = null
             subscription.also { subscription = null }
         }
+        generationSubscription?.close()
+        generationSubscription = null
         synchronized(uiDispatchLock) {
             mainHandler.removeCallbacks(deliverUiUpdate)
             uiUpdateScheduled = false
@@ -170,6 +206,7 @@ class StandaloneTrainingActivity : ComponentActivity() {
         val immediate = state.phase != lastDeliveredState?.phase ||
             state.phase in terminalPhases ||
             state.lastCheckpoint != lastDeliveredState?.lastCheckpoint
+        if (state.lastCheckpoint != lastDeliveredState?.lastCheckpoint) generationSession.refreshCheckpoint()
         synchronized(uiDispatchLock) {
             pendingUiUpdate = PendingUiUpdate(state, generation)
             if (immediate) {
@@ -222,6 +259,10 @@ class StandaloneTrainingActivity : ComponentActivity() {
 
     private fun startOnIo(generation: Long) = ioExecutor.execute {
         if (!isCurrentGeneration(generation)) return@execute
+        if (generationSession.snapshot().execution is GenerationState.Running) {
+            postIfCurrent(generation) { toast("Generation is already running") }
+            return@execute
+        }
         // repository.start invokes the lifecycle's foreground-service start before it starts the worker.
         if (!repository.start()) postIfCurrent(generation) { toast(START_FAILURE_MESSAGE) }
     }
@@ -266,6 +307,13 @@ class StandaloneTrainingActivity : ComponentActivity() {
         const val UI_COALESCE_MS = 125L
         const val START_FAILURE_MESSAGE = "Training could not be started; check dataset and native HTP availability"
         val terminalPhases = setOf(TrainingPhase.COMPLETED, TrainingPhase.ERROR, TrainingPhase.INTERRUPTED)
+        val generationBlockingTrainingPhases = setOf(
+            TrainingPhase.PREPARING,
+            TrainingPhase.INITIALIZING_HTP,
+            TrainingPhase.TRAINING,
+            TrainingPhase.SAVING_CHECKPOINT,
+            TrainingPhase.PAUSED,
+        )
     }
 
     private data class PendingUiUpdate(val state: TrainingUiState, val generation: Long)

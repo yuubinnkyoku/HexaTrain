@@ -86,6 +86,9 @@ object NativeBridge {
         htpNativeTensorFp16: Boolean,
     ): String
 
+    /** Applies the shared native lossless UTF-8 display contract and returns valid UTF-8 bytes. */
+    external fun nativeSafeUtf8Display(bytes: ByteArray): ByteArray
+
     external fun nativeRunNicopediaDivergenceLocalization(
         checkpointPath: String,
         seed: Long,

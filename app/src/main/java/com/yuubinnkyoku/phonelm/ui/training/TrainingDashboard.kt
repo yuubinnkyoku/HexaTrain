@@ -24,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +37,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
@@ -72,6 +75,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuubinnkyoku.phonelm.PhaseTiming
+import com.yuubinnkyoku.phonelm.GenerationCheckpointStatus
+import com.yuubinnkyoku.phonelm.GenerationMode
+import com.yuubinnkyoku.phonelm.GenerationState
+import com.yuubinnkyoku.phonelm.GenerationUiState
 import com.yuubinnkyoku.phonelm.TimingBackend
 import com.yuubinnkyoku.phonelm.TrainingDashboardEvent
 import com.yuubinnkyoku.phonelm.TrainingDashboardEventType
@@ -91,12 +98,20 @@ import java.util.Locale
 @Composable
 fun TrainingDashboardApp(
     state: TrainingUiState?,
+    generationState: GenerationUiState = GenerationUiState(),
     onSelectDataset: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStartOver: () -> Unit,
+    onGenerationPromptChange: (String) -> Unit = {},
+    onGenerationModeChange: (GenerationMode) -> Unit = {},
+    onGenerationTemperatureChange: (String) -> Unit = {},
+    onGenerationTopKChange: (String) -> Unit = {},
+    onGenerationSamplingSeedChange: (String) -> Unit = {},
+    onGenerationMaxNewBytesChange: (String) -> Unit = {},
+    onGenerate: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val base = phoneLmDarkScheme()
@@ -132,7 +147,10 @@ fun TrainingDashboardApp(
     ) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (state == null) TrainingLoading() else TrainingDashboard(
-                state, onSelectDataset, onStart, onStop, onPause, onResume, onStartOver,
+                state, generationState, onSelectDataset, onStart, onStop, onPause, onResume, onStartOver,
+                onGenerationPromptChange, onGenerationModeChange, onGenerationTemperatureChange,
+                onGenerationTopKChange, onGenerationSamplingSeedChange,
+                onGenerationMaxNewBytesChange, onGenerate,
             )
         }
     }
@@ -179,12 +197,20 @@ private fun TrainingLoading() = Box(Modifier.fillMaxSize().padding(24.dp)) {
 @Composable
 fun TrainingDashboard(
     state: TrainingUiState,
+    generationState: GenerationUiState = GenerationUiState(),
     onSelectDataset: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStartOver: () -> Unit,
+    onGenerationPromptChange: (String) -> Unit = {},
+    onGenerationModeChange: (GenerationMode) -> Unit = {},
+    onGenerationTemperatureChange: (String) -> Unit = {},
+    onGenerationTopKChange: (String) -> Unit = {},
+    onGenerationSamplingSeedChange: (String) -> Unit = {},
+    onGenerationMaxNewBytesChange: (String) -> Unit = {},
+    onGenerate: () -> Unit = {},
 ) {
     var detailsVisible by remember { mutableStateOf(false) }
     Scaffold(
@@ -204,6 +230,7 @@ fun TrainingDashboard(
                     onResume,
                     onStartOver,
                     onDetails = { detailsVisible = true },
+                    generationRunning = generationState.execution is GenerationState.Running,
                 )
             }
         },
@@ -221,7 +248,12 @@ fun TrainingDashboard(
     }
     if (detailsVisible) {
         ModalBottomSheet(onDismissRequest = { detailsVisible = false }) {
-            TrainingDetails(state, onSelectDataset, onStartOver)
+            TrainingDetails(
+                state, generationState, onSelectDataset, onStartOver,
+                onGenerationPromptChange, onGenerationModeChange, onGenerationTemperatureChange,
+                onGenerationTopKChange, onGenerationSamplingSeedChange,
+                onGenerationMaxNewBytesChange, onGenerate,
+            )
         }
     }
 }
@@ -511,6 +543,7 @@ private fun CompactActionDock(
     onResume: () -> Unit,
     onStartOver: () -> Unit,
     onDetails: () -> Unit,
+    generationRunning: Boolean,
 ) {
     val primary = trainingToolbarPrimaryAction(
         phase = state.phase,
@@ -561,6 +594,7 @@ private fun CompactActionDock(
             compactPadding = compactPadding,
             semantic = semantic,
             compactLabel = fontScale >= 1.2f,
+            enabled = !generationRunning || primary !in setOf(ToolbarAction.START, ToolbarAction.START_OVER),
         )
     }
 }
@@ -592,6 +626,7 @@ private fun ToolbarActionButton(
     compactPadding: PaddingValues,
     semantic: TrainingSemanticColors,
     compactLabel: Boolean,
+    enabled: Boolean = true,
 ) {
     val icon = when (action) {
         ToolbarAction.STOP -> Icons.Default.Stop
@@ -623,6 +658,7 @@ private fun ToolbarActionButton(
     if (primary) {
         Button(
             onClick = onClick,
+            enabled = enabled,
             contentPadding = compactPadding,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -634,6 +670,7 @@ private fun ToolbarActionButton(
     } else {
         TextButton(
             onClick = onClick,
+            enabled = enabled,
             contentPadding = compactPadding,
             colors = ButtonDefaults.textButtonColors(contentColor = contentColor),
         ) {
@@ -643,12 +680,37 @@ private fun ToolbarActionButton(
 }
 
 @Composable
-private fun TrainingDetails(state: TrainingUiState, onSelectDataset: () -> Unit, onStartOver: () -> Unit) {
+private fun TrainingDetails(
+    state: TrainingUiState,
+    generationState: GenerationUiState,
+    onSelectDataset: () -> Unit,
+    onStartOver: () -> Unit,
+    onGenerationPromptChange: (String) -> Unit,
+    onGenerationModeChange: (GenerationMode) -> Unit,
+    onGenerationTemperatureChange: (String) -> Unit,
+    onGenerationTopKChange: (String) -> Unit,
+    onGenerationSamplingSeedChange: (String) -> Unit,
+    onGenerationMaxNewBytesChange: (String) -> Unit,
+    onGenerate: () -> Unit,
+) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Text("Training details", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            GenerationCard(
+                generationState = generationState,
+                trainingActive = state.phase in activePhases,
+                onPromptChange = onGenerationPromptChange,
+                onModeChange = onGenerationModeChange,
+                onTemperatureChange = onGenerationTemperatureChange,
+                onTopKChange = onGenerationTopKChange,
+                onSamplingSeedChange = onGenerationSamplingSeedChange,
+                onMaxNewBytesChange = onGenerationMaxNewBytesChange,
+                onGenerate = onGenerate,
+            )
+        }
         if (state.phase in terminalPhases) item { TrainingSummaryCard(state) }
         item { ModelConfigCard(state.modelConfig, state.datasetDisplayName, state.datasetUri) }
         item { DetailedPerformanceCard(state) }
@@ -662,6 +724,111 @@ private fun TrainingDetails(state: TrainingUiState, onSelectDataset: () -> Unit,
                     enabled = state.phase !in activePhases && state.phase != TrainingPhase.IDLE,
                     modifier = Modifier.weight(1f),
                 ) { Text("Start over") }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun GenerationCard(
+    generationState: GenerationUiState,
+    trainingActive: Boolean,
+    onPromptChange: (String) -> Unit = {},
+    onModeChange: (GenerationMode) -> Unit = {},
+    onTemperatureChange: (String) -> Unit = {},
+    onTopKChange: (String) -> Unit = {},
+    onSamplingSeedChange: (String) -> Unit = {},
+    onMaxNewBytesChange: (String) -> Unit = {},
+    onGenerate: () -> Unit = {},
+) = DetailCard("Generation") {
+    val running = generationState.execution is GenerationState.Running
+    val checkpointUnavailable = generationState.checkpoint as? GenerationCheckpointStatus.Unavailable
+    OutlinedTextField(
+        value = generationState.prompt,
+        onValueChange = onPromptChange,
+        enabled = !running,
+        label = { Text("Prompt") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(
+            selected = generationState.mode == GenerationMode.GREEDY,
+            onClick = { onModeChange(GenerationMode.GREEDY) },
+            enabled = !running,
+        )
+        Text("Greedy")
+        RadioButton(
+            selected = generationState.mode == GenerationMode.SAMPLE,
+            onClick = { onModeChange(GenerationMode.SAMPLE) },
+            enabled = !running,
+        )
+        Text("Sample")
+    }
+    if (generationState.mode == GenerationMode.SAMPLE) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = generationState.temperatureText,
+                onValueChange = onTemperatureChange,
+                enabled = !running,
+                label = { Text("Temperature") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = generationState.topKText,
+                onValueChange = onTopKChange,
+                enabled = !running,
+                label = { Text("TopK") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OutlinedTextField(
+            value = generationState.samplingSeedText,
+            onValueChange = onSamplingSeedChange,
+            enabled = !running,
+            label = { Text("SamplingSeed") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    OutlinedTextField(
+        value = generationState.maxNewBytesText,
+        onValueChange = onMaxNewBytesChange,
+        enabled = !running,
+        label = { Text("Max new bytes") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    checkpointUnavailable?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+    Button(
+        onClick = onGenerate,
+        enabled = generationState.canGenerate && !trainingActive,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Generate on HTP")
+    }
+    when (val execution = generationState.execution) {
+        GenerationState.Idle -> Unit
+        GenerationState.Running -> Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            Text("Generating on HTP…")
+        }
+        is GenerationState.Success -> {
+            Text(execution.result.displayText, fontFamily = TelemetryFontFamily)
+            Text("${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · backend=${execution.result.backend}")
+        }
+        is GenerationState.Failed -> Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Text("Generation failed", fontWeight = FontWeight.Bold)
+                Text(execution.message)
             }
         }
     }
