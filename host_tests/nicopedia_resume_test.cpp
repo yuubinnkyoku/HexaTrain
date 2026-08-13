@@ -338,6 +338,102 @@ TrainState runTrain(const Config& config, const Cache& cache,
 int main() {
   int failures = 0;
   try {
+    // Checkpoint filename identity contract.
+    //
+    // T32/D32/FFN32 is the production anchor and exclusively owns the
+    // canonical untagged filename. All non-anchor configurations, including
+    // historical/research D16, must carry explicit T/D/FFN tags.
+    {
+      using phonelm::nicopedia_checkpoint::checkpointName;
+      using phonelm::nicopedia_checkpoint::parseCheckpointStep;
+
+      const std::string d32Canonical =
+          checkpointName(1, 19, 32, 32, 32, 8000);
+      if (d32Canonical != "htp-seed1-l19-step8000.ckpt") {
+        std::cerr << "D32 canonical checkpoint name mismatch: "
+                  << d32Canonical << '\n';
+        ++failures;
+      }
+
+      const std::string d16Tagged =
+          checkpointName(1, 19, 32, 16, 32, 8000);
+      if (d16Tagged !=
+          "htp-seed1-l19-t32-d16-f32-step8000.ckpt") {
+        std::cerr << "D16 tagged checkpoint name mismatch: "
+                  << d16Tagged << '\n';
+        ++failures;
+      }
+
+      std::uint32_t parsedStep = 0;
+
+      // D32 canonical untagged => ACCEPT.
+      if (!parseCheckpointStep(
+              "htp-seed1-l19-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 32, 32) ||
+          parsedStep != 8000) {
+        std::cerr << "D32 canonical checkpoint must parse\n";
+        ++failures;
+      }
+
+      // Default parser identity must also be T32/D32/FFN32.
+      parsedStep = 0;
+      if (!parseCheckpointStep(
+              "htp-seed1-l19-step8000.ckpt",
+              1, 19, &parsedStep) ||
+          parsedStep != 8000) {
+        std::cerr << "default checkpoint identity must be D32 anchor\n";
+        ++failures;
+      }
+
+      // D16 explicitly tagged => ACCEPT.
+      parsedStep = 0;
+      if (!parseCheckpointStep(
+              "htp-seed1-l19-t32-d16-f32-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 16, 32) ||
+          parsedStep != 8000) {
+        std::cerr << "D16 tagged checkpoint must parse\n";
+        ++failures;
+      }
+
+      // D16 untagged => REJECT.
+      if (parseCheckpointStep(
+              "htp-seed1-l19-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 16, 32)) {
+        std::cerr << "D16 untagged checkpoint must be rejected\n";
+        ++failures;
+      }
+
+      // T mismatch => REJECT.
+      if (parseCheckpointStep(
+              "htp-seed1-l19-t16-d16-f32-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 16, 32)) {
+        std::cerr << "checkpoint token mismatch must be rejected\n";
+        ++failures;
+      }
+
+      // D mismatch => REJECT.
+      if (parseCheckpointStep(
+              "htp-seed1-l19-t32-d32-f32-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 16, 32)) {
+        std::cerr << "checkpoint dimension mismatch must be rejected\n";
+        ++failures;
+      }
+
+      // FFN mismatch => REJECT.
+      if (parseCheckpointStep(
+              "htp-seed1-l19-t32-d16-f64-step8000.ckpt",
+              1, 19, &parsedStep,
+              32, 16, 32)) {
+        std::cerr << "checkpoint FFN mismatch must be rejected\n";
+        ++failures;
+      }
+    }
+
     Config config;
     config.vocabularySize = 16;
     config.tokens = 8;

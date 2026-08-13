@@ -537,15 +537,17 @@ function Get-PhoneLmCheckpointName {
         [Parameter(Mandatory = $true)][int]$Seed,
         [Parameter(Mandatory = $true)][int]$Layers,
         [Parameter(Mandatory = $true)][int]$Tokens,
-        [Parameter(Mandatory = $false)][int]$Dimension = 16,
+        [Parameter(Mandatory = $false)][int]$Dimension = 32,
         [Parameter(Mandatory = $false)][int]$FeedForwardDimension = 32,
         [Parameter(Mandatory = $true)][int]$Step
     )
     # The canonical anchor retains its legacy name. Every non-anchor model
     # identity carries T/D/FFN tags, so resume and evaluation cannot silently
     # select an incompatible checkpoint.
-    if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) {
-        return "htp-seed$Seed-l$Layers-step$Step.ckpt"
+    if ($Tokens -eq 32 -and
+        $Dimension -eq 32 -and
+        $FeedForwardDimension -eq 32) {
+            return "htp-seed$Seed-l$Layers-step$Step.ckpt"
     }
     return "htp-seed$Seed-l$Layers-t$Tokens-d$Dimension-f$FeedForwardDimension-step$Step.ckpt"
 }
@@ -774,7 +776,26 @@ function Wait-PhoneLmHeadlessStatus {
 function Get-PhoneLmHeadlessReport {
     param([Parameter(Mandatory = $true)][string]$StatusJson, [Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package)
     $match = [regex]::Match($StatusJson, '"report_relative_path"\s*:\s*"([^"]+)"')
-    if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) { throw 'HEADLESS_REPORT_PATH_MISSING' }
+    if (-not $match.Success -or
+    [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {
+        $statusMatch = [regex]::Match(
+            $StatusJson,
+            '"status"\s*:\s*"([^"]*)"'
+        )
+        $failureMatch = [regex]::Match(
+            $StatusJson,
+            '"failure_code"\s*:\s*"([^"]*)"'
+        )
+        $phaseMatch = [regex]::Match(
+            $StatusJson,
+            '"current_phase"\s*:\s*"([^"]*)"'
+        )
+
+        if ($statusMatch.Groups[1].Value -eq 'FAILED') {
+            throw "HEADLESS_FAILED_WITHOUT_REPORT: failure_code=$($failureMatch.Groups[1].Value) phase=$($phaseMatch.Groups[1].Value)"
+        }
+    throw 'HEADLESS_REPORT_PATH_MISSING'
+    }
     $relative = $match.Groups[1].Value
     if ($relative -notmatch '^headless/reports/[A-Za-z0-9._-]+\.txt$') { throw 'HEADLESS_REPORT_PATH_INVALID' }
     $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'run-as', $Package, 'cat', "files/$relative")

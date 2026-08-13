@@ -207,7 +207,7 @@ function Assert-SafeDeviceCondition([Collections.IDictionary]$Condition) {
 }
 function Stage-NicopediaParityInputs {
     $relativeDirectory = "files/headless-input/$RunId"
-    $checkpointTarget = "$relativeDirectory/htp-seed1-l19-step1000.ckpt"
+    $checkpointTarget = "$relativeDirectory/htp-seed1-l19-t32-d16-f32-step1000.ckpt"
     $promptTarget = "$relativeDirectory/prompt.bin"
     $temporaryCheckpoint = "/data/local/tmp/phonelm-headless-$RunId-checkpoint"
     $temporaryPrompt = "/data/local/tmp/phonelm-headless-$RunId-prompt"

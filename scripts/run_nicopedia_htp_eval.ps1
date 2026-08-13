@@ -21,7 +21,7 @@ param(
   [int]$Layers = 19,
   [int]$Heads = 2,
   [int]$Tokens = 32,  # context window length (8..256; 32 = legacy T32 behavior)
-  [int]$Dimension = 16,
+  [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
   [int]$CheckpointStep = 1000,
   [int]$ValidationChunks = 8192,
@@ -62,7 +62,7 @@ $testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-an
 $reportRoot = Join-Path $root "build\reports\nicopedia-htp-eval"
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
-$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
 $evalDataRoot = if ($Tokens -eq 32) { 'build\private-data\nicopedia-real-text' } else { 'build\private-data\nicopedia-real-text-t64' }
 if (-not $CacheRoot) { $CacheRoot = Join-Path $root (Join-Path $evalDataRoot 'caches') }
 if (-not $CheckpointPath) {

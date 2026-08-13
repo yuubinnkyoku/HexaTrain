@@ -314,7 +314,14 @@ function Invoke-ResearchSegment($Candidate, [int]$Seed, [int]$Steps, [string]$St
     $evalDevelopmentChunks = if ($FullCapEval) { 16384 } else { $DevelopmentChunks }
     & $EvalRunner -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -Seed $Seed -Layers $fixed.layers -Heads $fixed.heads -Tokens $fixed.tokens -CheckpointStep $Steps -CheckpointPath $checkpoint -ValidationChunks $evalValidationChunks -DevelopmentChunks $evalDevelopmentChunks -Dimension $Candidate.dimension -FeedForwardDimension $Candidate.feed_forward_dimension -RunId "$tag-eval" -SkipBuild:$true -SkipInstall:$true
     if ($LASTEXITCODE -ne 0) { throw "RESEARCH_EVAL_RUNNER_FAILED: $tag" }
-    $configTag = if ($Candidate.dimension -eq 16 -and $Candidate.feed_forward_dimension -eq 32) { '' } else { "-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)" }
+    $configTag = if (
+        $Candidate.dimension -eq 32 -and
+        $Candidate.feed_forward_dimension -eq 32
+    ) {
+        ''
+    } else {
+        "-t32-d$($Candidate.dimension)-f$($Candidate.feed_forward_dimension)"
+    }
     $trainReport = Join-Path $root "build\reports\nicopedia-htp-training\seed$Seed-l19$configTag-steps$Steps-result.txt"
     $evalReport = Join-Path $root "build\reports\nicopedia-htp-eval\seed$Seed-l19$configTag-step$Steps-htp.txt"
     $train = Get-Map $trainReport; $eval = Get-Map $evalReport

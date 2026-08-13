@@ -5241,13 +5241,8 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
 std::string nprtCheckpointName(uint32_t seed, uint32_t layers,
                                uint32_t tokens, uint32_t dimension,
                                uint32_t feedForwardDimension, uint32_t step) {
-  return "htp-seed" + std::to_string(seed) + "-l" + std::to_string(layers) +
-         ((tokens == 32 && dimension == 32 && feedForwardDimension == 32)
-              ? ""
-              : "-t" + std::to_string(tokens) + "-d" +
-                    std::to_string(dimension) + "-f" +
-                    std::to_string(feedForwardDimension)) + "-step" +
-         std::to_string(step) + ".ckpt";
+  return ::phonelm::nicopedia_checkpoint::checkpointName(
+      seed, layers, tokens, dimension, feedForwardDimension, step);
 }
 bool finiteTrainingOutputs(const TinyTransformerTrainingOutputs &output) {
   const bool finiteLayers = std::all_of(
@@ -5269,73 +5264,23 @@ bool finiteTrainingOutputs(const TinyTransformerTrainingOutputs &output) {
 // Shared digit validation for the step segment (and, in the -t<T> variant,
 // the token segment): 1..6 ASCII digits parsing to a value in 1..999999,
 // mirroring the legacy checkpoint step rule.
-static bool nprtParseCheckpointDigits(const std::string &digits,
-                                      uint32_t *value) {
-  if (digits.empty() || digits.size() > 6) return false;
-  for (char digit : digits)
-    if (digit < '0' || digit > '9') return false;
-  char *end = nullptr;
-  const long parsed = std::strtol(digits.c_str(), &end, 10);
-  if (!end || *end != '\0' || parsed <= 0 || parsed >= 1000000) return false;
-  *value = static_cast<uint32_t>(parsed);
-  return true;
-}
 
-bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
-                             uint32_t expectedLayers, uint32_t *step,
-                             uint32_t expectedTokens = 32,
-                             uint32_t expectedDimension = 16,
-                             uint32_t expectedFeedForwardDimension = 32) {
-  const std::string base = path.substr(path.find_last_of("/\\") + 1);
-  const std::string stepMarker = "-step";
-  const std::string suffix = ".ckpt";
-  const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
-                             std::to_string(expectedLayers) + stepMarker;
-  // The legacy name is exclusively the T32/D32/FFN32 production anchor identity.
-  if (base.size() > prefix.size() + suffix.size() &&
-      base.compare(0, prefix.size(), prefix) == 0 &&
-      base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
-    if (expectedTokens != 32 || expectedDimension != 16 ||
-        expectedFeedForwardDimension != 32)
-      return false;
-    return nprtParseCheckpointDigits(
-        base.substr(prefix.size(), base.size() - prefix.size() - suffix.size()),
-        step);
-  }
-  // The extended name must carry and match T, D, and FFN exactly.
-  const std::string tPrefix = "htp-seed" + std::to_string(expectedSeed) +
-                              "-l" + std::to_string(expectedLayers) + "-t";
-  if (base.size() <= tPrefix.size() ||
-      base.compare(0, tPrefix.size(), tPrefix) != 0 ||
-      base.compare(base.size() - suffix.size(), suffix.size(), suffix) != 0)
-    return false;
-  const std::size_t dPos = base.find("-d", tPrefix.size());
-  const std::size_t fPos = dPos == std::string::npos
-                               ? std::string::npos
-                               : base.find("-f", dPos + 2);
-  const std::size_t stepPos = fPos == std::string::npos
-                                  ? std::string::npos
-                                  : base.find(stepMarker, fPos + 2);
-  if (dPos == std::string::npos || fPos == std::string::npos ||
-      stepPos == std::string::npos)
-    return false;
-  uint32_t tokens = 0;
-  uint32_t dimension = 0;
-  uint32_t feedForwardDimension = 0;
-  if (!nprtParseCheckpointDigits(base.substr(tPrefix.size(), dPos - tPrefix.size()),
-                                 &tokens) ||
-      !nprtParseCheckpointDigits(base.substr(dPos + 2, fPos - dPos - 2),
-                                 &dimension) ||
-      !nprtParseCheckpointDigits(base.substr(fPos + 2, stepPos - fPos - 2),
-                                 &feedForwardDimension))
-    return false;
-  if (tokens != expectedTokens || dimension != expectedDimension ||
-      feedForwardDimension != expectedFeedForwardDimension)
-    return false;
-  return nprtParseCheckpointDigits(
-      base.substr(stepPos + stepMarker.size(),
-                  base.size() - stepPos - stepMarker.size() - suffix.size()),
-      step);
+bool nprtParseCheckpointStep(
+    const std::string &path,
+    uint32_t expectedSeed,
+    uint32_t expectedLayers,
+    uint32_t *step,
+    uint32_t expectedTokens = 32,
+    uint32_t expectedDimension = 32,
+    uint32_t expectedFeedForwardDimension = 32) {
+  return ::phonelm::nicopedia_checkpoint::parseCheckpointStep(
+      path,
+      expectedSeed,
+      expectedLayers,
+      step,
+      expectedTokens,
+      expectedDimension,
+      expectedFeedForwardDimension);
 }
 
 struct LoadedNprtCheckpoint {

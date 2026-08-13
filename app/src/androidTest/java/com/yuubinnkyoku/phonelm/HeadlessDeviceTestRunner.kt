@@ -590,7 +590,11 @@ class HeadlessDeviceTestRunner {
         require(split in 0..2) { "htpContextGraphSplitting must be 0, 1, or 2" }
         val inputDirectory = File(context.filesDir, "headless-input/$runId")
         // Parity is the fixed T32 contract: legacy checkpoint name and tokens=32.
-        val checkpoint = File(inputDirectory, "htp-seed1-l19-step1000.ckpt")
+        val checkpoint =
+            File(
+                inputDirectory,
+                "htp-seed1-l19-t32-d16-f32-step1000.ckpt",
+            )
         val prompt = File(inputDirectory, "prompt.bin")
         require(checkpoint.isFile) { "nicopedia parity checkpoint is unavailable" }
         require(prompt.isFile) { "nicopedia parity prompt is unavailable" }

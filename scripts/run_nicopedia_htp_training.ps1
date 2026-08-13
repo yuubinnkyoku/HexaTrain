@@ -18,7 +18,7 @@ param(
   [int]$Layers = 19,
   [int]$Steps = 32,
   [int]$Tokens = 32,  # context window length (8..256; 32 = legacy T32 behavior)
-  [int]$Dimension = 16,
+  [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
   [int]$BatchSize = 8,   # canonical pilot config (protocol.json): 8 samples/step
   [string]$CachePath = "",
@@ -42,12 +42,45 @@ if ($SelfTest) {
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
   if ($Layers -ne 19) { throw "SELFTEST_LAYERS_DEFAULT: expected=19 actual=$Layers" }
   if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
-  if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT" }
-  $canonicalName = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 16 -FeedForwardDimension 32 -Step 320
-  $candidateName = Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 32 -FeedForwardDimension 64 -Step 320
+  if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) {
+      throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT: expected=D32/FFN32 actual=D$Dimension/FFN$FeedForwardDimension"
+  }
+
+  # Production anchor: T32/D32/FFN32 uses the canonical untagged filename.
+  $canonicalName = Get-PhoneLmCheckpointName `
+      -Seed 1 `
+      -Layers 19 `
+      -Tokens 32 `
+      -Dimension 32 `
+      -FeedForwardDimension 32 `
+      -Step 320
+
+  # Historical/research D16 is no longer canonical and must be explicitly tagged.
+  $d16Name = Get-PhoneLmCheckpointName `
+      -Seed 1 `
+      -Layers 19 `
+      -Tokens 32 `
+      -Dimension 16 `
+      -FeedForwardDimension 32 `
+      -Step 320
+
+  # Other non-anchor configurations remain explicitly tagged.
+  $candidateName = Get-PhoneLmCheckpointName `
+      -Seed 1 `
+      -Layers 19 `
+      -Tokens 32 `
+      -Dimension 32 `
+      -FeedForwardDimension 64 `
+      -Step 320
+
   if ($canonicalName -ne 'htp-seed1-l19-step320.ckpt' -or
+      $d16Name -ne 'htp-seed1-l19-t32-d16-f32-step320.ckpt' -or
       $candidateName -ne 'htp-seed1-l19-t32-d32-f64-step320.ckpt' -or
-      $canonicalName -eq $candidateName) { throw 'SELFTEST_CHECKPOINT_MODEL_IDENTITY' }
+      $canonicalName -eq $d16Name -or
+      $canonicalName -eq $candidateName -or
+      $d16Name -eq $candidateName) {
+      throw 'SELFTEST_CHECKPOINT_MODEL_IDENTITY'
+  }
   if ($CheckpointInterval -lt 1 -or $PollSeconds -lt 1 -or $PollLimit -lt 1 -or $ProgressEverySeconds -lt 1 -or $CheckpointStallSeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
   $inactiveEvidence = @{ status_state = 'terminal'; status_uncertain = $false; process_present = $true; test_process_present = $false; fgs_present = $false; service_present = $false; service_uncertain = $false; activity_known = $true; activity_active = $false; task_present = $true }
   $inactiveDecision = Resolve-PhoneLmRunConflict $inactiveEvidence
@@ -82,7 +115,7 @@ if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens
 if ($Dimension -lt 2 -or $Dimension -gt 256 -or ($Dimension % 2) -ne 0) { throw 'NICOPEDIA_DIMENSION_INVALID: Dimension must be even and in 2..256' }
 if ($FeedForwardDimension -lt 2 -or $FeedForwardDimension -gt 1024) { throw 'NICOPEDIA_FFN_INVALID: FeedForwardDimension must be in 2..1024' }
 $root = Split-Path -Parent $PSScriptRoot
-$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME

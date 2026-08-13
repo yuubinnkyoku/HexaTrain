@@ -16,7 +16,7 @@ param(
     [string]$Model = '',                 # L6 | L19 (required)
     [int]$Seed = 0,                      # L6: 1/2/4, L19: 1
     [int]$Tokens = 32,                   # context window length (8..256; 32 = legacy T32 behavior)
-    [int]$Dimension = 16,
+    [int]$Dimension = 32,
     [int]$FeedForwardDimension = 32,
     [string]$Prompt = '',                # arbitrary Japanese text
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
@@ -54,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
-$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 16 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
 
 $reportRoot = Join-Path $root 'build\reports\nicopedia-htp-generation'
 $trainingRoot = Join-Path $root 'build\reports\nicopedia-htp-training'
@@ -148,7 +148,37 @@ function Get-SafeUtf8Display([byte[]]$Bytes) {
 
 function Invoke-SelfTest {
     if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
-    if ($Dimension -ne 16 -or $FeedForwardDimension -ne 32) { throw 'SELFTEST_MODEL_DIMENSIONS_DEFAULT' }
+
+    # Production anchor is T32/D32/FFN32.
+    if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) {
+        throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT: expected=T32/D32/FFN32 actual=T$Tokens/D$Dimension/FFN$FeedForwardDimension"
+    }
+
+    # Checkpoint naming contract.
+    $canonicalD32 = Get-PhoneLmCheckpointName `
+        -Seed 1 `
+        -Layers 19 `
+        -Tokens 32 `
+        -Dimension 32 `
+        -FeedForwardDimension 32 `
+        -Step 8000
+
+    if ($canonicalD32 -ne 'htp-seed1-l19-step8000.ckpt') {
+        throw "SELFTEST_D32_CANONICAL_NAME: $canonicalD32"
+    }
+
+    $taggedD16 = Get-PhoneLmCheckpointName `
+        -Seed 1 `
+        -Layers 19 `
+        -Tokens 32 `
+        -Dimension 16 `
+        -FeedForwardDimension 32 `
+        -Step 8000
+
+    if ($taggedD16 -ne 'htp-seed1-l19-t32-d16-f32-step8000.ckpt') {
+        throw "SELFTEST_D16_TAGGED_NAME: $taggedD16"
+    }
+
     # Safe display mirrors the C++ core (lossless \xNN escapes).
     $cases = @(
         @{ Bytes = [byte[]](0x68, 0x69); Expect = 'hi' },
@@ -164,13 +194,49 @@ function Invoke-SelfTest {
     $empty = Get-SafeUtf8Display -Bytes ([byte[]]@())
     if ($empty -ne '') { throw 'SELFTEST_DISPLAY_EMPTY' }
 
-    # CheckpointStep file-name resolution mirrors the device-side
-    # nprtParseCheckpointStep contract (htp-seed<S>-l<L>-step<N>.ckpt).
+    # CheckpointStep file-name resolution mirrors the shared checkpoint naming
+    # contract. T32/D32/FFN32 uses the canonical untagged name; non-anchor
+    # configurations such as D16 use explicit -t<T>-d<D>-f<FFN> tags.
     $ckRoot = Join-Path $env:TEMP ("nicopedia-gen-selftest-" + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($ckRoot) | Out-Null
     try {
-        $step320Ckpt = Join-Path $ckRoot 'htp-seed1-l19-step320.ckpt'
-        $step1000Ckpt = Join-Path $ckRoot 'htp-seed1-l19-step1000.ckpt'
+        $step320Name = Get-PhoneLmCheckpointName `
+            -Seed 1 `
+            -Layers 19 `
+            -Tokens 32 `
+            -Dimension 32 `
+            -FeedForwardDimension 32 `
+            -Step 320
+
+        $step1000Name = Get-PhoneLmCheckpointName `
+            -Seed 1 `
+            -Layers 19 `
+            -Tokens 32 `
+            -Dimension 32 `
+            -FeedForwardDimension 32 `
+            -Step 1000
+        
+        $d16Name = Get-PhoneLmCheckpointName `
+            -Seed 1 `
+            -Layers 19 `
+            -Tokens 32 `
+            -Dimension 16 `
+            -FeedForwardDimension 32 `
+            -Step 1000
+
+        if ($d16Name -ne 'htp-seed1-l19-t32-d16-f32-step1000.ckpt') {
+            throw "SELFTEST_D16_CHECKPOINT_NAME: $d16Name"
+        }
+
+        $step320Ckpt = Join-Path $ckRoot $step320Name
+        $step1000Ckpt = Join-Path $ckRoot $step1000Name
+        if ($step320Name -ne 'htp-seed1-l19-step320.ckpt') {
+            throw "SELFTEST_CHECKPOINT_NAME_320: $step320Name"
+        }
+
+        if ($step1000Name -ne 'htp-seed1-l19-step1000.ckpt') {
+            throw "SELFTEST_CHECKPOINT_NAME_1000: $step1000Name"
+        }
         [IO.File]::WriteAllText($step320Ckpt, 'selftest-320')
         [IO.File]::WriteAllText($step1000Ckpt, 'selftest-1000')
         $anchor320 = Join-Path $ckRoot 'seed1-l19-steps320-result.txt'
@@ -178,8 +244,8 @@ function Invoke-SelfTest {
         [IO.File]::WriteAllText($anchor320, "final_parameter_hash=fnv1a64:0123456789abcdef`n")
         [IO.File]::WriteAllText($anchor1000, "final_parameter_hash=fnv1a64:fedcba9876543210`n")
         # Resolve-* helpers must pick the step-driven file names.
-        $checkpoint = Join-Path $ckRoot "htp-seed1-l19-step320.ckpt"
-        $anchorFile = Join-Path $ckRoot "seed1-l19-steps320-result.txt"
+        $checkpoint = Join-Path $ckRoot $step320Name
+        $checkpoint1000 = Join-Path $ckRoot $step1000Name
         if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf) -or
             -not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) {
             throw 'SELFTEST_CHECKPOINT_STEP_320'
