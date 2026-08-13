@@ -5291,6 +5291,7 @@ struct LoadedNprtCheckpoint {
   std::uint64_t parameterElements = 0;
   bool finite = true;
   bool hasAdam = false;
+  bool v2 = false;
   Params parameters;
   std::vector<std::pair<std::string, std::vector<float>>> adamFirst;
   std::vector<std::pair<std::string, std::vector<float>>> adamSecond;
@@ -5314,6 +5315,7 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n")
     throw std::runtime_error("NPRT_CKPT_MAGIC");
   const bool v2 = magic == "NPRTCKPTV2\n";
+  result.v2 = v2;
   result.vocabulary = nprtReadU32(input);
   result.tokens = nprtReadU32(input);
   result.dimension = nprtReadU32(input);
@@ -5639,14 +5641,18 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=temperature_or_top_k_invalid\n";
-  // htp-native is the explicit experimental policy: the AR parity loop still
-  // runs as diagnostics, but generation is gated on HTP health alone.
+  // htp-native and htp-smoke are explicit HTP-health policies: the AR parity
+  // loop still runs as diagnostics, but generation is gated on HTP health
+  // alone.  htp-smoke intentionally does not imply any public evidence or
+  // parity certification.
   const bool htpNativePolicy = generateConfig.gatePolicy == "htp-native";
-  if (!htpNativePolicy && generateConfig.gatePolicy != "legacy" &&
+  const bool htpSmokePolicy = generateConfig.gatePolicy == "htp-smoke";
+  const bool htpHealthPolicy = htpNativePolicy || htpSmokePolicy;
+  if (!htpHealthPolicy && generateConfig.gatePolicy != "legacy" &&
       generateConfig.gatePolicy != "candidate")
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
-           "error=gate_policy must be legacy, candidate, or htp-native\n";
+           "error=gate_policy must be legacy, candidate, htp-native, or htp-smoke\n";
   uint32_t expectedStep = 0;
   if (!nprtParseCheckpointStep(checkpointPath, static_cast<uint32_t>(seed),
                                layers, &expectedStep, config.tokens,
@@ -5674,6 +5680,10 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_IDENTITY\n"
            "error=checkpoint step does not match filename\n";
+  if (htpSmokePolicy && !loaded.v2)
+    return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+           "failure_classification=CHECKPOINT_FORMAT\n"
+           "error=htp-smoke requires NPRTCKPTV2\n";
   if (!loaded.finite)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_NONFINITE\n"
@@ -5799,7 +5809,7 @@ std::string nicopediaHtpGeneration(
     const bool qnnStatusSuccess = trace.graphExecuteAttemptCount > 0 &&
                                   trace.graphExecuteLastResult == 0;
     htpNativeQnnSuccess = htpNativeQnnSuccess && qnnStatusSuccess;
-    return htpNativePolicy ? htpNativeFailure(phase, detail)
+    return htpHealthPolicy ? htpNativeFailure(phase, detail)
                            : failure(phase, detail, runtime);
   };
 
@@ -5853,7 +5863,7 @@ std::string nicopediaHtpGeneration(
         htpNativePrefixLogitsFinite && prefixLogitsFinite;
     htpNativePrefixProbabilitiesFinite =
         htpNativePrefixProbabilitiesFinite && prefixProbabilitiesFinite;
-    if (htpNativePolicy && (!prefixOutputFinite || !prefixLogitsFinite ||
+    if (htpHealthPolicy && (!prefixOutputFinite || !prefixLogitsFinite ||
                             !prefixProbabilitiesFinite))
       return htpNativeFailure("fixed_prefix", "non-finite HTP logits/probabilities");
     htpExecutionFingerprintLogits.insert(htpExecutionFingerprintLogits.end(),
@@ -5959,7 +5969,7 @@ std::string nicopediaHtpGeneration(
     htpNativeArLogitsFinite = htpNativeArLogitsFinite && arLogitsFinite;
     htpNativeArProbabilitiesFinite =
         htpNativeArProbabilitiesFinite && arProbabilitiesFinite;
-    if (htpNativePolicy && (!arOutputFinite || !arLogitsFinite ||
+    if (htpHealthPolicy && (!arOutputFinite || !arLogitsFinite ||
                             !arProbabilitiesFinite))
       return htpNativeFailure("autoregressive_parity",
                               "non-finite HTP logits/probabilities");
@@ -6045,16 +6055,31 @@ std::string nicopediaHtpGeneration(
   arGate = arGate && !divergenceBlocked;
   const bool legacyGate = parityGate && arGate;
   const bool candidateGate = parityGateCandidate && arGateCandidate;
-  // htp-native experimental policy: fixed-prefix and AR parity are diagnostic
-  // only, while generation is gated on QNN success plus finite HTP tensors in
-  // every one of those executions.  Legacy/candidate parity gates remain
-  // exactly as established above.
+  // HTP-health policies (htp-native and htp-smoke): fixed-prefix and AR parity
+  // are diagnostic only, while generation is gated on QNN success plus finite
+  // HTP tensors in every one of those executions.  Legacy/candidate parity
+  // gates remain exactly as established above.
+  const auto &diagnosticTrace = runtime.apiTrace();
+  const auto qnnTraceHealthy = [](const auto &trace) {
+    return trace.backendRequested == "HTP" &&
+           trace.graphExecuteAttemptCount > 0 &&
+           trace.graphExecuteSuccessCount == trace.graphExecuteAttemptCount &&
+           trace.graphExecuteFailureCount == 0 &&
+           trace.graphExecuteLastResult == 0 && trace.lastQnnResult == 0 &&
+           trace.effectiveResult == 0 && !trace.cpuBackendInitialized &&
+           !trace.fallbackAttempted && !trace.fallbackSucceeded;
+  };
+  const bool qnnTraceHealth = qnnTraceHealthy(diagnosticTrace);
+  // Keep htp-native's established health semantics unchanged.  The new
+  // development smoke policy additionally requires the explicit aggregate
+  // trace/backend/fallback health below.
+  if (htpSmokePolicy) htpNativeQnnSuccess = htpNativeQnnSuccess && qnnTraceHealth;
   const bool htpNativeGate =
       htpNativeQnnSuccess && htpNativePrefixLogitsFinite &&
       htpNativePrefixProbabilitiesFinite && htpNativeArLogitsFinite &&
       htpNativeArProbabilitiesFinite && htpNativeApplicationTensorsFinite;
   const bool generationGate =
-      htpNativePolicy
+      htpHealthPolicy
           ? htpNativeGate
           : ((generateConfig.gatePolicy == "candidate") ? candidateGate
                                                         : legacyGate);
@@ -6098,14 +6123,14 @@ std::string nicopediaHtpGeneration(
       htpNativeApplicationTensorsFinite =
           htpNativeApplicationTensorsFinite && finiteTrainingOutputs(htpStep);
       if (!rowFinite)
-        return htpNativePolicy
+        return htpHealthPolicy
                    ? htpNativeFailure("generation_loop",
                                       "generation step produced non-finite logits")
                    : "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
                      "failure_classification=EXECUTION_NONFINITE\n"
                      "error=generation step produced non-finite logits\n" +
                          runtime.apiTraceSummary() + runtime.diagnostics();
-      if (!generationProbabilitiesFinite && htpNativePolicy)
+      if (!generationProbabilitiesFinite && htpHealthPolicy)
         return htpNativeFailure("generation_loop",
                                 "generation step produced non-finite probabilities");
       uint8_t byte = 0;
@@ -6132,7 +6157,7 @@ std::string nicopediaHtpGeneration(
         samplingProbabilitySum = sampling.probabilitySum;
         if (!sampling.ok) {
           ++samplingFailureCount;
-          if (htpNativePolicy)
+          if (htpHealthPolicy)
             return htpNativeFailure(
                 "sampling",
                 "top-k probability weights/logits are non-finite or sum<=0");
@@ -6163,12 +6188,15 @@ std::string nicopediaHtpGeneration(
       nicopedia_gen::utf8StatsOf(generated);
   const nicopedia_gen::GenerationAggregates ag =
       nicopedia_gen::generationAggregates(generated);
+  if (htpSmokePolicy) htpNativeQnnSuccess =
+      htpNativeQnnSuccess && qnnTraceHealthy(runtime.apiTrace());
   const bool htpNativeHealth =
       htpNativeGate && htpNativeGenerationLogitsFinite &&
       htpNativeGenerationProbabilitiesFinite &&
-      htpNativeApplicationTensorsFinite && samplingHealth;
+      htpNativeApplicationTensorsFinite && samplingHealth &&
+      (!htpSmokePolicy || qnnTraceHealthy(runtime.apiTrace()));
   const bool reportGenerationGate =
-      htpNativePolicy ? htpNativeHealth : generationGate;
+      htpHealthPolicy ? htpNativeHealth : generationGate;
   // Row-level logit/probability finiteness is enforced fail-closed inside the
   // generation loop.  Keep the host timing flags separate from tensor health
   // so a QNN success is never mistaken for finite application-visible data.
@@ -6182,7 +6210,7 @@ std::string nicopediaHtpGeneration(
           << status
           << (reportGenerationGate
                   ? ""
-                  : (htpNativePolicy
+                  : (htpHealthPolicy
                          ? "\nfailure_classification=HTP_NATIVE_HEALTH"
                          : "\nfailure_classification=PARITY_GATE_REJECTED"))
          << "\nmodel=L" << layers << "\nlayers=" << layers << "\nheads=" << heads
@@ -6190,6 +6218,7 @@ std::string nicopediaHtpGeneration(
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
+         << "\ncheckpoint_format=" << (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1")
          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
          << "\ncheckpoint_file_bytes=" << loaded.fileBytes
          << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
@@ -6245,8 +6274,8 @@ std::string nicopediaHtpGeneration(
          << "\nar_divergence_blocked=" << (divergenceBlocked ? "true" : "false")
           << "\ngeneration_gate=" << (generationGate ? "true" : "false")
           << "\ngeneration_health="
-          << (htpNativePolicy ? (htpNativeHealth ? "true" : "false")
-                              : "n/a")
+          << (htpHealthPolicy ? (htpNativeHealth ? "true" : "false")
+                               : "n/a")
           << "\nhtp_native_qnn_success="
           << (htpNativeQnnSuccess ? "true" : "false")
           // Keep QNN return status and application-visible tensor finiteness
@@ -6292,6 +6321,7 @@ std::string nicopediaHtpGeneration(
           << (samplingProbabilitySumPositive ? "true" : "false")
           << "\nsampling_probability_sum=" << samplingProbabilitySum
           << "\ngeneration_policy=" << generateConfig.gatePolicy;
+  if (htpSmokePolicy) report << "\nsmoke_only=true";
   for (size_t i = 0; i < parityRows.size(); ++i) {
     const auto &row = parityRows[i];
     report << "\nparity_" << i << "_label=" << row.label

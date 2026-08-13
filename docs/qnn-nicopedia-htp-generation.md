@@ -6,6 +6,16 @@
 > [L19 long-training milestone](qnn-nicopedia-htp-long-training.md)を参照。
 > この節以降はlegacy generation milestoneの記録である。
 
+> 2026-08-13追記: 開発用 `htp-smoke` は「HTP native generation が実際に
+> autoregressive 実行できるか」を最短で確認するための別policyである。
+> `NPRTCKPTV2` の要求header、finite checkpoint、canonical training report の
+> `final_parameter_hash`、HTP/QNN実行成功、`cpu_fallback=false`、logits/
+> probabilities/output tensors のfiniteをfail-closedで要求する。legacy raw-logit
+> parity、candidate parity、full-cap eval、NLL、chunk healthは証明条件ではなく、
+> generation pathで計算された場合も診断値としてのみ保存する。`htp-smoke` の
+> reportには `generation_policy=htp-smoke` と `smoke_only=true` を記録し、public
+> evidence、parity certification、model-quality validationには使用しない。
+
 Milestone: load the HTP-trained Nicopedia real-text checkpoint
 (`build/reports/nicopedia-htp-training/htp-seed<S>-l<L>-step320.ckpt`,
 NPRTCKPTV1 private format) into the QNN HTP graph and run byte-level
@@ -113,6 +123,18 @@ numerical evidence) apply unchanged.
   terminal output may show the lossless display.
 - `-SelfTest` validates the lossless display, SHA-256 plumbing, and QAIRT
   pinning without a device.
+
+### Development-only `htp-smoke`
+
+Use `-GatePolicy htp-smoke` for a bounded generation smoke test. Before any
+device work the runner requires the canonical same-step training report
+(`seed<S>-l<L>-steps<N>-result.txt`) and validates its final parameter hash,
+then parses the checkpoint header on the host and requires `NPRTCKPTV2` plus
+exact vocabulary/tokens/dimension/FFN/layers/heads/seed/step identity. No
+full-cap HTP/CPU evaluation report is read in this policy. On device, parity
+and AR rows remain diagnostics; generation opens only when the HTP/QNN health
+conditions above pass. `legacy`, `candidate`, and `htp-native` keep their
+existing gate semantics.
 
 ## Public/private split
 

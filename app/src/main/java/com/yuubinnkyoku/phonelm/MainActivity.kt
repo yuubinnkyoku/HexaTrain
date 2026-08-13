@@ -210,8 +210,9 @@ class MainActivity : Activity() {
                     "phonelm.temperature must be positive and finite"
                 generateMode == "sample" && (topK < 1 || topK > 256) ->
                     "phonelm.top_k must be in 1..256"
-                gatePolicy != "legacy" && gatePolicy != "candidate" && gatePolicy != "htp-native" ->
-                    "phonelm.gate_policy must be legacy, candidate or htp-native"
+                gatePolicy != "legacy" && gatePolicy != "candidate" &&
+                    gatePolicy != "htp-native" && gatePolicy != "htp-smoke" ->
+                    "phonelm.gate_policy must be legacy, candidate, htp-native or htp-smoke"
                 htpGraphPrecisionMode !in 0..2 ->
                     "phonelm.htp_graph_precision_mode must be 0, 1 or 2"
                 htpGraphPrecisionCompensation !in 0..2 ->

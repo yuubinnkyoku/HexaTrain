@@ -39,10 +39,10 @@ struct GenerateConfig {
   // 1..256; values above the vocabulary are clamped to the vocabulary.
   uint32_t topK = 256;
   uint64_t samplingSeed = 0;
-  // Parity policy that gates generation ("legacy" | "candidate"; fixed by
-  // the parity re-audit protocol docs/qnn-nicopedia-htp-parity-policy.md).
-  // "candidate" is the full policy F and is only usable after independent
-  // review approval; the runner enforces this with -CandidatePolicyApproved.
+  // Gate policy: "legacy" | "candidate" | "htp-native" | "htp-smoke".
+  // The parity re-audit protocol remains fixed; "candidate" is the full
+  // policy F and is only usable after independent review approval.  The
+  // runner enforces that approval with -CandidatePolicyApproved.
   std::string gatePolicy = "legacy";
   // Diagnostic tap configuration ("NONE" | "COARSE" | "FINE").  These fields
   // are private diagnostics only: they never change parity-gate semantics.

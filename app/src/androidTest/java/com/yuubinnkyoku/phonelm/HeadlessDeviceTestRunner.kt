@@ -281,8 +281,8 @@ class HeadlessDeviceTestRunner {
         val topK = intArgument(arguments, "topK", 16, 1..256)
         val samplingSeed = longArgument(arguments, "samplingSeed", 42L, 0L..Long.MAX_VALUE)
         val gatePolicy = stringArgument(arguments, "gatePolicy", "legacy")
-        require(gatePolicy == "legacy" || gatePolicy == "candidate" || gatePolicy == "htp-native") {
-            "gatePolicy must be legacy, candidate, or htp-native"
+        require(gatePolicy == "legacy" || gatePolicy == "candidate" || gatePolicy == "htp-native" || gatePolicy == "htp-smoke") {
+            "gatePolicy must be legacy, candidate, htp-native, or htp-smoke"
         }
 
         require(layers == 19) { "$suite requires layers=19" }
@@ -646,7 +646,15 @@ class HeadlessDeviceTestRunner {
             val qnnReturnOk = Regex("(?m)^qnn_return_code_success=true$").containsMatchIn(report)
             val tensorFiniteOk = Regex("(?m)^output_tensors_finite=true$").containsMatchIn(report)
             val finiteDiagnosticsOk = !Regex("(?m)^(?:nan_detected|inf_detected)=true$").containsMatchIn(report)
-            return statusOk && prefixOk && fallbackOk && qnnReturnOk && tensorFiniteOk && finiteDiagnosticsOk
+            val smokeGateOk = if (suite == "nicopedia-generate" &&
+                Regex("(?m)^gate_policy=htp-smoke$").containsMatchIn(report)) {
+                Regex("(?m)^generation_gate=true$").containsMatchIn(report) &&
+                    Regex("(?m)^smoke_only=true$").containsMatchIn(report)
+            } else {
+                true
+            }
+            return statusOk && prefixOk && fallbackOk && qnnReturnOk && tensorFiniteOk &&
+                finiteDiagnosticsOk && smokeGateOk
         }
         val values = report.lineSequence()
             .mapNotNull { line -> line.split('=', limit = 2).takeIf { it.size == 2 } }

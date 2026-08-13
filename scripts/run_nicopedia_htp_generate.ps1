@@ -36,7 +36,7 @@ param(
     [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
     [string]$TrainingReportPath = '',
     [string]$EvalReportPath = '',
-    [string]$GatePolicy = 'legacy',   # legacy | candidate | htp-native (explicit experimental, health-gated)
+    [string]$GatePolicy = 'legacy',   # legacy | candidate | htp-native | htp-smoke
     [switch]$CandidatePolicyApproved, # required to run -GatePolicy candidate
     [switch]$AuditOnly,               # accept a FAILED gate report (audit runs)
     [int]$HtpGraphPrecisionMode = 0,  # private diagnostics: 0 unset, 1 fp16, 2 fp32
@@ -102,6 +102,30 @@ function Resolve-PhoneLmHtpNativeAnchorHash {
         }
     }
     return [string]$EvalHealth.checkpoint_parameter_hash
+}
+
+function Assert-PhoneLmHtpSmokeCheckpointHeader {
+    param(
+        [Parameter(Mandatory = $true)]$Header,
+        [Parameter(Mandatory = $true)][int]$Seed,
+        [Parameter(Mandatory = $true)][int]$Layers,
+        [Parameter(Mandatory = $true)][int]$Tokens,
+        [Parameter(Mandatory = $true)][int]$Dimension,
+        [Parameter(Mandatory = $true)][int]$FeedForwardDimension,
+        [Parameter(Mandatory = $true)][int]$Step
+    )
+    $expected = [ordered]@{
+        Magic = 'NPRTCKPTV2'; Vocabulary = 256; Tokens = $Tokens
+        Dimension = $Dimension; FeedForward = $FeedForwardDimension
+        Layers = $Layers; Heads = 2; Seed = $Seed; Step = $Step
+    }
+    foreach ($key in $expected.Keys) {
+        if (-not $Header.PSObject.Properties.Name.Contains($key) -or
+            $Header.$key -ne $expected[$key]) {
+            $actual = if ($Header.PSObject.Properties.Name.Contains($key)) { $Header.$key } else { '<missing>' }
+            throw "HTP_SMOKE_CHECKPOINT_HEADER_MISMATCH: $key actual=$actual expected=$($expected[$key])"
+        }
+    }
 }
 
 # Lossless UTF-8 display: valid sequences pass through, invalid/truncated
@@ -328,6 +352,18 @@ function Invoke-SelfTest {
     $trainingAnchor = [ordered]@{ final_parameter_hash = $evalAnchor.checkpoint_parameter_hash }
     $resolvedWithTraining = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalAnchor -CpuHealth $cpuAnchor -TrainingHealth $trainingAnchor
     if ($resolvedWithTraining -ne $resolvedWithoutTraining) { throw 'SELFTEST_HTP_NATIVE_TRAINING_ANCHOR' }
+    $smokeHeader = [pscustomobject][ordered]@{
+        Magic = 'NPRTCKPTV2'; Vocabulary = 256; Tokens = 32; Dimension = 32
+        FeedForward = 32; Layers = 19; Heads = 2; Seed = 1; Step = 8000
+    }
+    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $smokeHeader -Seed 1 -Layers 19 -Tokens 32 -Dimension 32 -FeedForwardDimension 32 -Step 8000
+    $smokeHeader.Step = 7999
+    try {
+        Assert-PhoneLmHtpSmokeCheckpointHeader -Header $smokeHeader -Seed 1 -Layers 19 -Tokens 32 -Dimension 32 -FeedForwardDimension 32 -Step 8000
+        throw 'SELFTEST_HTP_SMOKE_HEADER_NEGATIVE'
+    } catch {
+        if ($_.Exception.Message -notmatch '^HTP_SMOKE_CHECKPOINT_HEADER_MISMATCH:') { throw }
+    }
     Write-Host 'run_nicopedia_htp_generate_self_test=PASS'
     exit 0
 }
@@ -347,8 +383,8 @@ if ($CheckpointStep -lt 1 -or $CheckpointStep -gt 999999) {
 }
 if ($MaxNewBytes -lt 1 -or $MaxNewBytes -gt 1024) { throw 'MAX_NEW_BYTES_INVALID: MaxNewBytes must be in 1..1024' }
 if ($Mode -ne 'Greedy' -and $Mode -ne 'Sample') { throw 'MODE_INVALID: Mode must be Greedy or Sample' }
-if ($GatePolicy -ne 'legacy' -and $GatePolicy -ne 'candidate' -and $GatePolicy -ne 'htp-native') {
-    throw 'GATE_POLICY_INVALID: GatePolicy must be legacy, candidate or htp-native'
+if ($GatePolicy -notin @('legacy', 'candidate', 'htp-native', 'htp-smoke')) {
+    throw 'GATE_POLICY_INVALID: GatePolicy must be legacy, candidate, htp-native or htp-smoke'
 }
 if ($GatePolicy -eq 'candidate' -and -not $CandidatePolicyApproved) {
     throw 'CANDIDATE_POLICY_NOT_APPROVED: -GatePolicy candidate requires -CandidatePolicyApproved (independent Reviewer PASS + explicit instruction)'
@@ -394,10 +430,28 @@ if ($promptBytes.Length -gt $Tokens) {
 # mismatched file cannot pass.
 $checkpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
 $checkpoint = Join-Path $trainingRoot $checkpointName
-$anchorFile = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt"
+$canonicalTrainingReport = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt"
+if ($GatePolicy -eq 'htp-smoke') {
+    if (-not $TrainingReportPath) { $TrainingReportPath = $canonicalTrainingReport }
+    if ([IO.Path]::GetFullPath($TrainingReportPath) -ne [IO.Path]::GetFullPath($canonicalTrainingReport)) {
+        throw "HTP_SMOKE_TRAINING_REPORT_NOT_CANONICAL: expected=$canonicalTrainingReport"
+    }
+}
+$anchorFile = if ($GatePolicy -eq 'htp-smoke') { $TrainingReportPath } else { $canonicalTrainingReport }
 if (-not (Test-Path -LiteralPath $checkpoint -PathType Leaf)) { throw "CHECKPOINT_MISSING: $checkpoint" }
 $anchorHash = ''
-if ($GatePolicy -ne 'htp-native') {
+if ($GatePolicy -eq 'htp-smoke') {
+    if (-not (Test-Path -LiteralPath $TrainingReportPath -PathType Leaf)) { throw "ANCHOR_MISSING: $TrainingReportPath" }
+    $trainingMap = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $TrainingReportPath -Raw)
+    if (-not $trainingMap.Contains('final_parameter_hash') -or
+        $trainingMap.final_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') {
+        throw "HTP_SMOKE_TRAINING_HASH_NOT_FOUND: $TrainingReportPath"
+    }
+    $anchorHash = [string]$trainingMap.final_parameter_hash
+    $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
+    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $checkpointHeader -Seed $Seed -Layers $layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
+    Write-Host "htp-smoke prerequisites accepted: canonical training report and NPRTCKPTV2 header verified anchor=$anchorHash"
+} elseif ($GatePolicy -ne 'htp-native') {
     if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
     $anchorText = Get-Content -LiteralPath $anchorFile -Raw
     $anchorMatch = [regex]::Match($anchorText, '(?m)^final_parameter_hash=(fnv1a64:[0-9a-f]{16})$')
@@ -535,7 +589,14 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
 $result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -Device $device -Package $package
 if ($waited.ProcessExitCode -ne 0 -and -not $AuditOnly) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
 Assert-PhoneLmHeadlessNoActivity -Text $result
-if ($result -notmatch 'NICOPEDIA_HTP_GENERATION') { throw 'DEVICE_RESULT_SCHEMA_MISMATCH' }
+if ($result -notmatch 'NICOPEDIA_HTP_GENERATION') {
+    $preview = if ($result.Length -gt 4096) {
+        $result.Substring(0, 4096)
+    } else {
+        $result
+    }
+    throw "DEVICE_RESULT_SCHEMA_MISMATCH: expected=NICOPEDIA_HTP_GENERATION`nactual:`n$preview"
+}
 if ($result -notmatch '(?m)^status=SUCCESS$') {
     if (-not $AuditOnly) {
         throw "DEVICE_GENERATION_FAILED:`n$result"
@@ -568,7 +629,7 @@ $arGate = [regex]::Match($result, '(?m)^ar_gate=(true|false)$').Groups[1].Value
 $generationGate = [regex]::Match($result, '(?m)^generation_gate=(true|false)$').Groups[1].Value
 $parityGateCandidate = [regex]::Match($result, '(?m)^parity_gate_candidate=(true|false)$').Groups[1].Value
 $arGateCandidate = [regex]::Match($result, '(?m)^ar_gate_candidate=(true|false)$').Groups[1].Value
-$gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate|htp-native)$').Groups[1].Value
+$gatePolicyReported = [regex]::Match($result, '(?m)^gate_policy=(legacy|candidate|htp-native|htp-smoke)$').Groups[1].Value
 if ($gatePolicyReported -ne $GatePolicy) {
     throw "GATE_POLICY_MISMATCH: device=$gatePolicyReported requested=$GatePolicy"
 }
@@ -603,7 +664,7 @@ if ($parityGateCandidate -eq '' -or $arGateCandidate -eq '') {
     throw 'CANDIDATE_GATE_FIELDS_MISSING: report lacks parity_gate_candidate/ar_gate_candidate'
 }
 
-if ($GatePolicy -eq 'htp-native') {
+if ($GatePolicy -eq 'htp-native' -or $GatePolicy -eq 'htp-smoke') {
     # HTP-native execution is health-gated independently of legacy parity.
     # The trace and every reported finite row are mandatory evidence; missing
     # fields fail closed instead of being interpreted as a success.
@@ -622,10 +683,38 @@ if ($GatePolicy -eq 'htp-native') {
     # The explicit experimental policy: generation is gated on HTP health
     # alone (fail-closed at every graph execute on-device); the parity rows
     # stay in the report as diagnostics and never block the run.
-    if ($generationGate -ne 'true') {
-        throw "HTP_NATIVE_GENERATION_GATE_REJECTED generation=$generationGate`n$result"
+    if ($GatePolicy -eq 'htp-smoke') {
+        $smokeOnlyReported = [regex]::Match($result, '(?m)^smoke_only=(true|false)$').Groups[1].Value
+        if ($smokeOnlyReported -ne 'true') { throw 'HTP_SMOKE_REPORT_NOT_MARKED_SMOKE_ONLY' }
+        $smokeHeaders = [ordered]@{
+            checkpoint_header_vocabulary = '256'; checkpoint_header_tokens = [string]$Tokens
+            checkpoint_header_dimension = [string]$Dimension; checkpoint_header_feedforward = [string]$FeedForwardDimension
+            checkpoint_header_layers = [string]$layers; checkpoint_header_heads = '2'
+            checkpoint_header_seed = [string]$Seed; checkpoint_header_step = [string]$CheckpointStep
+            checkpoint_format = 'NPRTCKPTV2'
+            checkpoint_finite = 'true'; htp_native_prefix_logits_finite = 'true'
+            htp_native_prefix_probabilities_finite = 'true'; htp_native_ar_logits_finite = 'true'
+            htp_native_ar_probabilities_finite = 'true'; htp_native_generation_logits_finite = 'true'
+            htp_native_generation_probabilities_finite = 'true'
+        }
+        $smokeMap = Get-PhoneLmKeyValueMap -Text $result
+        foreach ($entry in $smokeHeaders.GetEnumerator()) {
+            if (-not $smokeMap.Contains($entry.Key) -or $smokeMap[$entry.Key] -ne $entry.Value) {
+                throw "HTP_SMOKE_REPORT_FIELD_REJECTED: $($entry.Key)"
+            }
+        }
     }
-    Write-Host "htp-native policy accepted; parity diagnostics: parity=$parityGate ar=$arGate"
+    if ($generationGate -ne 'true') {
+        if ($GatePolicy -eq 'htp-native') {
+            throw "HTP_NATIVE_GENERATION_GATE_REJECTED generation=$generationGate`n$result"
+        }
+        throw "HTP_SMOKE_GENERATION_GATE_REJECTED generation=$generationGate`n$result"
+    }
+    if ($GatePolicy -eq 'htp-native') {
+        Write-Host "htp-native policy accepted; parity diagnostics: parity=$parityGate ar=$arGate"
+    } else {
+        Write-Host "htp-smoke policy accepted; parity diagnostics: parity=$parityGate ar=$arGate"
+    }
 } else {
     if ($parityGate -ne 'true' -or $arGate -ne 'true' -or $generationGate -ne 'true') {
         if (-not $AuditOnly) {

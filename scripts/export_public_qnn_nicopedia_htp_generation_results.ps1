@@ -224,6 +224,13 @@ $performanceRows = @()
 $identityRows = @()
 foreach ($file in $resultFiles) {
     $map = Read-KeyValueReport $file.FullName
+    # Development-only htp-smoke is never a public evidence source.  Reject
+    # it before any aggregate rows are materialized so a smoke pass cannot be
+    # mistaken for parity certification or model-quality evidence.
+    if (($map.Contains('generation_policy') -and $map['generation_policy'] -eq 'htp-smoke') -or
+        ($map.Contains('smoke_only') -and $map['smoke_only'] -eq 'true')) {
+        throw "HTP_SMOKE_REPORT_NOT_PUBLIC: $($file.Name)"
+    }
     $summaryRows += [ordered]@{
         model = $map["model"]; seed = $map["seed"]; layers = $map["layers"]
         mode = $map["generate_mode"]; temperature = $map["temperature"]
