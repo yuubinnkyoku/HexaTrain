@@ -7,6 +7,8 @@ param(
     [switch]$SkipAndroidBuild,
     # Run gradle :app:clean first. Slow (CMake/NDK rebuild). Use only when required.
     [switch]$Clean,
+    # Fast local gate for iterative development: audits, parser check, and unit tests only.
+    [switch]$Fast,
     # Additionally verify the QAIRT SDK and a QNN-enabled build + APK audit.
     [switch]$WithQairt,
     [string]$QairtSdkRoot = "",
@@ -61,11 +63,45 @@ function Invoke-Process([string]$Label, [string]$FilePath, [string[]]$Arguments)
     if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE" }
 }
 
+# Resolve the real PowerShell 7 executable. Windows PowerShell's $PSHOME does
+# not contain pwsh.exe, so never assume Join-Path $PSHOME "pwsh.exe" exists.
+$script:ResolvedPwshExe = $null
+function Resolve-PwshExe() {
+    if ($script:ResolvedPwshExe) { return $script:ResolvedPwshExe }
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $cmd -or -not (Test-Path -LiteralPath $cmd.Source)) {
+        throw "pwsh.exe (PowerShell 7+) not found on PATH; install PowerShell 7 or add it to PATH"
+    }
+    $script:ResolvedPwshExe = $cmd.Source
+    return $script:ResolvedPwshExe
+}
+
 # External scripts may call `exit`, which would terminate this script when run
 # in-process. Always run them in a child pwsh process and check $LASTEXITCODE.
 function Invoke-PwshScript([string]$Label, [string]$ScriptPath, [string[]]$Arguments) {
-    $pwshExe = Join-Path $PSHOME "pwsh.exe"
+    $pwshExe = Resolve-PwshExe
     Invoke-Process $Label $pwshExe (@("-NoProfile", "-File", $ScriptPath) + $Arguments)
+}
+
+function Test-Command([string]$Name) {
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Invoke-PowerShellParserCheck() {
+    $scripts = Get-ChildItem (Join-Path $Root "scripts\*.ps1")
+    $bad = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $scripts) {
+        $parseErrs = $null
+        [void][System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content -LiteralPath $item.FullName -Raw), [ref]$parseErrs)
+        if ($parseErrs.Count -gt 0) {
+            $bad.Add("$($item.Name): $($parseErrs[0].Message)")
+        }
+    }
+    if ($bad.Count -gt 0) {
+        throw ("PowerShell parser errors:`n" + ($bad -join "`n"))
+    }
+    "$($scripts.Count) PowerShell scripts parsed cleanly"
 }
 
 function Invoke-Gradle([string]$Label, [string[]]$Tasks) {
@@ -74,6 +110,9 @@ function Invoke-Gradle([string]$Label, [string[]]$Tasks) {
 
 Push-Location $Root
 try {
+    # Fail-fast: almost every step below relies on PowerShell 7.
+    Resolve-PwshExe | Out-Null
+
     Invoke-Step "git-diff-check" {
         git diff --check
         if ($LASTEXITCODE -ne 0) { throw "git diff --check reported whitespace errors" }
@@ -125,204 +164,282 @@ try {
         "$($changed.Count) changed/untracked file(s) scanned"
     }
 
+    if ($Fast) {
+        Invoke-Step "powershell-parser-check" {
+            Invoke-PowerShellParserCheck
+        }
+    }
+
     Invoke-Step "qairt-selection-self-test" {
         Invoke-PwshScript "check_qairt self-test" (Join-Path $Root "scripts\check_qairt.ps1") @(
             "-SelfTest")
         "pinned arguments, root selection, core/advisory classification ok (temp-only)"
     }
 
-    Invoke-Step "nicopedia-generation-self-test" {
-        Invoke-PwshScript "Nicopedia HTP generation runner self-test" `
-            (Join-Path $Root "scripts\run_nicopedia_htp_generate.ps1") @(
-                "-SelfTest",
-                "-QairtSdkRoot", "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702",
-                "-ExpectedBuildId", "2.48.40.260702151143")
-        Invoke-PwshScript "Nicopedia HTP generation public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_generation_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Nicopedia HTP 1000-step generation public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_1000step_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Nicopedia HTP parity policy public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_parity_policy.ps1") @(
-                "-SelfTest")
-        "runner allow-list/display self-tests and exporter leak guards PASS (temp-only; no device required)"
+    if ($Fast) {
+        Add-Skip "nicopedia-generation-self-test" "fast mode"
+    } else {
+        Invoke-Step "nicopedia-generation-self-test" {
+            Invoke-PwshScript "Nicopedia HTP generation runner self-test" `
+                (Join-Path $Root "scripts\run_nicopedia_htp_generate.ps1") @(
+                    "-SelfTest",
+                    "-QairtSdkRoot", "C:\Qualcomm\AIStack\QAIRT\2.48.40.260702",
+                    "-ExpectedBuildId", "2.48.40.260702151143")
+            Invoke-PwshScript "Nicopedia HTP generation public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_generation_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Nicopedia HTP 1000-step generation public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_1000step_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Nicopedia HTP parity policy public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_parity_policy.ps1") @(
+                    "-SelfTest")
+            "runner allow-list/display self-tests and exporter leak guards PASS (temp-only; no device required)"
+        }
     }
 
-    Invoke-Step "margin-decomposition-probe" {
-        Invoke-PwshScript "l19 first-error/margin decomposition probe" `
-            (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
-        "deterministic CPU reports regenerated (private margin-tokens included)"
+    if ($Fast) {
+        Add-Skip "margin-decomposition-probe" "fast mode"
+    } else {
+        Invoke-Step "margin-decomposition-probe" {
+            Invoke-PwshScript "l19 first-error/margin decomposition probe" `
+                (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
+            "deterministic CPU reports regenerated (private margin-tokens included)"
+        }
     }
 
-    Invoke-Step "critical-margin-objective-probe" {
-        Invoke-PwshScript "critical margin objective probe" `
-            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @()
-        Invoke-PwshScript "critical margin training probe" `
-            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @(
-                "-Train", "-BaselineDir", (Join-Path $Root "build\reports\qnn-critical-margin-objective"),
-                "-ReportRoot", (Join-Path $Root "build\reports\qnn-critical-margin-training"))
-        "deterministic CPU objective/training reports regenerated (private)"
+    if ($Fast) {
+        Add-Skip "critical-margin-objective-probe" "fast mode"
+    } else {
+        Invoke-Step "critical-margin-objective-probe" {
+            Invoke-PwshScript "critical margin objective probe" `
+                (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @()
+            Invoke-PwshScript "critical margin training probe" `
+                (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @(
+                    "-Train", "-BaselineDir", (Join-Path $Root "build\reports\qnn-critical-margin-objective"),
+                    "-ReportRoot", (Join-Path $Root "build\reports\qnn-critical-margin-training"))
+            "deterministic CPU objective/training reports regenerated (private)"
+        }
     }
 
-    Invoke-Step "readout-probe-self-test" {
-        Invoke-PwshScript "readout probe self-test" `
-            (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @("-SelfTest")
-        "readout probe self-test PASS (private)"
+    if ($Fast) {
+        Add-Skip "readout-probe-self-test" "fast mode"
+    } else {
+        Invoke-Step "readout-probe-self-test" {
+            Invoke-PwshScript "readout probe self-test" `
+                (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @("-SelfTest")
+            "readout probe self-test PASS (private)"
+        }
     }
 
-    Invoke-Step "readout-representation-probe" {
-        Invoke-PwshScript "readout/representation diagnosis run" `
-            (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @()
-        "deterministic CPU readout/representation reports regenerated (private; exporter self-test pre-fly uses them)"
+    if ($Fast) {
+        Add-Skip "readout-representation-probe" "fast mode"
+    } else {
+        Invoke-Step "readout-representation-probe" {
+            Invoke-PwshScript "readout/representation diagnosis run" `
+                (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @()
+            "deterministic CPU readout/representation reports regenerated (private; exporter self-test pre-fly uses them)"
+        }
     }
 
-    Invoke-Step "intra-block-readability-self-test" {
-        Invoke-PwshScript "intra-block readability self-test" `
-            (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @("-SelfTest")
-        "intra-block readability self-test PASS (private)"
+    if ($Fast) {
+        Add-Skip "intra-block-readability-self-test" "fast mode"
+    } else {
+        Invoke-Step "intra-block-readability-self-test" {
+            Invoke-PwshScript "intra-block readability self-test" `
+                (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @("-SelfTest")
+            "intra-block readability self-test PASS (private)"
+        }
     }
 
-    Invoke-Step "intra-block-readability-run" {
-        Invoke-PwshScript "intra-block readability diagnosis run" `
-            (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @()
-        "deterministic CPU intra-block readability reports regenerated (private; exporter self-test pre-fly uses them)"
+    if ($Fast) {
+        Add-Skip "intra-block-readability-run" "fast mode"
+    } else {
+        Invoke-Step "intra-block-readability-run" {
+            Invoke-PwshScript "intra-block readability diagnosis run" `
+                (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @()
+            "deterministic CPU intra-block readability reports regenerated (private; exporter self-test pre-fly uses them)"
+        }
     }
 
-    Invoke-Step "attention-internal-self-test" {
-        Invoke-PwshScript "attention-internal diagnosis self-test" `
-            (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @("-SelfTest")
-        "attention-internal diagnosis self-test PASS (private)"
+    if ($Fast) {
+        Add-Skip "attention-internal-self-test" "fast mode"
+    } else {
+        Invoke-Step "attention-internal-self-test" {
+            Invoke-PwshScript "attention-internal diagnosis self-test" `
+                (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @("-SelfTest")
+            "attention-internal diagnosis self-test PASS (private)"
+        }
     }
 
-    Invoke-Step "attention-internal-run" {
-        Invoke-PwshScript "attention-internal diagnosis run" `
-            (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @()
-        "deterministic CPU attention-internal diagnosis reports regenerated (private; exporter self-test pre-fly uses them)"
+    if ($Fast) {
+        Add-Skip "attention-internal-run" "fast mode"
+    } else {
+        Invoke-Step "attention-internal-run" {
+            Invoke-PwshScript "attention-internal diagnosis run" `
+                (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @()
+            "deterministic CPU attention-internal diagnosis reports regenerated (private; exporter self-test pre-fly uses them)"
+        }
     }
 
-    Invoke-Step "output-projection-self-test" {
-        Invoke-PwshScript "output-projection audit self-test" `
-            (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @("-SelfTest")
-        "output-projection audit self-test PASS (private)"
+    if ($Fast) {
+        Add-Skip "output-projection-self-test" "fast mode"
+    } else {
+        Invoke-Step "output-projection-self-test" {
+            Invoke-PwshScript "output-projection audit self-test" `
+                (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @("-SelfTest")
+            "output-projection audit self-test PASS (private)"
+        }
     }
 
-    Invoke-Step "output-projection-run" {
-        Invoke-PwshScript "output-projection audit run" `
-            (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @()
-        "deterministic CPU output-projection audit reports regenerated (private; exporter self-test pre-fly uses them)"
+    if ($Fast) {
+        Add-Skip "output-projection-run" "fast mode"
+    } else {
+        Invoke-Step "output-projection-run" {
+            Invoke-PwshScript "output-projection audit run" `
+                (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @()
+            "deterministic CPU output-projection audit reports regenerated (private; exporter self-test pre-fly uses them)"
+        }
     }
 
-    Invoke-Step "probe-optimization-self-test" {
-        Invoke-PwshScript "probe-optimization audit self-test" `
-            (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @("-SelfTest")
-        "probe-optimization audit self-test PASS (private)"
+    if ($Fast) {
+        Add-Skip "probe-optimization-self-test" "fast mode"
+    } else {
+        Invoke-Step "probe-optimization-self-test" {
+            Invoke-PwshScript "probe-optimization audit self-test" `
+                (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @("-SelfTest")
+            "probe-optimization audit self-test PASS (private)"
+        }
     }
 
-    Invoke-Step "probe-optimization-run" {
-        Invoke-PwshScript "probe-optimization audit run" `
-            (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @()
-        "deterministic CPU probe-optimization audit reports regenerated (private; exporter self-test pre-fly uses them)"
+    if ($Fast) {
+        Add-Skip "probe-optimization-run" "fast mode"
+    } else {
+        Invoke-Step "probe-optimization-run" {
+            Invoke-PwshScript "probe-optimization audit run" `
+                (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @()
+            "deterministic CPU probe-optimization audit reports regenerated (private; exporter self-test pre-fly uses them)"
+        }
     }
 
-    Invoke-Step "seed-instability-diagnostics-self-test" {
-        Invoke-PwshScript "seed-instability diagnostics self-test" `
-            (Join-Path $Root "scripts\run_l19_seed_instability_diagnostics.ps1") @("-SelfTest")
-        "deterministic rerun, intervention scope, corrected TRAIN contract, and negative branch control fixtures PASS"
+    if ($Fast) {
+        Add-Skip "seed-instability-diagnostics-self-test" "fast mode"
+    } else {
+        Invoke-Step "seed-instability-diagnostics-self-test" {
+            Invoke-PwshScript "seed-instability diagnostics self-test" `
+                (Join-Path $Root "scripts\run_l19_seed_instability_diagnostics.ps1") @("-SelfTest")
+            "deterministic rerun, intervention scope, corrected TRAIN contract, and negative branch control fixtures PASS"
+        }
     }
 
-    Invoke-Step "attention-minimal-cause-self-test" {
-        Invoke-PwshScript "attention minimal-cause self-test" `
-            (Join-Path $Root "scripts\run_l19_attention_minimal_cause.ps1") @("-SelfTest")
-        "no-op parity, fixed patterns, branch scale, freeze scope, group identity, and deterministic training fixture PASS"
+    if ($Fast) {
+        Add-Skip "attention-minimal-cause-self-test" "fast mode"
+    } else {
+        Invoke-Step "attention-minimal-cause-self-test" {
+            Invoke-PwshScript "attention minimal-cause self-test" `
+                (Join-Path $Root "scripts\run_l19_attention_minimal_cause.ps1") @("-SelfTest")
+            "no-op parity, fixed patterns, branch scale, freeze scope, group identity, and deterministic training fixture PASS"
+        }
     }
 
-    Invoke-Step "context-supervision-stability-self-test" {
-        Invoke-PwshScript "context supervision stability self-test" `
-            (Join-Path $Root "scripts\run_l19_context_supervision_stability.ps1") @("-SelfTest")
-        "dataset determinism, matched histogram, target contract, canonical no-op, ordinary Attention, and curriculum multiset fixtures PASS"
+    if ($Fast) {
+        Add-Skip "context-supervision-stability-self-test" "fast mode"
+    } else {
+        Invoke-Step "context-supervision-stability-self-test" {
+            Invoke-PwshScript "context supervision stability self-test" `
+                (Join-Path $Root "scripts\run_l19_context_supervision_stability.ps1") @("-SelfTest")
+            "dataset determinism, matched histogram, target contract, canonical no-op, ordinary Attention, and curriculum multiset fixtures PASS"
+        }
     }
 
-    Invoke-Step "public-exporter-self-test" {
-        Invoke-PwshScript "post-fix public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Tiny LM scaling public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_tiny_lm_scaling_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "multilayer/multihead public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_multilayer_multihead_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "generic depth/head public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_generic_depth_head_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "first-nonfinite public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_first_nonfinite_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "depth-quality public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_depth_quality_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "validation-selection public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_validation_selected_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "autoregressive validation public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_autoregressive_validation.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "first-error/margin public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_margin_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "critical margin stabilization public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_critical_margin_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "readout diagnosis public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_readout_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "intra-block readability public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_intra_block_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "attention-internal diagnosis public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_attention_internal_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "output-projection audit public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_output_projection_audit_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "probe-optimization audit public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_probe_optimization_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "seed-instability root-cause public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_seed_instability_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "attention minimal-cause public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_attention_minimal_cause.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "context supervision stability public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_l19_context_supervision_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Nicopedia real-text public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Nicopedia real-text HTP public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_results.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "Nicopedia HTP long-training public exporter self-test" `
-            (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_long_training_results.ps1") @(
-                "-SelfTest")
-        "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
+    if ($Fast) {
+        Add-Skip "public-exporter-self-test" "fast mode"
+    } else {
+        Invoke-Step "public-exporter-self-test" {
+            Invoke-PwshScript "post-fix public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_post_fix_generation_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Tiny LM scaling public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_tiny_lm_scaling_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "multilayer/multihead public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_multilayer_multihead_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "generic depth/head public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_generic_depth_head_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "first-nonfinite public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_first_nonfinite_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "depth-quality public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_depth_quality_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "validation-selection public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_validation_selected_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "autoregressive validation public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_autoregressive_validation.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "first-error/margin public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_margin_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "critical margin stabilization public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_critical_margin_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "readout diagnosis public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_readout_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "intra-block readability public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_intra_block_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "attention-internal diagnosis public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_attention_internal_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "output-projection audit public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_output_projection_audit_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "probe-optimization audit public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_probe_optimization_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "seed-instability root-cause public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_seed_instability_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "attention minimal-cause public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_attention_minimal_cause.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "context supervision stability public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_l19_context_supervision_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Nicopedia real-text public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Nicopedia real-text HTP public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_results.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "Nicopedia HTP long-training public exporter self-test" `
+                (Join-Path $Root "scripts\export_public_qnn_nicopedia_htp_long_training_results.ps1") @(
+                    "-SelfTest")
+            "allow-list exports, manifest consistency, and negative rejection ok (temp-only)"
+        }
     }
 
-    Invoke-Step "resumable-formal-runner-self-test" {
-        Invoke-PwshScript "headless runner physical-identity self-test" `
-            (Join-Path $Root "scripts\run_qnn_headless_tests.ps1") @(
-                "-QairtSdkRoot", $PhoneLmQairtSdkRoot,
-                "-ExpectedBuildId", $PhoneLmQairtBuildId,
-                "-SelfTest")
-        Invoke-PwshScript "direct-seed identity self-test" `
-            (Join-Path $Root "scripts\run_qnn_direct_seed_equivalence.ps1") @(
-                "-SelfTest")
-        Invoke-PwshScript "resumable formal runner self-test" `
-            (Join-Path $Root "scripts\run_qnn_resumable_formal.ps1") @(
-                "-SelfTest")
-        "direct identity plus resume/atomic/identity-rejection/reattach cases ok (temp-only; no device required)"
+    if ($Fast) {
+        Add-Skip "resumable-formal-runner-self-test" "fast mode"
+    } else {
+        Invoke-Step "resumable-formal-runner-self-test" {
+            Invoke-PwshScript "headless runner physical-identity self-test" `
+                (Join-Path $Root "scripts\run_qnn_headless_tests.ps1") @(
+                    "-QairtSdkRoot", $PhoneLmQairtSdkRoot,
+                    "-ExpectedBuildId", $PhoneLmQairtBuildId,
+                    "-SelfTest")
+            Invoke-PwshScript "direct-seed identity self-test" `
+                (Join-Path $Root "scripts\run_qnn_direct_seed_equivalence.ps1") @(
+                    "-SelfTest")
+            Invoke-PwshScript "resumable formal runner self-test" `
+                (Join-Path $Root "scripts\run_qnn_resumable_formal.ps1") @(
+                    "-SelfTest")
+            "direct identity plus resume/atomic/identity-rejection/reattach cases ok (temp-only; no device required)"
+        }
     }
 
     if ($Clean) {
@@ -337,29 +454,40 @@ try {
         "JVM unit tests ok"
     }
 
-    Invoke-Step "host-tests" {
-        if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-            throw "g++ not found on PATH (required by scripts/run_host_tests.ps1)"
+    if ($Fast) {
+        Add-Skip "host-tests" "fast mode"
+    } else {
+        Invoke-Step "host-tests" {
+            if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
+                throw "g++ not found on PATH (required by scripts/run_host_tests.ps1)"
+            }
+            Invoke-PwshScript "run_host_tests" (Join-Path $Root "scripts\run_host_tests.ps1") @()
+            "C++ host tests ok (includes qnn_graph_shape_validator and nicopedia parity policy fault battery)"
         }
-        Invoke-PwshScript "run_host_tests" (Join-Path $Root "scripts\run_host_tests.ps1") @()
-        "C++ host tests ok (includes qnn_graph_shape_validator and nicopedia parity policy fault battery)"
     }
 
-    Invoke-Step "nicopedia-parity-policy-host-battery" {
-        $ParityHost = Join-Path $Root "build\host-tests\nicopedia_parity_policy_test.exe"
-        if (-not (Test-Path -LiteralPath $ParityHost)) {
-            throw "nicopedia_parity_policy_test.exe missing - run_host_tests must run first"
+    if ($Fast) {
+        Add-Skip "nicopedia-parity-policy-host-battery" "fast mode"
+    } else {
+        Invoke-Step "nicopedia-parity-policy-host-battery" {
+            $ParityHost = Join-Path $Root "build\host-tests\nicopedia_parity_policy_test.exe"
+            if (-not (Test-Path -LiteralPath $ParityHost)) {
+                throw "nicopedia_parity_policy_test.exe missing - run_host_tests must run first"
+            }
+            $FaultCsvDir = Join-Path $Root "build\reports\nicopedia-parity-policy"
+            New-Item -ItemType Directory -Force -Path $FaultCsvDir | Out-Null
+            & $ParityHost (Join-Path $FaultCsvDir "synthetic-fault-results.csv")
+            if ($LASTEXITCODE -ne 0) { throw "nicopedia parity policy fault battery failed" }
+            "nicopedia parity policy fault battery PASS (synthetic-fault-results.csv regenerated)"
         }
-        $FaultCsvDir = Join-Path $Root "build\reports\nicopedia-parity-policy"
-        New-Item -ItemType Directory -Force -Path $FaultCsvDir | Out-Null
-        & $ParityHost (Join-Path $FaultCsvDir "synthetic-fault-results.csv")
-        if ($LASTEXITCODE -ne 0) { throw "nicopedia parity policy fault battery failed" }
-        "nicopedia parity policy fault battery PASS (synthetic-fault-results.csv regenerated)"
     }
 
     if ($SkipAndroidBuild) {
         Add-Skip "assemble-debug" "-SkipAndroidBuild"
         Add-Skip "assemble-android-test" "-SkipAndroidBuild"
+    } elseif ($Fast) {
+        Add-Skip "assemble-debug" "fast mode"
+        Add-Skip "assemble-android-test" "fast mode"
     } else {
         Invoke-Step "assemble-debug" {
             Invoke-Gradle "assembleDebug" @(":app:assembleDebug")
@@ -379,7 +507,7 @@ try {
             Invoke-Step "qairt-check" {
                 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
                     -ExpectedBuildId $ExpectedBuildId
-                $pwshExe = Join-Path $PSHOME "pwsh.exe"
+                $pwshExe = Resolve-PwshExe
                 $checkOutput = & $pwshExe -NoProfile -File (Join-Path $Root "scripts\check_qairt.ps1") `
                     -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
                 $checkExit = $LASTEXITCODE

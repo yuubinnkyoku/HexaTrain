@@ -263,7 +263,7 @@ class HeadlessDeviceTestRunner {
         val layers = intArgument(arguments, "layers", 19, 1..100)
         val heads = intArgument(arguments, "heads", 2, 1..32)
         val tokens = intArgument(arguments, "tokens", 32, 8..256)
-        val dimension = intArgument(arguments, "dimension", 16, 2..256)
+        val dimension = intArgument(arguments, "dimension", 32, 2..256)
         val feedForwardDimension = intArgument(arguments, "feedForwardDimension", 32, 2..1024)
         val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
         val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
@@ -380,7 +380,7 @@ class HeadlessDeviceTestRunner {
         feedForwardDimension: Int,
         step: Int,
     ): String =
-        if (tokens == 32 && dimension == 16 && feedForwardDimension == 32) {
+        if (tokens == 32 && dimension == 32 && feedForwardDimension == 32) {
             // Canonical anchor naming remains byte-identical to historical artifacts.
             "htp-seed${seed}-l${layers}-step${step}.ckpt"
         } else {

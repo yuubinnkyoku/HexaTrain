@@ -5234,7 +5234,7 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
   else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
 }
 
-// Checkpoint file naming: the production anchor T32/D16/FFN32 keeps the
+// Checkpoint file naming: the production anchor T32/D32/FFN32 keeps the
 // legacy htp-seed<S>-l<L>-step<N>.ckpt name.  Every other configuration
 // includes all shape-bearing identity fields so two research configurations
 // cannot replace or mistakenly resume one another's checkpoint.
@@ -5242,7 +5242,7 @@ std::string nprtCheckpointName(uint32_t seed, uint32_t layers,
                                uint32_t tokens, uint32_t dimension,
                                uint32_t feedForwardDimension, uint32_t step) {
   return "htp-seed" + std::to_string(seed) + "-l" + std::to_string(layers) +
-         ((tokens == 32 && dimension == 16 && feedForwardDimension == 32)
+         ((tokens == 32 && dimension == 32 && feedForwardDimension == 32)
               ? ""
               : "-t" + std::to_string(tokens) + "-d" +
                     std::to_string(dimension) + "-f" +
@@ -5291,7 +5291,7 @@ bool nprtParseCheckpointStep(const std::string &path, uint32_t expectedSeed,
   const std::string suffix = ".ckpt";
   const std::string prefix = "htp-seed" + std::to_string(expectedSeed) + "-l" +
                              std::to_string(expectedLayers) + stepMarker;
-  // The legacy name is exclusively the production anchor identity.
+  // The legacy name is exclusively the T32/D32/FFN32 production anchor identity.
   if (base.size() > prefix.size() + suffix.size() &&
       base.compare(0, prefix.size(), prefix) == 0 &&
       base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
@@ -5707,7 +5707,7 @@ std::string nicopediaHtpGeneration(
                                layers, &expectedStep, config.tokens,
                                config.dimension, config.feedForwardDimension)) {
     const std::string variant =
-        config.tokens == 32 && config.dimension == 16 &&
+        config.tokens == 32 && config.dimension == 32 &&
                 config.feedForwardDimension == 32
             ? "htp-seed<seed>-l<layers>-step<step>.ckpt"
             : "htp-seed<seed>-l<layers>-t<tokens>-d<dimension>-f<ffn>-step<step>.ckpt";
@@ -6505,7 +6505,7 @@ std::string nicopediaHtpDivergenceLocalization(
                                config.dimension, config.feedForwardDimension))
     return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FILENAME\n"
-           "error=checkpoint filename must include T/D/FFN outside the T32/D16/FFN32 anchor\n";
+           "error=checkpoint filename must include T/D/FFN outside the T32/D32/FFN32 anchor\n";
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
