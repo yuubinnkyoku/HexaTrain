@@ -1315,21 +1315,31 @@ private fun GenerationOutputCard(
     modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 132.dp)
         .semantics { contentDescription = title },
 ) {
-    SelectionContainer {
-        Column(
-            Modifier.fillMaxWidth().padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+        Modifier.fillMaxWidth().padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (live) Text("LIVE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 92.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
-                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                if (live) Text("LIVE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            SelectionContainer {
+                Text(
+                    text.ifEmpty { "No output bytes" },
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 26.sp),
+                    fontFamily = TelemetryFontFamily,
+                )
             }
-            Text(
-                text.ifEmpty { "No output bytes" },
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 26.sp),
-                fontFamily = TelemetryFontFamily,
-            )
+        }
+        SelectionContainer {
             Text(
                 supportingText,
                 style = MaterialTheme.typography.labelLarge,
