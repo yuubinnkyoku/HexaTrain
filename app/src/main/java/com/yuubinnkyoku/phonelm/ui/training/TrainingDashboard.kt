@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -865,7 +866,9 @@ internal fun GenerationScreen(
     ) {
         item {
             DetailCard("Model identity") {
-                Text("D32 / FFN32 / L19 / H2 / T32", fontFamily = TelemetryFontFamily)
+                SelectionContainer {
+                    Text("D32 / FFN32 / L19 / H2 / T32", fontFamily = TelemetryFontFamily)
+                }
             }
         }
         item {
@@ -903,14 +906,20 @@ internal fun GenerationScreen(
         }
     }
     generationState.selectedCheckpoint?.let { checkpoint ->
-        Text(
-            "step ${checkpoint.step}\nD${checkpoint.dimension} / FFN${checkpoint.feedForwardDimension} / " +
-                "L${checkpoint.layers} / H${checkpoint.heads} / T${checkpoint.tokens}\nfinite",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        SelectionContainer {
+            Text(
+                "step ${checkpoint.step}\nD${checkpoint.dimension} / FFN${checkpoint.feedForwardDimension} / " +
+                    "L${checkpoint.layers} / H${checkpoint.heads} / T${checkpoint.tokens}\nfinite",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
-    generationState.checkpointMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    generationState.checkpointWarning?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+    generationState.checkpointMessage?.let {
+        SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+    generationState.checkpointWarning?.let {
+        SelectionContainer { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+    }
     if (incompatible.isNotEmpty()) {
         TextButton(onClick = { showIncompatible = !showIncompatible }, enabled = !running) {
             Icon(
@@ -922,9 +931,11 @@ internal fun GenerationScreen(
         }
         if (showIncompatible) {
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Incompatible / diagnostic only", fontWeight = FontWeight.Bold)
-                    incompatible.forEach { Text(it.label, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                SelectionContainer {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Incompatible / diagnostic only", fontWeight = FontWeight.Bold)
+                        incompatible.forEach { Text(it.label, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
                 }
             }
         }
@@ -995,22 +1006,28 @@ internal fun GenerationScreen(
         Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
         Text("Generate on HTP")
     }
-    if (trainingActive) Text("Generation is unavailable while training is active")
+    if (trainingActive) SelectionContainer { Text("Generation is unavailable while training is active") }
     when (val execution = generationState.execution) {
         GenerationState.Idle -> Unit
         is GenerationState.Running -> GenerationProgressCard(execution.progress)
         is GenerationState.Success -> {
-            Text("Completed", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(execution.result.displayText, fontFamily = TelemetryFontFamily)
-            Text("${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · backend=${execution.result.backend}")
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Completed", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(execution.result.displayText, fontFamily = TelemetryFontFamily)
+                    Text("${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · backend=${execution.result.backend}")
+                }
+            }
         }
         is GenerationState.Failed -> Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(12.dp)) {
-                Text("Generation failed", fontWeight = FontWeight.Bold)
-                Text(execution.message)
+            SelectionContainer {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Generation failed", fontWeight = FontWeight.Bold)
+                    Text(execution.message)
+                }
             }
         }
     }
@@ -1102,31 +1119,33 @@ private fun GenerationHistoryView(
         if (!history.loading && history.items.isEmpty()) item { Text("No generation history") }
         items(history.items, key = { it.record.id }) { item ->
             Card(onClick = { onSelected(item.record.id) }, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(formatHistoryTimestamp(item.record.createdAtMs), fontWeight = FontWeight.Bold)
-                    Text(quotedPreview(item.promptText), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        if (item.record.mode == GenerationMode.SAMPLE) {
-                            "Sample · T${item.record.temperature} · K${item.record.topK}"
-                        } else "Greedy",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "step${item.record.checkpointStep} · D${item.record.dimension}/FFN${item.record.feedForwardDimension}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(quotedPreview(item.outputText), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        "${item.record.generatedBytes.size} bytes · ${item.record.elapsedMs} ms · ${item.record.backend}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        if (item.record.status == GenerationHistoryStatus.SUCCESS) "Success" else "Failed",
-                        color = if (item.record.status == GenerationHistoryStatus.SUCCESS) {
-                            MaterialTheme.colorScheme.primary
-                        } else MaterialTheme.colorScheme.error,
-                        fontWeight = FontWeight.Bold,
-                    )
+                SelectionContainer {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(formatHistoryTimestamp(item.record.createdAtMs), fontWeight = FontWeight.Bold)
+                        Text(quotedPreview(item.promptText), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (item.record.mode == GenerationMode.SAMPLE) {
+                                "Sample · T${item.record.temperature} · K${item.record.topK}"
+                            } else "Greedy",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "step${item.record.checkpointStep} · D${item.record.dimension}/FFN${item.record.feedForwardDimension}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(quotedPreview(item.outputText), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${item.record.generatedBytes.size} bytes · ${item.record.elapsedMs} ms · ${item.record.backend}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            if (item.record.status == GenerationHistoryStatus.SUCCESS) "Success" else "Failed",
+                            color = if (item.record.status == GenerationHistoryStatus.SUCCESS) {
+                                MaterialTheme.colorScheme.primary
+                            } else MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
         }
@@ -1152,40 +1171,60 @@ private fun GenerationHistoryDetail(
                 Text("Back to history")
             }
         }
-        item { DetailCard("Prompt") { Text(item.promptText, fontFamily = TelemetryFontFamily) } }
-        item { DetailCard("Output") { Text(item.outputText, fontFamily = TelemetryFontFamily) } }
+        item {
+            DetailCard("Prompt") {
+                SelectionContainer { Text(item.promptText, fontFamily = TelemetryFontFamily) }
+            }
+        }
+        item {
+            DetailCard("Output") {
+                SelectionContainer { Text(item.outputText, fontFamily = TelemetryFontFamily) }
+            }
+        }
         item {
             DetailCard("Generation settings") {
-                MetricRow("Mode", record.mode.name.lowercase().replaceFirstChar(Char::uppercase))
-                MetricRow("Temperature", record.temperature.toString())
-                MetricRow("TopK", record.topK.toString())
-                MetricRow("SamplingSeed", record.samplingSeed.toString())
-                MetricRow("Max new bytes", record.maxNewBytes.toString())
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MetricRow("Mode", record.mode.name.lowercase().replaceFirstChar(Char::uppercase))
+                        MetricRow("Temperature", record.temperature.toString())
+                        MetricRow("TopK", record.topK.toString())
+                        MetricRow("SamplingSeed", record.samplingSeed.toString())
+                        MetricRow("Max new bytes", record.maxNewBytes.toString())
+                    }
+                }
             }
         }
         item {
             DetailCard("Checkpoint") {
-                MetricRow("Step", record.checkpointStep.toString())
-                MetricRow(
-                    "Model",
-                    "V${record.vocabulary} / T${record.tokens} / D${record.dimension} / " +
-                        "FFN${record.feedForwardDimension} / L${record.layers} / H${record.heads}",
-                )
-                MetricRow("Parameter hash", record.checkpointParameterHash)
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MetricRow("Step", record.checkpointStep.toString())
+                        MetricRow(
+                            "Model",
+                            "V${record.vocabulary} / T${record.tokens} / D${record.dimension} / " +
+                                "FFN${record.feedForwardDimension} / L${record.layers} / H${record.heads}",
+                        )
+                        MetricRow("Parameter hash", record.checkpointParameterHash)
+                    }
+                }
             }
         }
         item {
             DetailCard("Runtime") {
-                MetricRow("Backend", record.backend)
-                MetricRow("Elapsed", "${record.elapsedMs} ms")
-                MetricRow("Generated bytes", record.generatedBytes.size.toString())
-                MetricRow("QNN attempts", record.qnnExecuteAttempts.toString())
-                MetricRow("QNN successes", record.qnnExecuteSuccesses.toString())
-                MetricRow("QNN failures", record.qnnExecuteFailures.toString())
-                MetricRow("CPU fallback", if (record.cpuFallback) "YES" else "NO")
-                MetricRow("Finite", if (record.finite) "YES" else "NO")
-                MetricRow("Status", record.status.name)
-                record.failureMessage?.let { MetricRow("Failure reason", it) }
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MetricRow("Backend", record.backend)
+                        MetricRow("Elapsed", "${record.elapsedMs} ms")
+                        MetricRow("Generated bytes", record.generatedBytes.size.toString())
+                        MetricRow("QNN attempts", record.qnnExecuteAttempts.toString())
+                        MetricRow("QNN successes", record.qnnExecuteSuccesses.toString())
+                        MetricRow("QNN failures", record.qnnExecuteFailures.toString())
+                        MetricRow("CPU fallback", if (record.cpuFallback) "YES" else "NO")
+                        MetricRow("Finite", if (record.finite) "YES" else "NO")
+                        MetricRow("Status", record.status.name)
+                        record.failureMessage?.let { MetricRow("Failure reason", it) }
+                    }
+                }
             }
         }
         item {
@@ -1221,28 +1260,36 @@ private fun GenerationProgressCard(progress: GenerationProgress) {
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                if (progress.phase == GenerationPhase.GENERATING) "Generating on HTP" else phase,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Text("${progress.generatedBytes} / ${progress.maxNewBytes} bytes", style = MaterialTheme.typography.headlineSmall)
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (progress.phase == GenerationPhase.GENERATING) "Generating on HTP" else phase,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text("${progress.generatedBytes} / ${progress.maxNewBytes} bytes", style = MaterialTheme.typography.headlineSmall)
+                }
+            }
             val fraction = (progress.generatedBytes.toFloat() / progress.maxNewBytes.coerceAtLeast(1)).coerceIn(0f, 1f)
             LinearWavyProgressIndicator(
                 progress = { fraction },
                 modifier = Modifier.fillMaxWidth().height(8.dp),
                 amplitude = { if (progress.phase == GenerationPhase.GENERATING) 0.35f else 0f },
             )
-            MetricRow("Phase", phase)
-            MetricRow("Elapsed", "${progress.elapsedMs} ms")
-            MetricRow("Backend", "HTP")
-            MetricRow("QNN", "${progress.qnnExecuteSuccesses} / ${progress.qnnExecuteAttempts}")
-            if (progress.qnnExecuteFailures > 0) MetricRow("QNN failures", progress.qnnExecuteFailures.toString())
-            MetricRow("CPU fallback", if (progress.cpuFallback) "YES" else "NO")
-            MetricRow("Finite", if (progress.finite) "YES" else "NO")
-            if (progress.displayText.isNotEmpty()) {
-                Text("Live output", fontWeight = FontWeight.Bold)
-                Text(progress.displayText, fontFamily = TelemetryFontFamily)
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetricRow("Phase", phase)
+                    MetricRow("Elapsed", "${progress.elapsedMs} ms")
+                    MetricRow("Backend", "HTP")
+                    MetricRow("QNN", "${progress.qnnExecuteSuccesses} / ${progress.qnnExecuteAttempts}")
+                    if (progress.qnnExecuteFailures > 0) MetricRow("QNN failures", progress.qnnExecuteFailures.toString())
+                    MetricRow("CPU fallback", if (progress.cpuFallback) "YES" else "NO")
+                    MetricRow("Finite", if (progress.finite) "YES" else "NO")
+                    if (progress.displayText.isNotEmpty()) {
+                        Text("Live output", fontWeight = FontWeight.Bold)
+                        Text(progress.displayText, fontFamily = TelemetryFontFamily)
+                    }
+                }
             }
         }
     }
