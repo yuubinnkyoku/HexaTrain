@@ -842,43 +842,27 @@ internal fun GenerationScreen(
     var showIncompatible by remember { mutableStateOf(false) }
     val compatible = generationState.checkpoints.filter { it.usable }
     val incompatible = generationState.checkpoints.filterNot { it.usable }
+    BackHandler(enabled = view == GenerationView.HISTORY) {
+        if (generationState.history.selected != null) onHistoryDetailClosed()
+        else view = GenerationView.GENERATE
+    }
     Column(Modifier.fillMaxSize().semantics { contentDescription = "Generation screen" }) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (view == GenerationView.GENERATE) {
-                Button(onClick = {}, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Generate")
-                }
-            } else {
-                OutlinedButton(onClick = { view = GenerationView.GENERATE }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Generate")
-                }
-            }
-            if (view == GenerationView.HISTORY) {
-                Button(onClick = {}, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("History")
-                }
-            } else {
-                OutlinedButton(onClick = { view = GenerationView.HISTORY }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("History")
-                }
-            }
-        }
         if (view == GenerationView.GENERATE) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Generation", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = { view = GenerationView.HISTORY }) {
+                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("History")
+                }
+            }
     LazyColumn(
         modifier = Modifier.fillMaxWidth().weight(1f),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Text("Generation", style = MaterialTheme.typography.headlineSmall)
-        }
         item {
             DetailCard("Model identity") {
                 Text("D32 / FFN32 / L19 / H2 / T32", fontFamily = TelemetryFontFamily)
@@ -1036,6 +1020,7 @@ internal fun GenerationScreen(
         } else {
             GenerationHistoryView(
                 history = generationState.history,
+                onBackToGenerate = { view = GenerationView.GENERATE },
                 onSelected = onHistorySelected,
                 onCloseDetail = onHistoryDetailClosed,
                 onDelete = onDeleteHistory,
@@ -1051,6 +1036,7 @@ internal fun GenerationScreen(
 @Composable
 private fun GenerationHistoryView(
     history: GenerationHistoryUiState,
+    onBackToGenerate: () -> Unit,
     onSelected: (String) -> Boolean,
     onCloseDetail: () -> Unit,
     onDelete: (String) -> Unit,
@@ -1100,13 +1086,17 @@ private fun GenerationHistoryView(
     ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Generation history", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = onBackToGenerate, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Back to Generation")
+                }
                 TextButton(onClick = { confirmClear = true }, enabled = history.items.isNotEmpty()) {
                     Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Clear history")
                 }
             }
         }
+        item { Text("Generation history", style = MaterialTheme.typography.headlineSmall) }
         history.message?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
         if (history.loading) item { CircularProgressIndicator(Modifier.size(24.dp)) }
         if (!history.loading && history.items.isEmpty()) item { Text("No generation history") }

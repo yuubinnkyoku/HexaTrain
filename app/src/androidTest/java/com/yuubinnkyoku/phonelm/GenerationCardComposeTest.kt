@@ -21,6 +21,20 @@ class GenerationCardComposeTest {
         }
         compose.onNodeWithText("No usable checkpoint").assertIsDisplayed()
         compose.onNodeWithText("Generate on HTP").assertIsNotEnabled()
+        compose.onNodeWithText("Generate").assertDoesNotExist()
+        compose.onNodeWithText("History").assertIsDisplayed()
+    }
+
+    @Test fun historyIsASecondaryDestinationAndReturnsToGeneration() {
+        compose.setContent {
+            MaterialTheme { GenerationScreen(GenerationUiState(), trainingActive = false) }
+        }
+
+        compose.onNodeWithText("History").performClick()
+        compose.onNodeWithText("Generation history").assertIsDisplayed()
+        compose.onNodeWithText("Back to Generation").performClick()
+        compose.onNodeWithText("Generate on HTP").assertIsDisplayed()
+        compose.onNodeWithText("Generate").assertDoesNotExist()
     }
 
     @Test fun sampleControlsAreVisibleAndValidRequestEnablesGenerate() {
