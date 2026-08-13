@@ -53,6 +53,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.ModelTraining
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
@@ -69,6 +80,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -230,12 +242,14 @@ private fun TopLevelDestinationBar(
     ) {
         TopLevelDestinationButton(
             label = "Training",
+            icon = Icons.Default.ModelTraining,
             selected = selected == TopLevelDestination.TRAINING,
             onClick = { onSelected(TopLevelDestination.TRAINING) },
             modifier = Modifier.weight(1f),
         )
         TopLevelDestinationButton(
             label = "Generation",
+            icon = Icons.Default.AutoAwesome,
             selected = selected == TopLevelDestination.GENERATION,
             onClick = { onSelected(TopLevelDestination.GENERATION) },
             modifier = Modifier.weight(1f),
@@ -246,14 +260,21 @@ private fun TopLevelDestinationBar(
 @Composable
 private fun TopLevelDestinationButton(
     label: String,
+    icon: ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier,
 ) {
     if (selected) {
-        Button(onClick = onClick, modifier = modifier) { Text(label) }
+        Button(onClick = onClick, modifier = modifier) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(label)
+        }
     } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) { Text(label) }
+        OutlinedButton(onClick = onClick, modifier = modifier) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(label)
+        }
     }
 }
 
@@ -827,16 +848,24 @@ internal fun GenerationScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (view == GenerationView.GENERATE) {
-                Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("Generate") }
+                Button(onClick = {}, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Generate")
+                }
             } else {
                 OutlinedButton(onClick = { view = GenerationView.GENERATE }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Generate")
                 }
             }
             if (view == GenerationView.HISTORY) {
-                Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("History") }
+                Button(onClick = {}, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("History")
+                }
             } else {
                 OutlinedButton(onClick = { view = GenerationView.HISTORY }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("History")
                 }
             }
@@ -900,6 +929,11 @@ internal fun GenerationScreen(
     generationState.checkpointWarning?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
     if (incompatible.isNotEmpty()) {
         TextButton(onClick = { showIncompatible = !showIncompatible }, enabled = !running) {
+            Icon(
+                if (showIncompatible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
             Text(if (showIncompatible) "Hide incompatible checkpoints" else "Show incompatible checkpoints")
         }
         if (showIncompatible) {
@@ -974,6 +1008,7 @@ internal fun GenerationScreen(
         enabled = generationState.canGenerate && !trainingActive,
         modifier = Modifier.fillMaxWidth(),
     ) {
+        Icon(Icons.Default.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
         Text("Generate on HTP")
     }
     if (trainingActive) Text("Generation is unavailable while training is active")
@@ -1032,9 +1067,17 @@ private fun GenerationHistoryView(
                 Button(onClick = {
                     confirmClear = false
                     onClear()
-                }) { Text("Clear history") }
+                }) {
+                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Clear history")
+                }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) {
+                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Cancel")
+                }
+            },
         )
     }
     val selected = history.selected
@@ -1059,6 +1102,7 @@ private fun GenerationHistoryView(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Generation history", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }, enabled = history.items.isNotEmpty()) {
+                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Clear history")
                 }
             }
@@ -1113,7 +1157,10 @@ private fun GenerationHistoryDetail(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            TextButton(onClick = onBack) { Text("Back to history") }
+            TextButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Back to history")
+            }
         }
         item { DetailCard("Prompt") { Text(item.promptText, fontFamily = TelemetryFontFamily) } }
         item { DetailCard("Output") { Text(item.outputText, fontFamily = TelemetryFontFamily) } }
@@ -1152,10 +1199,14 @@ private fun GenerationHistoryDetail(
             }
         }
         item {
-            Button(onClick = onUseAgain, modifier = Modifier.fillMaxWidth()) { Text("Use settings again") }
+            Button(onClick = onUseAgain, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Replay, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Use settings again")
+            }
         }
         item {
             OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text("Delete this history entry")
             }
         }
