@@ -618,7 +618,10 @@ class NativeHtpGenerationBackend(
     }
 
     private companion object {
-        const val PROGRESS_POLL_MS = 150L
+        // Keep elapsed/phase feedback visibly responsive without adding callbacks
+        // to the native autoregressive loop. Raw byte snapshots still advance at
+        // the native loop's existing bounded observation cadence.
+        const val PROGRESS_POLL_MS = 50L
     }
 }
 
