@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.yuubinnkyoku.phonelm.ui.training.GenerationScreen
@@ -110,6 +111,7 @@ class GenerationCardComposeTest {
         compose.onNodeWithText("Generating on HTP").assertIsDisplayed()
         compose.onNodeWithText("37 / 64 bytes").assertIsDisplayed()
         compose.onNodeWithText("45 / 45").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Live output").assertIsDisplayed()
         compose.onNodeWithText("途中").assertIsDisplayed()
         compose.onNodeWithText("Generate on HTP").assertIsNotEnabled()
     }
@@ -131,6 +133,7 @@ class GenerationCardComposeTest {
                 )
             }
         }
+        compose.onNodeWithContentDescription("Generated output").assertIsDisplayed()
         compose.onNodeWithText("answer").assertIsDisplayed()
         compose.onNodeWithText("6 bytes · 42 ms · backend=HTP").assertIsDisplayed()
 

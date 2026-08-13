@@ -1011,13 +1011,12 @@ internal fun GenerationScreen(
         GenerationState.Idle -> Unit
         is GenerationState.Running -> GenerationProgressCard(execution.progress)
         is GenerationState.Success -> {
-            SelectionContainer {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Completed", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(execution.result.displayText, fontFamily = TelemetryFontFamily)
-                    Text("${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · backend=${execution.result.backend}")
-                }
-            }
+            GenerationOutputCard(
+                title = "Generated output",
+                text = execution.result.displayText,
+                supportingText = "${execution.result.byteCount} bytes · ${execution.result.elapsedMs} ms · " +
+                    "backend=${execution.result.backend}",
+            )
         }
         is GenerationState.Failed -> Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -1177,9 +1176,11 @@ private fun GenerationHistoryDetail(
             }
         }
         item {
-            DetailCard("Output") {
-                SelectionContainer { Text(item.outputText, fontFamily = TelemetryFontFamily) }
-            }
+            GenerationOutputCard(
+                title = "Generated output",
+                text = item.outputText,
+                supportingText = "${record.generatedBytes.size} bytes · ${record.elapsedMs} ms · ${record.backend}",
+            )
         }
         item {
             DetailCard("Generation settings") {
@@ -1276,6 +1277,14 @@ private fun GenerationProgressCard(progress: GenerationProgress) {
                 modifier = Modifier.fillMaxWidth().height(8.dp),
                 amplitude = { if (progress.phase == GenerationPhase.GENERATING) 0.35f else 0f },
             )
+            if (progress.displayText.isNotEmpty()) {
+                GenerationOutputCard(
+                    title = "Live output",
+                    text = progress.displayText,
+                    supportingText = "${progress.generatedBytes} / ${progress.maxNewBytes} bytes",
+                    live = true,
+                )
+            }
             SelectionContainer {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetricRow("Phase", phase)
@@ -1285,12 +1294,47 @@ private fun GenerationProgressCard(progress: GenerationProgress) {
                     if (progress.qnnExecuteFailures > 0) MetricRow("QNN failures", progress.qnnExecuteFailures.toString())
                     MetricRow("CPU fallback", if (progress.cpuFallback) "YES" else "NO")
                     MetricRow("Finite", if (progress.finite) "YES" else "NO")
-                    if (progress.displayText.isNotEmpty()) {
-                        Text("Live output", fontWeight = FontWeight.Bold)
-                        Text(progress.displayText, fontFamily = TelemetryFontFamily)
-                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GenerationOutputCard(
+    title: String,
+    text: String,
+    supportingText: String,
+    live: Boolean = false,
+) = Card(
+    colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ),
+    shape = RoundedCornerShape(24.dp),
+    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 132.dp)
+        .semantics { contentDescription = title },
+) {
+    SelectionContainer {
+        Column(
+            Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
+                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                if (live) Text("LIVE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Text(
+                text.ifEmpty { "No output bytes" },
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 26.sp),
+                fontFamily = TelemetryFontFamily,
+            )
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+            )
         }
     }
 }
