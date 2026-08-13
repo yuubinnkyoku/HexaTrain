@@ -45,7 +45,8 @@
         <activity
             android:name=".StandaloneTrainingActivity"
             android:configChanges="orientation|screenSize"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/TrainingAppTheme" />
         <receiver android:name=".LiveUpdateDismissReceiver" android:exported="false" />
         <service
             android:name=".LiveUpdateForegroundService"

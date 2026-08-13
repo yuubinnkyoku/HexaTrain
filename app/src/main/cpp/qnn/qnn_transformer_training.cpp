@@ -7039,6 +7039,11 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          intervalWallUs = 0.0;
   std::uint64_t intervalFusedCount = 0, intervalAdamCount = 0;
   std::uint32_t intervalSteps = 0;
+  // UI telemetry is deliberately independent of checkpoint persistence. At
+  // most one periodic callback is emitted per eight training steps (about
+  // 1,000 for 8,000 steps), while checkpoint, first, final, and interrupted
+  // updates remain immediate.
+  constexpr std::uint32_t kProgressTelemetryCadenceSteps = 8;
   bool interrupted = false;
   const auto trainingStarted = std::chrono::steady_clock::now();
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
@@ -7161,8 +7166,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     if (step == resumeStep + 1) firstLoss = meanLoss;
     lastLoss = meanLoss;
     if (stopRequested && stopRequested->load()) interrupted = true;
-    if (progress && (stepCheckpointWritten || step == resumeStep + 1 ||
-                     step % 32 == 0 || step == steps || interrupted)) {
+    if (progress &&
+        (stepCheckpointWritten || step == resumeStep + 1 ||
+         step % kProgressTelemetryCadenceSteps == 0 || step == steps ||
+         interrupted)) {
       std::ostringstream update;
       update << std::setprecision(10) << "phase="
              << (stepCheckpointWritten ? "saving_checkpoint" : "training")

@@ -69,7 +69,12 @@ sealed interface TrainingBackendResult {
         val htpActivity: HtpActivityWindow? = null,
         val runtimeEvidence: TrainingRuntimeEvidence? = null,
     ) : TrainingBackendResult
-    data class Failed(val reason: String, val htpActivity: HtpActivityWindow? = null) : TrainingBackendResult
+    data class Failed(
+        val reason: String,
+        val htpActivity: HtpActivityWindow? = null,
+        /** Terminal evidence is optional and never inferred from an earlier successful progress sample. */
+        val runtimeEvidence: TrainingRuntimeEvidence? = null,
+    ) : TrainingBackendResult
 }
 
 /** JNI contract only. Implementations must separately validate QNN return codes and tensor finiteness. */
