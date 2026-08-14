@@ -290,7 +290,7 @@ class HeadlessDeviceTestRunner {
         require(dimension % heads == 0) { "$suite requires dimension divisible by heads" }
         if (suite == "nicopedia-long-training") {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
-            require(steps in 1..8_000) { "nicopedia-long-training hard ceiling is step 8000" }
+            require(steps in 1..12_000) { "nicopedia-long-training hard ceiling is step 12000" }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
         }
         if (suite == "nicopedia-dffn-probe") {

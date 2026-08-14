@@ -250,8 +250,17 @@ function Get-PhoneLmRunEvidence {
     if ($serviceResult.ExitCode -ne 0 -and $serviceResult.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) { throw "$($serviceResult.Classification): service preflight interrupted" }
     $serviceUncertain = $serviceResult.ExitCode -ne 0
     $serviceText = $serviceResult.Text
-    $fgsPresent = $serviceResult.ExitCode -eq 0 -and $serviceText -match '(?i)isForeground\s*=\s*true|foreground\s+service|foreground=true'
-    $servicePresent = $serviceResult.ExitCode -eq 0 -and $serviceText -match '(?i)ServiceRecord|serviceRecord'
+    $escaped = [regex]::Escape($Package)
+    # `dumpsys activity services <package>` may still include an unrelated
+    # Last-ANR ServiceRecord.  Scope both service signals to a record whose
+    # component/package is the requested app; otherwise an unrelated service
+    # would block every headless run as ACTIVE_SERVICE.
+    $serviceScope = "(?im)ServiceRecord\{[^\r\n]*\b$escaped/|^\s*packageName=$escaped(?:$|\s)"
+    $servicePresent = $serviceResult.ExitCode -eq 0 -and $serviceText -match $serviceScope
+    $scopedServiceText = if ($servicePresent) {
+        (($serviceText -split '(?m)(?=^\s*ServiceRecord\{)') | Where-Object { $_ -match $serviceScope }) -join "`n"
+    } else { '' }
+    $fgsPresent = $servicePresent -and $scopedServiceText -match '(?i)isForeground\s*=\s*true|foreground\s+service|foreground=true'
     $activity = Get-PhoneLmActivityEvidence -Adb $Adb -Device $Device -Package $Package
     [pscustomobject][ordered]@{
         status_state = $statusState

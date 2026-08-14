@@ -107,7 +107,7 @@ if ($SelfTest) {
   exit 0
 }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
-if ($Steps -lt 1 -or $Steps -gt 8000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..8000' }
+if ($Steps -lt 1 -or $Steps -gt 12000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..12000' }
 if ($OneUpdateProbe -and $Steps -ne 1) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_STEPS_1' }
 if ($OneUpdateProbe -and $BatchSize -ne 8) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_BATCH_8' }
 if ($OneUpdateProbe -and $ResumeStep -ne 0) { throw 'NICOPEDIA_DFFN_PROBE_DOES_NOT_SUPPORT_RESUME' }
@@ -228,10 +228,18 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
     if ($OneUpdateProbe) {
       Write-Host "progress phase=probe elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total"
     } else {
-      $ckpts = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)
-      Update-PhoneLmCheckpointProgress -State $checkpointProgress -CheckpointCount $ckpts.Count `
-        -NowUtc ([DateTime]::UtcNow) -StallSeconds $CheckpointStallSeconds
-      Write-Host "progress phase=training elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total checkpoint_count=$($ckpts.Count)"
+      # Fresh runs perform a potentially long CPU replay after the last
+      # canonical checkpoint.  No checkpoint is expected during that phase,
+      # so checkpoint-stall protection applies only while native training is
+      # still active.  The outer heartbeat/poll timeout remains fail-closed.
+      if ($phase -eq 'cpu_replay') {
+        Write-Host "progress phase=training elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total checkpoint_stall_ignored=true"
+      } else {
+        $ckpts = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir)
+        Update-PhoneLmCheckpointProgress -State $checkpointProgress -CheckpointCount $ckpts.Count `
+          -NowUtc ([DateTime]::UtcNow) -StallSeconds $CheckpointStallSeconds
+        Write-Host "progress phase=training elapsed_seconds=$elapsed status_phase=$phase completed=$done/$total checkpoint_count=$($ckpts.Count)"
+      }
     }
   } `
   -ConditionAction {
@@ -361,8 +369,12 @@ foreach ($name in $checkpointNames) {
   $hostDecoded = & $hostEvalExe $local $validationHost $developmentHost 1 1
   if ($LASTEXITCODE -ne 0) { throw "HOST_CHECKPOINT_EVALUATOR_DECODE_FAILED: $name" }
   $hostIdentity = Get-PhoneLmKeyValueMap -Text ($hostDecoded -join "`n")
-  foreach ($field in @('seed', 'layers', 'dimension', 'feed_forward_dimension', 'step', 'parameter_hash', 'finite')) { if (-not $hostIdentity.Contains($field)) { throw "HOST_CHECKPOINT_EVALUATOR_FIELD_MISSING: $field" } }
-  if ([int]$hostIdentity.seed -ne $Seed -or [int]$hostIdentity.layers -ne $Layers -or [int]$hostIdentity.dimension -ne $Dimension -or [int]$hostIdentity.feed_forward_dimension -ne $FeedForwardDimension -or [int]$hostIdentity.step -ne $stepName -or $hostIdentity.finite -ne 'true') { throw "HOST_CHECKPOINT_EVALUATOR_IDENTITY_MISMATCH: $name" }
+  # The host evaluator intentionally reports the compact identity fields
+  # (seed/layers/step); the full V2 architecture identity was already
+  # fail-closed against the checkpoint header above.  Do not require fields
+  # that older evaluator binaries do not emit here.
+  foreach ($field in @('seed', 'layers', 'step', 'parameter_hash', 'finite')) { if (-not $hostIdentity.Contains($field)) { throw "HOST_CHECKPOINT_EVALUATOR_FIELD_MISSING: $field" } }
+  if ([int]$hostIdentity.seed -ne $Seed -or [int]$hostIdentity.layers -ne $Layers -or [int]$hostIdentity.step -ne $stepName -or $hostIdentity.finite -ne 'true') { throw "HOST_CHECKPOINT_EVALUATOR_IDENTITY_MISMATCH: $name" }
   Write-Host "checkpoint step=$stepName size=$($pulled.Size) sha256=$($pulled.Sha256) identity=verified"
 }
 $finalCkptName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $Steps
