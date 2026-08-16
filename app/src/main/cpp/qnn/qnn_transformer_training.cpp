@@ -5,6 +5,7 @@
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
 #include "../nicopedia_checkpoint_policy.h"
+#include "../nicopedia_byte_bpe.h"
 #include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
 #include "../training_stability.h"
@@ -20,10 +21,12 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <sys/resource.h>
 #include <tuple>
+#include <unordered_set>
 
 namespace phonelm::qnn {
 namespace {
@@ -1682,7 +1685,9 @@ std::string languageModelAdam(bool oneStepOnly, int candidate,
   const uint32_t optimizerGraphElements =
       static_cast<uint32_t>(std::min<std::uint64_t>(
           optimizerElements,
-          phonelm::transformer::kMaximumAdamChunkElements));
+          config.vocabularySize == nicopedia_bpe::kVocabulary
+              ? phonelm::transformer::kMaximumBpeAdamChunkElements
+              : phonelm::transformer::kMaximumAdamChunkElements));
   const uint32_t optimizerChunkCount =
       static_cast<uint32_t>(
           (std::uint64_t{optimizerElements} + optimizerGraphElements - 1) /
@@ -4883,7 +4888,7 @@ std::uint64_t nprtReadU64(std::istream &input) {
 
 struct NprtRecord {
   std::uint64_t articleHash = 0;
-  std::vector<std::uint8_t> window;
+  std::vector<std::uint16_t> window;
 };
 
 struct NprtCache {
@@ -4891,17 +4896,51 @@ struct NprtCache {
   uint32_t vocabulary = 0;
   std::vector<NprtRecord> records;
   std::string contentHash;
+  std::string tokenizerKind = "byte";
+  std::string tokenizerHash;
 };
 
 // Byte-for-byte compatible with host_tests/nicopedia_real_text_pilot.cpp
 // loadCache (NPRTBYTEV1).  The device and host runners share this contract so
 // a batch selected on the host has the same identity on the device.
-NprtCache loadNprtCache(const std::string &path) {
+NprtCache loadNprtCache(const std::string &path,
+                        const nicopedia_bpe::Model *bpeModel = nullptr) {
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("NPRT_CACHE_OPEN_FAILED");
-  std::string magic(11, '\0');
-  input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTBYTEV1\n") throw std::runtime_error("NPRT_CACHE_MAGIC");
+  std::string prefix(10, '\0');
+  input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+  if (!input) throw std::runtime_error("NPRT_CACHE_MAGIC");
+  if (prefix == "NPRTBPEV1\n") {
+    if (!bpeModel) throw std::runtime_error("NPRT_BPE_MODEL_REQUIRED");
+    input.close();
+    const auto source = nicopedia_bpe::loadCache(path, *bpeModel);
+    NprtCache cache;
+    cache.context = source.context;
+    cache.vocabulary = source.vocabulary;
+    cache.tokenizerKind = "byte_bpe";
+    cache.tokenizerHash = source.tokenizerHash;
+    cache.records.reserve(source.records.size());
+    std::uint64_t hash = kNprtFnvOffset;
+    hash = nprtFnvBytes(&cache.context, sizeof(cache.context), hash);
+    hash = nprtFnvBytes(&cache.vocabulary, sizeof(cache.vocabulary), hash);
+    hash = nprtFnvBytes(cache.tokenizerHash.data(), cache.tokenizerHash.size(), hash);
+    const std::uint64_t count = source.records.size();
+    hash = nprtFnvBytes(&count, sizeof(count), hash);
+    for (const auto &sourceRecord : source.records) {
+      NprtRecord record;
+      record.articleHash = sourceRecord.articleHash;
+      record.window = sourceRecord.window;
+      hash = nprtFnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
+      hash = nprtFnvBytes(record.window.data(), record.window.size() * sizeof(std::uint16_t), hash);
+      cache.records.push_back(std::move(record));
+    }
+    cache.contentHash = nprtHex64(hash);
+    if (cache.records.empty()) throw std::runtime_error("NPRT_CACHE_EMPTY");
+    return cache;
+  }
+  char finalMagic = 0;
+  input.get(finalMagic);
+  if (prefix + finalMagic != "NPRTBYTEV1\n") throw std::runtime_error("NPRT_CACHE_MAGIC");
   NprtCache cache;
   cache.context = nprtReadU32(input);
   cache.vocabulary = nprtReadU32(input);
@@ -4917,12 +4956,13 @@ NprtCache loadNprtCache(const std::string &path) {
   for (std::uint64_t i = 0; i < count; ++i) {
     NprtRecord record;
     record.articleHash = nprtReadU64(input);
-    record.window.resize(cache.context + 1);
-    input.read(reinterpret_cast<char *>(record.window.data()),
-               static_cast<std::streamsize>(record.window.size()));
+    std::vector<std::uint8_t> byteWindow(cache.context + 1);
+    input.read(reinterpret_cast<char *>(byteWindow.data()),
+               static_cast<std::streamsize>(byteWindow.size()));
     if (!input) throw std::runtime_error("NPRT_CACHE_RECORD_TRUNCATED");
+    record.window.assign(byteWindow.begin(), byteWindow.end());
     hash = nprtFnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
-    hash = nprtFnvBytes(record.window.data(), record.window.size(), hash);
+    hash = nprtFnvBytes(byteWindow.data(), byteWindow.size(), hash);
     cache.records.push_back(std::move(record));
   }
   if (input.get() != std::char_traits<char>::eof())
@@ -5049,6 +5089,38 @@ std::string nprtParameterHash(const Params &parameters) {
   return nprtHex64(hash);
 }
 
+std::string nprtCombinedApiTraceSummary(const Runtime &training,
+                                        const Runtime &optimizer) {
+  std::string summary = training.apiTraceSummary();
+  const auto &a = training.apiTrace();
+  const auto &b = optimizer.apiTrace();
+  const auto replace = [&](const char *key, std::uint64_t value) {
+    const std::string prefix = std::string(key) + "=";
+    const std::size_t start = summary.find(prefix);
+    if (start == std::string::npos) return;
+    const std::size_t end = summary.find('\n', start);
+    summary.replace(start + prefix.size(), end - start - prefix.size(),
+                    std::to_string(value));
+  };
+  replace("api_trace_graph_execute_attempt_count",
+          a.graphExecuteAttemptCount + b.graphExecuteAttemptCount);
+  replace("api_trace_graph_execute_success_count",
+          a.graphExecuteSuccessCount + b.graphExecuteSuccessCount);
+  replace("api_trace_graph_execute_failure_count",
+          a.graphExecuteFailureCount + b.graphExecuteFailureCount);
+  replace("api_trace_graph_execute_last_result",
+          static_cast<std::uint64_t>(b.graphExecuteAttemptCount
+                                         ? b.graphExecuteLastResult
+                                         : a.graphExecuteLastResult));
+  replace("api_trace_last_qnn_result",
+          static_cast<std::uint64_t>(b.graphExecuteAttemptCount
+                                         ? b.lastQnnResult : a.lastQnnResult));
+  replace("api_trace_effective_result",
+          static_cast<std::uint64_t>(b.graphExecuteAttemptCount
+                                         ? b.effectiveResult : a.effectiveResult));
+  return summary;
+}
+
 void nprtWriteU32(std::ostream &output, uint32_t value) {
   for (int shift = 24; shift >= 0; shift -= 8)
     output.put(static_cast<char>((value >> shift) & 0xffu));
@@ -5099,7 +5171,9 @@ bool nprtSaveCheckpoint(const std::string &path, const tiny_lm::Config &config,
 bool nprtSaveCheckpointV2(const std::string &path, const tiny_lm::Config &config,
                           uint32_t seed, uint32_t step, const Params &parameters,
                           const Params &firstMoments,
-                          const Params &secondMoments) {
+                          const Params &secondMoments,
+                          const std::string &tokenizerKind = {},
+                          const std::string &tokenizerHash = {}) {
   // Never create or replace a canonical resume source with non-finite state.
   // This check happens before the existing temporary file is removed.
   if (step == 0 || !finiteParams(parameters) || !finiteParams(firstMoments) ||
@@ -5117,7 +5191,12 @@ bool nprtSaveCheckpointV2(const std::string &path, const tiny_lm::Config &config
     return false;
   };
   if (!output) return fail();
-  output.write("NPRTCKPTV2\n", 11);
+  const bool v3 = config.vocabularySize == nicopedia_bpe::kVocabulary;
+  if (v3 && (tokenizerKind != "byte_bpe" || tokenizerHash.size() != 71 ||
+             tokenizerHash.compare(0, 7, "sha256:") != 0))
+    return fail();
+  if (!v3 && (!tokenizerKind.empty() || !tokenizerHash.empty())) return fail();
+  output.write(v3 ? "NPRTCKPTV3\n" : "NPRTCKPTV2\n", 11);
   nprtWriteU32(output, config.vocabularySize);
   nprtWriteU32(output, config.tokens);
   nprtWriteU32(output, config.dimension);
@@ -5126,6 +5205,12 @@ bool nprtSaveCheckpointV2(const std::string &path, const tiny_lm::Config &config
   nprtWriteU32(output, config.numHeads);
   nprtWriteU32(output, seed);
   nprtWriteU32(output, step);
+  if (v3) {
+    nprtWriteU32(output, static_cast<uint32_t>(tokenizerKind.size()));
+    output.write(tokenizerKind.data(), static_cast<std::streamsize>(tokenizerKind.size()));
+    nprtWriteU32(output, static_cast<uint32_t>(tokenizerHash.size()));
+    output.write(tokenizerHash.data(), static_cast<std::streamsize>(tokenizerHash.size()));
+  }
   const auto registry = tiny_lm::parameterRegistry(parameters);
   const auto firstRegistry = tiny_lm::parameterRegistry(firstMoments);
   const auto secondRegistry = tiny_lm::parameterRegistry(secondMoments);
@@ -5292,6 +5377,9 @@ struct LoadedNprtCheckpoint {
   bool finite = true;
   bool hasAdam = false;
   bool v2 = false;
+  bool v3 = false;
+  std::string tokenizerKind;
+  std::string tokenizerHash;
   Params parameters;
   std::vector<std::pair<std::string, std::vector<float>>> adamFirst;
   std::vector<std::pair<std::string, std::vector<float>>> adamSecond;
@@ -5300,7 +5388,7 @@ struct LoadedNprtCheckpoint {
 
 LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
     const std::string &path, const tiny_lm::Config &expected,
-    uint32_t expectedSeed) {
+    uint32_t expectedSeed, const std::string &expectedTokenizerHash = {}) {
   LoadedNprtCheckpoint result;
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("NPRT_CKPT_OPEN_FAILED");
@@ -5312,10 +5400,13 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.fileBytes = static_cast<std::uint64_t>(size);
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n")
+  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n" &&
+      magic != "NPRTCKPTV3\n")
     throw std::runtime_error("NPRT_CKPT_MAGIC");
   const bool v2 = magic == "NPRTCKPTV2\n";
+  const bool v3 = magic == "NPRTCKPTV3\n";
   result.v2 = v2;
+  result.v3 = v3;
   result.vocabulary = nprtReadU32(input);
   result.tokens = nprtReadU32(input);
   result.dimension = nprtReadU32(input);
@@ -5324,6 +5415,19 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.heads = nprtReadU32(input);
   result.seed = nprtReadU32(input);
   result.step = nprtReadU32(input);
+  if (v3) {
+    const uint32_t kindLength = nprtReadU32(input);
+    if (kindLength == 0 || kindLength > 32) throw std::runtime_error("NPRT_CKPT_TOKENIZER_KIND_LENGTH");
+    result.tokenizerKind.resize(kindLength);
+    input.read(result.tokenizerKind.data(), static_cast<std::streamsize>(kindLength));
+    const uint32_t hashLength = nprtReadU32(input);
+    if (hashLength != 71) throw std::runtime_error("NPRT_CKPT_TOKENIZER_HASH_LENGTH");
+    result.tokenizerHash.resize(hashLength);
+    input.read(result.tokenizerHash.data(), static_cast<std::streamsize>(hashLength));
+    if (!input || result.tokenizerKind != "byte_bpe" ||
+        result.tokenizerHash.compare(0, 7, "sha256:") != 0)
+      throw std::runtime_error("NPRT_CKPT_TOKENIZER_IDENTITY");
+  }
   result.registryCount = nprtReadU32(input);
   if (result.vocabulary != expected.vocabularySize ||
       result.tokens != expected.tokens ||
@@ -5333,6 +5437,13 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
     throw std::runtime_error("NPRT_CKPT_CONFIG_MISMATCH");
   if (result.seed != expectedSeed)
     throw std::runtime_error("NPRT_CKPT_SEED_MISMATCH");
+  if (expected.vocabularySize == nicopedia_bpe::kVocabulary) {
+    if (!v3) throw std::runtime_error("NPRT_CKPT_V3_REQUIRED_FOR_BPE");
+    if (expectedTokenizerHash.empty() || result.tokenizerHash != expectedTokenizerHash)
+      throw std::runtime_error("NPRT_CKPT_TOKENIZER_HASH_MISMATCH");
+  } else if (v3) {
+    throw std::runtime_error("NPRT_CKPT_V3_REQUIRES_BPE_MODEL");
+  }
   if (result.step == 0 || result.step >= 1000000)
     throw std::runtime_error("NPRT_CKPT_STEP_INVALID");
   // The trained checkpoint stores registry counts derived from fully-shaped
@@ -5369,7 +5480,7 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
                              std::move(values));
     elements += count;
   }
-  if (v2) {
+  if (v2 || v3) {
     const auto readMomentRegistry =
         [&](std::vector<std::pair<std::string, std::vector<float>>> &target) {
       const uint32_t count = nprtReadU32(input);
@@ -5638,7 +5749,7 @@ std::string nicopediaHtpGeneration(
   if (!generateConfig.greedy &&
       (!(generateConfig.temperature > 0.0f) ||
        !std::isfinite(generateConfig.temperature) ||
-       generateConfig.topK == 0 || generateConfig.topK > 256))
+       generateConfig.topK == 0 || generateConfig.topK > config.vocabularySize))
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=temperature_or_top_k_invalid\n";
@@ -5668,10 +5779,25 @@ std::string nicopediaHtpGeneration(
            "error=checkpoint filename must be " +
            variant + "\n";
   }
+  std::unique_ptr<nicopedia_bpe::Model> bpeModel;
+  try {
+    if (config.vocabularySize == nicopedia_bpe::kVocabulary) {
+      const std::size_t separator = checkpointPath.find_last_of("/\\");
+      const std::string directory = separator == std::string::npos
+          ? "." : checkpointPath.substr(0, separator);
+      bpeModel = std::make_unique<nicopedia_bpe::Model>(
+          nicopedia_bpe::loadModel(directory + "/byte-bpe-v1024.model"));
+    }
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                       "failure_classification=TOKENIZER_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
-                                             static_cast<uint32_t>(seed));
+                                             static_cast<uint32_t>(seed),
+                                             bpeModel ? bpeModel->identity() : "");
   } catch (const std::exception &exception) {
     return std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
                        "failure_classification=CHECKPOINT_DECODE\nerror=") +
@@ -5681,10 +5807,10 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_IDENTITY\n"
            "error=checkpoint step does not match filename\n";
-  if (htpSmokePolicy && !loaded.v2)
+  if (htpSmokePolicy && !loaded.v2 && !loaded.v3)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FORMAT\n"
-           "error=htp-smoke requires NPRTCKPTV2\n";
+           "error=htp-smoke requires NPRTCKPTV2 or NPRTCKPTV3\n";
   if (!loaded.finite)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_NONFINITE\n"
@@ -5702,10 +5828,13 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=PROMPT_EMPTY\n"
            "error=prompt file is empty\n";
-  const bool promptTruncated = prompt.size() > config.tokens;
+  std::vector<std::uint16_t> promptTokens;
+  if (bpeModel) promptTokens = bpeModel->encode(prompt);
+  else promptTokens.assign(prompt.begin(), prompt.end());
+  const bool promptTruncated = promptTokens.size() > config.tokens;
   uint32_t contextPad = 0;
-  std::vector<std::uint8_t> context =
-      nicopedia_gen::buildGenerationContext(prompt, config.tokens, &contextPad);
+  std::vector<std::uint16_t> context =
+      nicopedia_bpe::buildTokenContext(promptTokens, config.tokens, &contextPad);
 
   Runtime runtime;
   RuntimeOptions options;
@@ -5820,10 +5949,10 @@ std::string nicopediaHtpGeneration(
   // Inference-only forward: zero target (logits are target-independent).
   const std::vector<float> zeros(
       size_t(config.tokens) * config.vocabularySize, 0.0f);
-  const auto windowInput = [&](const std::vector<std::uint8_t> &window) {
+  const auto windowInput = [&](const std::vector<std::uint16_t> &window) {
     std::vector<uint32_t> tokens;
     tokens.reserve(window.size());
-    for (uint8_t byte : window) tokens.push_back(byte);
+    for (std::uint16_t token : window) tokens.push_back(token);
     return tiny_lm::oneHot(tokens, config.vocabularySize);
   };
 
@@ -5838,10 +5967,16 @@ std::string nicopediaHtpGeneration(
       (prefixes.size() + 8u) * size_t(config.tokens) * config.vocabularySize);
   bool parityGate = true;          // legacy gate (unchanged semantics)
   bool parityGateCandidate = true; // candidate full policy F (protocol)
+  const auto rawContext = [&](const std::vector<std::uint8_t> &raw,
+                              uint32_t *pad) {
+    std::vector<std::uint16_t> encoded;
+    if (bpeModel) encoded = bpeModel->encode(raw);
+    else encoded.assign(raw.begin(), raw.end());
+    return nicopedia_bpe::buildTokenContext(encoded, config.tokens, pad);
+  };
   for (const auto &prefix : prefixes) {
     uint32_t pad = 0;
-    const auto prefixContext =
-        nicopedia_gen::buildGenerationContext(prefix.bytes, config.tokens, &pad);
+    const auto prefixContext = rawContext(prefix.bytes, &pad);
     const auto cpuStep = tiny_lm::forwardBackwardGeneralized(
         config, windowInput(prefixContext), zeros, loaded.parameters, 0.0f);
     TinyTransformerTrainingOutputs htpStep;
@@ -5936,11 +6071,10 @@ std::string nicopediaHtpGeneration(
   // a divergence under a low CPU margin is numerical noise, recorded only.
   const uint32_t kArSteps = 8;
   std::vector<NprtArRow> arRows;
-  std::vector<std::uint8_t> cpuContext, htpContext;
+  std::vector<std::uint16_t> cpuContext, htpContext;
   {
     uint32_t pad = 0;
-    cpuContext =
-        nicopedia_gen::buildGenerationContext(prefixes[0].bytes, config.tokens, &pad);
+    cpuContext = rawContext(prefixes[0].bytes, &pad);
     htpContext = cpuContext;
   }
   bool contextsAligned = true;
@@ -6049,10 +6183,10 @@ std::string nicopediaHtpGeneration(
       arGateCandidate = false;
     }
     arRows.push_back(row);
-    nicopedia_gen::appendByteWindow(cpuContext,
-                                    static_cast<uint8_t>(row.argmaxCpu));
-    nicopedia_gen::appendByteWindow(htpContext,
-                                    static_cast<uint8_t>(row.argmaxHtp));
+    cpuContext.erase(cpuContext.begin());
+    cpuContext.push_back(static_cast<std::uint16_t>(row.argmaxCpu));
+    htpContext.erase(htpContext.begin());
+    htpContext.push_back(static_cast<std::uint16_t>(row.argmaxHtp));
   }
   const bool divergenceBlocked =
       hasDivergence && divergenceMarginCpu > 1e-2;
@@ -6090,6 +6224,7 @@ std::string nicopediaHtpGeneration(
 
   // User-prompt generation (only when both gates pass).
   std::vector<std::uint8_t> generated;
+  std::vector<std::uint16_t> generatedTokens;
   double generateSeconds = 0;
   if (generationGate) {
     if (progress) {
@@ -6153,9 +6288,9 @@ std::string nicopediaHtpGeneration(
       if (!generationProbabilitiesFinite && htpHealthPolicy)
         return htpNativeFailure("generation_loop",
                                 "generation step produced non-finite probabilities");
-      uint8_t byte = 0;
+      uint32_t nextToken = 0;
       if (generateConfig.greedy) {
-        byte = nicopedia_gen::greedyArgmax(row, config.vocabularySize);
+        nextToken = nicopedia_gen::greedyArgmax(row, config.vocabularySize);
       } else {
         const auto sampling = nicopedia_gen::sampleTopKChecked(
             row, config.vocabularySize, generateConfig.temperature,
@@ -6186,16 +6321,26 @@ std::string nicopediaHtpGeneration(
                  "error=top-k probability weights/logits are non-finite or sum<=0\n" +
                  runtime.apiTraceSummary() + runtime.diagnostics();
         }
-        byte = sampling.value;
+        nextToken = sampling.value;
       }
-      generated.push_back(byte);
-      nicopedia_gen::appendByteWindow(generateContext, byte);
+      if (nextToken >= config.vocabularySize)
+        return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+               "failure_classification=TOKEN_RANGE\nerror=generated token out of vocabulary\n";
+      // MaxNewBytes is a hard byte cap.  The boundary token is discarded and
+      // never resampled when its complete raw-byte expansion would overflow.
+      if (!nicopedia_bpe::appendTokenWithinByteLimit(
+              bpeModel.get(), nextToken, generateConfig.maxNewBytes,
+              &generated, &generatedTokens))
+        break;
+      generateContext.erase(generateContext.begin());
+      generateContext.push_back(static_cast<std::uint16_t>(nextToken));
       if (progress &&
           (step == 0 || (step + 1) % 16 == 0 ||
            step + 1 == generateConfig.maxNewBytes)) {
         const auto &trace = runtime.apiTrace();
         std::ostringstream update;
-        update << "phase=generating\ngenerated_bytes=" << (step + 1)
+        update << "phase=generating\ngenerated_bytes=" << generated.size()
+               << "\ngenerated_tokens=" << generatedTokens.size()
                << "\nmax_new_bytes=" << generateConfig.maxNewBytes
                << "\nqnn_execute_attempts=" << trace.graphExecuteAttemptCount
                << "\nqnn_execute_successes=" << trace.graphExecuteSuccessCount
@@ -6250,7 +6395,10 @@ std::string nicopediaHtpGeneration(
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
-         << "\ncheckpoint_format=" << (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1")
+         << "\ncheckpoint_format=" << (loaded.v3 ? "NPRTCKPTV3" :
+             (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1"))
+         << "\ntokenizer_kind=" << (bpeModel ? "byte_bpe" : "byte")
+         << "\ntokenizer_hash=" << (bpeModel ? bpeModel->identity() : "legacy-byte-v1")
          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
          << "\ncheckpoint_file_bytes=" << loaded.fileBytes
          << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
@@ -6265,14 +6413,18 @@ std::string nicopediaHtpGeneration(
          << "\ncheckpoint_header_registry_count=" << loaded.registryCount
          << "\nprompt_byte_count=" << prompt.size()
          << "\nprompt_truncated=" << (promptTruncated ? "true" : "false")
-         << "\ncontext_used_bytes=" << context.size()
-         << "\ncontext_padding_bytes=" << contextPad
+         << "\nprompt_token_count=" << promptTokens.size()
+         << "\ncontext_used_tokens=" << context.size()
+         << "\ncontext_padding_tokens=" << contextPad
+         << "\ncontext_used_bytes=" << (bpeModel ? 0 : context.size())
+         << "\ncontext_padding_bytes=" << (bpeModel ? 0 : contextPad)
          << "\ngenerate_mode=" << (generateConfig.greedy ? "greedy" : "sample")
          << "\ntemperature=" << generateConfig.temperature
          << "\ntop_k=" << generateConfig.topK
          << "\nsampling_seed=" << generateConfig.samplingSeed
          << "\nmax_new_bytes=" << generateConfig.maxNewBytes
          << "\ngenerated_byte_count=" << generated.size()
+         << "\ngenerated_token_count=" << generatedTokens.size()
          << "\ngenerated_valid_utf8_bytes=" << generatedStats.validBytes
          << "\ngenerated_invalid_utf8_bytes=" << generatedStats.invalidBytes
          << "\nunique_byte_values=" << ag.uniqueByteValues
@@ -6752,8 +6904,16 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=cache_path_required\n";
   NprtCache cache;
+  std::unique_ptr<nicopedia_bpe::Model> bpeModel;
+  if (progress) progress("phase=cache_decode");
   try {
-    cache = loadNprtCache(cachePath + "/train_pilot.bin");
+    if (config.vocabularySize == nicopedia_bpe::kVocabulary) {
+      bpeModel = std::make_unique<nicopedia_bpe::Model>(
+          nicopedia_bpe::loadModel(cachePath + "/byte-bpe-v1024.model"));
+    } else if (config.vocabularySize != 256) {
+      throw std::runtime_error("NPRT_TOKENIZER_VOCABULARY_UNSUPPORTED");
+    }
+    cache = loadNprtCache(cachePath + "/train_pilot.bin", bpeModel.get());
   } catch (const std::exception &exception) {
     return std::string("NICOPEDIA_HTP\nstatus=FAILED\n"
                        "failure_classification=CACHE_DECODE\nerror=") +
@@ -6793,8 +6953,11 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     return "NICOPEDIA_HTP\nstatus=FAILED\n"
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=resume_step must be in 1..steps-1\n";
-  const auto order = nprtTrainingOrder(cache.records.size(), steps, batchSize);
+  if (progress) progress("phase=training_order");
+  const uint32_t orderSteps = resumeStep == 0 ? std::max(steps, 8u) : steps;
+  const auto order = nprtTrainingOrder(cache.records.size(), orderSteps, batchSize);
   const std::string orderHashValue = nprtOrderHash(order);
+  if (progress) progress("phase=parameter_shape");
   const Params shape = tiny_lm::initialParameters(config, 1);
   const auto flattenedShape = flattenLanguageParameters(shape);
   if (flattenedShape.empty() ||
@@ -6807,39 +6970,64 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   const uint32_t optimizerGraphElements =
       static_cast<uint32_t>(std::min<std::uint64_t>(
           optimizerElements,
-          phonelm::transformer::kMaximumAdamChunkElements));
+          config.vocabularySize == nicopedia_bpe::kVocabulary
+              ? phonelm::transformer::kMaximumBpeAdamChunkElements
+              : phonelm::transformer::kMaximumAdamChunkElements));
   const uint32_t optimizerChunkCount =
       static_cast<uint32_t>((std::uint64_t{optimizerElements} +
                              optimizerGraphElements - 1) /
                             optimizerGraphElements);
+  // Construct all host-owned model state before QNN graph preparation.  Some
+  // HTP backends reserve a large contiguous address-space region at finalize;
+  // keeping post-finalize allocations out of the initialization boundary also
+  // makes allocation failures attributable and fail-closed.
+  if (progress) progress("phase=parameter_initialization");
+  Params htp = tiny_lm::initialParameters(config, seed);
+  if (progress) progress("phase=parameter_htp_ready");
+  Params cpu = htp;
+  if (progress) progress("phase=parameter_cpu_ready");
+  Params htpFirst = zeroLanguageParameters(htp);
+  if (progress) progress("phase=parameter_first_moment_ready");
+  Params htpSecond = htpFirst;
+  Params cpuFirst = htpFirst, cpuSecond = htpFirst;
+  if (progress) progress("phase=parameter_moments_ready");
+  const std::string initialParameterHash = nprtParameterHash(htp);
+  if (progress) progress("phase=parameter_identity_ready");
   Runtime runtime;
+  Runtime optimizerRuntime;
   RuntimeOptions options;
   options.captureQnnCallback = false;
   options.qnnLogLevel = 2;
   runtime.setOptions(options);
+  optimizerRuntime.setOptions(options);
   std::string error;
   const auto initStarted = std::chrono::steady_clock::now();
-  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
-      !runtime.prepareTinyTransformerTraining(
+  if (progress) progress("phase=adam_initialization");
+  if (!optimizerRuntime.initialize(QnnBackendKind::HTP, error))
+    return failure("nicopedia_adam_initialize", error, optimizerRuntime);
+  if (progress) progress("phase=adam_preparation");
+  if (!optimizerRuntime.prepareAdamOptimizer(optimizerGraphElements, error))
+    return failure("nicopedia_prepare_adam", error, optimizerRuntime);
+  if (progress) progress("phase=htp_initialization");
+  if (!runtime.initialize(QnnBackendKind::HTP, error))
+    return failure("nicopedia_initialize", error, runtime);
+  if (progress) progress("phase=graph_preparation");
+  if (!runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
-          config.numHeads) ||
-      !runtime.prepareAdamOptimizer(optimizerGraphElements, error))
-    return failure("nicopedia_prepare", error, runtime);
+          config.numHeads))
+    return failure("nicopedia_prepare_training", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
           std::chrono::steady_clock::now() - initStarted)
           .count();
-  const double graphCreateUs = runtime.metrics().graphCreateUs;
-  const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+  const double graphCreateUs = runtime.metrics().graphCreateUs +
+                               optimizerRuntime.metrics().graphCreateUs;
+  const double graphFinalizeUs = runtime.metrics().graphFinalizeUs +
+                                 optimizerRuntime.metrics().graphFinalizeUs;
 
-  Params htp = tiny_lm::initialParameters(config, seed);
-  Params cpu = htp;
-  Params htpFirst = zeroLanguageParameters(htp), htpSecond = htpFirst;
-  Params cpuFirst = htpFirst, cpuSecond = htpFirst;
-  const std::string initialParameterHash = nprtParameterHash(htp);
   const bool fromScratch = resumeStep == 0;
   std::string resumeCheckpointHash = "n/a", resumeCheckpointFormat = "n/a";
   if (!fromScratch) {
@@ -6854,7 +7042,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     LoadedNprtCheckpoint loaded;
     try {
       loaded = nprtLoadCheckpointForGeneration(
-          resumePath, config, static_cast<uint32_t>(seed));
+          resumePath, config, static_cast<uint32_t>(seed), cache.tokenizerHash);
     } catch (const std::exception &exception) {
       return std::string("NICOPEDIA_HTP\nstatus=FAILED\n"
                          "failure_classification=RESUME_CHECKPOINT_DECODE\nerror=") +
@@ -6880,7 +7068,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     restoreMoments(htpFirst, loaded.adamFirst);
     restoreMoments(htpSecond, loaded.adamSecond);
     resumeCheckpointHash = loaded.parameterHash;
-    resumeCheckpointFormat = "NPRTCKPTV2";
+    resumeCheckpointFormat = loaded.v3 ? "NPRTCKPTV3" : "NPRTCKPTV2";
   }
 
   // Step 0: same-batch CPU/HTP one-step comparison before any update.
@@ -6983,7 +7171,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           1e-8f, c1, c2);
       Params htpNext, htpFirstNext, htpSecondNext;
       AdamOptimizerOutputs raw;
-      if (!executeLanguageAdam(runtime, tHtp, htpGradientAccum, tHtpFirst,
+      if (!executeLanguageAdam(optimizerRuntime, tHtp, htpGradientAccum, tHtpFirst,
                                tHtpSecond, lr, int(step), 1.0f, htpNext,
                                htpFirstNext, htpSecondNext, &raw, error,
                                optimizerGraphElements))
@@ -7107,13 +7295,13 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     const float meanLoss = float(lossSum / batchSize);
     Params next, firstNext, secondNext;
     AdamOptimizerOutputs raw;
-    const std::size_t adamExecuteCountBefore = runtime.metrics().executeUs.size();
-    if (!executeLanguageAdam(runtime, current, gradientAccum, currentFirst,
+    const std::size_t adamExecuteCountBefore = optimizerRuntime.metrics().executeUs.size();
+    if (!executeLanguageAdam(optimizerRuntime, current, gradientAccum, currentFirst,
                              currentSecond, lr, int(step), 1.0f, next,
                              firstNext, secondNext, &raw, error,
                              optimizerGraphElements))
-      return failure("nicopedia_train_adam", error, runtime);
-    const auto &adamMetrics = runtime.metrics().executeUs;
+      return failure("nicopedia_train_adam", error, optimizerRuntime);
+    const auto &adamMetrics = optimizerRuntime.metrics().executeUs;
     for (std::size_t i = adamExecuteCountBefore; i < adamMetrics.size(); ++i) {
       adamQnnUs += adamMetrics[i];
       ++adamQnnExecuteCount;
@@ -7139,7 +7327,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                              config.feedForwardDimension, step);
       const bool written = nprtSaveCheckpointV2(
           intervalPath, config, uint32_t(seed), step, current, currentFirst,
-          currentSecond);
+          currentSecond, cache.tokenizerKind == "byte_bpe" ? cache.tokenizerKind : "",
+          cache.tokenizerHash);
       if (!written)
         return failure("nicopedia_checkpoint_interval",
                        "NPRTCKPTV2 atomic interval write failed", runtime);
@@ -7210,6 +7399,33 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           .count();
   const double stepMs = completedSteps ? trainingSeconds / completedSteps * 1000.0
                                        : 0.0;
+  const std::uint64_t targetTokensSeen =
+      std::uint64_t(lastCompletedStep) * batchSize * config.tokens;
+  const std::uint64_t runTargetTokensSeen =
+      std::uint64_t(completedSteps) * batchSize * config.tokens;
+  std::uint64_t targetUtf8BytesSeen = 0, runTargetUtf8BytesSeen = 0;
+  std::unordered_set<std::size_t> uniqueChunksSeen, runUniqueChunksSeen;
+  std::unordered_set<std::uint64_t> uniqueArticlesSeen, runUniqueArticlesSeen;
+  const std::size_t exposureSelections =
+      std::size_t(lastCompletedStep) * batchSize;
+  const std::size_t runExposureStart = std::size_t(resumeStep) * batchSize;
+  for (std::size_t selection = 0; selection < exposureSelections; ++selection) {
+    const std::size_t recordIndex = order[selection];
+    const auto &record = cache.records[recordIndex];
+    uniqueChunksSeen.insert(recordIndex);
+    uniqueArticlesSeen.insert(record.articleHash);
+    const bool inRun = selection >= runExposureStart;
+    if (inRun) {
+      runUniqueChunksSeen.insert(recordIndex);
+      runUniqueArticlesSeen.insert(record.articleHash);
+    }
+    for (uint32_t row = 1; row <= config.tokens; ++row) {
+      const std::uint64_t bytes =
+          bpeModel ? bpeModel->tokenByteLength(record.window[row]) : 1u;
+      targetUtf8BytesSeen += bytes;
+      if (inRun) runTargetUtf8BytesSeen += bytes;
+    }
+  }
   // Final state comparison.  The scratch path keeps the established CPU
   // replay and comparison threshold.  A resumed run already has a canonical
   // HTP state (parameters + Adam moments); replaying every prior step on CPU
@@ -7278,20 +7494,31 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       (!cpuReplayPerformed || finiteParams(cpuFinal));
   const bool lossDecreased = std::isfinite(firstLoss) && std::isfinite(lastLoss) &&
                              lastLoss < firstLoss;
+  const bool oneStepBpeSmoke =
+      config.vocabularySize == nicopedia_bpe::kVocabulary && steps == 1;
+  const bool lossCriterionSatisfied = oneStepBpeSmoke
+      ? std::isfinite(firstLoss) && firstLoss == lastLoss : lossDecreased;
   // Scratch retains the established loss-decrease assertion.  A resumed
   // segment is a continuation diagnostic: a noisy endpoint must not turn an
   // otherwise finite, fully-checkpointed segment into a health failure.
   const auto &trainingApiTrace = runtime.apiTrace();
+  const auto &optimizerApiTrace = optimizerRuntime.apiTrace();
+  const std::uint64_t combinedGraphExecuteCount =
+      runtime.metrics().graphExecuteCount + optimizerRuntime.metrics().graphExecuteCount;
   const bool trainingQnnReturnCodeSuccess =
       runtime.metrics().graphExecuteCount > 0 &&
-      trainingApiTrace.graphExecuteSuccessCount ==
-          runtime.metrics().graphExecuteCount &&
+      optimizerRuntime.metrics().graphExecuteCount > 0 &&
+      trainingApiTrace.graphExecuteSuccessCount == runtime.metrics().graphExecuteCount &&
+      optimizerApiTrace.graphExecuteSuccessCount == optimizerRuntime.metrics().graphExecuteCount &&
       trainingApiTrace.graphExecuteFailureCount == 0 &&
+      optimizerApiTrace.graphExecuteFailureCount == 0 &&
       trainingApiTrace.graphExecuteLastResult == 0 &&
-      trainingApiTrace.lastQnnResult == 0;
+      optimizerApiTrace.graphExecuteLastResult == 0 &&
+      trainingApiTrace.lastQnnResult == 0 && optimizerApiTrace.lastQnnResult == 0 &&
+      trainingApiTrace.runtimeBackendBuildId == optimizerApiTrace.runtimeBackendBuildId;
   const bool ok = !interrupted && step0Ok && allFinite && finalFinite &&
                   trainingQnnReturnCodeSuccess &&
-                  (!fromScratch || lossDecreased) &&
+                  (!fromScratch || lossCriterionSatisfied) &&
                   lastCompletedStep == steps;
   if (!curve.empty()) {
     std::ofstream curveOut(cachePath + "/training-curve-" +
@@ -7334,7 +7561,9 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   } else {
     checkpointWritten = nprtSaveCheckpointV2(
         checkpointPath, config, uint32_t(seed), lastCompletedStep, current,
-        currentFirst, currentSecond);
+        currentFirst, currentSecond,
+        cache.tokenizerKind == "byte_bpe" ? cache.tokenizerKind : "",
+        cache.tokenizerHash);
     if (!checkpointWritten)
       return failure("nicopedia_checkpoint_final",
                      "NPRTCKPTV2 atomic final write failed", runtime);
@@ -7358,13 +7587,26 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nmodel_config_identity=T" << config.tokens << "_D"
          << config.dimension << "_FFN" << config.feedForwardDimension
          << "\nsteps=" << steps << "\nbatch_size=" << batchSize
+         << "\ntarget_tokens_seen=" << targetTokensSeen
+         << "\ntarget_utf8_bytes_seen=" << targetUtf8BytesSeen
+         << "\nunique_chunks_seen=" << uniqueChunksSeen.size()
+         << "\nunique_articles_seen=" << uniqueArticlesSeen.size()
+         << "\nrun_target_tokens_seen=" << runTargetTokensSeen
+         << "\nrun_target_utf8_bytes_seen=" << runTargetUtf8BytesSeen
+         << "\nrun_unique_chunks_seen=" << runUniqueChunksSeen.size()
+         << "\nrun_unique_articles_seen=" << runUniqueArticlesSeen.size()
          << "\nlearning_rate=" << lr
          << "\nresume_from_step=" << resumeStep
          << "\nresume_checkpoint_format=" << resumeCheckpointFormat
          << "\nresume_checkpoint_hash=" << resumeCheckpointHash
          << "\ncheckpoint_interval=" << checkpointInterval
          << "\ncheckpoint_count=" << checkpointCount
+         << "\ncheckpoint_format="
+         << (config.vocabularySize == nicopedia_bpe::kVocabulary
+                 ? "NPRTCKPTV3" : "NPRTCKPTV2")
          << "\ncheckpoint_bytes=" << checkpointBytes
+         << "\ntokenizer_kind=" << cache.tokenizerKind
+         << "\ntokenizer_hash=" << cache.tokenizerHash
          << "\ncache_context=" << cache.context
          << "\ncache_vocabulary=" << cache.vocabulary
          << "\ncache_record_count=" << cache.records.size()
@@ -7400,6 +7642,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   }
   report << "\nfirst_loss=" << firstLoss << "\nlast_loss=" << lastLoss
          << "\nloss_decreased=" << (lossDecreased ? "true" : "false")
+         << "\nloss_decrease_required=" << (oneStepBpeSmoke ? "false" : "true")
          << "\ncompleted_steps=" << lastCompletedStep
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\nfinal_parameter_max_abs_error=" << finalParameterError
@@ -7423,7 +7666,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nfirst_execute_us=" << firstExecuteUs
          << "\ntraining_total_seconds=" << trainingSeconds
          << "\ntraining_step_ms=" << stepMs
-         << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\ngraph_execute_count=" << combinedGraphExecuteCount
          << "\nqnn_execute_count="
          << (fusedQnnExecuteCount + adamQnnExecuteCount)
          << "\nfused_forward_backward_qnn_us=" << fusedForwardBackwardQnnUs
@@ -7440,7 +7683,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\noptimizer_math_responsibility=HTP"
          << "\ncpu_fallback=false\nnan_detected=" << (allFinite ? "false" : "true")
          << "\ninf_detected=" << (allFinite ? "false" : "true") << '\n'
-         << runtime.apiTraceSummary() << runtime.diagnostics();
+         << nprtCombinedApiTraceSummary(runtime, optimizerRuntime)
+         << "optimizer_runtime_backend_build_id="
+         << optimizerApiTrace.runtimeBackendBuildId << '\n'
+         << runtime.diagnostics();
   return report.str();
 }
 }  // namespace
@@ -7771,10 +8017,21 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
                          static_cast<uint32_t>(layers), config.tokens,
                          config.dimension, config.feedForwardDimension,
                          checkpointStep);
+  std::unique_ptr<nicopedia_bpe::Model> bpeModel;
+  try {
+    if (config.vocabularySize == nicopedia_bpe::kVocabulary)
+      bpeModel = std::make_unique<nicopedia_bpe::Model>(
+          nicopedia_bpe::loadModel(dir + "/byte-bpe-v1024.model"));
+  } catch (const std::exception &exception) {
+    return std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                       "failure_classification=TOKENIZER_DECODE\nerror=") +
+           exception.what() + '\n';
+  }
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(
-        checkpointPath, config, static_cast<uint32_t>(seed));
+        checkpointPath, config, static_cast<uint32_t>(seed),
+        bpeModel ? bpeModel->identity() : "");
   } catch (const std::exception &exception) {
     return std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
                        "failure_classification=CHECKPOINT_DECODE\nerror=") +
@@ -7787,8 +8044,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
   NprtCache validation;
   NprtCache development;
   try {
-    validation = loadNprtCache(dir + "/validation.bin");
-    development = loadNprtCache(dir + "/development.bin");
+    validation = loadNprtCache(dir + "/validation.bin", bpeModel.get());
+    development = loadNprtCache(dir + "/development.bin", bpeModel.get());
   } catch (const std::exception &exception) {
     return std::string("NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
                        "failure_classification=CACHE_DECODE\nerror=") +
@@ -7825,7 +8082,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
     bool finite = true;
     double nll = 0, perplexity = 0, top1 = 0, top5 = 0, meanRank = 0;
     double meanMargin = 0, graphLossMean = 0;
-    std::uint64_t tokens = 0, chunks = 0;
+    std::uint64_t tokens = 0, targetBytes = 0, chunks = 0;
     uint32_t nonfiniteChunks = 0;
   };
   const auto evaluateSplit = [&](const NprtCache &cache, uint32_t limit,
@@ -7892,6 +8149,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
         top5 += rank <= 5;
         rankSum += rank;
         marginSum += truthLogit - maximumOther;
+        result.targetBytes += bpeModel ? bpeModel->tokenByteLength(
+            static_cast<std::uint16_t>(truth)) : 1u;
         ++result.tokens;
       }
       if (splitProgress && (chunk == 0 || (chunk + 1) % 1024 == 0 ||
@@ -7954,12 +8213,14 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
           << "\ncheckpoint_step=" << checkpointStep
           << "\ncheckpoint_format="
-          << (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")
+          << (loaded.v3 ? "NPRTCKPTV3" : (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1"))
           << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
           << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
           << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
           << "\ncontext_tokens=" << config.tokens
           << "\nvocabulary_size=" << config.vocabularySize
+          << "\ntokenizer_kind=" << validation.tokenizerKind
+          << "\ntokenizer_hash=" << validation.tokenizerHash
           << "\nvalidation_cache=" << validation.contentHash
          << "\ndevelopment_cache=" << development.contentHash
          << "\nvalidation_chunks=" << validationResult.chunks
@@ -7972,6 +8233,13 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\nvalidation_margin=" << validationResult.meanMargin
          << "\nvalidation_graph_loss_mean=" << validationResult.graphLossMean
          << "\nvalidation_tokens=" << validationResult.tokens
+         << "\nvalidation_target_utf8_bytes=" << validationResult.targetBytes
+         << "\nvalidation_nats_per_utf8_byte="
+         << (validationResult.targetBytes ?
+                validationResult.nll * validationResult.tokens / validationResult.targetBytes : 0.0)
+         << "\nvalidation_bits_per_utf8_byte="
+         << (validationResult.targetBytes ? validationResult.nll * validationResult.tokens /
+                validationResult.targetBytes / std::log(2.0) : 0.0)
          << "\nvalidation_nonfinite_chunks="
          << validationResult.nonfiniteChunks
          << "\ndevelopment_nll=" << developmentResult.nll
@@ -7982,6 +8250,13 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\ndevelopment_margin=" << developmentResult.meanMargin
          << "\ndevelopment_graph_loss_mean=" << developmentResult.graphLossMean
          << "\ndevelopment_tokens=" << developmentResult.tokens
+         << "\ndevelopment_target_utf8_bytes=" << developmentResult.targetBytes
+         << "\ndevelopment_nats_per_utf8_byte="
+         << (developmentResult.targetBytes ? developmentResult.nll * developmentResult.tokens /
+                developmentResult.targetBytes : 0.0)
+         << "\ndevelopment_bits_per_utf8_byte="
+         << (developmentResult.targetBytes ? developmentResult.nll * developmentResult.tokens /
+                developmentResult.targetBytes / std::log(2.0) : 0.0)
          << "\ndevelopment_nonfinite_chunks="
          << developmentResult.nonfiniteChunks
           << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
@@ -8004,7 +8279,12 @@ std::string runTinyTransformerTrainingExperiment(
     const LogSink& progress, std::atomic_bool* stopRequested) {
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA) {
     tiny_lm::Config config;
-    config.vocabularySize = 256;
+    config.vocabularySize = static_cast<uint32_t>(trainingConfig.outputDimension);
+    if (config.vocabularySize != 256 &&
+        config.vocabularySize != nicopedia_bpe::kVocabulary)
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=vocabulary_must_be_256_or_1024\n";
     config.tokens = static_cast<uint32_t>(
         trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
     config.dimension = static_cast<uint32_t>(trainingConfig.dimension > 0
@@ -8075,7 +8355,12 @@ std::string runTinyTransformerTrainingExperiment(
   }
   if (mode == ExecutionMode::QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL) {
     tiny_lm::Config config;
-    config.vocabularySize = 256;
+    config.vocabularySize = static_cast<uint32_t>(trainingConfig.outputDimension);
+    if (config.vocabularySize != 256 &&
+        config.vocabularySize != nicopedia_bpe::kVocabulary)
+      return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=vocabulary_must_be_256_or_1024\n";
     config.tokens = static_cast<uint32_t>(
         trainingConfig.sampleCount > 0 ? trainingConfig.sampleCount : 32);
     config.dimension = static_cast<uint32_t>(trainingConfig.dimension > 0

@@ -27,7 +27,7 @@ data class GenerationRequest(
         maxNewBytes !in 1..1024 -> "Max new bytes must be in 1..1024"
         mode == GenerationMode.SAMPLE && (!temperature.isFinite() || temperature <= 0f) ->
             "Temperature must be finite and positive"
-        mode == GenerationMode.SAMPLE && topK !in 1..256 -> "TopK must be in 1..256"
+        mode == GenerationMode.SAMPLE && topK !in 1..1024 -> "TopK must be in 1..1024"
         mode == GenerationMode.SAMPLE && samplingSeed < 0L -> "SamplingSeed must be non-negative"
         else -> null
     }
@@ -47,6 +47,9 @@ data class GenerationResult(
     val qnnExecuteAttempts: Long = 0,
     val qnnExecuteSuccesses: Long = 0,
     val qnnExecuteFailures: Long = 0,
+    val tokenCount: Int = byteCount,
+    val tokenizerKind: String = "byte",
+    val tokenizerHash: String? = null,
 )
 
 enum class GenerationPhase {
@@ -380,7 +383,7 @@ class GenerationSession(
             maxNewBytes = run.request.maxNewBytes,
             checkpointStep = checkpoint.step,
             checkpointParameterHash = checkpoint.parameterHash!!,
-            vocabulary = 256,
+            vocabulary = checkpoint.vocabulary,
             tokens = checkpoint.tokens,
             dimension = checkpoint.dimension,
             feedForwardDimension = checkpoint.feedForwardDimension,
@@ -407,6 +410,11 @@ class GenerationSession(
             } ?: false,
             status = if (result != null) GenerationHistoryStatus.SUCCESS else GenerationHistoryStatus.FAILED,
             failureMessage = failure?.message,
+            checkpointFormat = checkpoint.format,
+            tokenizerKind = checkpoint.tokenizerKind,
+            tokenizerHash = checkpoint.tokenizerHash,
+            generatedTokenCount = result?.tokenCount
+                ?: failureFields?.int("generated_token_count") ?: 0,
         )
     }
 
@@ -460,13 +468,20 @@ class NativeHtpGenerationBackend(
     ): GenerationResult {
         request.validationError()?.let { error(it) }
         if (!BuildConfig.PHONELM_QNN_ENABLED) error("QNN HTP is disabled in this APK; CPU fallback is not permitted")
-        val plan = TrainingPlan.NICOPEDIA_L19
-        require(checkpoint.usable && checkpoint.tokens == plan.modelConfig.tokens &&
-            checkpoint.dimension == plan.modelConfig.dimension &&
-            checkpoint.feedForwardDimension == plan.modelConfig.feedForwardDimension &&
-            checkpoint.layers == plan.modelConfig.layers && checkpoint.heads == plan.modelConfig.heads &&
-            checkpoint.seed == plan.modelConfig.seed) {
+        val config = if (checkpoint.vocabulary == 1024) {
+            TrainingModelConfig.nicopediaBpeV1024(
+                checkpoint.tokenizerHash ?: error("BPE checkpoint tokenizer hash is missing"),
+            )
+        } else TrainingModelConfig.NICOPEDIA_L19
+        require(checkpoint.usable && checkpoint.tokens == config.tokens &&
+            checkpoint.dimension == config.dimension &&
+            checkpoint.feedForwardDimension == config.feedForwardDimension &&
+            checkpoint.layers == config.layers && checkpoint.heads == config.heads &&
+            checkpoint.seed == config.seed && checkpoint.vocabulary == config.vocabularySize) {
             "checkpoint identity is incompatible with the production model"
+        }
+        require(request.mode != GenerationMode.SAMPLE || request.topK <= config.vocabularySize) {
+            "TopK exceeds checkpoint vocabulary"
         }
         check(promptDirectory.isDirectory || promptDirectory.mkdirs()) { "prompt staging directory is unavailable" }
         val promptFile = File(promptDirectory, "prompt-${UUID.randomUUID()}.bin")
@@ -488,13 +503,13 @@ class NativeHtpGenerationBackend(
                 PROGRESS_POLL_MS,
                 TimeUnit.MILLISECONDS,
             )
-            val config = plan.modelConfig
             val report = NativeBridge.nativeRunNicopediaGenerate(
                 checkpointPath = checkpoint.path,
                 promptPath = promptFile.absolutePath,
                 seed = config.seed,
                 layers = config.layers,
                 tokens = config.tokens,
+                vocabulary = config.vocabularySize,
                 dimension = config.dimension,
                 feedForwardDimension = config.feedForwardDimension,
                 maxNewBytes = request.maxNewBytes,
@@ -511,7 +526,7 @@ class NativeHtpGenerationBackend(
                 htpNativeTensorFp16 = false,
             )
             return try {
-                parseReport(report, checkpoint.parameterHash!!)
+                parseReport(report, checkpoint)
             } catch (error: GenerationBackendException) {
                 throw error
             } catch (error: Throwable) {
@@ -559,7 +574,7 @@ class NativeHtpGenerationBackend(
         )
     }
 
-    internal fun parseReport(report: String, expectedCheckpointHash: String): GenerationResult {
+    internal fun parseReport(report: String, checkpoint: GenerationCheckpoint): GenerationResult {
         val fields = NativeTrainingFieldsParser.parse(report)
         fun requireField(key: String, expected: String) {
             require(fields.string(key)?.removePrefix("v") == expected.removePrefix("v")) {
@@ -570,14 +585,17 @@ class NativeHtpGenerationBackend(
             val reason = fields.string("error") ?: fields.string("failure_classification") ?: "native generation failed"
             throw GenerationBackendException(reason, report)
         }
-        requireField("checkpoint_format", "NPRTCKPTV2")
-        requireField("checkpoint_header_tokens", "32")
-        requireField("checkpoint_header_dimension", "32")
-        requireField("checkpoint_header_feedforward", "32")
-        requireField("checkpoint_header_layers", "19")
-        requireField("checkpoint_header_heads", "2")
+        requireField("checkpoint_format", checkpoint.format)
+        requireField("checkpoint_header_vocabulary", checkpoint.vocabulary.toString())
+        requireField("checkpoint_header_tokens", checkpoint.tokens.toString())
+        requireField("checkpoint_header_dimension", checkpoint.dimension.toString())
+        requireField("checkpoint_header_feedforward", checkpoint.feedForwardDimension.toString())
+        requireField("checkpoint_header_layers", checkpoint.layers.toString())
+        requireField("checkpoint_header_heads", checkpoint.heads.toString())
+        requireField("tokenizer_kind", checkpoint.tokenizerKind)
+        if (checkpoint.tokenizerHash != null) requireField("tokenizer_hash", checkpoint.tokenizerHash)
         requireField("checkpoint_finite", "true")
-        requireField("checkpoint_parameter_hash", expectedCheckpointHash)
+        requireField("checkpoint_parameter_hash", checkpoint.parameterHash!!)
         requireField("qnn_return_code_success", "true")
         requireField("output_tensors_finite", "true")
         requireField("cpu_fallback", "false")
@@ -587,7 +605,9 @@ class NativeHtpGenerationBackend(
         requireField("inf_detected", "false")
         val bytes = decodeHex(fields.string("generated_hex") ?: error("generated bytes are missing"))
         val byteCount = fields.int("generated_byte_count") ?: error("generated byte count is missing")
+        val tokenCount = fields.int("generated_token_count") ?: error("generated token count is missing")
         require(byteCount == bytes.size) { "generated byte count differs from payload" }
+        require(tokenCount in 0..byteCount) { "generated token count is invalid" }
         val elapsedSeconds = fields.double("generation_total_seconds")
             ?.takeIf { it.isFinite() && it >= 0.0 } ?: error("generation elapsed time is invalid")
         val displayBytes = NativeBridge.nativeSafeUtf8Display(bytes)
@@ -606,6 +626,9 @@ class NativeHtpGenerationBackend(
             qnnExecuteAttempts = fields.long("api_trace_graph_execute_attempt_count")?.coerceAtLeast(0) ?: 0,
             qnnExecuteSuccesses = fields.long("api_trace_graph_execute_success_count")?.coerceAtLeast(0) ?: 0,
             qnnExecuteFailures = fields.long("api_trace_graph_execute_failure_count")?.coerceAtLeast(0) ?: 0,
+            tokenCount = tokenCount,
+            tokenizerKind = checkpoint.tokenizerKind,
+            tokenizerHash = checkpoint.tokenizerHash,
         )
     }
 

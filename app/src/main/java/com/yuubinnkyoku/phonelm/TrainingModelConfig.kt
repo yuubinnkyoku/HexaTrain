@@ -13,6 +13,7 @@ data class TrainingModelConfig(
     val checkpointInterval: Int,
     val seed: Long = 1L,
     val tokenizerId: String = "nicopedia-byte-v1",
+    val tokenizerHash: String? = null,
     val optimizerId: String = "adam-beta1-0.9-beta2-0.999-eps-1e-8",
 ) {
     fun validationError(): String? = when {
@@ -29,6 +30,12 @@ data class TrainingModelConfig(
         checkpointInterval !in 1..100_000 -> "checkpointInterval must be in 1..100000"
         seed !in 1L..99_999L -> "seed must be in 1..99999"
         tokenizerId.isBlank() -> "tokenizerId must not be blank"
+        vocabularySize == 1024 && tokenizerId != "byte_bpe" ->
+            "V1024 requires byte_bpe tokenizer"
+        vocabularySize == 1024 && tokenizerHash?.matches(Regex("sha256:[0-9a-f]{64}")) != true ->
+            "V1024 requires a canonical tokenizer SHA-256"
+        vocabularySize == 256 && tokenizerHash != null ->
+            "legacy V256 must not carry a BPE tokenizer hash"
         optimizerId.isBlank() -> "optimizerId must not be blank"
         else -> null
     }
@@ -39,7 +46,8 @@ data class TrainingModelConfig(
             "L=$layers", "H=$heads", "T=$tokens", "D=$dimension",
             "FFN=$feedForwardDimension", "V=$vocabularySize", "B=$batchSize",
             "LR=${learningRate.toBits()}", "interval=$checkpointInterval",
-            "seed=$seed", "tokenizer=$tokenizerId", "optimizer=$optimizerId",
+            "seed=$seed", "tokenizer=$tokenizerId", "tokenizer_hash=${tokenizerHash ?: "legacy"}",
+            "optimizer=$optimizerId",
         ).joinToString("|")
 
     companion object {
@@ -54,6 +62,21 @@ data class TrainingModelConfig(
             batchSize = 8,
             learningRate = 0.003f,
             checkpointInterval = 250,
+        )
+
+        fun nicopediaBpeV1024(tokenizerHash: String) = TrainingModelConfig(
+            layers = 19,
+            heads = 2,
+            tokens = 32,
+            dimension = 32,
+            feedForwardDimension = 32,
+            vocabularySize = 1024,
+            batchSize = 8,
+            learningRate = 0.003f,
+            checkpointInterval = 250,
+            seed = 1,
+            tokenizerId = "byte_bpe",
+            tokenizerHash = tokenizerHash,
         )
     }
 }

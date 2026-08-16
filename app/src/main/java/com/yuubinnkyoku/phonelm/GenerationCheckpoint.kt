@@ -24,6 +24,10 @@ data class GenerationCheckpoint(
     val fileSizeBytes: Long,
     val compatibility: GenerationCheckpointCompatibility,
     val formatValid: Boolean,
+    val vocabulary: Int = 256,
+    val tokenizerKind: String = "byte",
+    val tokenizerHash: String? = null,
+    val format: String = "NPRTCKPTV2",
     val diagnostic: String? = null,
 ) {
     val usable: Boolean
@@ -32,7 +36,7 @@ data class GenerationCheckpoint(
 
     val label: String
         get() = when {
-            !formatValid -> "invalid NPRTCKPTV2"
+            !formatValid -> "invalid checkpoint"
             compatibility == GenerationCheckpointCompatibility.INCOMPATIBLE ->
                 "step $step · D$dimension/FFN$feedForwardDimension · incompatible"
             !finite -> "step $step · D$dimension/FFN$feedForwardDimension · non-finite"
@@ -87,7 +91,8 @@ class AppPrivateGenerationCheckpointRepository(
 }
 
 internal object GenerationCheckpointInspector {
-    private const val MAGIC = "NPRTCKPTV2\n"
+    private const val MAGIC_V2 = "NPRTCKPTV2\n"
+    private const val MAGIC_V3 = "NPRTCKPTV3\n"
     private const val MAX_FILE_BYTES = 64L * 1024L * 1024L
     private const val MAX_ELEMENTS = 100_000_000L
     private const val FNV_OFFSET = -3750763034362895579L
@@ -130,9 +135,11 @@ internal object GenerationCheckpointInspector {
         expected: TrainingModelConfig,
     ): GenerationCheckpoint {
         DataInputStream(BufferedInputStream(source, 64 * 1024)).use { input ->
-            val magic = ByteArray(MAGIC.length)
+            val magic = ByteArray(MAGIC_V2.length)
             input.readFully(magic)
-            require(String(magic, Charsets.US_ASCII) == MAGIC) { "invalid NPRTCKPTV2 magic" }
+            val magicText = String(magic, Charsets.US_ASCII)
+            require(magicText == MAGIC_V2 || magicText == MAGIC_V3) { "invalid checkpoint magic" }
+            val v3 = magicText == MAGIC_V3
             val vocabulary = readPositiveU32(input, "vocabulary")
             val tokens = readPositiveU32(input, "tokens")
             val dimension = readPositiveU32(input, "dimension")
@@ -142,6 +149,22 @@ internal object GenerationCheckpointInspector {
             val seed = readPositiveU32(input, "seed")
             val step = readPositiveU32(input, "step")
             require(step < 1_000_000) { "checkpoint step is invalid" }
+            val tokenizerKind: String
+            val tokenizerHash: String?
+            if (v3) {
+                tokenizerKind = readBoundedAscii(input, "tokenizer kind", 1..32)
+                tokenizerHash = readBoundedAscii(input, "tokenizer hash", 71..71)
+                require(tokenizerKind == "byte_bpe" &&
+                    tokenizerHash.matches(Regex("sha256:[0-9a-f]{64}"))) {
+                    "checkpoint tokenizer identity is invalid"
+                }
+            } else {
+                tokenizerKind = "byte"
+                tokenizerHash = null
+            }
+            require((vocabulary == 1024) == v3) {
+                "V1024 requires NPRTCKPTV3 and V256 requires NPRTCKPTV2"
+            }
             val namesAndCounts = expectedRegistry(vocabulary, dimension, feedForward, layers)
             var finite = true
             var hash = FNV_OFFSET
@@ -151,7 +174,9 @@ internal object GenerationCheckpointInspector {
             require(input.read() < 0) { "checkpoint has trailing bytes" }
             val compatible = vocabulary == expected.vocabularySize && tokens == expected.tokens &&
                 dimension == expected.dimension && feedForward == expected.feedForwardDimension &&
-                layers == expected.layers && heads == expected.heads && seed.toLong() == expected.seed
+                layers == expected.layers && heads == expected.heads && seed.toLong() == expected.seed &&
+                tokenizerKind == expected.tokenizerId.removePrefix("nicopedia-").removeSuffix("-v1") &&
+                tokenizerHash == expected.tokenizerHash
             return GenerationCheckpoint(
                 path = path,
                 step = step,
@@ -168,6 +193,10 @@ internal object GenerationCheckpointInspector {
                 compatibility = if (compatible) GenerationCheckpointCompatibility.COMPATIBLE
                     else GenerationCheckpointCompatibility.INCOMPATIBLE,
                 formatValid = true,
+                vocabulary = vocabulary,
+                tokenizerKind = tokenizerKind,
+                tokenizerHash = tokenizerHash,
+                format = if (v3) "NPRTCKPTV3" else "NPRTCKPTV2",
             )
         }
     }
@@ -240,6 +269,18 @@ internal object GenerationCheckpointInspector {
         val value = input.readInt()
         require(value > 0) { "checkpoint $name is invalid" }
         return value
+    }
+
+    private fun readBoundedAscii(
+        input: DataInputStream,
+        name: String,
+        lengthRange: IntRange,
+    ): String {
+        val length = input.readInt()
+        require(length in lengthRange) { "checkpoint $name length is invalid" }
+        val bytes = ByteArray(length)
+        input.readFully(bytes)
+        return String(bytes, Charsets.US_ASCII)
     }
 
     private fun fnv(initial: Long, bytes: ByteArray, length: Int = bytes.size): Long {

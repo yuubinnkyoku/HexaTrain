@@ -34,6 +34,24 @@ class GenerationHistoryRepositoryTest {
         assertEquals(listOf("new", "old"), repository.listNewestFirst().map { it.id })
     }
 
+    @Test fun bpeIdentityAndRawBytesRoundTrip() {
+        val repository = repository()
+        val raw = byteArrayOf(0xf0.toByte(), 0x9f.toByte(), 0x98.toByte(), 0x80.toByte(), 0xff.toByte())
+        val record = record("bpe", 30, generated = raw).copy(
+            vocabulary = 1024,
+            checkpointFormat = "NPRTCKPTV3",
+            tokenizerKind = "byte_bpe",
+            tokenizerHash = "sha256:" + "ab".repeat(32),
+            generatedTokenCount = 2,
+        )
+        assertTrue(repository.insert(record))
+        val loaded = repository.listNewestFirst().single()
+        assertTrue(raw.contentEquals(loaded.generatedBytes))
+        assertEquals("NPRTCKPTV3", loaded.checkpointFormat)
+        assertEquals(record.tokenizerHash, loaded.tokenizerHash)
+        assertEquals(2, loaded.generatedTokenCount)
+    }
+
     @Test fun deleteOneAndClearAllDoNotTouchAnythingElse() {
         val repository = repository()
         repository.insert(record("one", 1))

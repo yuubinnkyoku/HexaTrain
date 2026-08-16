@@ -107,19 +107,19 @@ std::vector<uint8_t> buildGenerationContext(const std::vector<uint8_t>& history,
                                             uint32_t* padBytes = nullptr);
 
 // Deterministic argmax over a logits row (first maximum on ties).
-uint8_t greedyArgmax(const float* logits, uint32_t vocab);
+uint32_t greedyArgmax(const float* logits, uint32_t vocab);
 
 // Deterministic temperature + top-K sampling (see header comment).
 // `topK == 0` means the full vocabulary; a non-positive or non-finite
 // temperature falls back to greedy argmax.
-uint8_t sampleTopK(const float* logits, uint32_t vocab, float temperature,
+uint32_t sampleTopK(const float* logits, uint32_t vocab, float temperature,
                    uint32_t topK, uint64_t seed, uint64_t step);
 
 // Sampling diagnostics used by the HTP-native generation health gate.  The
 // legacy sampleTopK() ABI remains unchanged; callers that need a fail-closed
 // probability audit use sampleTopKChecked() and inspect every finite/sum flag.
 struct TopKSamplingResult {
-  uint8_t value = 0;
+  uint32_t value = 0;
   bool ok = true;
   bool logitsFinite = true;
   bool weightsFinite = true;
@@ -283,17 +283,14 @@ inline std::vector<uint8_t> buildGenerationContext(
   return context;
 }
 
-inline uint8_t greedyArgmax(const float* logits, uint32_t vocab) {
-  // uint8_t return contracts vocab <= 256 (the byte vocabulary is fixed at
-  // 256); larger vocabularies would silently wrap indices.
-  if (vocab > 256) throw std::invalid_argument("vocab_gt_256");
-  uint8_t best = 0;
+inline uint32_t greedyArgmax(const float* logits, uint32_t vocab) {
+  uint32_t best = 0;
   if (vocab == 0) return best;
   float bestValue = logits[0];
   for (uint32_t i = 1; i < vocab; ++i) {
     if (logits[i] > bestValue) {
       bestValue = logits[i];
-      best = static_cast<uint8_t>(i);
+      best = i;
     }
   }
   return best;
@@ -320,7 +317,7 @@ inline TopKSamplingResult sampleTopKChecked(const float* logits, uint32_t vocab,
                                             float temperature, uint32_t topK,
                                             uint64_t seed, uint64_t step) {
   TopKSamplingResult result;
-  if (vocab > 256) throw std::invalid_argument("vocab_gt_256");
+  if (vocab > 65536) throw std::invalid_argument("vocab_gt_65536");
   if (vocab == 0) return result;
   for (uint32_t i = 0; i < vocab; ++i) {
     if (!std::isfinite(logits[i])) {
@@ -375,7 +372,7 @@ inline TopKSamplingResult sampleTopKChecked(const float* logits, uint32_t vocab,
     if (!std::isfinite(probability)) result.probabilitiesFinite = false;
     probabilitySum += probability;
     if (!selected && u <= cumulative + probability) {
-      result.value = static_cast<uint8_t>(indices[i]);
+      result.value = indices[i];
       selected = true;
     }
     cumulative += probability;
@@ -393,11 +390,11 @@ inline TopKSamplingResult sampleTopKChecked(const float* logits, uint32_t vocab,
   // Rounding can leave u just above the cumulative sum; preserve the legacy
   // deterministic fallback while still publishing the finite/sum audit.
   if (!selected)
-    result.value = static_cast<uint8_t>(indices[k - 1]);
+    result.value = indices[k - 1];
   return result;
 }
 
-inline uint8_t sampleTopK(const float* logits, uint32_t vocab,
+inline uint32_t sampleTopK(const float* logits, uint32_t vocab,
                           float temperature, uint32_t topK, uint64_t seed,
                           uint64_t step) {
   return sampleTopKChecked(logits, vocab, temperature, topK, seed, step).value;

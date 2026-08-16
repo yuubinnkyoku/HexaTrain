@@ -20,10 +20,21 @@ from pathlib import Path
 import re
 import statistics
 import struct
+import subprocess
 import sys
 import tempfile
 import time
 import unicodedata
+
+from nicopedia_byte_bpe import (
+    CACHE_MAGIC as BPE_CACHE_MAGIC,
+    VOCABULARY as BPE_VOCABULARY,
+    load_model as load_bpe_model,
+    quality_metrics as bpe_quality_metrics,
+    read_bpe_cache,
+    self_test as bpe_self_test,
+    write_bpe_cache,
+)
 
 
 SCHEMA = "NICOPEDIA_REAL_TEXT_CORPUS_V1"
@@ -276,7 +287,98 @@ def write_byte_cache(path: Path, articles: list[tuple[int, int, str]], context: 
     }
 
 
-def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, object]:
+def train_bpe_with_host(articles: list[bytes], private_root: Path,
+                        trainer: Path | None):
+    if trainer is None or not trainer.is_file():
+        raise RuntimeError("BPE_HOST_TRAINER_REQUIRED")
+    tokenizer_root = private_root / "tokenizer"
+    tokenizer_root.mkdir(parents=True, exist_ok=True)
+    model_path = tokenizer_root / "byte-bpe-v1024.model"
+    with tempfile.NamedTemporaryFile(
+            prefix="bpe-train-", suffix=".bin", dir=tokenizer_root,
+            delete=False) as temporary:
+        input_path = Path(temporary.name)
+        temporary.write(b"NPRTBPETR1\n")
+        temporary.write(struct.pack(">I", len(articles)))
+        for article in articles:
+            temporary.write(struct.pack(">Q", len(article)))
+            temporary.write(article)
+    try:
+        completed = subprocess.run(
+            [str(trainer), str(input_path), str(model_path)],
+            check=False, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        if completed.returncode != 0:
+            raise RuntimeError("BPE_HOST_TRAIN_FAILED:" + completed.stderr[-1000:])
+        model = load_bpe_model(model_path)
+        if model.identity not in completed.stdout:
+            raise RuntimeError("BPE_HOST_TRAIN_IDENTITY_MISMATCH")
+        return model
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
+def encode_bpe_with_host(articles: list[tuple[int, int, str]], model_path: Path,
+                         trainer: Path | None) -> list[list[int]]:
+    if trainer is None:
+        raise RuntimeError("BPE_HOST_ENCODER_REQUIRED")
+    encoder = trainer.with_name("nicopedia_bpe_encode.exe")
+    if not encoder.is_file():
+        raise RuntimeError("BPE_HOST_ENCODER_REQUIRED")
+    temporary_root = model_path.parent
+    with tempfile.NamedTemporaryFile(
+            prefix="bpe-encode-input-", suffix=".bin", dir=temporary_root,
+            delete=False) as input_file:
+        input_path = Path(input_file.name)
+        input_file.write(b"NPRTBPEEN1\n")
+        input_file.write(struct.pack(">I", len(articles)))
+        for sequence, (_, article_hash, text) in enumerate(articles):
+            raw = text.encode("utf-8")
+            input_file.write(struct.pack(">QQQ", sequence, article_hash, len(raw)))
+            input_file.write(raw)
+    with tempfile.NamedTemporaryFile(
+            prefix="bpe-encode-output-", suffix=".bin", dir=temporary_root,
+            delete=False) as output_file:
+        output_path = Path(output_file.name)
+    try:
+        completed = subprocess.run(
+            [str(encoder), str(input_path), str(model_path), str(output_path)],
+            check=False, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        if completed.returncode != 0:
+            raise RuntimeError("BPE_HOST_ENCODE_FAILED:" + completed.stderr[-1000:])
+        encoded_articles: list[list[int]] = []
+        with output_path.open("rb") as output:
+            if output.read(11) != b"NPRTBPEEO1\n":
+                raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_MAGIC")
+            count_payload = output.read(4)
+            if len(count_payload) != 4 or struct.unpack(">I", count_payload)[0] != len(articles):
+                raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_COUNT")
+            for expected_sequence, (_, expected_hash, text) in enumerate(articles):
+                header = output.read(32)
+                if len(header) != 32:
+                    raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_TRUNCATED")
+                sequence, article_hash, byte_count, token_count = struct.unpack(">QQQQ", header)
+                if (sequence != expected_sequence or article_hash != expected_hash or
+                        byte_count != len(text.encode("utf-8")) or token_count > byte_count):
+                    raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_IDENTITY")
+                payload = output.read(token_count * 2)
+                if len(payload) != token_count * 2:
+                    raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_TRUNCATED")
+                tokens = list(struct.unpack(">" + "H" * token_count, payload))
+                if any(token >= BPE_VOCABULARY for token in tokens):
+                    raise RuntimeError("BPE_HOST_ENCODE_TOKEN_RANGE")
+                encoded_articles.append(tokens)
+            if output.read(1):
+                raise RuntimeError("BPE_HOST_ENCODE_OUTPUT_TRAILING")
+        return encoded_articles
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+def prepare(source_root: Path, private_root: Path, context: int,
+            tokenizer_kind: str = "byte", bpe_trainer: Path | None = None) -> dict[str, object]:
     header_files, body_files = source_files(source_root)
     files = header_files + body_files
     source_manifest_path = private_root / "source-manifest.json"
@@ -405,11 +507,6 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
         name: choose_articles(selectors[split], byte_target)
         for name, (split, byte_target) in targets.items()
     }
-    cache_reports = {}
-    cache_root = private_root / "caches"
-    for name, articles in chosen.items():
-        cache_reports[name] = write_byte_cache(cache_root / f"{name}.bin", articles, context)
-
     train_texts = [item[2] for item in chosen["train_pilot"]]
     char_counts: dict[str, int] = {}
     byte_ratios: list[float] = []
@@ -425,6 +522,45 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
             byte_ratios.append(encoded_bytes / chars)
         for char in text:
             char_counts[char] = char_counts.get(char, 0) + 1
+    cache_reports = {}
+    cache_root = private_root / "caches"
+    tokenizer_identity = "sha256:" + hashlib.sha256(b"nicopedia-byte-v1").hexdigest()
+    bpe_reports = None
+    if tokenizer_kind == "byte_bpe":
+        model = train_bpe_with_host(
+            [text.encode("utf-8") for text in train_texts], private_root, bpe_trainer)
+        model_path = private_root / "tokenizer" / "byte-bpe-v1024.model"
+        if load_bpe_model(model_path).identity != model.identity:
+            raise RuntimeError("BPE_MODEL_RELOAD_IDENTITY_MISMATCH")
+        tokenizer_identity = model.identity
+        encoded_by_split = {
+            name: encode_bpe_with_host(chosen[name], model_path, bpe_trainer)
+            for name in ("train_smoke", "train_pilot", "validation", "development")
+        }
+        # The short candidate needs the existing smoke/pilot and held-out
+        # caches only.  Avoid materializing the unrelated 25 MiB medium cache.
+        for name in ("train_smoke", "train_pilot", "validation", "development"):
+            articles = chosen[name]
+            cache_reports[name] = write_bpe_cache(
+                cache_root / f"{name}.bin", articles, context, model,
+                encoded_by_split[name])
+        bpe_reports = {
+            "tokenizer_type": "byte_bpe",
+            "vocabulary": BPE_VOCABULARY,
+            "merge_count": 768,
+            "tokenizer_hash": model.identity,
+            "train": bpe_quality_metrics(chosen["train_pilot"], model, encoded_by_split["train_pilot"]),
+            "validation": bpe_quality_metrics(chosen["validation"], model, encoded_by_split["validation"]),
+            "development": bpe_quality_metrics(chosen["development"], model, encoded_by_split["development"]),
+            "train_only_merge_learning": True,
+            "article_boundary_pair_counting": False,
+        }
+        write_json(private_root / "reports" / "tokenizer-aggregate.json", bpe_reports)
+    else:
+        for name, articles in chosen.items():
+            cache_reports[name] = write_byte_cache(
+                cache_root / f"{name}.bin", articles, context)
+
     ordered_chars = sorted(char_counts, key=lambda char: (-char_counts[char], ord(char)))[:2047]
     covered = sum(char_counts[char] for char in ordered_chars)
     char_vocab = {"schema": "NICOPEDIA_PRIVATE_CODEPOINT_V1", "unknown_id": 0, "tokens": ordered_chars}
@@ -487,8 +623,14 @@ def prepare(source_root: Path, private_root: Path, context: int) -> dict[str, ob
         "split_clean_utf8_bytes": split_bytes,
         "cache_reports": cache_reports,
         "tokenizer_candidates": tokenizer_protocols,
-        "selected_tokenizer": "utf8_byte",
-        "selected_tokenizer_reason": "zero unknown tokens, exact byte round-trip, and 8x lower dense output vocabulary than the TRAIN-only codepoint candidate",
+        "selected_tokenizer": "byte_bpe" if tokenizer_kind == "byte_bpe" else "utf8_byte",
+        "selected_tokenizer_identity": tokenizer_identity,
+        "selected_tokenizer_reason": (
+            "TRAIN-only deterministic raw-byte BPE candidate with byte fallback and exact round-trip"
+            if tokenizer_kind == "byte_bpe" else
+            "zero unknown tokens, exact byte round-trip, and 8x lower dense output vocabulary than the TRAIN-only codepoint candidate"
+        ),
+        "byte_bpe_aggregate": bpe_reports,
         "context_tokens": context,
         "processing_seconds": elapsed,
         "processing_mib_per_second": sum(path.stat().st_size for path in files) / 1048576 / max(elapsed, 1e-9),
@@ -557,7 +699,37 @@ def cache_content_identity(path: Path) -> dict[str, object]:
         while block := raw.read(1024 * 1024):
             digest.update(block)
     with path.open("rb") as handle:
-        if handle.read(11) != b"NPRTBYTEV1\n":
+        magic_prefix = handle.read(len(BPE_CACHE_MAGIC))
+        if magic_prefix == BPE_CACHE_MAGIC:
+            header = handle.read(48)
+            if len(header) != 48:
+                raise ValueError("CACHE_TRUNCATED_HEADER")
+            context, vocabulary = struct.unpack(">II", header[:8])
+            tokenizer_hash = "sha256:" + header[8:40].hex()
+            count = struct.unpack(">Q", header[40:])[0]
+            if context < 8 or context > 256 or vocabulary != BPE_VOCABULARY or count > 10_000_000:
+                raise ValueError("CACHE_HEADER_INVALID")
+            byte_order = "little" if sys.byteorder == "little" else "big"
+            value = FNV_OFFSET
+            for item in (context.to_bytes(4, byte_order), vocabulary.to_bytes(4, byte_order),
+                         bytes.fromhex(tokenizer_hash.split(":", 1)[1]), count.to_bytes(8, byte_order)):
+                value = fnv_update(value, item)
+            for _ in range(count):
+                article_bytes = handle.read(8)
+                window = handle.read(2 * (context + 1))
+                if len(article_bytes) != 8 or len(window) != 2 * (context + 1):
+                    raise ValueError("CACHE_RECORD_TRUNCATED")
+                if any(value >= vocabulary for value in struct.unpack(">" + "H" * (context + 1), window)):
+                    raise ValueError("CACHE_TOKEN_RANGE")
+                value = fnv_update(value, int.from_bytes(article_bytes, "big").to_bytes(8, byte_order))
+                value = fnv_update(value, window)
+            if handle.read(1):
+                raise ValueError("CACHE_TRAILING_BYTES")
+            return {"sha256": "sha256:" + digest.hexdigest(),
+                    "fnv1a64": f"fnv1a64:{value:016x}", "context": context,
+                    "vocabulary": vocabulary, "chunks": count,
+                    "tokenizer_hash": tokenizer_hash}
+        if magic_prefix + handle.read(1) != b"NPRTBYTEV1\n":
             raise ValueError("CACHE_MAGIC")
         header = handle.read(16)
         if len(header) != 16:
@@ -606,8 +778,11 @@ def build_private_evidence(private_root: Path) -> dict[str, object]:
         expected = corpus["cache_identities"][name]
         if identity["sha256"] != expected["sha256"] or identity["chunks"] != expected["chunks"]:
             raise ValueError("CACHE_REPORT_IDENTITY_MISMATCH")
-        if identity["context"] != corpus["context_tokens"] or identity["vocabulary"] != 256:
+        expected_vocabulary = BPE_VOCABULARY if corpus.get("selected_tokenizer") == "byte_bpe" else 256
+        if identity["context"] != corpus["context_tokens"] or identity["vocabulary"] != expected_vocabulary:
             raise ValueError("CACHE_PROTOCOL_MISMATCH")
+        if expected_vocabulary == BPE_VOCABULARY and identity.get("tokenizer_hash") != corpus.get("selected_tokenizer_identity"):
+            raise ValueError("CACHE_TOKENIZER_IDENTITY_MISMATCH")
         cache_evidence[name] = identity
     if any((private_root / "caches").glob("*final*")):
         raise ValueError("FINAL_TEST_CACHE_PRESENT")
@@ -649,6 +824,7 @@ def verify_private_evidence(private_root: Path) -> None:
 
 def self_test() -> None:
     set_csv_limit()
+    bpe_self_test()
     assert clean_text("Ａ\r\n<b>日&amp;本</b>\x01") == "A\n日&本"
     assert clean_text("<script>secret</script><p>可視</p>") == "可視"
     assert split_name("123") == split_name("123")
@@ -708,6 +884,8 @@ def main() -> int:
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--private-root", type=Path)
     parser.add_argument("--context", type=int, default=32)
+    parser.add_argument("--tokenizer", choices=("byte", "byte_bpe"), default="byte")
+    parser.add_argument("--bpe-trainer", type=Path)
     args = parser.parse_args()
     if args.self_test:
         self_test()
@@ -733,7 +911,7 @@ def main() -> int:
     if args.inventory:
         inventory(source_root, private_root)
     else:
-        prepare(source_root, private_root, args.context)
+        prepare(source_root, private_root, args.context, args.tokenizer, args.bpe_trainer)
     return 0
 
 

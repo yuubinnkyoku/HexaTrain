@@ -248,6 +248,7 @@ class MainActivity : Activity() {
                         // UI fallback stays at the fixed T32 nicopedia contract;
                         // headless runs pass the explicit context length.
                         tokens = 32,
+                        vocabulary = 256,
                         dimension = 32,
                         feedForwardDimension = 32,
                         maxNewBytes = maxNewBytes,
@@ -324,6 +325,7 @@ class MainActivity : Activity() {
                         // UI fallback stays at the fixed T32 nicopedia contract;
                         // headless runs pass the explicit context length.
                         tokens = 32,
+                        vocabulary = 256,
                         dimension = 32,
                         feedForwardDimension = 32,
                         checkpointStep = checkpointStep,

@@ -232,6 +232,7 @@ class HeadlessDeviceTestRunner {
 
     private data class NicopediaArguments(
         val seed: Long,
+        val vocabulary: Int,
         val layers: Int,
         val heads: Int,
         val tokens: Int,
@@ -260,6 +261,8 @@ class HeadlessDeviceTestRunner {
         // malformed numeric text instead of silently falling back to a
         // different trajectory.
         val seed = longArgument(arguments, "seed", 1L, 1L..99_999L)
+        val vocabulary = intArgument(arguments, "vocabulary", 256, 256..1024)
+        require(vocabulary == 256 || vocabulary == 1024) { "vocabulary must be 256 or 1024" }
         val layers = intArgument(arguments, "layers", 19, 1..100)
         val heads = intArgument(arguments, "heads", 2, 1..32)
         val tokens = intArgument(arguments, "tokens", 32, 8..256)
@@ -278,7 +281,7 @@ class HeadlessDeviceTestRunner {
         }
         val maxNewBytes = intArgument(arguments, "maxNewBytes", 64, 1..1_024)
         val temperature = floatArgument(arguments, "temperature", 0.6f, 0.0001f..100f)
-        val topK = intArgument(arguments, "topK", 16, 1..256)
+        val topK = intArgument(arguments, "topK", 16, 1..vocabulary)
         val samplingSeed = longArgument(arguments, "samplingSeed", 42L, 0L..Long.MAX_VALUE)
         val gatePolicy = stringArgument(arguments, "gatePolicy", "legacy")
         require(gatePolicy == "legacy" || gatePolicy == "candidate" || gatePolicy == "htp-native" || gatePolicy == "htp-smoke") {
@@ -303,6 +306,7 @@ class HeadlessDeviceTestRunner {
         }
         return NicopediaArguments(
             seed = seed,
+            vocabulary = vocabulary,
             layers = layers,
             heads = heads,
             tokens = tokens,
@@ -405,6 +409,7 @@ class HeadlessDeviceTestRunner {
         val config = parseNicopediaArguments(arguments, "nicopedia-long-training")
         val directory = nicopediaInputDirectory(context, runId)
         requiredInputFile(directory, "train_pilot.bin")
+        if (config.vocabulary == 1024) requiredInputFile(directory, "byte-bpe-v1024.model")
         if (config.resumeStep > 0) {
             requiredInputFile(directory, nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.resumeStep))
         }
@@ -413,7 +418,7 @@ class HeadlessDeviceTestRunner {
             batchSize = config.batchSize,
             dimension = config.dimension,
             hiddenDimension = config.feedForwardDimension,
-            outputDimension = 256,
+            outputDimension = config.vocabulary,
             steps = config.steps,
             warmupSteps = 0,
             learningRate = 0.003f,
@@ -442,6 +447,7 @@ class HeadlessDeviceTestRunner {
     ): String {
         val config = parseNicopediaArguments(arguments, "nicopedia-eval")
         val directory = nicopediaInputDirectory(context, runId)
+        if (config.vocabulary == 1024) requiredInputFile(directory, "byte-bpe-v1024.model")
         requiredInputFile(directory,
             nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.checkpointStep))
         requiredInputFile(directory, "validation.bin")
@@ -452,6 +458,7 @@ class HeadlessDeviceTestRunner {
             layers = config.layers,
             heads = config.heads,
             tokens = config.tokens,
+            vocabulary = config.vocabulary,
             dimension = config.dimension,
             feedForwardDimension = config.feedForwardDimension,
             checkpointStep = config.checkpointStep,
@@ -492,6 +499,7 @@ class HeadlessDeviceTestRunner {
         val directory = nicopediaInputDirectory(context, runId)
         val checkpoint = requiredInputFile(directory,
             nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.checkpointStep))
+        if (config.vocabulary == 1024) requiredInputFile(directory, "byte-bpe-v1024.model")
         val prompt = requiredInputFile(directory, "prompt.bin")
         return NativeBridge.nativeRunNicopediaGenerate(
             checkpointPath = checkpoint.absolutePath,
@@ -499,6 +507,7 @@ class HeadlessDeviceTestRunner {
             seed = config.seed,
             layers = config.layers,
             tokens = config.tokens,
+            vocabulary = config.vocabulary,
             dimension = config.dimension,
             feedForwardDimension = config.feedForwardDimension,
             maxNewBytes = config.maxNewBytes,
@@ -604,6 +613,7 @@ class HeadlessDeviceTestRunner {
             seed = 1L,
             layers = 19,
             tokens = 32,
+            vocabulary = 256,
             dimension = 16,
             feedForwardDimension = 32,
             // If the unchanged legacy gate unexpectedly passes, this is the

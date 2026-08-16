@@ -6,6 +6,7 @@
 // CPU reference used by the pilot.  Outputs aggregate NLL only; the private
 // checkpoint itself never enters the repository.
 #include "tiny_language_model_cpu.h"
+#include "nicopedia_byte_bpe.h"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -54,7 +56,7 @@ std::uint64_t readU64(std::istream& input) {
 
 struct CacheRecord {
   std::uint64_t articleHash = 0;
-  std::vector<std::uint8_t> window;
+  std::vector<std::uint16_t> window;
 };
 
 struct Cache {
@@ -64,12 +66,25 @@ struct Cache {
   std::string contentHash;
 };
 
-Cache loadCache(const std::string& path) {
+Cache loadCache(const std::string& path,
+                const phonelm::nicopedia_bpe::Model* bpeModel = nullptr) {
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("CACHE_OPEN_FAILED");
-  std::string magic(11, '\0');
-  input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTBYTEV1\n") throw std::runtime_error("CACHE_MAGIC_MISMATCH");
+  std::string prefix(10, '\0');
+  input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+  if (prefix == "NPRTBPEV1\n") {
+    if (!bpeModel) throw std::runtime_error("BPE_MODEL_REQUIRED");
+    input.close();
+    const auto source = phonelm::nicopedia_bpe::loadCache(path, *bpeModel);
+    Cache cache;
+    cache.context = source.context; cache.vocabulary = source.vocabulary;
+    for (const auto& item : source.records)
+      cache.records.push_back({item.articleHash, item.window});
+    cache.contentHash = source.tokenizerHash;
+    return cache;
+  }
+  char last = 0; input.get(last);
+  if (prefix + last != "NPRTBYTEV1\n") throw std::runtime_error("CACHE_MAGIC_MISMATCH");
   Cache cache;
   cache.context = readU32(input);
   cache.vocabulary = readU32(input);
@@ -84,11 +99,12 @@ Cache loadCache(const std::string& path) {
   for (std::uint64_t i = 0; i < count; ++i) {
     CacheRecord record;
     record.articleHash = readU64(input);
-    record.window.resize(cache.context + 1);
-    input.read(reinterpret_cast<char*>(record.window.data()), static_cast<std::streamsize>(record.window.size()));
+    std::vector<std::uint8_t> byteWindow(cache.context + 1);
+    input.read(reinterpret_cast<char*>(byteWindow.data()), static_cast<std::streamsize>(byteWindow.size()));
     if (!input) throw std::runtime_error("CACHE_RECORD_TRUNCATED");
+    record.window.assign(byteWindow.begin(), byteWindow.end());
     hash = fnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
-    hash = fnvBytes(record.window.data(), record.window.size(), hash);
+    hash = fnvBytes(byteWindow.data(), byteWindow.size(), hash);
     cache.records.push_back(std::move(record));
   }
   if (input.get() != std::char_traits<char>::eof()) throw std::runtime_error("CACHE_TRAILING_BYTES");
@@ -102,6 +118,9 @@ struct Checkpoint {
   phonelm::tiny_lm::Config config;
   std::uint32_t seed = 0;
   std::uint32_t step = 0;
+  bool v3 = false;
+  std::string tokenizerKind;
+  std::string tokenizerHash;
   phonelm::qnn::TinyTransformerParameters parameters;
 };
 
@@ -110,10 +129,12 @@ Checkpoint loadCheckpoint(const std::string& path) {
   if (!input) throw std::runtime_error("CHECKPOINT_OPEN_FAILED");
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n")
+  if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n" && magic != "NPRTCKPTV3\n")
     throw std::runtime_error("CHECKPOINT_MAGIC");
   const bool v2 = magic == "NPRTCKPTV2\n";
+  const bool v3 = magic == "NPRTCKPTV3\n";
   Checkpoint checkpoint;
+  checkpoint.v3 = v3;
   checkpoint.config.vocabularySize = readU32(input);
   checkpoint.config.tokens = readU32(input);
   checkpoint.config.dimension = readU32(input);
@@ -122,6 +143,23 @@ Checkpoint loadCheckpoint(const std::string& path) {
   checkpoint.config.numHeads = readU32(input);
   checkpoint.seed = readU32(input);
   checkpoint.step = readU32(input);
+  if (v3) {
+    const std::uint32_t kindLength = readU32(input);
+    if (kindLength == 0 || kindLength > 32) throw std::runtime_error("CHECKPOINT_TOKENIZER_KIND_LENGTH");
+    checkpoint.tokenizerKind.resize(kindLength);
+    input.read(checkpoint.tokenizerKind.data(), static_cast<std::streamsize>(kindLength));
+    const std::uint32_t hashLength = readU32(input);
+    if (hashLength != 71) throw std::runtime_error("CHECKPOINT_TOKENIZER_HASH_LENGTH");
+    checkpoint.tokenizerHash.resize(hashLength);
+    input.read(checkpoint.tokenizerHash.data(), static_cast<std::streamsize>(hashLength));
+    if (!input || checkpoint.tokenizerKind != "byte_bpe" ||
+        checkpoint.tokenizerHash.compare(0, 7, "sha256:") != 0)
+      throw std::runtime_error("CHECKPOINT_TOKENIZER_IDENTITY");
+  }
+  if (checkpoint.config.vocabularySize == 1024 && !v3)
+    throw std::runtime_error("CHECKPOINT_V3_REQUIRED_FOR_BPE");
+  if (checkpoint.config.vocabularySize != 1024 && v3)
+    throw std::runtime_error("CHECKPOINT_V3_REQUIRES_BPE");
   checkpoint.parameters = phonelm::tiny_lm::initialParameters(checkpoint.config, checkpoint.seed);
   auto registry = phonelm::tiny_lm::parameterRegistry(checkpoint.parameters);
   const std::uint32_t count = readU32(input);
@@ -141,7 +179,7 @@ Checkpoint loadCheckpoint(const std::string& path) {
                      [](float value) { return std::isfinite(value); }))
       throw std::runtime_error("CHECKPOINT_VALUES_NONFINITE");
   }
-  if (v2) {
+  if (v2 || v3) {
     // NPRTCKPTV2 appends the Adam first/second moment registries (same
     // registry layout as the parameters). The CPU evaluation only uses the
     // parameters, so the moments are read and discarded.
@@ -195,7 +233,7 @@ std::uint64_t parameterHash(const phonelm::qnn::TinyTransformerParameters& param
 
 struct Metrics {
   double nll = 0, perplexity = 0, top1 = 0, top5 = 0, meanRank = 0, meanMargin = 0;
-  std::uint64_t tokens = 0, chunks = 0;
+  std::uint64_t tokens = 0, targetBytes = 0, chunks = 0;
   bool finite = true;
 };
 
@@ -324,7 +362,8 @@ Inference infer(const phonelm::tiny_lm::Config& config, const std::vector<std::u
 
 Metrics evaluate(const Cache& cache, const phonelm::tiny_lm::Config& config,
                  const phonelm::qnn::TinyTransformerParameters& parameters,
-                 std::size_t maximumChunks) {
+                 std::size_t maximumChunks,
+                 const phonelm::nicopedia_bpe::Model* bpeModel = nullptr) {
   Metrics metrics;
   if (cache.records.size() < maximumChunks)
     throw std::runtime_error("CACHE_CAPACITY_MISMATCH");
@@ -362,6 +401,8 @@ Metrics evaluate(const Cache& cache, const phonelm::tiny_lm::Config& config,
       top5 += rank <= 5;
       rankSum += rank;
       marginSum += truthLogit - maximumOther;
+      metrics.targetBytes += bpeModel
+          ? bpeModel->tokenByteLength(static_cast<std::uint16_t>(truth)) : 1u;
       ++metrics.tokens;
     }
   }
@@ -383,8 +424,18 @@ int main(int argc, char** argv) {
       return 2;
     }
     const Checkpoint checkpoint = loadCheckpoint(argv[1]);
-    const Cache validation = loadCache(argv[2]);
-    const Cache development = loadCache(argv[3]);
+    std::unique_ptr<phonelm::nicopedia_bpe::Model> bpeModel;
+    if (checkpoint.config.vocabularySize == 1024) {
+      const std::string checkpointPath = argv[1];
+      const std::size_t separator = checkpointPath.find_last_of("/\\");
+      const std::string directory = separator == std::string::npos ? "." : checkpointPath.substr(0, separator);
+      bpeModel = std::make_unique<phonelm::nicopedia_bpe::Model>(
+          phonelm::nicopedia_bpe::loadModel(directory + "/byte-bpe-v1024.model"));
+      if (checkpoint.tokenizerHash != bpeModel->identity())
+        throw std::runtime_error("CHECKPOINT_TOKENIZER_HASH_MISMATCH");
+    }
+    const Cache validation = loadCache(argv[2], bpeModel.get());
+    const Cache development = loadCache(argv[3], bpeModel.get());
     const std::size_t validationChunks = std::stoull(argv[4]);
     const std::size_t developmentChunks = std::stoull(argv[5]);
     // Fail closed: a cache whose context length differs from the checkpoint's
@@ -396,9 +447,9 @@ int main(int argc, char** argv) {
     if (!parametersFinite(checkpoint.parameters))
       throw std::runtime_error("CHECKPOINT_PARAMETERS_NONFINITE");
     const Metrics validationMetrics =
-        evaluate(validation, checkpoint.config, checkpoint.parameters, validationChunks);
+        evaluate(validation, checkpoint.config, checkpoint.parameters, validationChunks, bpeModel.get());
     const Metrics developmentMetrics =
-        evaluate(development, checkpoint.config, checkpoint.parameters, developmentChunks);
+        evaluate(development, checkpoint.config, checkpoint.parameters, developmentChunks, bpeModel.get());
     if (!validationMetrics.finite || !developmentMetrics.finite)
       throw std::runtime_error("EVALUATION_NONFINITE");
     std::cout << std::setprecision(10)
@@ -418,12 +469,24 @@ int main(int argc, char** argv) {
               << "\nvalidation_margin=" << validationMetrics.meanMargin
               << "\nvalidation_chunks=" << validationMetrics.chunks
               << "\nvalidation_tokens=" << validationMetrics.tokens
+              << "\nvalidation_target_utf8_bytes=" << validationMetrics.targetBytes
+              << "\nvalidation_nats_per_utf8_byte="
+              << validationMetrics.nll * validationMetrics.tokens / std::max<std::uint64_t>(1, validationMetrics.targetBytes)
+              << "\nvalidation_bits_per_utf8_byte="
+              << validationMetrics.nll * validationMetrics.tokens /
+                    std::max<std::uint64_t>(1, validationMetrics.targetBytes) / std::log(2.0)
               << "\ndevelopment_nll=" << developmentMetrics.nll
               << "\ndevelopment_perplexity=" << developmentMetrics.perplexity
               << "\ndevelopment_top1=" << developmentMetrics.top1
               << "\ndevelopment_top5=" << developmentMetrics.top5
               << "\ndevelopment_chunks=" << developmentMetrics.chunks
               << "\ndevelopment_tokens=" << developmentMetrics.tokens
+              << "\ndevelopment_target_utf8_bytes=" << developmentMetrics.targetBytes
+              << "\ndevelopment_nats_per_utf8_byte="
+              << developmentMetrics.nll * developmentMetrics.tokens / std::max<std::uint64_t>(1, developmentMetrics.targetBytes)
+              << "\ndevelopment_bits_per_utf8_byte="
+              << developmentMetrics.nll * developmentMetrics.tokens /
+                    std::max<std::uint64_t>(1, developmentMetrics.targetBytes) / std::log(2.0)
               << "\nfinite=true\n";
     return 0;
   } catch (const std::exception& error) {

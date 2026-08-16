@@ -106,6 +106,12 @@ void testGreedy() {
   require(ngen::greedyArgmax(all, 4) == 0, "greedy on all-equal picks index 0");
   const float high[3] = {0.0f, 0.0f, 5.0f};
   require(ngen::greedyArgmax(high, 3) == 2, "greedy picks unique max");
+  std::vector<float> bpeLogits(1024, -1.0f);
+  bpeLogits[1023] = 9.0f;
+  require(ngen::greedyArgmax(bpeLogits.data(), 1024) == 1023,
+          "V1024 argmax does not truncate to uint8");
+  require(ngen::sampleTopK(bpeLogits.data(), 1024, 1.0f, 1, 1, 0) == 1023,
+          "V1024 topK=1 does not truncate to uint8");
 }
 
 void testSampling() {

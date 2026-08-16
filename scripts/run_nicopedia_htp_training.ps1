@@ -18,10 +18,12 @@ param(
   [int]$Layers = 19,
   [int]$Steps = 32,
   [int]$Tokens = 32,  # context window length (8..256; 32 = legacy T32 behavior)
+  [ValidateSet(256, 1024)][int]$Vocabulary = 256,
   [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
   [int]$BatchSize = 8,   # canonical pilot config (protocol.json): 8 samples/step
   [string]$CachePath = "",
+  [string]$TokenizerModelPath = "",
   [int]$PollLimit = 7200,
   [int]$PollSeconds = 2,
   [int]$ProgressEverySeconds = 30,
@@ -42,6 +44,7 @@ if ($SelfTest) {
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
   if ($Layers -ne 19) { throw "SELFTEST_LAYERS_DEFAULT: expected=19 actual=$Layers" }
   if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
+  if ($Vocabulary -ne 256) { throw "SELFTEST_VOCABULARY_DEFAULT: expected=256 actual=$Vocabulary" }
   if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) {
       throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT: expected=D32/FFN32 actual=D$Dimension/FFN$FeedForwardDimension"
   }
@@ -111,29 +114,42 @@ if ($Steps -lt 1 -or $Steps -gt 12000) { throw 'NICOPEDIA_L19_HARD_CEILING: Step
 if ($OneUpdateProbe -and $Steps -ne 1) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_STEPS_1' }
 if ($OneUpdateProbe -and $BatchSize -ne 8) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_BATCH_8' }
 if ($OneUpdateProbe -and $ResumeStep -ne 0) { throw 'NICOPEDIA_DFFN_PROBE_DOES_NOT_SUPPORT_RESUME' }
+if ($OneUpdateProbe -and $Vocabulary -ne 256) { throw 'NICOPEDIA_DFFN_PROBE_IS_LEGACY_V256_ONLY' }
 if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens must be in 8..256' }
 if ($Dimension -lt 2 -or $Dimension -gt 256 -or ($Dimension % 2) -ne 0) { throw 'NICOPEDIA_DIMENSION_INVALID: Dimension must be even and in 2..256' }
 if ($FeedForwardDimension -lt 2 -or $FeedForwardDimension -gt 1024) { throw 'NICOPEDIA_FFN_INVALID: FeedForwardDimension must be in 2..1024' }
 $root = Split-Path -Parent $PSScriptRoot
-$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$vocabularyTag = if ($Vocabulary -eq 256) { '' } else { "-v$Vocabulary" }
+$shapeTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$modelTag = "$vocabularyTag$shapeTag"
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $package = 'com.yuubinnkyoku.phonelm'
 $apk = Join-Path $root 'app\build\outputs\apk\debug\app-debug.apk'
 $testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
-$reportRoot = Join-Path $root "build\reports\nicopedia-htp-training"
+$reportDirectory = if ($Vocabulary -eq 1024) {
+  "build\reports\nicopedia-htp-training-v1024"
+} else { "build\reports\nicopedia-htp-training" }
+$reportRoot = Join-Path $root $reportDirectory
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
 # The private token cache lives under build/private-data and is never
 # committed.  The host pushes only the minimal pilot input the device needs.
-$trainingDataRoot = if ($Tokens -eq 32) { 'build\private-data\nicopedia-real-text' } else { 'build\private-data\nicopedia-real-text-t64' }
+$trainingDataRoot = if ($Vocabulary -eq 1024) { 'build\private-data\nicopedia-real-text-bpe-v1024' } elseif ($Tokens -eq 32) { 'build\private-data\nicopedia-real-text' } else { 'build\private-data\nicopedia-real-text-t64' }
 if (-not $CachePath) { $CachePath = Join-Path $root (Join-Path $trainingDataRoot 'caches\train_pilot.bin') }
 if (-not (Test-Path -LiteralPath $CachePath -PathType Leaf)) { throw "PRIVATE_CACHE_MISSING: $CachePath" }
 $cacheResolved = [IO.Path]::GetFullPath($CachePath)
 $allowed = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
 if (-not $cacheResolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) {
   throw "CachePath must resolve below the repository build directory"
+}
+$tokenizerResolved = ''
+if ($Vocabulary -eq 1024) {
+  if (-not $TokenizerModelPath) { $TokenizerModelPath = Join-Path $root (Join-Path $trainingDataRoot 'tokenizer\byte-bpe-v1024.model') }
+  if (-not (Test-Path -LiteralPath $TokenizerModelPath -PathType Leaf)) { throw "PRIVATE_TOKENIZER_MODEL_MISSING: $TokenizerModelPath" }
+  $tokenizerResolved = [IO.Path]::GetFullPath($TokenizerModelPath)
+  if (-not $tokenizerResolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'TokenizerModelPath must resolve below the repository build directory' }
 }
 
 if (-not $SkipBuild) {
@@ -178,6 +194,13 @@ $tmpOnDevice = "/data/local/tmp/phonelm-headless-$RunId-train"
 Adb @('push', $cacheResolved, $tmpOnDevice) | Out-Null
 Adb @('shell', 'run-as', $package, 'cp', $tmpOnDevice, "$remoteDir/train_pilot.bin") | Out-Null
 Adb @('shell', 'rm', '-f', $tmpOnDevice) | Out-Null
+if ($Vocabulary -eq 1024) {
+  $tmpTokenizer = "/data/local/tmp/phonelm-headless-$RunId-tokenizer"
+  Adb @('push', $tokenizerResolved, $tmpTokenizer) | Out-Null
+  Adb @('shell', 'run-as', $package, 'cp', $tmpTokenizer, "$remoteDir/byte-bpe-v1024.model") | Out-Null
+  Adb @('shell', 'rm', '-f', $tmpTokenizer) | Out-Null
+  Copy-Item -LiteralPath $tokenizerResolved -Destination (Join-Path $reportRoot 'byte-bpe-v1024.model') -Force
+}
 
 # Canonical resume: the previous segment's NPRTCKPTV2 checkpoint is pulled by
 # that run and kept under build/reports; it is staged on-device and the mode
@@ -214,7 +237,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -352,10 +375,15 @@ foreach ($name in $checkpointNames) {
   $pulled = Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   $header = Get-PhoneLmCheckpointHeaders -Path $local
-  if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne 256 -or $header.Tokens -ne $Tokens -or $header.Dimension -ne $Dimension -or $header.FeedForward -ne $FeedForwardDimension) {
+  if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne $Vocabulary -or $header.Tokens -ne $Tokens -or $header.Dimension -ne $Dimension -or $header.FeedForward -ne $FeedForwardDimension) {
     throw "CHECKPOINT_IDENTITY_MISMATCH: $name"
   }
-  if ($header.Magic -ne 'NPRTCKPTV2') { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
+  $expectedCheckpointFormat = if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }
+  if ($header.Magic -ne $expectedCheckpointFormat) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
+  if ($Vocabulary -eq 1024) {
+    $modelHash = 'sha256:' + (Get-FileHash -LiteralPath $tokenizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($header.TokenizerKind -ne 'byte_bpe' -or $header.TokenizerHash -ne $modelHash) { throw "CHECKPOINT_TOKENIZER_IDENTITY_MISMATCH: $name" }
+  }
   # When the production evaluator and held-out caches are available, decode
   # every pulled checkpoint through the same host path used by the eval runner
   # (one chunk is sufficient for identity/finiteness; full-cap eval is a

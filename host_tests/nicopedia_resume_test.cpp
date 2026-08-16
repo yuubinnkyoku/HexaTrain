@@ -22,6 +22,7 @@
 // CPU replay uses.
 #include "nicopedia_checkpoint_policy.h"
 #include "tiny_language_model_cpu.h"
+#include "transformer_resource_estimator.h"
 
 #include <algorithm>
 #include <array>
@@ -432,6 +433,41 @@ int main() {
         std::cerr << "checkpoint FFN mismatch must be rejected\n";
         ++failures;
       }
+    }
+
+    Config bpeConfig;
+    bpeConfig.vocabularySize = 1024;
+    bpeConfig.tokens = 32;
+    bpeConfig.dimension = 32;
+    bpeConfig.feedForwardDimension = 32;
+    bpeConfig.numLayers = 19;
+    bpeConfig.numHeads = 2;
+    const auto bpeParameters = phonelm::tiny_lm::initialParameters(bpeConfig, 1);
+    std::size_t bpeParameterCount = 0;
+    for (const auto& entry : phonelm::tiny_lm::parameterRegistry(bpeParameters))
+      bpeParameterCount += entry.values->size();
+    if (bpeParameterCount != 184704) {
+      std::cerr << "V1024 parameter count mismatch: " << bpeParameterCount << '\n';
+      ++failures;
+    }
+    const auto bpeResources = phonelm::transformer::estimateTrainingResources(
+        32, 1024, 32, 32, 19, 2);
+    if (!bpeResources.ok || bpeResources.adamGraphElements != 8192 ||
+        bpeResources.adamChunkCount != 23) {
+      std::cerr << "V1024 Adam chunk resource estimate mismatch\n";
+      ++failures;
+    }
+    const std::vector<std::uint32_t> bpeTokens(bpeConfig.tokens, 1023);
+    const auto bpeSmoke = phonelm::tiny_lm::forwardBackwardGeneralized(
+        bpeConfig, phonelm::tiny_lm::oneHot(bpeTokens, bpeConfig.vocabularySize),
+        phonelm::tiny_lm::oneHot(bpeTokens, bpeConfig.vocabularySize),
+        bpeParameters, 0.0f);
+    if (bpeSmoke.logits.size() != std::size_t(32) * 1024 ||
+        !std::isfinite(bpeSmoke.loss) ||
+        !std::all_of(bpeSmoke.logits.begin(), bpeSmoke.logits.end(),
+                     [](float value) { return std::isfinite(value); })) {
+      std::cerr << "V1024 host forward/backward smoke failed\n";
+      ++failures;
     }
 
     Config config;

@@ -39,6 +39,10 @@ data class GenerationHistoryRecord(
     val finite: Boolean,
     val status: GenerationHistoryStatus,
     val failureMessage: String? = null,
+    val checkpointFormat: String = "NPRTCKPTV2",
+    val tokenizerKind: String = "byte",
+    val tokenizerHash: String? = null,
+    val generatedTokenCount: Int = generatedBytes.size,
 )
 
 data class GenerationHistoryItem(
@@ -101,10 +105,12 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
     private fun readAll(): List<GenerationHistoryRecord> {
         if (!file.isFile) return emptyList()
         DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
-            require(input.readUTF() == MAGIC) { "generation history format is invalid" }
+            val magic = input.readUTF()
+            require(magic == MAGIC_V1 || magic == MAGIC_V2) { "generation history format is invalid" }
+            val v2 = magic == MAGIC_V2
             val count = input.readInt()
             require(count in 0..MAX_RECORDS) { "generation history record count is invalid" }
-            return List(count) { readRecord(input) }.also {
+            return List(count) { readRecord(input, v2) }.also {
                 require(input.read() < 0) { "generation history has trailing data" }
             }
         }
@@ -118,7 +124,7 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
         val temporary = File(file.parentFile, "${file.name}.tmp")
         FileOutputStream(temporary).use { stream ->
             DataOutputStream(BufferedOutputStream(stream)).use { output ->
-                output.writeUTF(MAGIC)
+                output.writeUTF(MAGIC_V2)
                 output.writeInt(records.size)
                 records.forEach { writeRecord(output, it) }
                 output.flush()
@@ -137,24 +143,35 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
         }
     }
 
-    private fun readRecord(input: DataInputStream) = GenerationHistoryRecord(
-        id = input.readBoundedString("id"),
-        createdAtMs = input.readLong(),
-        promptBytes = input.readBoundedBytes("prompt"),
-        mode = GenerationMode.entries.getOrNull(input.readInt()) ?: error("generation history mode is invalid"),
-        temperature = input.readFloat(),
-        topK = input.readInt(),
-        samplingSeed = input.readLong(),
-        maxNewBytes = input.readInt(),
-        checkpointStep = input.readInt(),
-        checkpointParameterHash = input.readBoundedString("checkpoint hash"),
-        vocabulary = input.readInt(),
-        tokens = input.readInt(),
-        dimension = input.readInt(),
-        feedForwardDimension = input.readInt(),
-        layers = input.readInt(),
-        heads = input.readInt(),
-        generatedBytes = input.readBoundedBytes("generated output"),
+    private fun readRecord(input: DataInputStream, v2: Boolean): GenerationHistoryRecord {
+        val id = input.readBoundedString("id")
+        val createdAtMs = input.readLong()
+        val promptBytes = input.readBoundedBytes("prompt")
+        val mode = GenerationMode.entries.getOrNull(input.readInt()) ?: error("generation history mode is invalid")
+        val temperature = input.readFloat()
+        val topK = input.readInt()
+        val samplingSeed = input.readLong()
+        val maxNewBytes = input.readInt()
+        val checkpointStep = input.readInt()
+        val checkpointParameterHash = input.readBoundedString("checkpoint hash")
+        val vocabulary = input.readInt()
+        val tokens = input.readInt()
+        val dimension = input.readInt()
+        val feedForwardDimension = input.readInt()
+        val layers = input.readInt()
+        val heads = input.readInt()
+        val checkpointFormat = if (v2) input.readBoundedString("checkpoint format") else "NPRTCKPTV2"
+        val tokenizerKind = if (v2) input.readBoundedString("tokenizer kind") else "byte"
+        val tokenizerHash = if (v2) input.readNullableString() else null
+        val generatedTokenCount = if (v2) input.readInt() else -1
+        val generatedBytes = input.readBoundedBytes("generated output")
+        return GenerationHistoryRecord(
+        id = id, createdAtMs = createdAtMs, promptBytes = promptBytes, mode = mode,
+        temperature = temperature, topK = topK, samplingSeed = samplingSeed,
+        maxNewBytes = maxNewBytes, checkpointStep = checkpointStep,
+        checkpointParameterHash = checkpointParameterHash, vocabulary = vocabulary,
+        tokens = tokens, dimension = dimension, feedForwardDimension = feedForwardDimension,
+        layers = layers, heads = heads, generatedBytes = generatedBytes,
         elapsedMs = input.readLong(),
         backend = input.readBoundedString("backend"),
         qnnExecuteAttempts = input.readLong(),
@@ -165,7 +182,11 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
         status = GenerationHistoryStatus.entries.getOrNull(input.readInt())
             ?: error("generation history status is invalid"),
         failureMessage = input.readNullableString(),
+        checkpointFormat = checkpointFormat, tokenizerKind = tokenizerKind,
+        tokenizerHash = tokenizerHash,
+        generatedTokenCount = if (generatedTokenCount >= 0) generatedTokenCount else generatedBytes.size,
     ).also(::validate)
+    }
 
     private fun writeRecord(output: DataOutputStream, record: GenerationHistoryRecord) {
         validate(record)
@@ -185,6 +206,10 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
         output.writeInt(record.feedForwardDimension)
         output.writeInt(record.layers)
         output.writeInt(record.heads)
+        output.writeBoundedString(record.checkpointFormat)
+        output.writeBoundedString(record.tokenizerKind)
+        output.writeNullableString(record.tokenizerHash)
+        output.writeInt(record.generatedTokenCount)
         output.writeBoundedBytes(record.generatedBytes)
         output.writeLong(record.elapsedMs)
         output.writeBoundedString(record.backend)
@@ -202,11 +227,17 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
         require(record.createdAtMs >= 0)
         require(record.promptBytes.size <= MAX_BLOB_BYTES && record.generatedBytes.size <= MAX_BLOB_BYTES)
         require(record.temperature.isFinite())
-        require(record.topK in 1..256 && record.maxNewBytes in 1..1024)
+        require(record.topK in 1..record.vocabulary && record.maxNewBytes in 1..1024)
         require(record.checkpointStep > 0)
         require(record.checkpointParameterHash.matches(Regex("fnv1a64:[0-9a-f]{16}")))
         require(record.vocabulary > 0 && record.tokens > 0 && record.dimension > 0 &&
             record.feedForwardDimension > 0 && record.layers > 0 && record.heads > 0)
+        require(record.generatedTokenCount >= 0 && record.generatedTokenCount <= record.maxNewBytes)
+        require(record.checkpointFormat == "NPRTCKPTV2" || record.checkpointFormat == "NPRTCKPTV3")
+        require((record.vocabulary == 1024) == (record.tokenizerKind == "byte_bpe"))
+        if (record.tokenizerKind == "byte_bpe")
+            require(record.tokenizerHash?.matches(Regex("sha256:[0-9a-f]{64}")) == true)
+        else require(record.tokenizerHash == null)
         require(record.elapsedMs >= 0 && record.qnnExecuteAttempts >= 0 &&
             record.qnnExecuteSuccesses >= 0 && record.qnnExecuteFailures >= 0)
         require(record.qnnExecuteSuccesses + record.qnnExecuteFailures <= record.qnnExecuteAttempts)
@@ -247,7 +278,8 @@ class FileGenerationHistoryRepository(private val file: File) : GenerationHistor
     }
 
     private companion object {
-        const val MAGIC = "PHONELM_GENERATION_HISTORY_V1"
+        const val MAGIC_V1 = "PHONELM_GENERATION_HISTORY_V1"
+        const val MAGIC_V2 = "PHONELM_GENERATION_HISTORY_V2"
         const val MAX_RECORDS = 10_000
         const val MAX_BLOB_BYTES = 16 * 1024 * 1024
         const val MAX_STRING_BYTES = 64 * 1024

@@ -9,6 +9,8 @@ param(
     [string]$SourceRoot = "",
     [string]$PrivateRoot = "build/private-data/nicopedia-real-text",
     [int]$Context = 32,
+    [ValidateSet("byte", "byte_bpe")]
+    [string]$Tokenizer = "byte",
     [int]$Layers = 6,
     [int]$MeasuredSteps = 5,
     [int]$Seed = 1,
@@ -28,6 +30,10 @@ $pythonScript = Join-Path $repoRoot "scripts/nicopedia_real_text_pipeline.py"
 $sourceFile = Join-Path $repoRoot "host_tests/nicopedia_real_text_pilot.cpp"
 $cpuSource = Join-Path $repoRoot "app/src/main/cpp/tiny_language_model_cpu.cpp"
 $executable = Join-Path $buildRoot "nicopedia_real_text_pilot.exe"
+$bpeTrainerSource = Join-Path $repoRoot "host_tests/nicopedia_bpe_train.cpp"
+$bpeTrainer = Join-Path $buildRoot "nicopedia_bpe_train.exe"
+$bpeEncoderSource = Join-Path $repoRoot "host_tests/nicopedia_bpe_encode.cpp"
+$bpeEncoder = Join-Path $buildRoot "nicopedia_bpe_encode.exe"
 
 function Resolve-UnderBuild([string]$RelativeOrAbsolute, [string]$Label) {
     $resolved = if ([IO.Path]::IsPathRooted($RelativeOrAbsolute)) {
@@ -73,6 +79,32 @@ function Build-Runner {
     $arguments += @("-o", $executable)
     & $compiler.Source @arguments
     if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_REAL_TEXT_COMPILE_FAILED" }
+}
+
+function Build-BpeTrainer {
+    New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
+    $inputs = @(
+        $bpeTrainerSource,
+        $bpeEncoderSource,
+        (Join-Path $repoRoot "app/src/main/cpp/nicopedia_byte_bpe.h")
+    )
+    $builtAt = if ((Test-Path -LiteralPath $bpeTrainer -PathType Leaf) -and
+                    (Test-Path -LiteralPath $bpeEncoder -PathType Leaf)) {
+        @((Get-Item -LiteralPath $bpeTrainer).LastWriteTimeUtc,
+          (Get-Item -LiteralPath $bpeEncoder).LastWriteTimeUtc) | Sort-Object | Select-Object -First 1
+    } else { $null }
+    if ($builtAt -and -not @($inputs | Where-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc -gt $builtAt }).Count) {
+        return
+    }
+    $compiler = Get-Command clang++ -ErrorAction SilentlyContinue
+    if (-not $compiler) { $compiler = Get-Command g++ -ErrorAction SilentlyContinue }
+    if (-not $compiler) { throw "CXX_COMPILER_NOT_FOUND" }
+    & $compiler.Source "-std=c++20" "-O2" "-Wall" "-Wextra" "-Wpedantic" `
+        "-I" (Join-Path $repoRoot "app/src/main/cpp") $bpeTrainerSource "-o" $bpeTrainer
+    if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_BPE_TRAINER_COMPILE_FAILED" }
+    & $compiler.Source "-std=c++20" "-O2" "-Wall" "-Wextra" "-Wpedantic" `
+        "-I" (Join-Path $repoRoot "app/src/main/cpp") $bpeEncoderSource "-o" $bpeEncoder
+    if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_BPE_ENCODER_COMPILE_FAILED" }
 }
 
 $selectedModes = @($SelfTest, $Inventory, $Prepare, $AuditEvidence, $Benchmark, $Train, $Compare) |
@@ -122,7 +154,12 @@ if ($Inventory -or $Prepare) {
     $source = [IO.Path]::GetFullPath($SourceRoot)
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "SOURCE_ROOT_NOT_FOUND" }
     $mode = if ($Inventory) { "--inventory" } else { "--prepare" }
-    & $python.Source $pythonScript $mode --source-root $source --private-root $private --context $Context
+    $bpeArguments = @()
+    if ($Prepare -and $Tokenizer -eq "byte_bpe") {
+        Build-BpeTrainer
+        $bpeArguments = @("--bpe-trainer", $bpeTrainer)
+    }
+    & $python.Source $pythonScript $mode --source-root $source --private-root $private --context $Context --tokenizer $Tokenizer @bpeArguments
     if ($LASTEXITCODE -ne 0) { throw "NICOPEDIA_CORPUS_$($mode.TrimStart('-').ToUpperInvariant())_FAILED" }
     exit 0
 }

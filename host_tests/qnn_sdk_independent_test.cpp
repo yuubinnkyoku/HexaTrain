@@ -308,6 +308,17 @@ void testGraphShapeValidator() {
               "Nicopedia L6 parameter element count is not 20864");
       require(nicopediaL19.parameterElements == 48320,
               "Nicopedia L19 parameter element count is not 48320");
+      TransformerTopologyConfig bpeV1024{32, 32, 32, 19, 2, 1024};
+      bpeV1024.parameterElements =
+          19 * (4 * 32 * 32 + 4 * 32 + 2 * 32 * 32) + 2 * 1024 * 32;
+      bpeV1024.optimizerElements = 2 * bpeV1024.parameterElements;
+      std::vector<TransformerLayerTopology> bpeTopology;
+      for (std::size_t i = 0; i < 19; ++i)
+        bpeTopology.push_back(makeLayer(i, 32, 32, 2, 32));
+      require(validateTransformerTopology(bpeV1024, bpeTopology).ok,
+              "shape validator rejected Nicopedia V1024/T32/D32/FFN32/L19/H2 topology");
+      require(bpeV1024.parameterElements == 184704,
+              "Nicopedia V1024 parameter element count is not 184704");
     }
     // Width-search contract: the generalized graph shape validator must accept
     // both single-axis and joint D/FFN candidates, rather than silently

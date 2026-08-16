@@ -13,6 +13,11 @@ namespace phonelm::transformer {
 // limit here makes the resource estimate and execution contract identical.
 // It is an application safety limit, not a QNN/HTP hardware limit.
 inline constexpr std::uint64_t kMaximumAdamChunkElements = 32768;
+// V1024's training graph retains four times the logits/head tensors of the
+// legacy byte model. Bound the separately-finalized Adam graph more tightly
+// so both graphs coexist within the device runtime allocation envelope. Adam
+// is elementwise, so chunking changes scheduling only, not optimizer math.
+inline constexpr std::uint64_t kMaximumBpeAdamChunkElements = 8192;
 inline constexpr std::uint64_t kApplicationPolicyBytes =
     std::uint64_t{1536} * 1024 * 1024;
 
@@ -133,10 +138,10 @@ inline ResourceEstimate estimateTrainingResources(
       !bytes(result.adamMomentElements, &result.adamMomentBytes)) {
     return fail("APP_RESOURCE_ESTIMATOR", "Adam m/v byte overflow");
   }
-  result.adamGraphElements =
-      result.parameterElements < kMaximumAdamChunkElements
-          ? result.parameterElements
-          : kMaximumAdamChunkElements;
+  const std::uint64_t maximumAdamChunk = vocabularySize == 1024
+      ? kMaximumBpeAdamChunkElements : kMaximumAdamChunkElements;
+  result.adamGraphElements = result.parameterElements < maximumAdamChunk
+      ? result.parameterElements : maximumAdamChunk;
   if (!result.adamGraphElements ||
       result.parameterElements >
           kMax - (result.adamGraphElements - 1)) {

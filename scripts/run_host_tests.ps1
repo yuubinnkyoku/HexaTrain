@@ -261,6 +261,15 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nicopedia real-text pipeline self-tests failed"
 }
 
+$NicopediaByteBpeExecutable = Join-Path $OutputDirectory "nicopedia_byte_bpe_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "host_tests\nicopedia_byte_bpe_test.cpp") `
+    -o $NicopediaByteBpeExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia byte-BPE host test compilation failed" }
+& $NicopediaByteBpeExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia byte-BPE host tests failed" }
+
 $NicopediaGenerationExecutable = Join-Path $OutputDirectory "nicopedia_htp_generation_test.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `

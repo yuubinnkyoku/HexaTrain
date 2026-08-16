@@ -16,10 +16,12 @@ param(
     [string]$Model = '',                 # L6 | L19 (required)
     [int]$Seed = 0,                      # L6: 1/2/4, L19: 1
     [int]$Tokens = 32,                   # context window length (8..256; 32 = legacy T32 behavior)
+    [ValidateSet(256, 1024)][int]$Vocabulary = 256,
     [int]$Dimension = 32,
     [int]$FeedForwardDimension = 32,
     [string]$Prompt = '',                # arbitrary Japanese text
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
+    [string]$TokenizerModelPath = '',
     [int]$MaxNewBytes = 64,              # 1..1024
     [string]$Mode = 'Greedy',            # Greedy | Sample
     [double]$Temperature = 1.0,
@@ -54,10 +56,18 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root = Split-Path -Parent $PSScriptRoot
-$modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$vocabularyTag = if ($Vocabulary -eq 256) { '' } else { "-v$Vocabulary" }
+$shapeTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
+$modelTag = "$vocabularyTag$shapeTag"
 
-$reportRoot = Join-Path $root 'build\reports\nicopedia-htp-generation'
-$trainingRoot = Join-Path $root 'build\reports\nicopedia-htp-training'
+$generationDirectory = if ($Vocabulary -eq 1024) {
+    'build\reports\nicopedia-htp-generation-v1024'
+} else { 'build\reports\nicopedia-htp-generation' }
+$trainingDirectory = if ($Vocabulary -eq 1024) {
+    'build\reports\nicopedia-htp-training-v1024'
+} else { 'build\reports\nicopedia-htp-training' }
+$reportRoot = Join-Path $root $generationDirectory
+$trainingRoot = Join-Path $root $trainingDirectory
 $stateDir = Join-Path $root 'build\private-diagnostics\nicopedia-htp-generation-goal'
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 [IO.Directory]::CreateDirectory($stateDir) | Out-Null
@@ -77,12 +87,13 @@ function Resolve-PhoneLmHtpNativeAnchorHash {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EvalHealth,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CpuHealth,
-        [AllowNull()][System.Collections.IDictionary]$TrainingHealth
+        [AllowNull()][System.Collections.IDictionary]$TrainingHealth,
+        [ValidateSet('NPRTCKPTV2', 'NPRTCKPTV3')][string]$ExpectedCheckpointFormat = 'NPRTCKPTV2'
     )
     foreach ($key in @('checkpoint_format', 'checkpoint_finite', 'checkpoint_parameter_hash')) {
         if (-not $EvalHealth.Contains($key)) { throw "HTP_NATIVE_EVAL_ANCHOR_FIELD_MISSING: $key" }
     }
-    if ($EvalHealth.checkpoint_format -ne 'NPRTCKPTV2' -or $EvalHealth.checkpoint_finite -ne 'true' -or
+    if ($EvalHealth.checkpoint_format -ne $ExpectedCheckpointFormat -or $EvalHealth.checkpoint_finite -ne 'true' -or
         $EvalHealth.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') {
         throw 'HTP_NATIVE_EVAL_CHECKPOINT_HEALTH_REJECTED'
     }
@@ -110,12 +121,13 @@ function Assert-PhoneLmHtpSmokeCheckpointHeader {
         [Parameter(Mandatory = $true)][int]$Seed,
         [Parameter(Mandatory = $true)][int]$Layers,
         [Parameter(Mandatory = $true)][int]$Tokens,
+        [int]$Vocabulary = 256,
         [Parameter(Mandatory = $true)][int]$Dimension,
         [Parameter(Mandatory = $true)][int]$FeedForwardDimension,
         [Parameter(Mandatory = $true)][int]$Step
     )
     $expected = [ordered]@{
-        Magic = 'NPRTCKPTV2'; Vocabulary = 256; Tokens = $Tokens
+        Magic = $(if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }); Vocabulary = $Vocabulary; Tokens = $Tokens
         Dimension = $Dimension; FeedForward = $FeedForwardDimension
         Layers = $Layers; Heads = 2; Seed = $Seed; Step = $Step
     }
@@ -406,7 +418,7 @@ if ($HtpContextGraphSplitting -lt 0 -or $HtpContextGraphSplitting -gt 2) {
 }
 if ($Mode -eq 'Sample') {
     if (-not [double]::IsFinite($Temperature) -or $Temperature -le 0.0) { throw 'TEMPERATURE_INVALID' }
-    if ($TopK -lt 1 -or $TopK -gt 256) { throw 'TOPK_INVALID' }
+    if ($TopK -lt 1 -or $TopK -gt $Vocabulary) { throw 'TOPK_INVALID' }
 }
 if ($Prompt -ne '') {
     $promptBytes = [System.Text.Encoding]::UTF8.GetBytes($Prompt)
@@ -419,7 +431,7 @@ if ($Prompt -ne '') {
 }
 if ($promptBytes.Length -eq 0) { throw 'PROMPT_EMPTY' }
 if ($promptBytes.Length -gt $Tokens) {
-    Write-Host "prompt=${Model} seed=$Seed bytes=$($promptBytes.Length) -> device uses last $Tokens bytes (training window semantics)"
+    Write-Host "prompt=${Model} seed=$Seed bytes=$($promptBytes.Length) -> native tokenizer uses the last $Tokens tokens"
 }
 
 # Checkpoint + approved anchor (fail-closed before any device work).
@@ -449,8 +461,8 @@ if ($GatePolicy -eq 'htp-smoke') {
     }
     $anchorHash = [string]$trainingMap.final_parameter_hash
     $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
-    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $checkpointHeader -Seed $Seed -Layers $layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
-    Write-Host "htp-smoke prerequisites accepted: canonical training report and NPRTCKPTV2 header verified anchor=$anchorHash"
+    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $checkpointHeader -Seed $Seed -Layers $layers -Tokens $Tokens -Vocabulary $Vocabulary -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
+    Write-Host "htp-smoke prerequisites accepted: canonical training report and checkpoint header verified anchor=$anchorHash"
 } elseif ($GatePolicy -ne 'htp-native') {
     if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
     $anchorText = Get-Content -LiteralPath $anchorFile -Raw
@@ -467,7 +479,8 @@ if ($GatePolicy -eq 'htp-smoke') {
 if ($GatePolicy -eq 'htp-native') {
     if ($PollLimit -lt 1 -or $PollSeconds -lt 1 -or $ProgressEverySeconds -lt 1) { throw 'POLL_CONFIGURATION_INVALID' }
     if (-not $TrainingReportPath) { $TrainingReportPath = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt" }
-    if (-not $EvalReportPath) { $EvalReportPath = Join-Path $root "build\reports\nicopedia-htp-eval\seed$Seed-l$layers$modelTag-step$CheckpointStep-htp.txt" }
+    $evalDirectory = if ($Vocabulary -eq 1024) { 'build\reports\nicopedia-htp-eval-v1024' } else { 'build\reports\nicopedia-htp-eval' }
+    if (-not $EvalReportPath) { $EvalReportPath = Join-Path $root "$evalDirectory\seed$Seed-l$layers$modelTag-step$CheckpointStep-htp.txt" }
     if (-not (Test-Path -LiteralPath $EvalReportPath -PathType Leaf)) { throw "HTP_NATIVE_EVAL_HEALTH_MISSING: $EvalReportPath" }
     $trainingHealth = $null
     if (Test-Path -LiteralPath $TrainingReportPath -PathType Leaf) {
@@ -476,23 +489,35 @@ if ($GatePolicy -eq 'htp-native') {
         Write-Host "htp-native training report unavailable; using eval-backed checkpoint health: $TrainingReportPath"
     }
     $evalHealth = Assert-PhoneLmHealthReport -Text (Get-Content -LiteralPath $EvalReportPath -Raw) -ExpectedBuildId $ExpectedBuildId -ExpectedStep $CheckpointStep -Kind eval
-    if ($evalHealth.checkpoint_format -ne 'NPRTCKPTV2' -or $evalHealth.checkpoint_finite -ne 'true') {
+    $expectedCheckpointFormat = if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }
+    if ($evalHealth.checkpoint_format -ne $expectedCheckpointFormat -or $evalHealth.checkpoint_finite -ne 'true') {
         throw 'HTP_NATIVE_EVAL_CHECKPOINT_HEALTH_REJECTED'
     }
     $cpuEvalPath = if ($EvalReportPath -match '-htp\.txt$') { $EvalReportPath -replace '-htp\.txt$', '-cpu.txt' } else { [IO.Path]::ChangeExtension($EvalReportPath, 'cpu.txt') }
     if (-not (Test-Path -LiteralPath $cpuEvalPath -PathType Leaf)) { throw "HTP_NATIVE_CPU_EVAL_MISSING: $cpuEvalPath" }
     $cpuHealth = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $cpuEvalPath -Raw)
-    $anchorHash = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalHealth -CpuHealth $cpuHealth -TrainingHealth $trainingHealth
+    $anchorHash = Resolve-PhoneLmHtpNativeAnchorHash -EvalHealth $evalHealth -CpuHealth $cpuHealth -TrainingHealth $trainingHealth -ExpectedCheckpointFormat $expectedCheckpointFormat
     $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
-    if ($checkpointHeader.Magic -ne 'NPRTCKPTV2' -or $checkpointHeader.Seed -ne $Seed -or $checkpointHeader.Layers -ne $layers -or $checkpointHeader.Heads -ne 2 -or $checkpointHeader.Tokens -ne $Tokens -or $checkpointHeader.Dimension -ne $Dimension -or $checkpointHeader.FeedForward -ne $FeedForwardDimension -or $checkpointHeader.Step -ne $CheckpointStep) {
+    if ($checkpointHeader.Magic -ne $expectedCheckpointFormat -or $checkpointHeader.Vocabulary -ne $Vocabulary -or $checkpointHeader.Seed -ne $Seed -or $checkpointHeader.Layers -ne $layers -or $checkpointHeader.Heads -ne 2 -or $checkpointHeader.Tokens -ne $Tokens -or $checkpointHeader.Dimension -ne $Dimension -or $checkpointHeader.FeedForward -ne $FeedForwardDimension -or $checkpointHeader.Step -ne $CheckpointStep) {
         throw 'HTP_NATIVE_CHECKPOINT_IDENTITY_REJECTED'
     }
     $anchorSource = if ($null -ne $trainingHealth) { 'training-report' } else { 'full-cap-eval-cpu' }
-    Write-Host "htp-native prerequisites accepted: source=$anchorSource eval/CPU checkpoint health and V2 identity verified"
+    Write-Host "htp-native prerequisites accepted: source=$anchorSource eval/CPU checkpoint health and $expectedCheckpointFormat identity verified"
 }
 
 # Fingerprints computed on the host (never the prompt text itself).
 $checkpointSha256 = Get-Sha256Hex $checkpoint
+$tokenizerResolved = ''
+if ($Vocabulary -eq 1024) {
+    if (-not $TokenizerModelPath) { $TokenizerModelPath = Join-Path $trainingRoot 'byte-bpe-v1024.model' }
+    if (-not (Test-Path -LiteralPath $TokenizerModelPath -PathType Leaf)) { throw "PRIVATE_TOKENIZER_MODEL_MISSING: $TokenizerModelPath" }
+    $tokenizerResolved = [IO.Path]::GetFullPath($TokenizerModelPath)
+    $allowedPrivateRoot = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
+    if (-not $tokenizerResolved.StartsWith($allowedPrivateRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'TokenizerModelPath must resolve below the repository build directory' }
+    $modelHash = 'sha256:' + (Get-FileHash -LiteralPath $tokenizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
+    if ($checkpointHeader.TokenizerKind -ne 'byte_bpe' -or $checkpointHeader.TokenizerHash -ne $modelHash) { throw 'CHECKPOINT_TOKENIZER_IDENTITY_MISMATCH' }
+}
 $promptSha256Bytes = [System.Security.Cryptography.SHA256]::Create()
 $promptSha256 = [System.BitConverter]::ToString($promptSha256Bytes.ComputeHash($promptBytes)).Replace('-', '').ToLowerInvariant()
 Write-Event 'host-staged' @{
@@ -554,6 +579,12 @@ Adb @('push', $localPrompt, $tmpPrompt) | Out-Null
 }
 Adb @('shell', 'run-as', $package, 'cp', $tmpCheckpoint, "$remoteDir/$checkpointName") | Out-Null
 Adb @('shell', 'run-as', $package, 'cp', $tmpPrompt, "$remoteDir/prompt.bin") | Out-Null
+if ($Vocabulary -eq 1024) {
+    $tmpTokenizer = "/data/local/tmp/phonelm-headless-$RunId-tokenizer"
+    Adb @('push', $tokenizerResolved, $tmpTokenizer) | Out-Null
+    Adb @('shell', 'run-as', $package, 'cp', $tmpTokenizer, "$remoteDir/byte-bpe-v1024.model") | Out-Null
+    Adb @('shell', 'rm', '-f', $tmpTokenizer) | Out-Null
+}
 Adb @('shell', 'rm', '-f', $tmpCheckpoint, $tmpPrompt) | Out-Null
 
 # Drive generation through the headless instrumentation suite.  The preflight
@@ -566,7 +597,7 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
     -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-generate' -RunId $RunId `
-    -Arguments @{ seed = $Seed; layers = $layers; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
+    -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $layers; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
     -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
     -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "generation-step-$CheckpointStep" `
@@ -732,8 +763,11 @@ if ($generatedHex.Length -gt 0) {
     }
 }
 if (-not $AuditOnly) {
-    if ($generatedBytes.Length -ne $MaxNewBytes) {
+    if ($Vocabulary -eq 256 -and $generatedBytes.Length -ne $MaxNewBytes) {
         throw "GENERATED_BYTE_COUNT_MISMATCH: expected=$MaxNewBytes actual=$($generatedBytes.Length)"
+    }
+    if ($Vocabulary -eq 1024 -and $generatedBytes.Length -gt $MaxNewBytes) {
+        throw "GENERATED_BYTE_CAP_EXCEEDED: cap=$MaxNewBytes actual=$($generatedBytes.Length)"
     }
 }
 $generatedSha256Bytes = [System.Security.Cryptography.SHA256]::Create()

@@ -299,7 +299,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
         }
     }
     bool callbackEnabled = progressCallback != nullptr && progressMethod != nullptr;
+    std::string lastProgressMessage;
     auto sink = [&](const std::string& message) {
+        lastProgressMessage = message;
         logcat(message);
         if (!callbackEnabled) return;
         jstring javaMessage = toJavaString(env, message);
@@ -356,7 +358,10 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
             static_cast<phonelm::ExecutionMode>(executionMode), config, gStopRequested, sink);
         return toJavaString(env, report);
     } catch (const std::exception& exception) {
-        const auto report = failedReport(std::string("native mode exception: ") + exception.what());
+        std::string detail = std::string("native mode exception: ") + exception.what();
+        const std::string phase = progressField(lastProgressMessage, "phase");
+        if (!phase.empty()) detail += "\nnative_last_progress=" + phase;
+        const auto report = failedReport(detail);
         sink(report);
         return toJavaString(env, report);
     } catch (...) {
@@ -444,6 +449,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jlong seed,
     jint layers,
     jint tokens,
+    jint vocabulary,
     jint dimension,
     jint feedForwardDimension,
     jint maxNewBytes,
@@ -510,7 +516,12 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     // legacy T=32.
     if (tokens < 1 || tokens > 256) tokens = 32;
     phonelm::tiny_lm::Config config;
-    config.vocabularySize = 256;
+    if (vocabulary != 256 && vocabulary != 1024) {
+        return toJavaString(env, "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                 "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+                                 "error=vocabulary_must_be_256_or_1024\n");
+    }
+    config.vocabularySize = static_cast<uint32_t>(vocabulary);
     config.tokens = static_cast<uint32_t>(tokens);
     if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
         feedForwardDimension < 2 || feedForwardDimension > 1024) {
@@ -640,6 +651,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     jint layers,
     jint heads,
     jint tokens,
+    jint vocabulary,
     jint dimension,
     jint feedForwardDimension,
     jint checkpointStep,
@@ -682,6 +694,12 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     config.dimension = dimension;
     config.feedForwardDimension = feedForwardDimension;
     config.sampleCount = tokens;
+    if (vocabulary != 256 && vocabulary != 1024) {
+        return toJavaString(env, "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                                 "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+                                 "error=vocabulary_must_be_256_or_1024\n");
+    }
+    config.outputDimension = vocabulary;
     config.diagnosticResumeStep = checkpointStep;
     config.steps = validationChunks > 0 ? validationChunks : 8192;
     config.batchSize = developmentChunks > 0 ? developmentChunks : 16384;

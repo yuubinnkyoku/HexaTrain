@@ -52,6 +52,60 @@ class GenerationCheckpointInspectorTest {
         )
     }
 
+    @Test fun v3BindsTokenizerHashAndRejectsMismatch() {
+        val hash = "sha256:" + "ab".repeat(32)
+        val bpeConfig = TrainingModelConfig.nicopediaBpeV1024(hash).copy(
+            layers = 1, heads = 1, tokens = 1, dimension = 1,
+            feedForwardDimension = 1, batchSize = 1, checkpointInterval = 1,
+        )
+        val bytes = bpeCheckpointBytes(hash)
+        val inspected = GenerationCheckpointInspector.inspect(
+            ByteArrayInputStream(bytes), "bpe.ckpt", 10L, bytes.size.toLong(), bpeConfig,
+        )
+        assertTrue(inspected.usable)
+        assertEquals("NPRTCKPTV3", inspected.format)
+        assertEquals(hash, inspected.tokenizerHash)
+        val mismatch = GenerationCheckpointInspector.inspect(
+            ByteArrayInputStream(bytes), "bpe.ckpt", 10L, bytes.size.toLong(),
+            bpeConfig.copy(tokenizerHash = "sha256:" + "cd".repeat(32)),
+        )
+        assertEquals(GenerationCheckpointCompatibility.INCOMPATIBLE, mismatch.compatibility)
+        assertFalse(mismatch.usable)
+    }
+
+    private fun bpeCheckpointBytes(hash: String): ByteArray {
+        val output = ByteArrayOutputStream()
+        DataOutputStream(output).use { data ->
+            data.write("NPRTCKPTV3\n".toByteArray(Charsets.US_ASCII))
+            listOf(1024, 1, 1, 1, 1, 1, 1, 250).forEach(data::writeInt)
+            val kind = "byte_bpe".toByteArray(Charsets.US_ASCII)
+            val hashBytes = hash.toByteArray(Charsets.US_ASCII)
+            data.writeInt(kind.size); data.write(kind)
+            data.writeInt(hashBytes.size); data.write(hashBytes)
+            val registry = listOf(
+                "token_embedding" to 1024,
+                "layer_000.norm1_gamma" to 1, "layer_000.norm1_beta" to 1,
+                "layer_000.wq" to 1, "layer_000.wk" to 1,
+                "layer_000.wv" to 1, "layer_000.wo" to 1,
+                "layer_000.norm2_gamma" to 1, "layer_000.norm2_beta" to 1,
+                "layer_000.ffn_w1" to 1, "layer_000.ffn_w2" to 1,
+                "output_projection" to 1024,
+            )
+            repeat(3) { registryIndex ->
+                data.writeInt(registry.size)
+                registry.forEachIndexed { entryIndex, (name, count) ->
+                    val nameBytes = name.toByteArray(Charsets.UTF_8)
+                    data.writeInt(nameBytes.size); data.write(nameBytes); data.writeLong(count.toLong())
+                    repeat(count) { valueIndex ->
+                        val value = (registryIndex + entryIndex + valueIndex + 1).toFloat()
+                        data.writeInt(Integer.reverseBytes(value.toBits()))
+                    }
+                }
+            }
+        }
+        return output.toByteArray()
+    }
+
     private fun checkpointBytes(nonFinite: Boolean): ByteArray {
         val output = ByteArrayOutputStream()
         DataOutputStream(output).use { data ->
