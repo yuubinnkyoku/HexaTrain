@@ -58,6 +58,8 @@ class TrainingOverviewLayoutTest {
     @Test fun toolbarPromotesPauseResumeAndStartWithoutMakingStopPrimary() {
         assertEquals(TrainingToolbarPrimaryAction.PAUSE, trainingToolbarPrimaryAction(TrainingPhase.TRAINING, false, true, true, false))
         assertEquals(TrainingToolbarPrimaryAction.RESUME, trainingToolbarPrimaryAction(TrainingPhase.PAUSED, false, true, false, true))
+        assertEquals(TrainingToolbarPrimaryAction.RESUME, trainingToolbarPrimaryAction(TrainingPhase.INTERRUPTED, true, false, false, true))
+        assertEquals(TrainingToolbarPrimaryAction.START_OVER, trainingToolbarPrimaryAction(TrainingPhase.INTERRUPTED, true, false, false, false))
         assertEquals(TrainingToolbarPrimaryAction.START, trainingToolbarPrimaryAction(TrainingPhase.IDLE, true, false, false, false))
     }
 

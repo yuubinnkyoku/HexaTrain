@@ -224,6 +224,7 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     // Newest verified compatible line: alpha19+ pulls Compose 1.12; published alpha25 needs SDK 37 / AGP 9.1.
@@ -234,5 +235,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.work:work-testing:2.11.2")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

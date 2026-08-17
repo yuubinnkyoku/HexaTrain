@@ -143,6 +143,15 @@ class TrainingSession(
         }
     }
 
+    /** WorkManager owns execution and must propagate cancellation in every active phase. */
+    fun requestOwnerStop(): Boolean {
+        synchronized(backendOperationLock) {
+            val active = synchronized(lock) { !closed && state.phase in activePhases }
+            if (active) backend.requestStop()
+            return active
+        }
+    }
+
     fun pause(): Boolean {
         synchronized(backendOperationLock) {
             val runId = synchronized(lock) {
@@ -759,6 +768,77 @@ class StandaloneTrainingRepository(
 
     fun stop(): Boolean = session.requestStop()
 
+    fun cancelWorkerExecution(): Boolean = session.requestOwnerStop()
+
+    fun workerIdentity(): TrainingWorkerIdentity? {
+        val dataset = selectedDataset ?: return null
+        val datasetIdentity = dataset.identity ?: return null
+        return TrainingWorkerIdentity(
+            modelConfigIdentity = selectedConfig.compatibilityKey,
+            datasetIdentity = datasetIdentity,
+            latestCheckpointUri = compatibleCheckpoint()?.uri,
+        )
+    }
+
+    /**
+     * Starts or reattaches the execution owned by WorkManager. Recovery uses
+     * checkpoint commit identity only; WorkInfo progress is never a resume point.
+     */
+    fun attachOrStartWorkerRun(
+        mode: TrainingWorkerStartMode,
+        checkpointUri: String?,
+        recoverStartedRun: Boolean,
+        runStartedAtMs: Long,
+    ): Boolean {
+        synchronized(commandLock) {
+            if (session.snapshot().phase in activePhases) return true
+            val dataset = selectedDataset ?: return false
+            val identity = dataset.identity ?: return false
+            if (datasetStore.validateReadAccess(dataset).isFailure) return false
+            val plan = TrainingPlan.NICOPEDIA_L19
+            val candidates = when {
+                checkpointUri != null -> checkpointStore.list().filter { it.uri == checkpointUri }
+                mode == TrainingWorkerStartMode.RESUME -> checkpointStore.list()
+                recoverStartedRun -> checkpointStore.list().filter { it.createdAtMs >= runStartedAtMs }
+                else -> emptyList()
+            }
+            val selection = TrainingCheckpointCatalog.latestCompatible(
+                candidates,
+                selectedConfig,
+                plan.checkpointFormat,
+                plan.checkpointFormatVersion,
+                identity,
+                expectedTotalSteps = plan.targetSteps,
+            )
+            val resumeFrom = when (selection) {
+                is TrainingCheckpointSelection.Selected -> {
+                    if (!checkpointStore.isUsableForResume(selection.checkpoint)) {
+                        resumeMessage = "Worker resume unavailable: checkpoint payload is unavailable"
+                        publishUi()
+                        return false
+                    }
+                    selection.checkpoint
+                }
+                is TrainingCheckpointSelection.Incompatible -> {
+                    resumeMessage = "Worker resume unavailable: ${selection.reason}"
+                    publishUi()
+                    return false
+                }
+                TrainingCheckpointSelection.None -> {
+                    if (mode == TrainingWorkerStartMode.RESUME) {
+                        resumeMessage = "Worker resume unavailable: compatible checkpoint not found"
+                        publishUi()
+                        return false
+                    }
+                    null
+                }
+            }
+            latestRequest = TrainingRequest(selectedConfig, dataset, plan.targetSteps, resumeFrom)
+            resumeMessage = null
+            return session.start(latestRequest!!)
+        }
+    }
+
     /** In-run pause/resume is only enabled when the native backend proves support. */
     fun resume(): Boolean {
         val dataset = selectedDataset ?: return false
@@ -996,7 +1076,10 @@ object StandaloneTrainingRepositoryRegistry {
                 datasetStore = AndroidTrainingDatasetUriStore(appContext),
                 selectionPersistence = AndroidTrainingSelectionPersistence(appContext),
                 checkpointStore = checkpointStore,
-                runLifecycle = AndroidTrainingRunLifecycle(appContext),
+                // Standalone GUI execution lifetime is owned by WorkManager's
+                // SystemForegroundService. Benchmark notifications retain the
+                // legacy service independently.
+                runLifecycle = NoOpTrainingRunLifecycle,
             )
         }
     }

@@ -263,6 +263,23 @@ internal fun classifyNativeTrainingPhase(nativePhase: String): TrainingPhase? = 
     "training" -> TrainingPhase.TRAINING
     "saving_checkpoint" -> TrainingPhase.SAVING_CHECKPOINT
     "cpu_replay" -> null
+    // Known initialization-only callbacks carry no step/tensor evidence. They
+    // keep the repository in INITIALIZING_HTP and are never presented as HTP
+    // training progress.
+    "checkpoint_validation",
+    "cache_decode",
+    "training_order",
+    "parameter_shape",
+    "parameter_initialization",
+    "parameter_htp_ready",
+    "parameter_cpu_ready",
+    "parameter_first_moment_ready",
+    "parameter_moments_ready",
+    "parameter_identity_ready",
+    "adam_initialization",
+    "adam_preparation",
+    "htp_initialization",
+    "graph_preparation" -> null
     else -> error("unknown native phase")
 }
 

@@ -83,6 +83,7 @@ internal fun trainingToolbarPrimaryAction(
     canPause: Boolean,
     canResume: Boolean,
 ): TrainingToolbarPrimaryAction = when {
+    phase == TrainingPhase.INTERRUPTED && canResume -> TrainingToolbarPrimaryAction.RESUME
     phase in terminalPhasesForToolbar -> TrainingToolbarPrimaryAction.START_OVER
     phase == TrainingPhase.PAUSED && canResume -> TrainingToolbarPrimaryAction.RESUME
     canPause -> TrainingToolbarPrimaryAction.PAUSE

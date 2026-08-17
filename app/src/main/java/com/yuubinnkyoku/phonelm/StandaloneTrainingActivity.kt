@@ -26,6 +26,7 @@ import java.util.concurrent.Executors
  */
 class StandaloneTrainingActivity : ComponentActivity() {
     private lateinit var repository: StandaloneTrainingRepository
+    private lateinit var workCoordinator: TrainingWorkCoordinator
     private lateinit var generationSession: GenerationSession
     private var subscription: AutoCloseable? = null
     private var generationSubscription: AutoCloseable? = null
@@ -60,6 +61,7 @@ class StandaloneTrainingActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingStart = savedInstanceState?.getBoolean(KEY_PENDING_START, false) ?: false
         repository = StandaloneTrainingRepositoryRegistry.get(applicationContext)
+        workCoordinator = trainingWorkCoordinator(applicationContext, repository)
         generationSession = GenerationSessionRegistry.get(applicationContext)
         setContent {
             TrainingDashboardApp(
@@ -67,9 +69,9 @@ class StandaloneTrainingActivity : ComponentActivity() {
                 generationState = generationComposeState,
                 onSelectDataset = ::openDatasetPicker,
                 onStart = ::startTrainingAfterNotificationCheck,
-                onStop = { ioExecutor.execute { repository.stop() } },
+                onStop = { ioExecutor.execute { workCoordinator.stop() } },
                 onPause = { ioExecutor.execute { repository.pause() } },
-                onResume = { ioExecutor.execute { repository.resume() } },
+                onResume = { ioExecutor.execute { workCoordinator.resume() } },
                 onStartOver = ::confirmStartOver,
                 onGenerationPromptChange = generationSession::updatePrompt,
                 onGenerationModeChange = generationSession::updateMode,
@@ -196,7 +198,9 @@ class StandaloneTrainingActivity : ComponentActivity() {
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.training_start_over_confirm) { _, _ ->
                 ioExecutor.execute {
-                    if (!repository.startOver()) postIfCurrentCurrent { toast(START_FAILURE_MESSAGE) }
+                    if (!workCoordinator.start(TrainingWorkerStartMode.FRESH)) {
+                        postIfCurrentCurrent { toast(START_FAILURE_MESSAGE) }
+                    }
                 }
             }
             .show()
@@ -269,8 +273,7 @@ class StandaloneTrainingActivity : ComponentActivity() {
             postIfCurrent(generation) { toast("Generation is already running") }
             return@execute
         }
-        // repository.start invokes the lifecycle's foreground-service start before it starts the worker.
-        if (!repository.start()) postIfCurrent(generation) { toast(START_FAILURE_MESSAGE) }
+        if (!workCoordinator.start()) postIfCurrent(generation) { toast(START_FAILURE_MESSAGE) }
     }
 
     private fun displayName(uri: Uri): String? = runCatching {

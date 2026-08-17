@@ -48,6 +48,21 @@ class NativeTrainingFieldsParserTest {
     }
 
     @Test
+    fun knownInitializationCallbacksRemainInitializationOnly() {
+        listOf(
+            "cache_decode",
+            "parameter_initialization",
+            "htp_initialization",
+            "graph_preparation",
+        ).forEach { assertNull(classifyNativeTrainingPhase(it)) }
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun unknownNativePhaseStillFailsClosed() {
+        classifyNativeTrainingPhase("unexpected_future_phase")
+    }
+
+    @Test
     fun observationWallWithoutBothExecuteTimingsRemainsUnavailable() {
         assertNull(observedHtpActivityWindow(10_000.0, null, null, 1, 1))
         assertNull(observedHtpActivityWindow(10_000.0, 2_000.0, null, 1, 1))
