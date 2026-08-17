@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.SystemClock
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -62,6 +63,12 @@ class TrainingWorkMetadataStore(context: Context) {
             .putInt(KEY_MAX_STEP, 0)
             .remove(KEY_CHECKPOINT_URI)
             .remove(KEY_TERMINAL_STATUS)
+            .remove(KEY_STOP_REQUESTED_AT_ELAPSED_MS)
+            .remove(KEY_NATIVE_STOP_OBSERVED_AT_ELAPSED_MS)
+            .remove(KEY_SAFE_CHECKPOINT_STARTED_AT_ELAPSED_MS)
+            .remove(KEY_SAFE_CHECKPOINT_FINISHED_AT_ELAPSED_MS)
+            .remove(KEY_WORKER_TERMINAL_AT_ELAPSED_MS)
+            .remove(KEY_STOP_BASE_CHECKPOINT_URI)
             .putLong(KEY_STARTED_AT_MS, System.currentTimeMillis())
             .putBoolean(KEY_EXECUTION_STARTED, false)
             .putInt(KEY_STOP_REASON, STOP_REASON_UNAVAILABLE)
@@ -105,7 +112,58 @@ class TrainingWorkMetadataStore(context: Context) {
             .putInt(KEY_MAX_STEP, state.progress?.totalSteps ?: 0)
         state.lastCheckpoint?.uri?.let { edit.putString(KEY_CHECKPOINT_URI, it) }
         if (state.phase in TERMINAL_PHASES) edit.putString(KEY_TERMINAL_STATUS, state.phase.name)
+        val stopRequestedAt = prefs.getLong(KEY_STOP_REQUESTED_AT_ELAPSED_MS, UNSET_ELAPSED_MS)
+        if (stopRequestedAt != UNSET_ELAPSED_MS) {
+            val now = SystemClock.elapsedRealtime()
+            val stopCheckpointBase = prefs.getString(KEY_STOP_BASE_CHECKPOINT_URI, null)
+            val checkpointStarted = prefs.getLong(
+                KEY_SAFE_CHECKPOINT_STARTED_AT_ELAPSED_MS,
+                UNSET_ELAPSED_MS,
+            )
+            if (state.phase == TrainingPhase.SAVING_CHECKPOINT &&
+                checkpointStarted == UNSET_ELAPSED_MS
+            ) {
+                edit.putLong(KEY_SAFE_CHECKPOINT_STARTED_AT_ELAPSED_MS, now)
+            }
+            val checkpointFinished = prefs.getLong(
+                KEY_SAFE_CHECKPOINT_FINISHED_AT_ELAPSED_MS,
+                UNSET_ELAPSED_MS,
+            )
+            val checkpointUri = state.lastCheckpoint?.uri
+            if (checkpointFinished == UNSET_ELAPSED_MS &&
+                checkpointUri != null && checkpointUri != stopCheckpointBase
+            ) {
+                edit.putLong(KEY_SAFE_CHECKPOINT_FINISHED_AT_ELAPSED_MS, now)
+            }
+            if (state.phase == TrainingPhase.INTERRUPTED &&
+                prefs.getLong(KEY_NATIVE_STOP_OBSERVED_AT_ELAPSED_MS, UNSET_ELAPSED_MS) == UNSET_ELAPSED_MS
+            ) {
+                // This is the app-side observation of the native CANCELLED
+                // terminal result, not a claim about a particular QNN core.
+                edit.putLong(KEY_NATIVE_STOP_OBSERVED_AT_ELAPSED_MS, now)
+            }
+        }
         check(edit.commit()) { "training work progress could not be persisted" }
+    }
+
+    /** Records the user/notification cancellation request using boot-relative time. */
+    @Synchronized
+    fun markStopRequested() {
+        if (prefs.getLong(KEY_STOP_REQUESTED_AT_ELAPSED_MS, UNSET_ELAPSED_MS) != UNSET_ELAPSED_MS) return
+        check(prefs.edit()
+            .putLong(KEY_STOP_REQUESTED_AT_ELAPSED_MS, SystemClock.elapsedRealtime())
+            .putString(KEY_STOP_BASE_CHECKPOINT_URI, prefs.getString(KEY_CHECKPOINT_URI, null))
+            .commit()) { "training stop request could not be persisted" }
+    }
+
+    /** Records the WorkManager coroutine's terminal boundary after cooperative cleanup. */
+    @Synchronized
+    fun markWorkerTerminal() {
+        if (prefs.getLong(KEY_STOP_REQUESTED_AT_ELAPSED_MS, UNSET_ELAPSED_MS) == UNSET_ELAPSED_MS) return
+        if (prefs.getLong(KEY_WORKER_TERMINAL_AT_ELAPSED_MS, UNSET_ELAPSED_MS) != UNSET_ELAPSED_MS) return
+        check(prefs.edit().putLong(KEY_WORKER_TERMINAL_AT_ELAPSED_MS, SystemClock.elapsedRealtime()).commit()) {
+            "training worker terminal timestamp could not be persisted"
+        }
     }
 
     @Synchronized
@@ -115,6 +173,7 @@ class TrainingWorkMetadataStore(context: Context) {
 
     companion object {
         const val STOP_REASON_UNAVAILABLE = -1
+        const val UNSET_ELAPSED_MS = -1L
         private const val PREFS = "phonelm_standalone_training_work"
         private const val KEY_RUN_ID = "run_id"
         private const val KEY_WORK_ID = "work_id"
@@ -125,6 +184,12 @@ class TrainingWorkMetadataStore(context: Context) {
         private const val KEY_MAX_STEP = "max_step"
         private const val KEY_CHECKPOINT_URI = "checkpoint_uri"
         private const val KEY_TERMINAL_STATUS = "terminal_status"
+        private const val KEY_STOP_REQUESTED_AT_ELAPSED_MS = "stop_requested_at_elapsed_ms"
+        private const val KEY_NATIVE_STOP_OBSERVED_AT_ELAPSED_MS = "native_stop_observed_at_elapsed_ms"
+        private const val KEY_SAFE_CHECKPOINT_STARTED_AT_ELAPSED_MS = "safe_checkpoint_started_at_elapsed_ms"
+        private const val KEY_SAFE_CHECKPOINT_FINISHED_AT_ELAPSED_MS = "safe_checkpoint_finished_at_elapsed_ms"
+        private const val KEY_WORKER_TERMINAL_AT_ELAPSED_MS = "worker_terminal_at_elapsed_ms"
+        private const val KEY_STOP_BASE_CHECKPOINT_URI = "stop_base_checkpoint_uri"
         private const val KEY_STARTED_AT_MS = "started_at_ms"
         private const val KEY_EXECUTION_STARTED = "execution_started"
         private const val KEY_STOP_REASON = "stop_reason"
@@ -156,6 +221,7 @@ class TrainingWorkCoordinator(
     }
 
     fun stop(): Boolean {
+        metadata.markStopRequested()
         workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
         return repository.cancelWorkerExecution()
     }
@@ -233,11 +299,20 @@ class StandaloneTrainingWorker(
                 setProgress(progressData(runId, state))
                 updateForegroundIfNeeded(state)
                 when (state.phase) {
-                    TrainingPhase.COMPLETED -> return Result.success(progressData(runId, state))
-                    TrainingPhase.ERROR -> return Result.failure(
-                        progressData(runId, state, state.message ?: "TRAINING_FAILED"),
-                    )
-                    TrainingPhase.INTERRUPTED -> return Result.success(progressData(runId, state))
+                    TrainingPhase.COMPLETED -> {
+                        metadata.markWorkerTerminal()
+                        return Result.success(progressData(runId, state))
+                    }
+                    TrainingPhase.ERROR -> {
+                        metadata.markWorkerTerminal()
+                        return Result.failure(
+                            progressData(runId, state, state.message ?: "TRAINING_FAILED"),
+                        )
+                    }
+                    TrainingPhase.INTERRUPTED -> {
+                        metadata.markWorkerTerminal()
+                        return Result.success(progressData(runId, state))
+                    }
                     else -> Unit
                 }
             }
@@ -247,6 +322,7 @@ class StandaloneTrainingWorker(
                 while (repository.snapshot().phase in ACTIVE_PHASES) delay(CANCEL_POLL_MS)
                 metadata.update(repository.snapshot())
                 metadata.recordStopReason(stopReasonOrUnknown())
+                metadata.markWorkerTerminal()
             }
             throw cancelled
         } finally {
