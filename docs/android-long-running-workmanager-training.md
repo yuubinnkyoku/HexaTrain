@@ -76,9 +76,31 @@ Worker は WorkInfo state、coarse progress、および利用可能な stop reas
 
 ## Remaining validation
 
-- controlled multi-hour run で Android 16 JobScheduler quota を観測する（今回の作業範囲外）
+- controlled multi-hour run は下記の結果で完了した。Android 16 の JobScheduler timeout 履歴は追加調査が必要
 - normal process death 後の Worker/repository/checkpoint reattachment を短い安全な run で確認する。`force-stop` は同等の試験として扱わない
 - forced idle は端末を占有できる development window で短時間だけ実施し、必ず device state を復元する
+
+### Controlled multi-hour soak
+
+Configuration: private run identity `workmanager-soak-20260818`; stable production GUI preset D32/FFN32/L19/H2/T32, seed 1, batch 8, target step 8000. No model, tokenizer, optimizer, dataset, training-order, QNN graph, or checkpoint-semantics changes were made for this run.
+
+Duration: 4 h 05 min 07 s until the GUI Stop request (4 h 05 min 09 s until the worker terminal boundary). The hard-ceiling stop attempt woke the screen but was blocked by the keyguard; after the user unlocked the device, the same production Stop control was used. Screen-off/Dozing was observed for at least 4 h 00 min. `dumpsys deviceidle` remained non-forced (`mForceIdle=false`, state `ACTIVE`); no forced-idle or stay-awake override was used.
+
+WorkManager: UUID `b5ddb797-fdf2-489a-bf9b-0ae506fa973c`; one continuous run, `runAttemptCount=1`, final WAL-inclusive WorkInfo state `CANCELLED`, native phase `INTERRUPTED`, no duplicate work. The low-frequency monitor lagged at the terminal transition, so the final state was confirmed from the WorkManager database after the stop.
+
+FGS: WorkManager `SystemForegroundService`, runtime type `specialUse`, present throughout the active samples. After the cooperative stop the service was absent, the training notification was absent from the active notification list (the record remained only in notification history), and the legacy custom training service was absent.
+
+JobScheduler: active samples remained `WITHIN_QUOTA`; `STOP_REASON_QUOTA` was not observed. Android 16 nevertheless recorded repeated `SystemJobService timeout` stop/start history (`Num failures=5`, `Num system stops=1`) while the same WorkRequest UUID, process, and progress continued. This is non-quota caveat evidence, not a quota exhaustion result, and needs a separate follow-up.
+
+Training health: progress continued while the screen was off and the device reported `Dozing`; sampled progress advanced through step 8000 without a WorkManager restart. QNN success/failure counters, tensor-finite counters, and fallback state were not available from the private monitor, so this soak is not used as a new model-quality or QNN numerical result.
+
+Checkpoint: latest native checkpoint reached step 8000. Existing checkpoint inspection verified `NPRTCKPTV2`, V256/T32/D32/FFN32/L19/H2, seed 1, finite parameter/Adam registries, and zero trailing bytes. The checkpoint identity matched the stable GUI configuration and dataset identity.
+
+Stop latency: request → native cancellation observed = 1.562 s; request → Worker terminal = 1.562 s; steps after request = 0. A new post-request safe-checkpoint interval was not required because the step-8000 checkpoint had already completed before the Stop request.
+
+Resume: `SKIP`. The latest compatible checkpoint was already at the fixed plan target (step 8000), so the production UI correctly did not offer a meaningful Resume action. No Start-over or second long run was created.
+
+Verdict: **B — ADOPT WITH CAVEAT**. WorkManager-managed `specialUse` FGS sustained the multi-hour screen-off run, remained within quota, and cooperatively stopped with checkpoint and lifecycle cleanup. Caveats are the Android 16 JobScheduler timeout history, lack of a deep/forced-idle observation, untested normal process-death recovery, and unavailable QNN counter telemetry.
 
 ## References
 
