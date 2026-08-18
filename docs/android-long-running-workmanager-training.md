@@ -76,8 +76,8 @@ Worker は WorkInfo state、coarse progress、および利用可能な stop reas
 
 ## Remaining validation
 
-- controlled multi-hour run は下記の結果で完了した。Android 16 の JobScheduler timeout 履歴は追加調査が必要
-- normal process death 後の Worker/repository/checkpoint reattachment を短い安全な run で確認する。`force-stop` は同等の試験として扱わない
+- controlled multi-hour run は下記の結果で完了した。Android 16 の JobScheduler timeout 履歴は下記のT2調査でWorker非停止を確認したが、OEM固有の発火理由は未特定
+- normal process death 後の Worker/repository/checkpoint reattachment は、下記の短い安全な run で確認済み。`force-stop` は同等の試験として扱わない
 - forced idle は端末を占有できる development window で短時間だけ実施し、必ず device state を復元する
 
 ### Controlled multi-hour soak
@@ -100,7 +100,97 @@ Stop latency: request → native cancellation observed = 1.562 s; request → Wo
 
 Resume: `SKIP`. The latest compatible checkpoint was already at the fixed plan target (step 8000), so the production UI correctly did not offer a meaningful Resume action. No Start-over or second long run was created.
 
-Verdict: **B — ADOPT WITH CAVEAT**. WorkManager-managed `specialUse` FGS sustained the multi-hour screen-off run, remained within quota, and cooperatively stopped with checkpoint and lifecycle cleanup. Caveats are the Android 16 JobScheduler timeout history, lack of a deep/forced-idle observation, untested normal process-death recovery, and unavailable QNN counter telemetry.
+Verdict at soak completion: **B — ADOPT WITH CAVEAT**. WorkManager-managed `specialUse` FGS sustained the multi-hour screen-off run, remained within quota, and cooperatively stopped with checkpoint and lifecycle cleanup. At that point the caveats were the Android 16 JobScheduler timeout history, lack of a deep/forced-idle observation, untested normal process-death recovery, and unavailable QNN counter telemetry; the follow-up sections below update the first two lifecycle questions.
+
+### SystemJobService timeout investigation
+
+The four-hour evidence was correlated with the WorkManager database snapshot
+captured while the run was active. The production WorkRequest
+`b5ddb797-fdf2-489a-bf9b-0ae506fa973c` was also the `WorkSpec` ID; its
+`generation` was `0`, `runAttemptCount` was `1`, and `SystemIdInfo` mapped that
+generational ID to JobScheduler job ID `6`. This rules out treating the timeout
+records as an unrelated package job or as a different WorkManager generation.
+
+The JobScheduler history for the same package/job showed repeated
+`SystemJobService timeout` stop/start records, ending at `Num failures=5` and
+`Num system stops=1`. Across the monitor samples, however, the WorkInfo state
+remained `RUNNING`, `runAttemptCount` remained `1`, the app PID remained
+unchanged, native progress advanced monotonically from step 368 through step
+8000, and checkpoint cadence continued. There was no observed
+`STOP_REASON_QUOTA`; the job remained within the recorded quota/foreground
+exemption state. The only terminal stop was the later GUI cooperative Stop,
+which produced the expected cancellation record.
+
+Classification: **T2 — BACKING JOB EVENT, WORKER UNAFFECTED**. AndroidX
+WorkManager encodes the WorkSpec ID and generation into the JobInfo extras and
+`SystemJobService` maps them back on start/stop; a delivered `onStopJob()` would
+call the WorkManager processor's stop path. The absence of the corresponding
+Worker/Processor transition in the synchronized WorkInfo, PID, native, and
+checkpoint evidence means the observed strings are scheduler-level backing-job
+timeout history, not proof that the production Worker stopped. The exact OEM /
+Android 16 trigger for the historical entries is not recoverable from the
+saved per-event callback data, so this remains a diagnostic caveat rather than
+a quota or architecture failure.
+
+The reconnected short recovery run reproduced the same shape: its mapped Job ID
+recorded two timeout entries while WorkInfo stayed `RUNNING`, the checkpoint
+advanced to step 1750, and the process identity remained stable until the
+separate induced crash. After that crash, the same WorkSpec was rescheduled as
+attempt 2 and later canceled by the GUI Stop. This is corroborating T2 evidence,
+not a second long-soak result.
+
+### Process death recovery
+
+Method: production GUI Start on the stable D32/FFN32/L19/H2/T32 configuration,
+then Android's `am crash` shell-induced VM crash. This is an induced crash
+semantics check, not an LMK/natural-kill claim; neither `force-stop` nor
+`kill -9` was used. The first transport-disconnected attempt reached step 120
+before step 250 and is retained as external-inconclusive evidence. After the
+device reconnected, the same active run provided the valid recovery pair.
+
+Before death, the durable metadata named WorkRequest
+`06f25f01-6619-417e-b8b6-aebad0e90bdb`, runId
+`56aef38b-b698-448a-bae3-f54f60e1cd9a`, and a complete compatible finite
+checkpoint at step 1750. The process was in `TRAINING` beyond that checkpoint.
+`ApplicationExitInfo` recorded an app crash and the process identity changed.
+WorkManager kept the same WorkRequest UUID and generation; the final
+WAL-inclusive database showed `runAttemptCount` advancing from 1 to 2, with no
+second WorkSpec. The foreground service/job were recreated once and the
+production Training screen displayed `Training resumed` from step 1750, then
+progressed beyond it (step 1800 observed). This rules out fresh initialization
+and WorkInfo-progress-only resume for this run.
+
+The post-recovery GUI Stop produced a complete terminal checkpoint at step
+2014. WorkInfo then reached `CANCELLED`, the SystemForegroundService and
+WorkManager job mapping were absent, and no active training notification or
+legacy training service remained. Checkpoint metadata remained finite and
+identity-compatible; detailed QNN success/failure counters were unavailable
+from the existing monitor.
+
+Result: **PASS** for induced crash → checkpoint recovery → continued training
+→ cooperative GUI Stop. This does not cover LMK or every natural process-death
+cause.
+
+### Deep Idle
+
+**SKIP.** The completed soak already demonstrated continued progress during
+screen-off / natural Dozing. No additional forced-idle diagnostic was started
+while the targeted recovery run was incomplete.
+
+### Follow-up architecture verdict
+
+**B — ADOPT WITH CAVEAT.** The timeout history is classified T2: the active
+WorkSpec/job mapping is known, but the OEM-specific reason for the backing
+`SystemJobService timeout` entries is not recoverable beyond the AndroidX
+semantics. The Worker itself continued through those entries, quota was never
+exhausted, and the induced process-death recovery passed from the exact finite
+checkpoint. WorkManager-managed `specialUse` FGS remains the production
+architecture; no direct-FGS fallback or quota bypass is warranted.
+
+Remaining caveats are limited to the OEM timeout trigger, natural LMK-style
+process death (the test used an induced VM crash), and deep/forced-idle
+behavior. None is a reason to rerun a multi-hour soak or start another ML
+experiment in this task.
 
 ## References
 
