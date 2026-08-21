@@ -245,6 +245,7 @@ class MainActivity : Activity() {
                         promptPath = promptFile.absolutePath,
                         seed = seed,
                         layers = layers,
+                        heads = 2,
                         // UI fallback stays at the fixed T32 nicopedia contract;
                         // headless runs pass the explicit context length.
                         tokens = 32,

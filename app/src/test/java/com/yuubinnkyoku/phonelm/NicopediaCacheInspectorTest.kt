@@ -51,4 +51,41 @@ class NicopediaCacheInspectorTest {
             TrainingModelConfig.NICOPEDIA_L19,
         )
     }
+
+    @Test fun validatesCanonicalNprtBpeV1AndTokenRange() {
+        val config = ModelConfigurationCatalog.config(1024, 64, 64)
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { output ->
+            output.write("NPRTBPEV1\n".toByteArray(Charsets.US_ASCII))
+            output.writeInt(32)
+            output.writeInt(1024)
+            output.write(hexToBytes(ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH.removePrefix("sha256:")))
+            output.writeLong(1L)
+            output.writeLong(0x1122334455667788L)
+            repeat(33) { output.writeShort((it * 31) % 1024) }
+        }
+        val inspection = NicopediaCacheInspector.inspect(ByteArrayInputStream(bytes.toByteArray()), config)
+        assertEquals("NPRTBPEV1", inspection.format)
+        assertEquals(1024, inspection.vocabulary)
+        assertEquals(ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH, inspection.tokenizerHash)
+        assertTrue(inspection.identity.contains("tokenizer=byte_bpe"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsBpeCacheWithWrongCanonicalTokenizerHash() {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { output ->
+            output.write("NPRTBPEV1\n".toByteArray(Charsets.US_ASCII))
+            output.writeInt(32); output.writeInt(1024); output.write(ByteArray(32)); output.writeLong(1L)
+            output.writeLong(1L); repeat(33) { output.writeShort(0) }
+        }
+        NicopediaCacheInspector.inspect(
+            ByteArrayInputStream(bytes.toByteArray()),
+            ModelConfigurationCatalog.config(1024, 32, 32),
+        )
+    }
+
+    private fun hexToBytes(value: String): ByteArray = ByteArray(value.length / 2) { index ->
+        value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
 }

@@ -32,6 +32,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,6 +73,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -109,6 +111,7 @@ import com.yuubinnkyoku.phonelm.TrainingDashboardEventType
 import com.yuubinnkyoku.phonelm.TrainingDashboardSnapshot
 import com.yuubinnkyoku.phonelm.TrainingActivityHistoryEntry
 import com.yuubinnkyoku.phonelm.TrainingLossHistoryEntry
+import com.yuubinnkyoku.phonelm.ModelConfigurationCatalog
 import com.yuubinnkyoku.phonelm.TrainingModelConfig
 import com.yuubinnkyoku.phonelm.TrainingOperationPhase
 import com.yuubinnkyoku.phonelm.TrainingPhase
@@ -134,6 +137,7 @@ fun TrainingDashboardApp(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStartOver: () -> Unit,
+    onModelConfigSelected: (TrainingModelConfig) -> Unit = {},
     onGenerationPromptChange: (String) -> Unit = {},
     onGenerationModeChange: (GenerationMode) -> Unit = {},
     onGenerationTemperatureChange: (String) -> Unit = {},
@@ -203,6 +207,7 @@ fun TrainingDashboardApp(
                                 onPause = onPause,
                                 onResume = onResume,
                                 onStartOver = onStartOver,
+                                onModelConfigSelected = onModelConfigSelected,
                                 generationRunning = generationState.execution is GenerationState.Running,
                             )
                         }
@@ -326,9 +331,11 @@ fun TrainingDashboard(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStartOver: () -> Unit,
+    onModelConfigSelected: (TrainingModelConfig) -> Unit = {},
     generationRunning: Boolean = false,
 ) {
     var detailsVisible by remember { mutableStateOf(false) }
+    var modelSettingsVisible by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
@@ -364,8 +371,24 @@ fun TrainingDashboard(
     }
     if (detailsVisible) {
         ModalBottomSheet(onDismissRequest = { detailsVisible = false }) {
-            TrainingDetails(state, onSelectDataset, onStartOver)
+            TrainingDetails(
+                state,
+                onSelectDataset,
+                onStartOver,
+                onModelSettings = { modelSettingsVisible = true },
+            )
         }
+    }
+    if (modelSettingsVisible) {
+        ModelSettingsSheet(
+            state = state,
+            onDismiss = { modelSettingsVisible = false },
+            onApply = {
+                onModelConfigSelected(it)
+                modelSettingsVisible = false
+                detailsVisible = false
+            },
+        )
     }
 }
 
@@ -795,6 +818,7 @@ private fun TrainingDetails(
     state: TrainingUiState,
     onSelectDataset: () -> Unit,
     onStartOver: () -> Unit,
+    onModelSettings: () -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
@@ -802,7 +826,15 @@ private fun TrainingDetails(
     ) {
         item { Text("Training details", style = MaterialTheme.typography.headlineSmall) }
         if (state.phase in terminalPhases) item { TrainingSummaryCard(state) }
-        item { ModelConfigCard(state.modelConfig, state.datasetDisplayName, state.datasetUri) }
+        item {
+            ModelConfigCard(state.modelConfig, state.datasetDisplayName, state.datasetUri)
+        }
+        item {
+            OutlinedButton(onClick = onModelSettings, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(if (state.canEditModelConfig) "Model settings" else "Model settings (read only)")
+            }
+        }
         item { DetailedPerformanceCard(state) }
         item { TrainingEventTimeline(state.dashboard.eventTimeline) }
         item { DiagnosticCard(state) }
@@ -814,6 +846,124 @@ private fun TrainingDetails(
                     enabled = state.phase !in activePhases && state.phase != TrainingPhase.IDLE,
                     modifier = Modifier.weight(1f),
                 ) { Text("Start over") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelSettingsSheet(
+    state: TrainingUiState,
+    onDismiss: () -> Unit,
+    onApply: (TrainingModelConfig) -> Unit,
+) {
+    var vocabulary by remember(state.selectedModelConfig) {
+        mutableStateOf(state.selectedModelConfig.vocabularySize)
+    }
+    var dimension by remember(state.selectedModelConfig) {
+        mutableStateOf(state.selectedModelConfig.dimension)
+    }
+    var feedForward by remember(state.selectedModelConfig) {
+        mutableStateOf(state.selectedModelConfig.feedForwardDimension)
+    }
+    val candidate = remember(vocabulary, dimension, feedForward) {
+        ModelConfigurationCatalog.config(vocabulary, dimension, feedForward)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                Text("Model settings", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    if (state.canEditModelConfig) "Settings apply to the next training run."
+                    else "The active run keeps its immutable model configuration.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item {
+                ModelChoiceRow(
+                    title = "Model vocabulary",
+                    values = ModelConfigurationCatalog.vocabularySizes,
+                    selected = vocabulary,
+                    enabled = state.canEditModelConfig,
+                    label = { "V$it" },
+                    onSelected = { vocabulary = it },
+                )
+            }
+            item {
+                ModelChoiceRow(
+                    title = "Model dimension",
+                    values = ModelConfigurationCatalog.dimensions,
+                    selected = dimension,
+                    enabled = state.canEditModelConfig,
+                    label = { "D$it" },
+                    onSelected = { dimension = it },
+                )
+            }
+            item {
+                ModelChoiceRow(
+                    title = "Model FFN dimension",
+                    values = ModelConfigurationCatalog.feedForwardDimensions,
+                    selected = feedForward,
+                    enabled = state.canEditModelConfig,
+                    label = { "FFN$it" },
+                    onSelected = { feedForward = it },
+                )
+            }
+            item {
+                DetailCard("Resolved configuration") {
+                    Text(candidate.architecture.displayLabel, fontFamily = TelemetryFontFamily)
+                    Text(String.format(Locale.US, "%,d parameters", candidate.architecture.parameterCount()))
+                    Text("Head dim ${candidate.architecture.headDimension}")
+                    Text(
+                        if (vocabulary == 1024) {
+                            "V1024 uses canonical byte-BPE and checkpoint format NPRTCKPTV3. Training is blocked until the tokenizer model import is available."
+                        } else {
+                            "V256 uses legacy byte tokens and checkpoint format NPRTCKPTV2."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (vocabulary == 1024) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            state.modelReadinessMessage?.let { message ->
+                item { SelectionContainer { Text(message, color = MaterialTheme.colorScheme.tertiary) } }
+            }
+            item {
+                Button(
+                    onClick = { onApply(candidate) },
+                    enabled = state.canEditModelConfig && candidate != state.selectedModelConfig,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Apply model settings") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelChoiceRow(
+    title: String,
+    values: List<Int>,
+    selected: Int,
+    enabled: Boolean,
+    label: (Int) -> String,
+    onSelected: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            values.forEach { value ->
+                FilterChip(
+                    selected = value == selected,
+                    onClick = { onSelected(value) },
+                    enabled = enabled,
+                    label = { Text(label(value)) },
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -867,7 +1017,13 @@ internal fun GenerationScreen(
         item {
             DetailCard("Model identity") {
                 SelectionContainer {
-                    Text("D32 / FFN32 / L19 / H2 / T32", fontFamily = TelemetryFontFamily)
+                    Text(
+                        generationState.selectedCheckpoint?.let {
+                            "V${it.vocabulary} / T${it.tokens} / D${it.dimension} / " +
+                                "FFN${it.feedForwardDimension} / L${it.layers} / H${it.heads}"
+                        } ?: "Select a compatible checkpoint to resolve the model identity",
+                        fontFamily = TelemetryFontFamily,
+                    )
                 }
             }
         }

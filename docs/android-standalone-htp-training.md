@@ -6,8 +6,9 @@ This document defines the Android application path for a user-initiated,
 standalone HTP training run. It is a design and integration contract; it does
 not claim that the path has been run on a physical device.
 
-The current screen exposes the fixed canonical preset as read-only text. On
-Start, the repository validates the SAF selection and creates an immutable
+The current screen exposes the bounded model catalog documented in
+[`android-selectable-model-configuration.md`](android-selectable-model-configuration.md). On Start,
+the repository validates the selected model and SAF selection and creates an immutable
 `TrainingRequest`. `TrainingSession` owns the request, a worker, structured
 state, and running timing aggregates. In a QNN-enabled build the registry
 injects `NativeHtpTrainingBackend`; it stages and validates the selected
@@ -20,7 +21,7 @@ fails closed; it never silently selects CPU training.
 UI -> TrainingRequest -> TrainingSession -> JNI adapter -> native HTP runtime
                          |                    |
                          v                    v
-                 process-scoped repository  native checkpoint V2
+                 process-scoped repository  native checkpoint V2/V3
                          |
                          v
               LiveUpdateForegroundService / notification
@@ -105,11 +106,14 @@ native `gRunning` check remains a second defensive gate.
 
 ## ModelConfig is the configuration source
 
-`TrainingModelConfig` is the single application-level source for model identity:
+`ModelArchitecture` is the architecture identity and `TrainingModelConfig` adds
+the fixed optimizer/run controls:
 vocabulary/tokenizer identity, sequence length, dimensions, layers, heads,
 optimizer parameters, seed, dataset identity, and checkpoint compatibility
-fields. `TrainingPlan.NICOPEDIA_L19` adds the authoritative target (8,000
-steps) and the NPRTCKPTV2 format/version. The UI only renders these values.
+fields. `TrainingPlan.forConfig` adds the authoritative target (8,000 steps)
+and selects NPRTCKPTV2 for V256 or NPRTCKPTV3 for canonical V1024. The UI
+renders and persists only catalog values. The queued worker carries the strict
+versioned config encoding, so a later UI choice cannot mutate an active run.
 
 The JNI adapter maps that immutable snapshot to the native `TrainingConfig`.
 Neither defaults in the UI nor values reconstructed after process death may
@@ -223,7 +227,7 @@ CPU-utilization or HTP-occupancy claim.
 
 ## Checkpoint and resume
 
-Standalone training reuses the existing native `NPRTCKPTV2` checkpoint codec
+Standalone training reuses the existing native `NPRTCKPTV2`/`NPRTCKPTV3` checkpoint codecs
 and its atomic write path. The Android layer adds a small durable session record
 that references the checkpoint by opaque app-owned identifier and stores the
 `ModelConfig`/dataset compatibility digests, completed step, and terminal

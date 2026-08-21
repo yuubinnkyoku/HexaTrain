@@ -6,11 +6,14 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import com.yuubinnkyoku.phonelm.ui.training.TrainingDashboardApp
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
 
 class TrainingDashboardComposeTest {
     @get:Rule val compose = createComposeRule()
@@ -142,7 +145,34 @@ class TrainingDashboardComposeTest {
         compose.onNodeWithContentDescription("Top-level navigation").assertIsDisplayed()
         compose.onNodeWithText("Generation").performClick()
         compose.onNodeWithContentDescription("Generation screen").assertIsDisplayed()
-        compose.onNodeWithText("D32 / FFN32 / L19 / H2 / T32").assertIsDisplayed()
+        compose.onNodeWithText("Select a compatible checkpoint to resolve the model identity").assertIsDisplayed()
+    }
+
+    @Test fun idleModelSettingsApplyCatalogSelection() {
+        var applied: TrainingModelConfig? = null
+        compose.setContent {
+            TrainingDashboardApp(
+                state = trainingState().copy(
+                    phase = TrainingPhase.IDLE,
+                    canEditModelConfig = true,
+                    selectedModelConfig = TrainingModelConfig.NICOPEDIA_L19,
+                ),
+                onSelectDataset = {}, onStart = {}, onStop = {}, onPause = {}, onResume = {}, onStartOver = {},
+                onModelConfigSelected = { applied = it },
+            )
+        }
+
+        compose.onNodeWithText("Details").performClick()
+        compose.onNodeWithText("Model settings").performClick()
+        compose.onNodeWithText("V1024").performClick()
+        compose.onNodeWithText("D64").performClick()
+        compose.onNodeWithText("FFN64").performClick()
+        compose.onNodeWithText("602,880 parameters").assertIsDisplayed()
+        compose.onNodeWithText("Head dim 32").assertExists()
+        compose.onNodeWithText("Apply model settings").performClick()
+        compose.runOnIdle {
+            assertEquals(ModelConfigurationCatalog.config(1024, 64, 64), applied)
+        }
     }
 
     @Test fun generationDestinationReturnsToTraining() {
@@ -178,12 +208,12 @@ class TrainingDashboardComposeTest {
         }
 
         compose.onNodeWithText("Generation").performClick()
-        compose.onNodeWithText("37 / 64 bytes").assertIsDisplayed()
+        compose.onAllNodesWithText("37 / 64 bytes").onFirst().assertIsDisplayed()
         compose.onNodeWithText("途中").assertIsDisplayed()
         compose.onNodeWithText("Training").performClick()
         compose.onNodeWithText("Generation").performClick()
-        compose.onNodeWithText("37 / 64 bytes").assertIsDisplayed()
-        compose.onNodeWithText("420 ms").assertIsDisplayed()
+        compose.onAllNodesWithText("37 / 64 bytes").onFirst().assertIsDisplayed()
+        compose.onNodeWithText("420 ms").assertExists()
         compose.onNodeWithText("途中").assertIsDisplayed()
     }
 

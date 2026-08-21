@@ -15,9 +15,27 @@ class StandaloneTrainingWorkContractTest {
         assertTrue(request.tags.contains(TrainingWorkCoordinator.TAG))
         assertEquals("run-key", request.workSpec.input.getString(TrainingWorkCoordinator.KEY_RUN_ID))
         assertEquals("config-key", request.workSpec.input.getString(TrainingWorkCoordinator.KEY_CONFIG_IDENTITY))
+        assertEquals("config-key", request.workSpec.input.getString(TrainingWorkCoordinator.KEY_CONFIG_ENCODING))
         assertEquals("dataset-key", request.workSpec.input.getString(TrainingWorkCoordinator.KEY_DATASET_IDENTITY))
         assertEquals("RESUME", request.workSpec.input.getString(TrainingWorkCoordinator.KEY_START_MODE))
         assertEquals("phonelm-standalone-training", TrainingWorkCoordinator.UNIQUE_WORK_NAME)
+    }
+
+    @Test fun enqueuedRequestKeepsItsEncodedModelSnapshotAfterLaterSelection() {
+        val first = ModelConfigurationCatalog.config(256, 32, 48)
+        val later = ModelConfigurationCatalog.config(256, 64, 64)
+        val firstEncoding = TrainingModelConfigCodec.encode(first)
+        val request = TrainingWorkCoordinator.request(
+            "run-key",
+            TrainingWorkerIdentity(first.compatibilityKey, "dataset-key", null, firstEncoding),
+            TrainingWorkerStartMode.FRESH,
+        )
+        val laterEncoding = TrainingModelConfigCodec.encode(later)
+        assertEquals(firstEncoding, request.workSpec.input.getString(TrainingWorkCoordinator.KEY_CONFIG_ENCODING))
+        assertFalse(laterEncoding == request.workSpec.input.getString(TrainingWorkCoordinator.KEY_CONFIG_ENCODING))
+        assertEquals(first, TrainingModelConfigCodec.decode(
+            request.workSpec.input.getString(TrainingWorkCoordinator.KEY_CONFIG_ENCODING)!!,
+        ))
     }
 
     @Test fun ownerCancellationPropagatesDuringInitialization() {

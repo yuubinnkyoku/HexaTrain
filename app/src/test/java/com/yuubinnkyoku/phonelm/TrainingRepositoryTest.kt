@@ -6,6 +6,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TrainingRepositoryTest {
+    @Test fun modelSelectionPersistsAcrossRepositoryRecreation() {
+        val persistence = InMemoryTrainingSelectionPersistence()
+        val selected = ModelConfigurationCatalog.config(256, 64, 48)
+        StandaloneTrainingRepository(selectionPersistence = persistence).use { repository ->
+            assertTrue(repository.selectModelConfig(selected))
+            assertEquals(selected, repository.snapshot().selectedModelConfig)
+        }
+        StandaloneTrainingRepository(selectionPersistence = persistence).use { restored ->
+            assertEquals(selected, restored.snapshot().selectedModelConfig)
+            assertTrue(restored.snapshot().canEditModelConfig)
+        }
+    }
+
+    @Test fun v1024SelectionIsVisibleButTrainingStartIsCapabilityBlocked() {
+        val repository = StandaloneTrainingRepository()
+        assertTrue(repository.selectModelConfig(ModelConfigurationCatalog.config(1024, 64, 64)))
+        assertTrue(repository.selectDataset(TrainingDataset("content://provider/bpe")))
+        val state = repository.snapshot()
+        assertFalse(state.canStart)
+        assertTrue(state.modelReadinessMessage.orEmpty().contains("tokenizer model"))
+        repository.close()
+    }
+
     @Test fun datasetSelectionPersistsOpaqueContentUriAndNeverUsesFilesystemPath() {
         val persistence = object : TrainingSelectionPersistence {
             var value: TrainingDataset? = null

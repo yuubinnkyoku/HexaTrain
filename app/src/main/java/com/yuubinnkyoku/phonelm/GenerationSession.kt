@@ -468,19 +468,9 @@ class NativeHtpGenerationBackend(
     ): GenerationResult {
         request.validationError()?.let { error(it) }
         if (!BuildConfig.PHONELM_QNN_ENABLED) error("QNN HTP is disabled in this APK; CPU fallback is not permitted")
-        val config = if (checkpoint.vocabulary == 1024) {
-            TrainingModelConfig.nicopediaBpeV1024(
-                checkpoint.tokenizerHash ?: error("BPE checkpoint tokenizer hash is missing"),
-            )
-        } else TrainingModelConfig.NICOPEDIA_L19
-        require(checkpoint.usable && checkpoint.tokens == config.tokens &&
-            checkpoint.dimension == config.dimension &&
-            checkpoint.feedForwardDimension == config.feedForwardDimension &&
-            checkpoint.layers == config.layers && checkpoint.heads == config.heads &&
-            checkpoint.seed == config.seed && checkpoint.vocabulary == config.vocabularySize) {
-            "checkpoint identity is incompatible with the production model"
-        }
-        require(request.mode != GenerationMode.SAMPLE || request.topK <= config.vocabularySize) {
+        require(checkpoint.usable) { checkpoint.diagnostic ?: "checkpoint is not usable" }
+        SupportedGenerationModelPolicy.validationError(checkpoint.architecture)?.let { error(it) }
+        require(request.mode != GenerationMode.SAMPLE || request.topK <= checkpoint.vocabulary) {
             "TopK exceeds checkpoint vocabulary"
         }
         check(promptDirectory.isDirectory || promptDirectory.mkdirs()) { "prompt staging directory is unavailable" }
@@ -506,12 +496,13 @@ class NativeHtpGenerationBackend(
             val report = NativeBridge.nativeRunNicopediaGenerate(
                 checkpointPath = checkpoint.path,
                 promptPath = promptFile.absolutePath,
-                seed = config.seed,
-                layers = config.layers,
-                tokens = config.tokens,
-                vocabulary = config.vocabularySize,
-                dimension = config.dimension,
-                feedForwardDimension = config.feedForwardDimension,
+                seed = checkpoint.seed,
+                layers = checkpoint.layers,
+                heads = checkpoint.heads,
+                tokens = checkpoint.tokens,
+                vocabulary = checkpoint.vocabulary,
+                dimension = checkpoint.dimension,
+                feedForwardDimension = checkpoint.feedForwardDimension,
                 maxNewBytes = request.maxNewBytes,
                 generateMode = if (request.mode == GenerationMode.GREEDY) "greedy" else "sample",
                 temperature = request.temperature,

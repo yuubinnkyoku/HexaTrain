@@ -6,6 +6,7 @@ import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 
 enum class GenerationCheckpointCompatibility { COMPATIBLE, INCOMPATIBLE, INVALID }
 
@@ -30,6 +31,11 @@ data class GenerationCheckpoint(
     val format: String = "NPRTCKPTV2",
     val diagnostic: String? = null,
 ) {
+    val architecture: ModelArchitecture
+        get() = ModelArchitecture(
+            layers, heads, tokens, dimension, feedForwardDimension,
+            vocabulary, tokenizerKind, tokenizerHash,
+        )
     val usable: Boolean
         get() = formatValid && compatibility == GenerationCheckpointCompatibility.COMPATIBLE &&
             finite && parameterHash?.matches(Regex("fnv1a64:[0-9a-f]{16}")) == true
@@ -68,11 +74,10 @@ internal object GenerationCheckpointSelection {
 
 class AppPrivateGenerationCheckpointRepository(
     private val checkpointStore: TrainingCheckpointStore,
-    private val expected: TrainingModelConfig = TrainingModelConfig.NICOPEDIA_L19,
 ) : GenerationCheckpointRepository {
     override fun listCheckpoints(): List<GenerationCheckpoint> = GenerationCheckpointSelection.sorted(
         checkpointStore.listNativeCheckpointPaths().distinct().map { path ->
-            GenerationCheckpointInspector.inspect(File(path), expected)
+            GenerationCheckpointInspector.inspect(File(path))
         },
     )
 
@@ -80,7 +85,7 @@ class AppPrivateGenerationCheckpointRepository(
         GenerationCheckpointSelection.default(checkpoints)
 
     override fun validateCheckpoint(checkpoint: GenerationCheckpoint): Result<GenerationCheckpoint> = runCatching {
-        val inspected = GenerationCheckpointInspector.inspect(File(checkpoint.path), expected)
+        val inspected = GenerationCheckpointInspector.inspect(File(checkpoint.path))
         require(inspected.usable) { inspected.diagnostic ?: "checkpoint is not usable" }
         require(inspected.path == checkpoint.path && inspected.step == checkpoint.step &&
             inspected.parameterHash == checkpoint.parameterHash) {
@@ -98,14 +103,31 @@ internal object GenerationCheckpointInspector {
     private const val FNV_OFFSET = -3750763034362895579L
     private const val FNV_PRIME = 1099511628211L
 
-    fun inspect(file: File, expected: TrainingModelConfig): GenerationCheckpoint {
+    fun inspect(file: File, expected: TrainingModelConfig? = null): GenerationCheckpoint {
         val canonical = runCatching { file.canonicalFile }.getOrElse { file.absoluteFile }
         val modified = canonical.takeIf { it.exists() }?.lastModified() ?: 0L
         val size = canonical.takeIf { it.exists() }?.length() ?: 0L
         return runCatching {
             require(canonical.isFile) { "checkpoint file is missing" }
             require(size in 1..MAX_FILE_BYTES) { "checkpoint file size is invalid" }
-            canonical.inputStream().use { inspect(it, canonical.path, modified, size, expected) }
+            val inspected = canonical.inputStream().use { inspect(it, canonical.path, modified, size, expected) }
+            if (inspected.vocabulary == 1024) {
+                val model = File(canonical.parentFile, "byte-bpe-v1024.model")
+                val hash = model.takeIf { it.isFile }?.inputStream()?.use { input ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                    "sha256:" + digest.digest().joinToString("") { "%02x".format(it) }
+                }
+                if (hash != inspected.tokenizerHash) inspected.copy(
+                    compatibility = GenerationCheckpointCompatibility.INCOMPATIBLE,
+                    diagnostic = "canonical byte-BPE tokenizer model is missing or differs",
+                ) else inspected
+            } else inspected
         }.getOrElse { error ->
             GenerationCheckpoint(
                 path = canonical.path,
@@ -132,7 +154,7 @@ internal object GenerationCheckpointInspector {
         path: String,
         modifiedAtMs: Long,
         fileSizeBytes: Long,
-        expected: TrainingModelConfig,
+        expected: TrainingModelConfig? = null,
     ): GenerationCheckpoint {
         DataInputStream(BufferedInputStream(source, 64 * 1024)).use { input ->
             val magic = ByteArray(MAGIC_V2.length)
@@ -154,8 +176,8 @@ internal object GenerationCheckpointInspector {
             if (v3) {
                 tokenizerKind = readBoundedAscii(input, "tokenizer kind", 1..32)
                 tokenizerHash = readBoundedAscii(input, "tokenizer hash", 71..71)
-                require(tokenizerKind == "byte_bpe" &&
-                    tokenizerHash.matches(Regex("sha256:[0-9a-f]{64}"))) {
+                require(tokenizerKind == ModelConfigurationCatalog.BYTE_BPE_TOKENIZER &&
+                    tokenizerHash == ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH) {
                     "checkpoint tokenizer identity is invalid"
                 }
             } else {
@@ -172,11 +194,15 @@ internal object GenerationCheckpointInspector {
             readRegistry(input, namesAndCounts, hashValues = false, initialHash = hash) { finite = finite && it }
             readRegistry(input, namesAndCounts, hashValues = false, initialHash = hash) { finite = finite && it }
             require(input.read() < 0) { "checkpoint has trailing bytes" }
-            val compatible = vocabulary == expected.vocabularySize && tokens == expected.tokens &&
-                dimension == expected.dimension && feedForward == expected.feedForwardDimension &&
-                layers == expected.layers && heads == expected.heads && seed.toLong() == expected.seed &&
-                tokenizerKind == expected.tokenizerId.removePrefix("nicopedia-").removeSuffix("-v1") &&
-                tokenizerHash == expected.tokenizerHash
+            val architecture = ModelArchitecture(
+                layers, heads, tokens, dimension, feedForward, vocabulary, tokenizerKind, tokenizerHash,
+            )
+            val supportError = SupportedGenerationModelPolicy.validationError(architecture)
+            val expectedMismatch = expected?.let {
+                architecture != it.architecture || seed.toLong() != it.seed
+            } ?: false
+            val compatible = (if (expected != null) !expectedMismatch else supportError == null) &&
+                seed.toLong() in 1L..99_999L
             return GenerationCheckpoint(
                 path = path,
                 step = step,
@@ -197,6 +223,12 @@ internal object GenerationCheckpointInspector {
                 tokenizerKind = tokenizerKind,
                 tokenizerHash = tokenizerHash,
                 format = if (v3) "NPRTCKPTV3" else "NPRTCKPTV2",
+                diagnostic = when {
+                    expected == null && supportError != null -> supportError
+                    expectedMismatch -> "checkpoint differs from the expected test model"
+                    seed.toLong() !in 1L..99_999L -> "checkpoint seed is outside the supported range"
+                    else -> null
+                },
             )
         }
     }

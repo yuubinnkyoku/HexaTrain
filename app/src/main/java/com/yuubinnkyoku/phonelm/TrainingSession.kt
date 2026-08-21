@@ -464,10 +464,11 @@ class TrainingSession(
             return "training completed without authoritative QNN HTP evidence"
         }
         progress.checkpoint?.let { checkpoint ->
+            val checkpointPolicy = CheckpointFormatPolicy.forConfig(request.modelConfig)
             if (!checkpoint.finite) return "terminal checkpoint is not finite"
             if (checkpoint.modelConfig != request.modelConfig) return "terminal checkpoint model configuration differs"
-            if (checkpoint.format != TrainingPlan.NICOPEDIA_L19.checkpointFormat ||
-                checkpoint.formatVersion != TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion
+            if (checkpoint.format != checkpointPolicy.format ||
+                checkpoint.formatVersion != checkpointPolicy.version
             ) return "terminal checkpoint format differs"
             if (checkpoint.completedStep > progress.completedSteps) return "terminal checkpoint is ahead of progress"
             if (checkpoint.datasetIdentity == null || request.dataset.identity == null ||
@@ -482,11 +483,12 @@ class TrainingSession(
         request: TrainingRequest,
         completedSteps: Int,
     ): String? {
+        val checkpointPolicy = CheckpointFormatPolicy.forConfig(request.modelConfig)
         if (!checkpoint.finite) return "native checkpoint is not finite"
         if (checkpoint.completedStep > completedSteps) return "native checkpoint is ahead of progress"
         if (checkpoint.modelConfig != request.modelConfig) return "native checkpoint model configuration differs"
-        if (checkpoint.format != TrainingPlan.NICOPEDIA_L19.checkpointFormat ||
-            checkpoint.formatVersion != TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion
+        if (checkpoint.format != checkpointPolicy.format ||
+            checkpoint.formatVersion != checkpointPolicy.version
         ) return "native checkpoint format differs"
         if (checkpoint.datasetIdentity == null || request.dataset.identity == null ||
             checkpoint.datasetIdentity != request.dataset.identity
@@ -647,12 +649,17 @@ class TrainingSession(
 interface TrainingSelectionPersistence {
     fun loadDataset(): TrainingDataset?
     fun saveDataset(dataset: TrainingDataset)
+    fun loadModelConfig(): TrainingModelConfig = ModelConfigurationCatalog.defaultConfig
+    fun saveModelConfig(config: TrainingModelConfig) = Unit
 }
 
 class InMemoryTrainingSelectionPersistence : TrainingSelectionPersistence {
     private var dataset: TrainingDataset? = null
+    private var modelConfig: TrainingModelConfig = ModelConfigurationCatalog.defaultConfig
     override fun loadDataset(): TrainingDataset? = dataset
     override fun saveDataset(dataset: TrainingDataset) { this.dataset = dataset }
+    override fun loadModelConfig(): TrainingModelConfig = modelConfig
+    override fun saveModelConfig(config: TrainingModelConfig) { modelConfig = config }
 }
 
 interface TrainingRunLifecycle {
@@ -680,7 +687,8 @@ class StandaloneTrainingRepository(
 ) : Closeable {
     @Volatile private var latestRequest: TrainingRequest? = null
     @Volatile private var selectedDataset: TrainingDataset? = selectionPersistence.loadDataset()
-    @Volatile private var selectedConfig: TrainingModelConfig = TrainingModelConfig.NICOPEDIA_L19
+    @Volatile private var selectedConfig: TrainingModelConfig = selectionPersistence.loadModelConfig()
+    @Volatile private var datasetCompatibilityMessage: String? = null
     @Volatile private var resumeMessage: String? = null
     private val commandLock = Any()
     private val datasetSelectionGeneration = AtomicLong(0L)
@@ -714,7 +722,7 @@ class StandaloneTrainingRepository(
         synchronized(commandLock) {
             if (selectionGeneration < datasetSelectionGeneration.get()) return false
             if (session.snapshot().phase in activePhases) return false
-            val result = datasetStore.persistReadAccess(dataset.uri)
+            val result = datasetStore.persistReadAccess(dataset.uri, selectedConfig)
                 .map { persisted -> dataset.copy(identity = dataset.identity ?: persisted.identity) }
             val selected = result.getOrNull() ?: return false
             if (selectionGeneration != datasetSelectionGeneration.get()) {
@@ -730,17 +738,32 @@ class StandaloneTrainingRepository(
                 runCatching { datasetStore.releaseReadAccess(previous.uri) }
             }
             resumeMessage = null
+            datasetCompatibilityMessage = null
             publishUi()
             return true
         }
     }
 
-    fun selectModelConfig(config: TrainingModelConfig): Boolean {
-        if (config.validationError() != null) return false
-        if (session.snapshot().phase in activePhases) return false
+    fun selectModelConfig(config: TrainingModelConfig): Boolean = synchronized(commandLock) {
+        if (SupportedTrainingModelPolicy.validationError(config) != null) return@synchronized false
+        if (session.snapshot().phase in activePhases) return@synchronized false
         selectedConfig = config
+        selectionPersistence.saveModelConfig(config)
+        selectedDataset?.let { dataset ->
+            val reinspected = datasetStore.reinspect(dataset, config)
+            selectedDataset = reinspected.getOrNull() ?: dataset.copy(identity = null)
+            selectionPersistence.saveDataset(selectedDataset!!)
+            datasetCompatibilityMessage = reinspected.exceptionOrNull()?.let {
+                if (config.vocabularySize == 1024) {
+                    "Selected cache is not compatible with V1024 byte-BPE; select an NPRTBPEV1 cache."
+                } else {
+                    "Selected cache is not compatible with V256 byte format; select an NPRTBYTEV1 cache."
+                }
+            }
+        }
+        resumeMessage = null
         publishUi()
-        return true
+        true
     }
 
     fun start(request: TrainingRequest): Boolean {
@@ -777,8 +800,11 @@ class StandaloneTrainingRepository(
             modelConfigIdentity = selectedConfig.compatibilityKey,
             datasetIdentity = datasetIdentity,
             latestCheckpointUri = compatibleCheckpoint()?.uri,
+            modelConfigEncoding = TrainingModelConfigCodec.encode(selectedConfig),
         )
     }
+
+    fun selectedDatasetIdentity(): String? = selectedDataset?.identity
 
     /**
      * Starts or reattaches the execution owned by WorkManager. Recovery uses
@@ -789,13 +815,14 @@ class StandaloneTrainingRepository(
         checkpointUri: String?,
         recoverStartedRun: Boolean,
         runStartedAtMs: Long,
+        runConfig: TrainingModelConfig = selectedConfig,
     ): Boolean {
         synchronized(commandLock) {
             if (session.snapshot().phase in activePhases) return true
             val dataset = selectedDataset ?: return false
             val identity = dataset.identity ?: return false
             if (datasetStore.validateReadAccess(dataset).isFailure) return false
-            val plan = TrainingPlan.NICOPEDIA_L19
+            val plan = runCatching { TrainingPlan.forConfig(runConfig) }.getOrNull() ?: return false
             val candidates = when {
                 checkpointUri != null -> checkpointStore.list().filter { it.uri == checkpointUri }
                 mode == TrainingWorkerStartMode.RESUME -> checkpointStore.list()
@@ -804,7 +831,7 @@ class StandaloneTrainingRepository(
             }
             val selection = TrainingCheckpointCatalog.latestCompatible(
                 candidates,
-                selectedConfig,
+                runConfig,
                 plan.checkpointFormat,
                 plan.checkpointFormatVersion,
                 identity,
@@ -833,7 +860,7 @@ class StandaloneTrainingRepository(
                     null
                 }
             }
-            latestRequest = TrainingRequest(selectedConfig, dataset, plan.targetSteps, resumeFrom)
+            latestRequest = TrainingRequest(runConfig, dataset, plan.targetSteps, resumeFrom)
             resumeMessage = null
             return session.start(latestRequest!!)
         }
@@ -848,7 +875,7 @@ class StandaloneTrainingRepository(
             return false
         }
         if (session.canResume()) return session.resume()
-        val plan = TrainingPlan.NICOPEDIA_L19
+        val plan = TrainingPlan.forConfig(selectedConfig)
         val selection = if (dataset.identity == null) {
             TrainingCheckpointSelection.Incompatible("dataset identity is unavailable")
         } else {
@@ -923,17 +950,18 @@ class StandaloneTrainingRepository(
             append("\nL${config.layers} H${config.heads} T${config.tokens} D${config.dimension} ")
             append("FFN${config.feedForwardDimension} V${config.vocabularySize} B${config.batchSize} ")
             append("LR${config.learningRate} checkpoint_interval=${config.checkpointInterval}")
-            (state.message ?: resumeMessage)?.let { append("\nerror=$it") }
+            (state.message ?: resumeMessage ?: datasetCompatibilityMessage)?.let { append("\nerror=$it") }
         }
         val timing = state.timing
         val timingText = formatTiming(timing)
         val activityText = formatActivity(timing?.htpActivity, timing?.aggregate)
+        val modelReadinessMessage = StandaloneTrainingCapabilityPolicy.blockingError(selectedConfig)
         return TrainingUiState(
             phase = state.phase,
             progress = progress,
             overview = overview,
             overviewText = overview,
-            message = state.message ?: resumeMessage,
+            message = state.message ?: resumeMessage ?: datasetCompatibilityMessage,
             timing = timing,
             timingText = timingText,
             htpActivity = timing?.htpActivity,
@@ -945,20 +973,25 @@ class StandaloneTrainingRepository(
             } ?: "Latest checkpoint: Unavailable (native checkpoint integration pending)",
             datasetUri = selectedDataset?.uri,
             datasetDisplayName = selectedDataset?.displayName,
-            canStart = state.phase !in activePhases && selectedDataset != null,
+            canStart = state.phase !in activePhases && selectedDataset?.identity != null &&
+                SupportedTrainingModelPolicy.validationError(selectedConfig) == null &&
+                modelReadinessMessage == null,
             canStop = state.phase in stopAcceptingPhases,
             canPause = session.canPause(),
             canResume = session.canResume() ||
                 (state.phase !in activePhases && compatible != null),
             modelConfig = config,
             dashboard = state.dashboard,
+            selectedModelConfig = selectedConfig,
+            canEditModelConfig = state.phase !in activePhases,
+            modelReadinessMessage = modelReadinessMessage,
         )
     }
 
     private fun compatibleCheckpoint(): TrainingCheckpointMetadata? {
         val dataset = selectedDataset ?: return null
         val identity = dataset.identity ?: return null
-        val plan = TrainingPlan.NICOPEDIA_L19
+        val plan = TrainingPlan.forConfig(selectedConfig)
         return (TrainingCheckpointCatalog.latestCompatible(
             checkpointStore.list(), selectedConfig,
             plan.checkpointFormat, plan.checkpointFormatVersion, identity,
@@ -970,7 +1003,7 @@ class StandaloneTrainingRepository(
 
     private fun isDisplayableCheckpoint(checkpoint: TrainingCheckpointMetadata): Boolean {
         val dataset = selectedDataset ?: return false
-        val plan = TrainingPlan.NICOPEDIA_L19
+        val plan = TrainingPlan.forConfig(selectedConfig)
         return checkpoint.finite &&
             checkpoint.modelConfig == selectedConfig &&
             checkpoint.format == plan.checkpointFormat &&

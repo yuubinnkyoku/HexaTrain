@@ -9,11 +9,11 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import java.util.Locale
 
-/** SAF adapter: full NPRTBYTEV1 identity validation runs only on the caller's IO executor. */
+/** SAF adapter: full cache identity validation runs only on the caller's IO executor. */
 class AndroidTrainingDatasetUriStore(private val context: Context) : TrainingDatasetUriStore {
     private val resolver = context.contentResolver
 
-    override fun persistReadAccess(uri: String): Result<TrainingDataset> = runCatching {
+    override fun persistReadAccess(uri: String, expectedConfig: TrainingModelConfig): Result<TrainingDataset> = runCatching {
         val parsed = Uri.parse(uri)
         require(parsed.scheme == "content") { "dataset must be a content:// URI" }
         val alreadyPersisted = resolver.persistedUriPermissions.any { it.uri == parsed && it.isReadPermission }
@@ -40,7 +40,7 @@ class AndroidTrainingDatasetUriStore(private val context: Context) : TrainingDat
             // content identity now so Resume can be fail-closed after restart;
             // the backend still stages and verifies the bytes again before JNI.
             val inspection = resolver.openInputStream(parsed)?.use {
-                NicopediaCacheInspector.inspect(it, TrainingPlan.NICOPEDIA_L19.modelConfig)
+                NicopediaCacheInspector.inspect(it, expectedConfig)
             } ?: error("dataset provider returned no readable stream")
             TrainingDataset(uri, displayName, inspection.identity)
         } catch (failure: Throwable) {
@@ -77,6 +77,14 @@ class AndroidTrainingDatasetUriStore(private val context: Context) : TrainingDat
             }
         } ?: error("dataset provider returned no readable descriptor")
     }
+
+    override fun reinspect(dataset: TrainingDataset, expectedConfig: TrainingModelConfig): Result<TrainingDataset> = runCatching {
+        validateReadAccess(dataset).getOrThrow()
+        val inspection = resolver.openInputStream(Uri.parse(dataset.uri))?.use {
+            NicopediaCacheInspector.inspect(it, expectedConfig)
+        } ?: error("dataset provider returned no readable stream")
+        dataset.copy(identity = inspection.identity)
+    }
 }
 
 class AndroidTrainingSelectionPersistence(context: Context) : TrainingSelectionPersistence {
@@ -95,11 +103,24 @@ class AndroidTrainingSelectionPersistence(context: Context) : TrainingSelectionP
             .commit()) { "dataset selection could not be persisted" }
     }
 
+    override fun loadModelConfig(): TrainingModelConfig {
+        val encoded = prefs.getString(KEY_MODEL_CONFIG, null) ?: return ModelConfigurationCatalog.defaultConfig
+        return runCatching { TrainingModelConfigCodec.decode(encoded) }
+            .getOrElse { ModelConfigurationCatalog.defaultConfig }
+    }
+
+    override fun saveModelConfig(config: TrainingModelConfig) {
+        check(prefs.edit().putString(KEY_MODEL_CONFIG, TrainingModelConfigCodec.encode(config)).commit()) {
+            "model selection could not be persisted"
+        }
+    }
+
     private companion object {
         const val PREFS = "phonelm_standalone_training"
         const val KEY_URI = "dataset_uri"
         const val KEY_NAME = "dataset_display_name"
         const val KEY_IDENTITY = "dataset_identity"
+        const val KEY_MODEL_CONFIG = "model_config_v1"
     }
 }
 
@@ -110,6 +131,7 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
     // directory. The path is never exposed to UI or persisted metadata.
     private val checkpointDirectory = context.getDir("standalone_training_checkpoints", Context.MODE_PRIVATE)
     internal val nativeRootDirectory: java.io.File get() = checkpointDirectory
+    private val inspectionCache = java.util.concurrent.ConcurrentHashMap<String, CheckpointInspectionStamp>()
 
     init {
         check(checkpointDirectory.isDirectory || checkpointDirectory.mkdirs()) {
@@ -151,8 +173,19 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
             }.getOrDefault(false)
         }
 
-    override fun isUsableForResume(metadata: TrainingCheckpointMetadata): Boolean =
-        resolveNativePath(metadata) != null
+    override fun isUsableForResume(metadata: TrainingCheckpointMetadata): Boolean {
+        val path = resolveNativePath(metadata) ?: return false
+        val file = java.io.File(path)
+        val cached = inspectionCache[path]
+        if (cached != null && cached.modifiedAtMs == file.lastModified() && cached.size == file.length()) {
+            return cached.usable
+        }
+        val inspected = GenerationCheckpointInspector.inspect(file, metadata.modelConfig)
+        val usable = inspected.usable && inspected.step == metadata.completedStep &&
+            inspected.format == metadata.format && inspected.finite
+        inspectionCache[path] = CheckpointInspectionStamp(file.lastModified(), file.length(), usable)
+        return usable
+    }
 
     override fun registerNativePath(metadata: TrainingCheckpointMetadata, path: String): Boolean = runCatching {
         val root = checkpointDirectory.canonicalFile
@@ -194,7 +227,7 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
         value.formatVersion.toString(),
         value.finite.toString(),
         value.createdAtMs.toString(),
-        value.modelConfig.compatibilityKey,
+        TrainingModelConfigCodec.encode(value.modelConfig),
         value.datasetIdentity.orEmpty(),
     ).joinToString(DELIMITER) { Uri.encode(it) }
 
@@ -202,8 +235,11 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
         return runCatching {
             val fields = encoded.split(DELIMITER).map(Uri::decode)
             require(fields.size >= 8) { "checkpoint metadata is truncated" }
-            val config = TrainingModelConfig.NICOPEDIA_L19
-            require(fields[6] == config.compatibilityKey) { "checkpoint config differs" }
+            val config = if (fields[6].startsWith("NPRTMODEL")) {
+                TrainingModelConfigCodec.decode(fields[6])
+            } else {
+                TrainingModelConfigCodec.decodeLegacyCompatibilityKey(fields[6])
+            }
             TrainingCheckpointMetadata(
                 uri = fields[0],
                 completedStep = fields[1].toInt(),
@@ -235,6 +271,8 @@ class AndroidTrainingCheckpointStore(context: Context) : TrainingCheckpointStore
         const val KEY_PATHS = "native_paths"
         const val DELIMITER = "|"
     }
+
+    private data class CheckpointInspectionStamp(val modifiedAtMs: Long, val size: Long, val usable: Boolean)
 }
 
 class AndroidCpuProcessMetricSource : CpuProcessMetricSource {

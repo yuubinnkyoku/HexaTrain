@@ -448,6 +448,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jstring promptPath,
     jlong seed,
     jint layers,
+    jint heads,
     jint tokens,
     jint vocabulary,
     jint dimension,
@@ -512,9 +513,13 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
             "error=phonelm.htp_context_graph_splitting must be 0, 1 or 2\n");
     }
 
-    // 256 is the cache context range max; out-of-range falls back to the
-    // legacy T=32.
-    if (tokens < 1 || tokens > 256) tokens = 32;
+    if (tokens < 1 || tokens > 256 || layers < 1 || layers > 128 ||
+        heads < 1 || heads > 128 || seed < 1 || seed > 99999 ||
+        maxNewBytes < 1 || maxNewBytes > 1024 || samplingSeed < 0) {
+        return toJavaString(env, "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                 "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+                                 "error=tokens/layers/heads/seed/generation limits are invalid\n");
+    }
     phonelm::tiny_lm::Config config;
     if (vocabulary != 256 && vocabulary != 1024) {
         return toJavaString(env, "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
@@ -523,8 +528,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     }
     config.vocabularySize = static_cast<uint32_t>(vocabulary);
     config.tokens = static_cast<uint32_t>(tokens);
-    if (dimension < 2 || dimension > 256 || dimension % 2 != 0 ||
-        feedForwardDimension < 2 || feedForwardDimension > 1024) {
+    if (dimension < 2 || dimension > 256 || dimension % heads != 0 ||
+        feedForwardDimension < 2 || feedForwardDimension > 1024 ||
+        topK < 1 || topK > vocabulary) {
         return toJavaString(
             env,
             "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
@@ -533,16 +539,16 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     }
     config.dimension = static_cast<uint32_t>(dimension);
     config.feedForwardDimension = static_cast<uint32_t>(feedForwardDimension);
-    config.numLayers = static_cast<uint32_t>(layers > 0 ? layers : 6);
-    config.numHeads = 2;
+    config.numLayers = static_cast<uint32_t>(layers);
+    config.numHeads = static_cast<uint32_t>(heads);
     phonelm::TrainingConfig trainingConfig;
     trainingConfig.seed = static_cast<std::uint64_t>(seed);
     trainingConfig.epochs = static_cast<int>(config.numLayers);
-    trainingConfig.measuredSteps = 2;
-    trainingConfig.steps = maxNewBytes > 0 ? maxNewBytes : 64;
+    trainingConfig.measuredSteps = heads;
+    trainingConfig.steps = maxNewBytes;
     phonelm::nicopedia_gen::GenerateConfig generateConfig;
     generateConfig.maxNewBytes =
-        static_cast<uint32_t>(maxNewBytes > 0 ? maxNewBytes : 64);
+        static_cast<uint32_t>(maxNewBytes);
     generateConfig.greedy = modeString != "sample";
     generateConfig.temperature = temperature;
     generateConfig.topK = static_cast<uint32_t>(topK);

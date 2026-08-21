@@ -69,6 +69,7 @@ object NativeBridge {
         promptPath: String,
         seed: Long,
         layers: Int,
+        heads: Int,
         tokens: Int,
         vocabulary: Int,
         dimension: Int,

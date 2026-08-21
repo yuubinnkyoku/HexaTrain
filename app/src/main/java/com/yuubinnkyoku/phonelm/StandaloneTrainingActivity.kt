@@ -73,6 +73,13 @@ class StandaloneTrainingActivity : ComponentActivity() {
                 onPause = { ioExecutor.execute { repository.pause() } },
                 onResume = { ioExecutor.execute { workCoordinator.resume() } },
                 onStartOver = ::confirmStartOver,
+                onModelConfigSelected = { config ->
+                    ioExecutor.execute {
+                        if (!repository.selectModelConfig(config)) {
+                            postIfCurrentCurrent { toast("Model settings could not be applied while a run is active") }
+                        }
+                    }
+                },
                 onGenerationPromptChange = generationSession::updatePrompt,
                 onGenerationModeChange = generationSession::updateMode,
                 onGenerationTemperatureChange = generationSession::updateTemperature,

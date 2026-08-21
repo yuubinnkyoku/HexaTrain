@@ -21,6 +21,7 @@ import java.util.UUID
  * path from the SAF URI.
  */
 internal data class NicopediaCacheInspection(
+    val format: String,
     val context: Int,
     val vocabulary: Int,
     val recordCount: Long,
@@ -28,15 +29,19 @@ internal data class NicopediaCacheInspection(
     val sha256: String,
     val nativeFnv1a64: String,
     val trainingOrderHash: String,
+    val tokenizerKind: String,
+    val tokenizerHash: String?,
 ) {
     val identity: String
-        get() = "NPRTBYTEV1;context=$context;vocab=$vocabulary;records=$recordCount;" +
+        get() = "$format;context=$context;vocab=$vocabulary;records=$recordCount;" +
             "bytes=$byteCount;sha256=$sha256;$nativeFnv1a64;" +
+            "tokenizer=$tokenizerKind;tokenizer_hash=${tokenizerHash ?: "legacy"};" +
             "order_seed=20260806;training_order=$trainingOrderHash"
 }
 
 internal object NicopediaCacheInspector {
-    private const val MAGIC = "NPRTBYTEV1\n"
+    private const val BYTE_MAGIC = "NPRTBYTEV1\n"
+    private const val BPE_MAGIC = "NPRTBPEV1\n"
     private const val MAX_RECORDS = 10_000_000L
     internal const val MAX_BYTES = 1_536L * 1024L * 1024L
     // FNV-1a 64-bit offset basis 0xCBF29CE484222325 = 14695981039346656037,
@@ -48,26 +53,47 @@ internal object NicopediaCacheInspector {
         file.inputStream().use { inspect(it, expected) }
 
     fun inspect(input: InputStream, expected: TrainingModelConfig): NicopediaCacheInspection {
-        require(expected.tokens == 32 && expected.vocabularySize == 256) {
-            "native Nicopedia cache contract only supports T32/V256"
+        require(expected.tokens == 32 && expected.vocabularySize in setOf(256, 1024)) {
+            "native Nicopedia cache contract only supports T32/V256 or V1024"
         }
         val digest = MessageDigest.getInstance("SHA-256")
         val counted = DigestCountingInputStream(input, digest)
         DataInputStream(BufferedInputStream(counted, 64 * 1024)).use { data ->
-            val magic = ByteArray(MAGIC.length)
-            data.readFully(magic)
-            require(String(magic, Charsets.US_ASCII) == MAGIC) { "NPRT_CACHE_MAGIC" }
+            val prefix = ByteArray(BPE_MAGIC.length)
+            data.readFully(prefix)
+            val prefixText = String(prefix, Charsets.US_ASCII)
+            val format = if (prefixText == BPE_MAGIC) {
+                "NPRTBPEV1"
+            } else {
+                val finalByte = data.readUnsignedByte()
+                (prefixText + finalByte.toChar()).also { require(it == BYTE_MAGIC) { "NPRT_CACHE_MAGIC" } }
+                    .trimEnd('\n')
+            }
+            require(format == BYTE_MAGIC.trimEnd('\n') || format == BPE_MAGIC.trimEnd('\n')) { "NPRT_CACHE_MAGIC" }
             val context = data.readInt()
             val vocabulary = data.readInt()
+            val tokenizerHash = if (format == "NPRTBPEV1") {
+                "sha256:" + ByteArray(32).also(data::readFully).joinToString("") { "%02x".format(it) }
+            } else null
             val count = data.readLong()
-            require(context in 8..256 && vocabulary == 256 && count in 1..MAX_RECORDS) {
+            require(context in 8..256 && vocabulary == (if (format == "NPRTBPEV1") 1024 else 256) &&
+                count in 1..MAX_RECORDS) {
                 "NPRT_CACHE_HEADER_INVALID"
+            }
+            if (format == "NPRTBPEV1") {
+                require(tokenizerHash == expected.tokenizerHash &&
+                    tokenizerHash == ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH) {
+                    "NPRT_CACHE_TOKENIZER_HASH"
+                }
             }
             require(context == expected.tokens && vocabulary == expected.vocabularySize) {
                 "NPRT_CACHE_CONFIG_MISMATCH"
             }
-            val recordBytes = 8L + context + 1L
-            val expectedBytes = MAGIC.length.toLong() + 4L + 4L + 8L + count * recordBytes
+            val tokenBytes = if (format == "NPRTBPEV1") 2L else 1L
+            val recordBytes = 8L + tokenBytes * (context + 1L)
+            val tokenizerBytes = if (format == "NPRTBPEV1") 32L else 0L
+            val magicBytes = if (format == "NPRTBPEV1") BPE_MAGIC.length.toLong() else BYTE_MAGIC.length.toLong()
+            val expectedBytes = magicBytes + 4L + 4L + tokenizerBytes + 8L + count * recordBytes
             require(expectedBytes <= MAX_BYTES) { "NPRT_CACHE_TOO_LARGE" }
             var fnv = FNV_OFFSET
             fun updateLongLittleEndian(value: Long) {
@@ -94,20 +120,31 @@ internal object NicopediaCacheInspector {
                 fnv = (fnv xor (vocabularyValue.toLong() and 0xffL)) * FNV_PRIME
                 vocabularyValue = vocabularyValue ushr 8
             }
+            if (tokenizerHash != null) tokenizerHash.toByteArray(Charsets.US_ASCII).forEach { byte ->
+                fnv = (fnv xor (byte.toLong() and 0xffL)) * FNV_PRIME
+            }
             updateLongLittleEndian(count)
-            val window = ByteArray(context + 1)
             repeat(count.toInt()) {
                 val articleHash = data.readLong()
-                data.readFully(window)
                 updateLongLittleEndian(articleHash)
-                window.forEach { byte -> fnv = (fnv xor (byte.toLong() and 0xffL)) * FNV_PRIME }
+                repeat(context + 1) {
+                    val token = if (format == "NPRTBPEV1") data.readUnsignedShort() else data.readUnsignedByte()
+                    require(token < vocabulary) { "NPRT_CACHE_TOKEN_RANGE" }
+                    fnv = (fnv xor (token.toLong() and 0xffL)) * FNV_PRIME
+                    if (format == "NPRTBPEV1") fnv = (fnv xor ((token ushr 8).toLong() and 0xffL)) * FNV_PRIME
+                }
             }
             require(data.read() < 0) { "NPRT_CACHE_TRAILING_BYTES" }
             require(counted.count == expectedBytes) { "NPRT_CACHE_LENGTH_MISMATCH" }
             val sha = digest.digest().joinToString("") { "%02x".format(it) }
             val fnvText = "fnv1a64:" + java.lang.Long.toUnsignedString(fnv, 16).padStart(16, '0')
             val orderHash = trainingOrderHash(count)
-            return NicopediaCacheInspection(context, vocabulary, count, counted.count, sha, fnvText, orderHash)
+            return NicopediaCacheInspection(
+                format, context, vocabulary, count, counted.count, sha, fnvText, orderHash,
+                if (format == "NPRTBPEV1") ModelConfigurationCatalog.BYTE_BPE_TOKENIZER
+                else ModelConfigurationCatalog.LEGACY_BYTE_TOKENIZER,
+                tokenizerHash,
+            )
         }
     }
 
@@ -179,6 +216,9 @@ internal class AndroidNicopediaCacheStager(
         require(dataset.uri.startsWith("content://")) { "dataset must be a content:// URI" }
         require(!dataset.identity.isNullOrBlank()) {
             "dataset content identity is unavailable; reselect the SAF document"
+        }
+        require(expected.vocabularySize != 1024) {
+            "V1024 cache is valid, but the canonical byte-BPE model must be supplied by a separate app-private import; cache-only training is blocked"
         }
         val root = appRoot.canonicalFile
         val directory = destination.canonicalFile
@@ -333,7 +373,7 @@ class NativeHtpTrainingBackend(
     }
 
     override fun resolveTotalSteps(config: TrainingModelConfig, dataset: TrainingDataset): Int? =
-        TrainingPlan.NICOPEDIA_L19.targetSteps.takeIf { config == TrainingPlan.NICOPEDIA_L19.modelConfig }
+        if (SupportedTrainingModelPolicy.validationError(config) == null) TrainingPlan.forConfig(config).targetSteps else null
 
     override fun run(
         request: TrainingRequest,
@@ -369,10 +409,11 @@ class NativeHtpTrainingBackend(
             if (!BuildConfig.PHONELM_QNN_ENABLED) {
                 return TrainingBackendResult.Failed("QNN HTP is disabled in this APK; CPU fallback is not permitted")
             }
-            require(request.modelConfig == TrainingPlan.NICOPEDIA_L19.modelConfig) {
-                "standalone Nicopedia native mode only supports the canonical L19/T32 preset"
+            require(SupportedTrainingModelPolicy.validationError(request.modelConfig) == null) {
+                SupportedTrainingModelPolicy.validationError(request.modelConfig)
+                    ?: "unsupported standalone training configuration"
             }
-            require(request.totalSteps == TrainingPlan.NICOPEDIA_L19.targetSteps) {
+            require(request.totalSteps == TrainingPlan.forConfig(request.modelConfig).targetSteps) {
                 "standalone Nicopedia native mode requires the canonical 8000-step target"
             }
             request.validationError()?.let { return TrainingBackendResult.Failed(it) }
@@ -531,7 +572,7 @@ class NativeHtpTrainingBackend(
             checkpointMetadata(runId, request, staged, it)
         }
         if (phase == TrainingPhase.SAVING_CHECKPOINT && checkpoint == null) {
-            error("native checkpoint event has no verified NPRTCKPTV2 metadata")
+            error("native checkpoint event has no verified checkpoint metadata")
         }
         val evidence = runtimeEvidence(fields)
         onProgress(
@@ -613,7 +654,7 @@ class NativeHtpTrainingBackend(
             return TrainingBackendResult.Failed("native checkpoint was written but could not be indexed safely")
         }
         if (status == "SUCCESS" && !nativeCheckpointWritten) {
-            return TrainingBackendResult.Failed("native training completed without a verified NPRTCKPTV2 checkpoint")
+            return TrainingBackendResult.Failed("native training completed without a verified checkpoint")
         }
         val finalProgress = TrainingBackendProgress(
             completedSteps = completed,
@@ -681,14 +722,23 @@ class NativeHtpTrainingBackend(
         step: Int,
     ): TrainingCheckpointMetadata? {
         if (step <= 0) return null
-        val path = File(staged.directory, "htp-seed${request.modelConfig.seed}-l${request.modelConfig.layers}-step$step.ckpt")
+        val config = request.modelConfig
+        val checkpointName = if (config.tokens == 32 && config.dimension == 32 &&
+            config.feedForwardDimension == 32
+        ) {
+            "htp-seed${config.seed}-l${config.layers}-step$step.ckpt"
+        } else {
+            "htp-seed${config.seed}-l${config.layers}-t${config.tokens}-d${config.dimension}-" +
+                "f${config.feedForwardDimension}-step$step.ckpt"
+        }
+        val path = File(staged.directory, checkpointName)
         if (!path.isFile || path.length() <= 0L) return null
         val metadata = TrainingCheckpointMetadata(
             uri = "native-checkpoint:$runId:$step",
             completedStep = step,
             modelConfig = request.modelConfig,
-            format = TrainingPlan.NICOPEDIA_L19.checkpointFormat,
-            formatVersion = TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion,
+            format = CheckpointFormatPolicy.forConfig(config).format,
+            formatVersion = CheckpointFormatPolicy.forConfig(config).version,
             finite = true,
             createdAtMs = System.currentTimeMillis(),
             datasetIdentity = staged.inspection.identity,

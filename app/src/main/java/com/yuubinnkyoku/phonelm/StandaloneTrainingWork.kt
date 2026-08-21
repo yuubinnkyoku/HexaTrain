@@ -29,6 +29,7 @@ data class TrainingWorkerIdentity(
     val modelConfigIdentity: String,
     val datasetIdentity: String,
     val latestCheckpointUri: String?,
+    val modelConfigEncoding: String = modelConfigIdentity,
 )
 
 enum class TrainingWorkerStartMode { FRESH, RESUME }
@@ -46,6 +47,7 @@ data class DurableTrainingWork(
     val runStartedAtMs: Long,
     val executionStarted: Boolean,
     val stopReason: Int,
+    val modelConfigEncoding: String = modelConfigIdentity,
 )
 
 class TrainingWorkMetadataStore(context: Context) {
@@ -57,6 +59,7 @@ class TrainingWorkMetadataStore(context: Context) {
             .putString(KEY_RUN_ID, runId)
             .putString(KEY_WORK_ID, request.id.toString())
             .putString(KEY_CONFIG_IDENTITY, identity.modelConfigIdentity)
+            .putString(KEY_CONFIG_ENCODING, identity.modelConfigEncoding)
             .putString(KEY_DATASET_IDENTITY, identity.datasetIdentity)
             .putString(KEY_PHASE, TrainingPhase.IDLE.name)
             .putInt(KEY_CURRENT_STEP, 0)
@@ -79,10 +82,14 @@ class TrainingWorkMetadataStore(context: Context) {
     fun load(): DurableTrainingWork? {
         val runId = prefs.getString(KEY_RUN_ID, null) ?: return null
         val workId = prefs.getString(KEY_WORK_ID, null) ?: return null
+        val configIdentity = prefs.getString(KEY_CONFIG_IDENTITY, null) ?: return null
+        val configEncoding = prefs.getString(KEY_CONFIG_ENCODING, null) ?: runCatching {
+            TrainingModelConfigCodec.encode(TrainingModelConfigCodec.decodeLegacyCompatibilityKey(configIdentity))
+        }.getOrNull() ?: return null
         return DurableTrainingWork(
             runId = runId,
             workId = workId,
-            modelConfigIdentity = prefs.getString(KEY_CONFIG_IDENTITY, null) ?: return null,
+            modelConfigIdentity = configIdentity,
             datasetIdentity = prefs.getString(KEY_DATASET_IDENTITY, null) ?: return null,
             phase = prefs.getString(KEY_PHASE, TrainingPhase.IDLE.name)!!,
             currentStep = prefs.getInt(KEY_CURRENT_STEP, 0),
@@ -92,6 +99,7 @@ class TrainingWorkMetadataStore(context: Context) {
             runStartedAtMs = prefs.getLong(KEY_STARTED_AT_MS, 0L),
             executionStarted = prefs.getBoolean(KEY_EXECUTION_STARTED, false),
             stopReason = prefs.getInt(KEY_STOP_REASON, STOP_REASON_UNAVAILABLE),
+            modelConfigEncoding = configEncoding,
         )
     }
 
@@ -178,6 +186,7 @@ class TrainingWorkMetadataStore(context: Context) {
         private const val KEY_RUN_ID = "run_id"
         private const val KEY_WORK_ID = "work_id"
         private const val KEY_CONFIG_IDENTITY = "config_identity"
+        private const val KEY_CONFIG_ENCODING = "config_encoding_v1"
         private const val KEY_DATASET_IDENTITY = "dataset_identity"
         private const val KEY_PHASE = "phase"
         private const val KEY_CURRENT_STEP = "current_step"
@@ -237,6 +246,7 @@ class TrainingWorkCoordinator(
         const val TAG = "phonelm-standalone-training"
         const val KEY_RUN_ID = "run_id"
         const val KEY_CONFIG_IDENTITY = "config_identity"
+        const val KEY_CONFIG_ENCODING = "config_encoding_v1"
         const val KEY_DATASET_IDENTITY = "dataset_identity"
         const val KEY_START_MODE = "start_mode"
 
@@ -248,6 +258,7 @@ class TrainingWorkCoordinator(
             .setInputData(workDataOf(
                 KEY_RUN_ID to runId,
                 KEY_CONFIG_IDENTITY to identity.modelConfigIdentity,
+                KEY_CONFIG_ENCODING to identity.modelConfigEncoding,
                 KEY_DATASET_IDENTITY to identity.datasetIdentity,
                 KEY_START_MODE to mode.name,
             ))
@@ -267,17 +278,19 @@ class StandaloneTrainingWorker(
     override suspend fun doWork(): Result {
         val runId = inputData.getString(TrainingWorkCoordinator.KEY_RUN_ID) ?: return Result.failure()
         val configIdentity = inputData.getString(TrainingWorkCoordinator.KEY_CONFIG_IDENTITY) ?: return Result.failure()
+        val configEncoding = inputData.getString(TrainingWorkCoordinator.KEY_CONFIG_ENCODING) ?: return Result.failure()
+        val runConfig = runCatching { TrainingModelConfigCodec.decode(configEncoding) }.getOrNull()
+            ?: return Result.failure()
+        if (runConfig.compatibilityKey != configIdentity) return Result.failure()
         val datasetIdentity = inputData.getString(TrainingWorkCoordinator.KEY_DATASET_IDENTITY) ?: return Result.failure()
         val mode = runCatching {
             TrainingWorkerStartMode.valueOf(inputData.getString(TrainingWorkCoordinator.KEY_START_MODE).orEmpty())
         }.getOrNull() ?: return Result.failure()
         val durable = metadata.load()?.takeIf { it.runId == runId && it.workId == id.toString() }
             ?: return Result.failure()
-        val currentIdentity = repository.workerIdentity()
-        if (currentIdentity == null ||
-            currentIdentity.modelConfigIdentity != configIdentity ||
-            currentIdentity.datasetIdentity != datasetIdentity ||
+        if (repository.selectedDatasetIdentity() != datasetIdentity ||
             durable.modelConfigIdentity != configIdentity ||
+            durable.modelConfigEncoding != configEncoding ||
             durable.datasetIdentity != datasetIdentity
         ) return Result.failure()
 
@@ -291,6 +304,7 @@ class StandaloneTrainingWorker(
                 checkpointUri = prior.latestCheckpointUri,
                 recoverStartedRun = prior.executionStarted,
                 runStartedAtMs = prior.runStartedAtMs,
+                runConfig = runConfig,
             )
             if (!started) return Result.failure(workDataOf(KEY_ERROR_CODE to "START_REJECTED"))
             while (true) {

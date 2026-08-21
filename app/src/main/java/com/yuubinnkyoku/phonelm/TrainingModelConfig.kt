@@ -16,26 +16,29 @@ data class TrainingModelConfig(
     val tokenizerHash: String? = null,
     val optimizerId: String = "adam-beta1-0.9-beta2-0.999-eps-1e-8",
 ) {
+    val architecture: ModelArchitecture
+        get() = ModelArchitecture(
+            layers = layers,
+            heads = heads,
+            tokens = tokens,
+            dimension = dimension,
+            feedForwardDimension = feedForwardDimension,
+            vocabularySize = vocabularySize,
+            tokenizerKind = when (tokenizerId) {
+                ModelConfigurationCatalog.LEGACY_TRAINING_TOKENIZER_ID -> ModelConfigurationCatalog.LEGACY_BYTE_TOKENIZER
+                else -> tokenizerId
+            },
+            tokenizerHash = tokenizerHash,
+        )
+
     fun validationError(): String? = when {
-        layers !in 1..128 -> "layers must be in 1..128"
-        heads !in 1..128 -> "heads must be in 1..128"
-        tokens !in 1..4096 -> "tokens must be in 1..4096"
-        dimension !in 1..4096 || dimension % heads != 0 ->
-            "dimension must be in 1..4096 and divisible by heads"
-        feedForwardDimension !in 1..16384 -> "feedForwardDimension must be in 1..16384"
-        vocabularySize !in 2..65536 -> "vocabularySize must be in 2..65536"
+        architecture.validationError() != null -> architecture.validationError()
         batchSize !in 1..4096 -> "batchSize must be in 1..4096"
         !learningRate.isFinite() || learningRate <= 0f ->
             "learningRate must be finite and positive"
         checkpointInterval !in 1..100_000 -> "checkpointInterval must be in 1..100000"
         seed !in 1L..99_999L -> "seed must be in 1..99999"
         tokenizerId.isBlank() -> "tokenizerId must not be blank"
-        vocabularySize == 1024 && tokenizerId != "byte_bpe" ->
-            "V1024 requires byte_bpe tokenizer"
-        vocabularySize == 1024 && tokenizerHash?.matches(Regex("sha256:[0-9a-f]{64}")) != true ->
-            "V1024 requires a canonical tokenizer SHA-256"
-        vocabularySize == 256 && tokenizerHash != null ->
-            "legacy V256 must not carry a BPE tokenizer hash"
         optimizerId.isBlank() -> "optimizerId must not be blank"
         else -> null
     }
@@ -64,7 +67,9 @@ data class TrainingModelConfig(
             checkpointInterval = 250,
         )
 
-        fun nicopediaBpeV1024(tokenizerHash: String) = TrainingModelConfig(
+        fun nicopediaBpeV1024(
+            tokenizerHash: String = ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH,
+        ) = TrainingModelConfig(
             layers = 19,
             heads = 2,
             tokens = 32,
@@ -98,6 +103,14 @@ data class TrainingPlan(
     }
 
     companion object {
+        fun forConfig(config: TrainingModelConfig): TrainingPlan {
+            require(SupportedTrainingModelPolicy.validationError(config) == null) {
+                SupportedTrainingModelPolicy.validationError(config) ?: "unsupported model configuration"
+            }
+            val checkpoint = CheckpointFormatPolicy.forConfig(config)
+            return TrainingPlan(config, 8_000, checkpoint.format, checkpoint.version)
+        }
+
         /** Canonical long-training ceiling used by the existing Nicopedia run. */
         val NICOPEDIA_L19 = TrainingPlan(
             modelConfig = TrainingModelConfig.NICOPEDIA_L19,

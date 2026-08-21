@@ -48,6 +48,10 @@ data class TrainingUiState(
     val canResume: Boolean,
     val modelConfig: TrainingModelConfig,
     val dashboard: TrainingDashboardSnapshot,
+    /** Persisted next-run selection; modelConfig remains the immutable active-run configuration. */
+    val selectedModelConfig: TrainingModelConfig = modelConfig,
+    val canEditModelConfig: Boolean = false,
+    val modelReadinessMessage: String? = null,
 )
 
 fun interface TrainingStateListener {

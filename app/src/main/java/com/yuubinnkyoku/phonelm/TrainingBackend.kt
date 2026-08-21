@@ -13,8 +13,9 @@ data class TrainingRequest(
         val checkpoint = resumeFrom ?: return null
         if (!checkpoint.finite) return "resume checkpoint is not finite"
         if (checkpoint.modelConfig != modelConfig) return "resume checkpoint model configuration differs"
-        if (checkpoint.format != TrainingPlan.NICOPEDIA_L19.checkpointFormat ||
-            checkpoint.formatVersion != TrainingPlan.NICOPEDIA_L19.checkpointFormatVersion
+        val checkpointPolicy = CheckpointFormatPolicy.forConfig(modelConfig)
+        if (checkpoint.format != checkpointPolicy.format ||
+            checkpoint.formatVersion != checkpointPolicy.version
         ) return "resume checkpoint format differs"
         if (checkpoint.completedStep <= 0 || checkpoint.completedStep >= totalSteps) {
             return "resume checkpoint step is outside the requested range"
@@ -87,7 +88,7 @@ interface TrainingBackend {
     fun cancelPreparedRun() = Unit
     /** Returns null when the backend cannot authoritatively determine a run length. */
     fun resolveTotalSteps(config: TrainingModelConfig, dataset: TrainingDataset): Int? =
-        TrainingPlan.NICOPEDIA_L19.targetSteps.takeIf { config == TrainingPlan.NICOPEDIA_L19.modelConfig }
+        if (SupportedTrainingModelPolicy.validationError(config) == null) TrainingPlan.forConfig(config).targetSteps else null
     val supportsPause: Boolean get() = false
     val supportsResume: Boolean get() = false
     /** True only when pause created a finite, compatible checkpoint for resume. */
