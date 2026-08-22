@@ -4,12 +4,20 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import com.yuubinnkyoku.phonelm.ui.training.TrainingDashboardApp
 import org.junit.Rule
 import org.junit.Test
@@ -17,6 +25,9 @@ import org.junit.Assert.assertEquals
 
 class TrainingDashboardComposeTest {
     @get:Rule val compose = createComposeRule()
+
+    private val trainingDestination = hasClickAction() and hasText("Training")
+    private val generationDestination = hasClickAction() and hasText("Generation")
 
     @Test fun trainingOverviewKeepsMonitoringAndToolbarActionsVisible() {
         compose.setContent {
@@ -143,7 +154,10 @@ class TrainingDashboardComposeTest {
 
         compose.onNodeWithContentDescription("Training overview, no scrolling").assertIsDisplayed()
         compose.onNodeWithContentDescription("Top-level navigation").assertIsDisplayed()
-        compose.onNodeWithText("Generation").performClick()
+        compose.onNode(trainingDestination).assertIsSelected()
+        compose.onNode(generationDestination).assertIsNotSelected()
+        compose.onNode(generationDestination).performClick()
+        compose.onNode(generationDestination).assertIsSelected()
         compose.onNodeWithContentDescription("Generation screen").assertIsDisplayed()
         compose.onNodeWithText("Select a compatible checkpoint to resolve the model identity").assertIsDisplayed()
     }
@@ -167,7 +181,10 @@ class TrainingDashboardComposeTest {
         compose.onNodeWithText("V1024").performClick()
         compose.onNodeWithText("D64").performClick()
         compose.onNodeWithText("FFN64").performClick()
-        compose.onNodeWithText("602,880 parameters").assertIsDisplayed()
+        compose.onNode(
+            hasScrollToIndexAction() and hasAnyDescendant(hasText("Apply model settings")),
+        ).performScrollToIndex(4)
+        compose.onNodeWithText("602,880 parameters").assertExists().assertIsDisplayed()
         compose.onNodeWithText("Head dim 32").assertExists()
         compose.onNodeWithText("Apply model settings").performClick()
         compose.runOnIdle {
@@ -183,8 +200,8 @@ class TrainingDashboardComposeTest {
             )
         }
 
-        compose.onNodeWithText("Generation").performClick()
-        compose.onNodeWithText("Training").performClick()
+        compose.onNode(generationDestination).performClick()
+        compose.onNode(trainingDestination).performClick()
         compose.onNodeWithContentDescription("Training overview, no scrolling").assertIsDisplayed()
     }
 
@@ -207,14 +224,14 @@ class TrainingDashboardComposeTest {
             )
         }
 
-        compose.onNodeWithText("Generation").performClick()
+        compose.onNode(generationDestination).performClick()
         compose.onAllNodesWithText("37 / 64 bytes").onFirst().assertIsDisplayed()
-        compose.onNodeWithText("途中").assertIsDisplayed()
-        compose.onNodeWithText("Training").performClick()
-        compose.onNodeWithText("Generation").performClick()
+        compose.onNodeWithText("途中").assertExists().performScrollTo().assertIsDisplayed()
+        compose.onNode(trainingDestination).performClick()
+        compose.onNode(generationDestination).performClick()
         compose.onAllNodesWithText("37 / 64 bytes").onFirst().assertIsDisplayed()
         compose.onNodeWithText("420 ms").assertExists()
-        compose.onNodeWithText("途中").assertIsDisplayed()
+        compose.onNodeWithText("途中").assertExists().performScrollTo().assertIsDisplayed()
     }
 
     @Test fun completedGenerationResultSurvivesDestinationSwitches() {
@@ -231,12 +248,13 @@ class TrainingDashboardComposeTest {
             )
         }
 
-        compose.onNodeWithText("Generation").performClick()
-        compose.onNodeWithText("answer").assertIsDisplayed()
-        compose.onNodeWithText("Training").performClick()
-        compose.onNodeWithText("Generation").performClick()
-        compose.onNodeWithText("answer").assertIsDisplayed()
-        compose.onNodeWithText("6 bytes · 42 ms · backend=HTP").assertIsDisplayed()
+        compose.onNode(generationDestination).performClick()
+        compose.onNodeWithText("answer").assertExists().performScrollTo().assertIsDisplayed()
+        compose.onNode(trainingDestination).performClick()
+        compose.onNode(generationDestination).performClick()
+        compose.onNodeWithText("answer").assertExists().performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("6 bytes · 42 ms · backend=HTP")
+            .assertExists().performScrollTo().assertIsDisplayed()
     }
 
     @Test fun trainingDetailsDoesNotContainGenerationEntry() {

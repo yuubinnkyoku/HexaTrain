@@ -18,3 +18,16 @@
 - 実機/高コストなdevice実行は最小規模から段階的に進める（shape検証→1-step parity→短期trajectory→full run→seed拡張→最大depth）。最初から最大config（例: L19 320 step）を実行しない。中間gateで説明不能な乖離があれば次段階へ進めず、段階の順序変更は理由を事前登録してから行う。Confidence: 0.9
 - SDK/APIに存在しない機能・precision controlを想像で実装しない。ヘッダ・docs・サンプルで実在を確認してから使用する。Confidence: 0.85
 - 固定SDK/QAIRT versionをsingle source of truthとして維持し、タスク中のversion変更をしない（version固定スクリプト等を尊重する）。Confidence: 0.75
+- 性能改善タスクでは最適化着手前にbaselineのphase別内訳（HTP init / graph create / finalize / first execute等）を測定して主因を特定し、結果を見ないまま最適化を始めない。コストを隠したり移動したりするのでなく、本体コスト（例: graph preparation自体）を実際に減らすことを目的にする。Confidence: 0.9
+- プロセス内再利用cache（prepared generation engine等）は厳密なidentity key（checkpoint parameter hash・tokenizer hash・QAIRT build ID・全graph option等）でのみhitさせ、不一致は必ずmiss→fresh prepareとする。best-effort loadやsilent fallbackはしない。実行失敗（QNN failure・nonfinite・identity mismatch）後はそのcacheをpoisonedとして破棄し、次回はfresh prepareから始める。Confidence: 0.9
+- 開発中の検証はtargeted testのみに留め、完成時にrelevant JVM/host test＋verify_local.ps1 -Fast -SkipAndroidBuild、QNN C++変更後はfixed QAIRT引数のQNN-enabled APK build＋APK auditを各1回、というtierで行う。性能系タスクでFull gate・長時間trainingは不要。Confidence: 0.85
+- timing telemetryは既存RuntimeMetrics・既存report schemaを優先して拡張し、重複する計測項目を乱造しない。デバッグ情報をUIに出す場合も最小限（Cold/Warm・Preparation・Generation程度）に留める。Confidence: 0.85
+- 大きなgraph builder等はcopy-pasteせずshared forward builder helperへの抽出を第一に検討するが、refactorが巨大化するなら安全な最小実装で妥協してよい。API美化より動作する性能改善を優先し、repository-wide architecture cleanupを目的にしない。Confidence: 0.85
+- QNNの数値error code（7004=INVALID_TENSOR_PARAM等）は記憶・推測でなくinstalled QAIRT headersで意味を確認する。端末logcatが読めない等診断経路が塞がっている場合は、JNI引数（StringBuilder errorOut等）やstructured report経由でfailure reasonを表面化させて診断する。Confidence: 0.85
+- 失敗の原因切り分けは、registry size等の集計数値の照合だけで済ませず、失敗するAPI呼び出し（graphExecute等）の直前に全bound対象のmetadata-only manifest（direction/index/logical name/id/type/rank/dims/要素数/期待byte数/buffer非null/dataSize/duplicate有無/stale有無）を出力し、宣言側（builder登録registry）と使用側（execute bind配列）を1対1突合して食い違いを特定する。manifestにtensor content等のpayloadは含めない。Confidence: 0.9
+- 原因判明時は「直接原因」と「なぜ類似構成（FULL graph等）では再現せず対象path（FORWARD_ONLY等）でのみ起きたか」という差分条件の説明をセットで明記してから次の作業へ進む。Confidence: 0.9
+- 性能改善・graph簡素化でも既存のparity/health gateが必要としている出力や検証を勝手に削除してgateを弱めない。削減したい場合はproduction最小構成とdiagnostic構成の役割分離などの案として提示し、gate意味の変更は別途議論する。未解決のfailureがある間はその解決を優先し、次の最適化（Context Binary等）の調査へ進まない。Confidence: 0.9
+- 性能・timing系のdocs表や報告は、1回限りのprepare phase（HTP init / graph create / finalize等、cache key毎に1回）とper-callのgeneration callを分離して表記する。per-call counter（graph_*_count_this_run等）がcold callでも0になり誤解を招く表現のままにしない。Confidence: 0.9
+- 実checkpoint等のartifact選定はfilenameでなくheader実測（V/T/D/FFN/L/H/seed/step等の直接parse）でidentity確認する。名前tagと実体が乖離している場合（canonical無tag名が歴史的に別shape anchorである等）はheader基準で選定・打ち切りとし、変換・再学習で都合の良いartifactを作らない。解決規則の修正が必要な場合はテストハーネス等の最小範囲（tagged名優先→canonical名fallback等）に留め、loader/QNN実装は不変とする。Confidence: 0.8
+- PASSしたregression・実験結果は対応するdocsファイルに追記して記録し、docsを最新状態に保つ。Confidence: 0.8
+- 目的の達成が証拠で確認できた時点でタスクを完了とみなし、追加検証・フォローアップ最適化（詳細benchmark比較、次の最適化案、gate短縮、180分級の長時間検証など）を同じタスクで続けない。それらは別タスクとして明記して残し、その時点でcommitして区切ることを好む。Confidence: 0.85

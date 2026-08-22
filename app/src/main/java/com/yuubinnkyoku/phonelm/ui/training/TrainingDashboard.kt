@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -40,6 +41,7 @@ import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -48,7 +50,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SingleChoiceSegmentedButtonRowScope
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
@@ -157,23 +163,11 @@ fun TrainingDashboardApp(
         destination = TopLevelDestination.TRAINING
     }
     val context = LocalContext.current
-    val base = phoneLmDarkScheme()
-    val colors = if (Build.VERSION.SDK_INT >= 31) dynamicDarkColorScheme(context).copy(
-        primary = base.primary,
-        onPrimary = base.onPrimary,
-        primaryContainer = base.primaryContainer,
-        onPrimaryContainer = base.onPrimaryContainer,
-        secondary = base.secondary,
-        onSecondary = base.onSecondary,
-        secondaryContainer = base.secondaryContainer,
-        onSecondaryContainer = base.onSecondaryContainer,
-        tertiary = base.tertiary,
-        onTertiary = base.onTertiary,
-        error = base.error,
-        background = base.background,
-        surface = base.surface,
-        surfaceVariant = base.surfaceVariant,
-    ) else base
+    val colors = if (Build.VERSION.SDK_INT >= 31) {
+        dynamicDarkColorScheme(context)
+    } else {
+        phoneLmDarkScheme()
+    }
     MaterialExpressiveTheme(
         colorScheme = colors,
         motionScheme = MotionScheme.expressive(),
@@ -182,13 +176,14 @@ fun TrainingDashboardApp(
             headlineSmall = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
         ),
         shapes = Shapes(
-            small = RoundedCornerShape(12.dp),
-            medium = RoundedCornerShape(18.dp),
-            large = RoundedCornerShape(28.dp),
-            extraLarge = RoundedCornerShape(36.dp),
+            extraSmall = RoundedCornerShape(4.dp),
+            small = RoundedCornerShape(8.dp),
+            medium = RoundedCornerShape(12.dp),
+            large = RoundedCornerShape(16.dp),
+            extraLarge = RoundedCornerShape(28.dp),
         ),
     ) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize()) {
                 TopLevelDestinationBar(
                     selected = destination,
@@ -240,47 +235,55 @@ private fun TopLevelDestinationBar(
     selected: TopLevelDestination,
     onSelected: (TopLevelDestination) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .semantics { contentDescription = "Top-level navigation" },
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    Box(
+        Modifier.fillMaxWidth().statusBarsPadding(),
+        contentAlignment = Alignment.Center,
     ) {
-        TopLevelDestinationButton(
-            label = "Training",
-            icon = Icons.Default.ModelTraining,
-            selected = selected == TopLevelDestination.TRAINING,
-            onClick = { onSelected(TopLevelDestination.TRAINING) },
-            modifier = Modifier.weight(1f),
-        )
-        TopLevelDestinationButton(
-            label = "Generation",
-            icon = Icons.Default.AutoAwesome,
-            selected = selected == TopLevelDestination.GENERATION,
-            onClick = { onSelected(TopLevelDestination.GENERATION) },
-            modifier = Modifier.weight(1f),
-        )
+        SingleChoiceSegmentedButtonRow(
+            modifier = Modifier.widthIn(max = 840.dp).fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .semantics { contentDescription = "Top-level navigation" },
+        ) {
+            TopLevelDestinationButton(
+                index = 0,
+                count = TopLevelDestination.entries.size,
+                label = "Training",
+                icon = Icons.Default.ModelTraining,
+                selected = selected == TopLevelDestination.TRAINING,
+                onClick = { onSelected(TopLevelDestination.TRAINING) },
+                modifier = Modifier.weight(1f),
+            )
+            TopLevelDestinationButton(
+                index = 1,
+                count = TopLevelDestination.entries.size,
+                label = "Generation",
+                icon = Icons.Default.AutoAwesome,
+                selected = selected == TopLevelDestination.GENERATION,
+                onClick = { onSelected(TopLevelDestination.GENERATION) },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
 @Composable
-private fun TopLevelDestinationButton(
+private fun SingleChoiceSegmentedButtonRowScope.TopLevelDestinationButton(
+    index: Int,
+    count: Int,
     label: String,
     icon: ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier,
 ) {
-    if (selected) {
-        Button(onClick = onClick, modifier = modifier) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label)
-        }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label)
-        }
+    SegmentedButton(
+        selected = selected,
+        onClick = onClick,
+        shape = SegmentedButtonDefaults.itemShape(index, count),
+        modifier = modifier,
+        icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+    ) {
+        Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
@@ -290,8 +293,20 @@ private fun phoneLmDarkScheme(): ColorScheme = darkColorScheme(
     secondary = Color(0xFFE3B7FF), onSecondary = Color(0xFF3A1454),
     secondaryContainer = Color(0xFF263D2B), onSecondaryContainer = Color(0xFFB9F2BF),
     tertiary = Color(0xFFFFD28A), onTertiary = Color(0xFF432C00),
-    surface = Color(0xFF111318), surfaceVariant = Color(0xFF20232B), background = Color(0xFF090B10),
-    onSurface = Color(0xFFE3E5ED), onSurfaceVariant = Color(0xFFC3C6D1), error = Color(0xFFFFB4AB),
+    tertiaryContainer = Color(0xFF443616), onTertiaryContainer = Color(0xFFFFE0A8),
+    error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A), onErrorContainer = Color(0xFFFFDAD6),
+    background = Color(0xFF090B10), onBackground = Color(0xFFE3E5ED),
+    surface = Color(0xFF111318), onSurface = Color(0xFFE3E5ED),
+    surfaceVariant = Color(0xFF20232B), onSurfaceVariant = Color(0xFFC3C6D1),
+    surfaceDim = Color(0xFF090B10), surfaceBright = Color(0xFF383A42),
+    surfaceContainerLowest = Color(0xFF07090D), surfaceContainerLow = Color(0xFF111318),
+    surfaceContainer = Color(0xFF181A20), surfaceContainerHigh = Color(0xFF20232B),
+    surfaceContainerHighest = Color(0xFF2B2E36),
+    outline = Color(0xFF8D919C), outlineVariant = Color(0xFF424650),
+    inverseSurface = Color(0xFFE3E5ED), inverseOnSurface = Color(0xFF2E3037),
+    inversePrimary = Color(0xFF006879), surfaceTint = Color(0xFF9BEAFF),
+    scrim = Color(0xFF000000),
 )
 
 private val TelemetryFontFamily = FontFamily.Monospace
@@ -311,7 +326,7 @@ private fun trainingSemanticColors() = TrainingSemanticColors(
     qnn = MaterialTheme.colorScheme.primary,
     cpu = MaterialTheme.colorScheme.tertiary,
     loss = MaterialTheme.colorScheme.secondary,
-    checkpoint = MaterialTheme.colorScheme.onSecondaryContainer,
+    checkpoint = MaterialTheme.colorScheme.secondary,
     warning = MaterialTheme.colorScheme.error,
     unavailable = MaterialTheme.colorScheme.onSurfaceVariant,
 )
@@ -337,7 +352,7 @@ fun TrainingDashboard(
     var detailsVisible by remember { mutableStateOf(false) }
     var modelSettingsVisible by remember { mutableStateOf(false) }
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = MaterialTheme.colorScheme.surface,
         bottomBar = {
             Box(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
@@ -354,6 +369,7 @@ fun TrainingDashboard(
                     onStartOver,
                     onDetails = { detailsVisible = true },
                     generationRunning = generationRunning,
+                    modifier = Modifier.widthIn(max = 840.dp).fillMaxWidth(),
                 )
             }
         },
@@ -366,7 +382,13 @@ fun TrainingDashboard(
                 heightDp = maxHeight.value.toInt(),
                 fontScale = LocalDensity.current.fontScale,
             )
-            TrainingOverview(state, density)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                TrainingOverview(
+                    state,
+                    density,
+                    Modifier.widthIn(max = 1040.dp).fillMaxSize(),
+                )
+            }
         }
     }
     if (detailsVisible) {
@@ -394,10 +416,14 @@ fun TrainingDashboard(
 
 /** Fixed portrait monitoring surface. Deliberately contains no scroll container. */
 @Composable
-private fun TrainingOverview(state: TrainingUiState, density: TrainingOverviewDensity) {
+private fun TrainingOverview(
+    state: TrainingUiState,
+    density: TrainingOverviewDensity,
+    modifier: Modifier = Modifier,
+) {
     val gap = density.sectionGapDp.dp
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = density.outerPaddingDp.dp, vertical = gap),
+        modifier = modifier.padding(horizontal = density.outerPaddingDp.dp, vertical = gap),
         verticalArrangement = Arrangement.spacedBy(gap),
     ) {
         CompactTrainingHero(state, density)
@@ -426,16 +452,21 @@ private fun TrainingOverview(state: TrainingUiState, density: TrainingOverviewDe
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOverviewDensity) {
-    val semantic = trainingSemanticColors()
     val target = when (state.phase) {
         TrainingPhase.ERROR -> MaterialTheme.colorScheme.errorContainer
         TrainingPhase.TRAINING -> MaterialTheme.colorScheme.primaryContainer
         TrainingPhase.COMPLETED -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val content = when (state.phase) {
+        TrainingPhase.ERROR -> MaterialTheme.colorScheme.onErrorContainer
+        TrainingPhase.TRAINING -> MaterialTheme.colorScheme.onPrimaryContainer
+        TrainingPhase.COMPLETED -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
     }
     val container by animateColorAsState(target, label = "training phase card")
     val progress = state.progress
-    DenseCard(container, density) {
+    DenseCard(container, density, contentColor = content) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -449,7 +480,7 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
                     stepTargetLine(state.phase, state.progress, state.message)
                         ?: if (state.phase == TrainingPhase.IDLE) "Ready" else "—",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = content.copy(alpha = 0.8f),
                     fontFamily = TelemetryFontFamily,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -460,11 +491,7 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
                 fontSize = density.heroPercentSp.sp,
                 fontWeight = FontWeight.Black,
                 fontFamily = TelemetryFontFamily,
-                color = when (state.phase) {
-                    TrainingPhase.ERROR -> semantic.warning
-                    TrainingPhase.COMPLETED -> semantic.checkpoint
-                    else -> semantic.qnn
-                },
+                color = content,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -473,8 +500,8 @@ private fun CompactTrainingHero(state: TrainingUiState, density: TrainingOvervie
         LinearWavyProgressIndicator(
             progress = { fraction },
             modifier = Modifier.fillMaxWidth().height(8.dp),
-            color = semantic.qnn,
-            trackColor = MaterialTheme.colorScheme.surface,
+            color = content,
+            trackColor = content.copy(alpha = 0.2f),
             amplitude = { if (state.phase == TrainingPhase.TRAINING) 0.35f else 0f },
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -493,7 +520,7 @@ private fun ActivityMetric(
     density: TrainingOverviewDensity,
     semanticDescription: String? = null,
 ) = DenseCard(
-    MaterialTheme.colorScheme.surfaceVariant,
+    MaterialTheme.colorScheme.surfaceContainer,
     density,
     if (semanticDescription == null) modifier else modifier.semantics { contentDescription = semanticDescription },
 ) {
@@ -515,7 +542,7 @@ private fun ActivityMetric(
 private fun CompactPerformanceGrid(state: TrainingUiState, density: TrainingOverviewDensity) {
     val current = state.timing?.aggregate?.current
     val semantic = trainingSemanticColors()
-    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
+    DenseCard(MaterialTheme.colorScheme.surfaceContainer, density) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PerformanceCell(if (density in compactDensityTiers) "F+B" else "Fwd + Bwd", phaseMs(current?.entries()?.get(TrainingOperationPhase.FUSED_FORWARD_BACKWARD)), Modifier.weight(1f), semantic.qnn, density)
             PerformanceCell("Adam", phaseMs(current?.entries()?.get(TrainingOperationPhase.ADAM)), Modifier.weight(1f), semantic.loss, density)
@@ -539,7 +566,7 @@ private fun CompactTelemetryStrip(state: TrainingUiState, density: TrainingOverv
     val checkpoint = state.lastCheckpoint?.createdAtMs?.let { createdAt ->
         checkpointAgeMs(System.currentTimeMillis(), createdAt)?.let(::duration)
     } ?: "—"
-    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
+    DenseCard(MaterialTheme.colorScheme.surfaceContainer, density) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -566,7 +593,7 @@ private fun CompactTelemetryItem(label: String, value: String, valueColor: Color
 
 @Composable
 private fun CompactLossCard(snapshot: TrainingDashboardSnapshot, modifier: Modifier, density: TrainingOverviewDensity) =
-    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density, modifier, fillHeight = true) {
+    DenseCard(MaterialTheme.colorScheme.surfaceContainer, density, modifier, fillHeight = true) {
         val values = snapshot.lossHistory
         val summary = summarizeLoss(values)
         val semantic = trainingSemanticColors()
@@ -624,7 +651,7 @@ private fun CompactLossCard(snapshot: TrainingDashboardSnapshot, modifier: Modif
 
 @Composable
 private fun LatestStatusRow(state: TrainingUiState, density: TrainingOverviewDensity) =
-    DenseCard(MaterialTheme.colorScheme.surfaceVariant, density) {
+    DenseCard(MaterialTheme.colorScheme.surfaceContainer, density) {
         val semantic = trainingSemanticColors()
         val event = latestImportantEvent(state.dashboard.eventTimeline)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -678,6 +705,7 @@ private fun CompactActionDock(
     onStartOver: () -> Unit,
     onDetails: () -> Unit,
     generationRunning: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val primary = trainingToolbarPrimaryAction(
         phase = state.phase,
@@ -696,10 +724,10 @@ private fun CompactActionDock(
     val secondarySelect = state.phase !in activePhases && primary != ToolbarAction.SELECT
     HorizontalFloatingToolbar(
         expanded = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(26.dp),
+        shape = MaterialTheme.shapes.extraLarge,
         leadingContent = {
             if (state.canStop) {
                 ToolbarActionButton(ToolbarAction.STOP, onStop, primary = false, compactPadding, semantic, fontScale >= 1.2f)
@@ -1467,7 +1495,7 @@ private fun GenerationOutputCard(
         containerColor = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
     ),
-    shape = RoundedCornerShape(24.dp),
+    shape = MaterialTheme.shapes.extraLarge,
     modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 132.dp)
         .semantics { contentDescription = title },
 ) {
@@ -1478,11 +1506,11 @@ private fun GenerationOutputCard(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            if (live) Text("LIVE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            if (live) Text("LIVE", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
         }
         Surface(
             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 92.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
@@ -1582,10 +1610,11 @@ private fun DenseCard(
     density: TrainingOverviewDensity,
     modifier: Modifier = Modifier,
     fillHeight: Boolean = false,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
     content: @Composable ColumnScope.() -> Unit,
 ) = Card(
-    colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = RoundedCornerShape(if (density in compactDensityTiers) 16.dp else 20.dp),
+    colors = CardDefaults.cardColors(containerColor = containerColor, contentColor = contentColor),
+    shape = if (density in compactDensityTiers) MaterialTheme.shapes.medium else MaterialTheme.shapes.large,
     modifier = modifier.fillMaxWidth(),
 ) {
     Column(
@@ -1597,8 +1626,8 @@ private fun DenseCard(
 
 @Composable
 private fun DetailCard(title: String, content: @Composable ColumnScope.() -> Unit) = Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    shape = RoundedCornerShape(24.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    shape = MaterialTheme.shapes.extraLarge,
     modifier = Modifier.fillMaxWidth(),
 ) {
     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1612,7 +1641,7 @@ private fun InlineMetric(label: String, value: String, modifier: Modifier, end: 
     modifier,
     horizontalArrangement = if (end) Arrangement.End else Arrangement.Start,
 ) {
-    Text("$label ", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("$label ", style = MaterialTheme.typography.labelMedium, color = LocalContentColor.current.copy(alpha = 0.8f))
     Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, fontFamily = TelemetryFontFamily, maxLines = 1)
 }
 

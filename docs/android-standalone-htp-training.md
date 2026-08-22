@@ -41,9 +41,19 @@ alpha25 artifact explicitly requires SDK 37 / AGP 9.1. It uses
 `MaterialExpressiveTheme`, the expressive motion scheme, the official
 `HorizontalFloatingToolbar`, and a restrained determinate wavy progress
 indicator. Experimental opt-in is localized to the training
-UI entrypoints. The dashboard keeps a black, high-contrast surface hierarchy,
+UI entrypoints. The dashboard keeps a dark, high-contrast surface hierarchy,
 semantic telemetry accents, monospace numeric values, dynamic Android 12+
 colors, and restrained phase/progress motion.
+
+The top-level Training/Generation switch is a single-select Material 3
+segmented control, so selection state is exposed directly to accessibility
+services without consuming the height of a full navigation bar. Android 12+
+uses one complete system dynamic-dark scheme; older releases use a complete
+PhoneLM fallback scheme with paired accent/error roles and the full tonal
+surface-container hierarchy. Cards and sheets use the theme shape scale rather
+than per-component corner values. The dense overview and action dock are
+centered and width-constrained on large windows while retaining the fixed,
+non-scrolling portrait monitoring layout.
 
 The screen combines a compact training hero, current compute observations,
 fused/Adam/step performance, a loss trace, latest checkpoint/event, and primary
