@@ -18,6 +18,7 @@
 namespace {
 
 constexpr const char* kLogTag = "PhoneLMBench";
+
 std::atomic_bool gStopRequested{false};
 std::atomic_bool gRunning{false};
 // A Kotlin stop can arrive after the worker is accepted but before the
@@ -642,6 +643,176 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeSafeUtf8Display(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(display.size()),
                             reinterpret_cast<const jbyte*>(display.data()));
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Prepared generation engine (process-local warm reuse).  The prepare/run/
+// release triple maps 1:1 onto the Kotlin PreparedGenerationEngine.  The
+// gRunning flag is NOT taken by prepare (it must not block or be blocked by
+// other native work); run takes it exactly like the cold generation path.
+// ---------------------------------------------------------------------------
+
+std::string jstringToStd(JNIEnv* env, jstring value) {
+    if (!value) return {};
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (!chars) return {};
+    std::string result(chars);
+    env->ReleaseStringUTFChars(value, chars);
+    return result;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativePrepareNicopediaGeneration(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jstring checkpointPath,
+    jlong checkpointFileBytes,
+    jlong checkpointModifiedMs,
+    jint vocabulary,
+    jint tokens,
+    jint dimension,
+    jint feedForwardDimension,
+    jint layers,
+    jint heads,
+    jlong seed,
+    jint checkpointStep,
+    jstring tokenizerKind,
+    jstring tokenizerHash,
+    jstring parameterHash,
+    jint htpGraphPrecisionMode,
+    jint htpGraphPrecisionCompensation,
+    jint htpGraphWeightsPacking,
+    jint htpGraphAdvancedActivationFusion,
+    jint htpContextGraphSplitting,
+    jboolean htpNativeTensorFp16,
+    jobject errorOut) {
+    phonelm::qnn::PreparedGenerationKey key;
+    key.checkpointPath = jstringToStd(env, checkpointPath);
+    key.checkpointFileBytes = static_cast<std::uint64_t>(checkpointFileBytes);
+    key.checkpointModifiedMs = static_cast<std::int64_t>(checkpointModifiedMs);
+    key.vocabulary = static_cast<std::uint32_t>(vocabulary);
+    key.tokens = static_cast<std::uint32_t>(tokens);
+    key.dimension = static_cast<std::uint32_t>(dimension);
+    key.feedForward = static_cast<std::uint32_t>(feedForwardDimension);
+    key.layers = static_cast<std::uint32_t>(layers);
+    key.heads = static_cast<std::uint32_t>(heads);
+    key.seed = static_cast<std::uint32_t>(seed);
+    key.step = static_cast<std::uint32_t>(checkpointStep);
+    key.tokenizerKind = jstringToStd(env, tokenizerKind);
+    key.tokenizerHash = jstringToStd(env, tokenizerHash);
+    key.parameterHash = jstringToStd(env, parameterHash);
+    key.htpGraphPrecisionMode = static_cast<std::uint32_t>(htpGraphPrecisionMode);
+    key.htpGraphPrecisionCompensation =
+        static_cast<std::uint32_t>(htpGraphPrecisionCompensation);
+    key.htpGraphWeightsPacking = static_cast<std::uint32_t>(htpGraphWeightsPacking);
+    key.htpGraphAdvancedActivationFusion =
+        static_cast<std::uint32_t>(htpGraphAdvancedActivationFusion);
+    key.htpContextGraphSplitting =
+        static_cast<std::uint32_t>(htpContextGraphSplitting);
+    key.htpNativeTensorFp16 = htpNativeTensorFp16 == JNI_TRUE;
+    if (key.checkpointPath.empty()) return 0;
+    std::string error;
+    const auto appendError = [&](const std::string& message) {
+        if (!errorOut) return;
+        jclass stringClass = env->GetObjectClass(errorOut);
+        if (!stringClass) return;
+        const jmethodID append = env->GetMethodID(
+            stringClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+        env->DeleteLocalRef(stringClass);
+        if (!append) return;
+        const jstring value = env->NewStringUTF(message.c_str());
+        if (!value) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
+        const auto result = env->CallObjectMethod(errorOut, append, value);
+        if (result) env->DeleteLocalRef(result);
+        env->DeleteLocalRef(value);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    };
+    try {
+        const auto handle = phonelm::qnn::prepareNicopediaGeneration(
+            key, {}, error);
+        if (!handle && error.empty()) error = "prepare failed without a reason";
+        if (!handle) {
+            appendError(error);
+            logcat("prepared generation prepare failed: " + error);
+        }
+        return reinterpret_cast<jlong>(handle);
+    } catch (const std::exception& exception) {
+        appendError(std::string("exception: ") + exception.what());
+        logcat(std::string("prepared generation prepare exception: ") +
+               exception.what());
+        return 0;
+    } catch (...) {
+        appendError("unknown exception");
+        logcat("prepared generation prepare unknown exception");
+        return 0;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunPreparedNicopediaGeneration(
+    JNIEnv* env,
+    jobject /* receiver */,
+    jlong handle,
+    jstring promptPath,
+    jint maxNewBytes,
+    jstring generateMode,
+    jfloat temperature,
+    jint topK,
+    jlong samplingSeed) {
+    resetGenerationProgress(static_cast<uint32_t>(maxNewBytes > 0 ? maxNewBytes : 64));
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    }
+    RunningGuard guard;
+    beginNativeCall();
+    phonelm::nicopedia_gen::GenerateConfig generateConfig;
+    generateConfig.maxNewBytes = static_cast<std::uint32_t>(
+        maxNewBytes > 0 && maxNewBytes <= 1024 ? maxNewBytes : 64);
+    generateConfig.greedy = jstringToStd(env, generateMode) != "sample";
+    generateConfig.temperature = temperature;
+    generateConfig.topK = static_cast<std::uint32_t>(topK);
+    generateConfig.samplingSeed = static_cast<std::uint64_t>(samplingSeed);
+    generateConfig.gatePolicy = "htp-native";
+    auto sink = [&](const std::string& message) {
+        observeGenerationProgress(message);
+        logcat(message);
+    };
+    try {
+        const auto report = phonelm::qnn::runPreparedNicopediaGeneration(
+            reinterpret_cast<phonelm::qnn::PreparedGenerationHandle>(handle),
+            jstringToStd(env, promptPath), generateConfig, sink);
+        finishGenerationProgress(report.find("\nstatus=SUCCESS\n") != std::string::npos);
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        finishGenerationProgress(false);
+        const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        finishGenerationProgress(false);
+        const auto report = std::string("NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeReleaseNicopediaGeneration(
+    JNIEnv* /* env */,
+    jobject /* receiver */,
+    jlong handle) {
+    try {
+        phonelm::qnn::releaseNicopediaGeneration(
+            reinterpret_cast<phonelm::qnn::PreparedGenerationHandle>(handle));
+    } catch (...) {
+        // Release never throws through the JNI boundary.
+    }
 }
 
 // HTP-native held-out evaluation: loads the fixed checkpoint step from the

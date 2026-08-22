@@ -955,9 +955,15 @@ bool Runtime::executeTinyTransformerTraining(
   using G = Impl::TinyTransformerTrainingGraph;
   auto &g = impl_->tinyTransformerTraining;
   const auto generalizedState = impl_->generalizedTinyTransformerTraining.state;
-  if (generalizedState == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE)
+  if (generalizedState == Impl::GeneralizedTinyTransformerTrainingGraph::State::ACTIVE) {
+    if (impl_->generalizedTinyTransformerTraining.forwardOnly) {
+      error = "generalized tiny training forward-only graph requires "
+              "executeTinyTransformerForwardOnly";
+      return false;
+    }
     return executeTinyTransformerTrainingGeneralized(input, target, current,
                                                      learningRate, outputs, error);
+  }
   if (generalizedState != Impl::GeneralizedTinyTransformerTrainingGraph::State::INACTIVE) {
     error = "generalized L2/H1 preparation did not complete";
     return false;

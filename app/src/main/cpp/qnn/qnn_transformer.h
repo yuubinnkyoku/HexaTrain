@@ -32,6 +32,61 @@ std::string runNicopediaHtpGeneration(
     const std::string& promptPath, const TrainingConfig& trainingConfig,
     const nicopedia_gen::GenerateConfig& generateConfig,
     const LogSink& progress);
+// Process-local prepared generation engine (Phase A warm reuse).
+//
+// nativePrepare builds (once per cache key) the HTP runtime plus a finalized
+// FORWARD_ONLY graph for the exact checkpoint identity and graph options, and
+// returns an opaque nonzero handle.  nativeRun reuses the prepared runtime:
+// it re-validates the checkpoint identity, then runs the fixed-prefix health
+// gate and the autoregressive loop against the existing graph.  nativeRelease
+// destroys the engine; double release and use-after-release fail closed.
+// The engine is process-local only: nothing persists past process death.
+//
+// Cache key (all must match for reuse): checkpoint canonical path, file size,
+// mtime, full header identity (V/T/D/FFN/L/H/seed/step), tokenizer kind/hash,
+// checkpoint parameter hash, QAIRT build ID, and every graph-behavior option
+// (precision mode/compensation/weights packing/activation fusion/context
+// splitting/native FP16).  Any mismatch forces a fresh prepare.
+struct PreparedGenerationKey {
+    std::string checkpointPath;
+    std::uint64_t checkpointFileBytes = 0;
+    std::int64_t checkpointModifiedMs = 0;
+    std::uint32_t vocabulary = 0, tokens = 0, dimension = 0;
+    std::uint32_t feedForward = 0, layers = 0, heads = 0, seed = 0, step = 0;
+    std::string tokenizerKind;
+    std::string tokenizerHash;
+    std::string parameterHash;
+    std::string qairtBuildId;
+    std::uint32_t htpGraphPrecisionMode = 0;
+    std::uint32_t htpGraphPrecisionCompensation = 0;
+    std::uint32_t htpGraphWeightsPacking = 0;
+    std::uint32_t htpGraphAdvancedActivationFusion = 0;
+    std::uint32_t htpContextGraphSplitting = 0;
+    bool htpNativeTensorFp16 = false;
+    bool gatePolicyHtpHealth = false;
+
+    bool operator==(const PreparedGenerationKey& other) const = default;
+};
+
+using PreparedGenerationHandle = void*;
+
+// Prepares (or returns the existing) engine for the key.  Returns nullptr on
+// any failure with `error` populated; no partial engine is retained.
+PreparedGenerationHandle prepareNicopediaGeneration(
+    const PreparedGenerationKey& key, const LogSink& progress,
+    std::string& error);
+// Runs one generation on the prepared engine.  Returns the private
+// NICOPEDIA_HTP_GENERATION KEY=VALUE report (same schema as
+// runNicopediaHtpGeneration plus prepared_graph_reused=true and warm-phase
+// timings).  Any QNN/finite/identity failure poisons the engine: the handle
+// stays allocated until release but every subsequent run fails closed.
+std::string runPreparedNicopediaGeneration(
+    PreparedGenerationHandle handle, const std::string& promptPath,
+    const nicopedia_gen::GenerateConfig& generateConfig,
+    const LogSink& progress);
+// Releases the engine.  Safe to call with nullptr; a handle must be released
+// exactly once.
+void releaseNicopediaGeneration(PreparedGenerationHandle handle);
 // Private-device diagnostic entry. The payload is the fail-closed
 // phonelm.qnn.first_nonfinite codec, never a public result artifact.
 std::string replayFirstNonfiniteCheckpoint(

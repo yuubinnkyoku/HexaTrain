@@ -532,8 +532,10 @@ struct Runtime::Impl {
         std::uint32_t tensorCreateSuccessCount = 0, graphAddNodeSuccessCount = 0;
         std::uint32_t lastInputTensorCount = 0, lastOutputTensorCount = 0;
         bool lastLearningRateBytesUnchanged = true;
+        bool bindManifestEmitted = false;
         State state = State::INACTIVE;
         bool active = false, languageModel = false, diagnosticOutputs = false;
+        bool forwardOnly = false;
         TinyTransformerTrainingTapSet tapSet =
             TinyTransformerTrainingTapSet::NONE;
         std::uint32_t diagnosticLayerIndex = std::numeric_limits<std::uint32_t>::max();

@@ -5732,6 +5732,7 @@ std::string nicopediaHtpGeneration(
     const std::string &promptPath, const TrainingConfig &trainingConfig,
     const nicopedia_gen::GenerateConfig &generateConfig,
     const LogSink &progress) {
+  const auto totalWallStarted = std::chrono::steady_clock::now();
   if (progress) progress("phase=checkpoint_validation");
   const int seed = trainingConfig.seed > 0 && trainingConfig.seed < 100000
                        ? static_cast<int>(trainingConfig.seed)
@@ -5780,6 +5781,7 @@ std::string nicopediaHtpGeneration(
            variant + "\n";
   }
   std::unique_ptr<nicopedia_bpe::Model> bpeModel;
+  const auto tokenizerStarted = std::chrono::steady_clock::now();
   try {
     if (config.vocabularySize == nicopedia_bpe::kVocabulary) {
       const std::size_t separator = checkpointPath.find_last_of("/\\");
@@ -5793,6 +5795,11 @@ std::string nicopediaHtpGeneration(
                        "failure_classification=TOKENIZER_DECODE\nerror=") +
            exception.what() + '\n';
   }
+  const double tokenizerLoadUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - tokenizerStarted)
+          .count();
+  const auto checkpointLoadStarted = std::chrono::steady_clock::now();
   LoadedNprtCheckpoint loaded;
   try {
     loaded = nprtLoadCheckpointForGeneration(checkpointPath, config,
@@ -5803,6 +5810,10 @@ std::string nicopediaHtpGeneration(
                        "failure_classification=CHECKPOINT_DECODE\nerror=") +
            exception.what() + '\n';
   }
+  const double checkpointLoadUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - checkpointLoadStarted)
+          .count();
   if (loaded.step != expectedStep)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_IDENTITY\n"
@@ -5817,6 +5828,7 @@ std::string nicopediaHtpGeneration(
            "error=checkpoint contains non-finite values\n";
 
   std::vector<std::uint8_t> prompt;
+  const auto promptReadStarted = std::chrono::steady_clock::now();
   try {
     prompt = nprtReadFileBytes(promptPath, 16u * 1024u * 1024u);
   } catch (const std::exception &exception) {
@@ -5824,6 +5836,10 @@ std::string nicopediaHtpGeneration(
                        "failure_classification=PROMPT_READ\nerror=") +
            exception.what() + '\n';
   }
+  const double promptPrepareUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - promptReadStarted)
+          .count();
   if (prompt.empty())
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=PROMPT_EMPTY\n"
@@ -5870,6 +5886,11 @@ std::string nicopediaHtpGeneration(
           .count();
   const double graphCreateUs = runtime.metrics().graphCreateUs;
   const double graphFinalizeUs = runtime.metrics().graphFinalizeUs;
+  const double graphPrepareUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - initStarted)
+          .count();
+  const auto parityStarted = std::chrono::steady_clock::now();
   bool htpNativeQnnSuccess = true;
   bool htpNativePrefixLogitsFinite = true;
   bool htpNativePrefixProbabilitiesFinite = true;
@@ -6193,6 +6214,10 @@ std::string nicopediaHtpGeneration(
   arGate = arGate && !divergenceBlocked;
   const bool legacyGate = parityGate && arGate;
   const bool candidateGate = parityGateCandidate && arGateCandidate;
+  const double parityUs =
+      std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - parityStarted)
+          .count();
   // HTP-health policies (htp-native and htp-smoke): fixed-prefix and AR parity
   // are diagnostic only, while generation is gated on QNN success plus finite
   // HTP tensors in every one of those executions.  Legacy/candidate parity
@@ -6609,6 +6634,18 @@ std::string nicopediaHtpGeneration(
   report << "\nhtp_initialize_us=" << initializeUs
          << "\ngraph_create_us=" << graphCreateUs
          << "\ngraph_finalize_us=" << graphFinalizeUs
+         << "\ngraph_prepare_us=" << graphPrepareUs
+         << "\ncheckpoint_load_us=" << checkpointLoadUs
+         << "\ntokenizer_load_us=" << tokenizerLoadUs
+         << "\nprompt_prepare_us=" << promptPrepareUs
+         << "\nparity_us=" << parityUs
+         << "\ngeneration_loop_us="
+         << (generateSeconds * 1e6)
+         << "\ncleanup_us=0"
+         << "\ntotal_wall_us="
+         << std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - totalWallStarted)
+                .count()
          << "\ngeneration_total_seconds=" << generateSeconds
          << "\ngeneration_ms_per_byte="
          << (generated.empty()

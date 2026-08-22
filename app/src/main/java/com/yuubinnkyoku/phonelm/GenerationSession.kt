@@ -493,38 +493,66 @@ class NativeHtpGenerationBackend(
                 PROGRESS_POLL_MS,
                 TimeUnit.MILLISECONDS,
             )
-            val report = NativeBridge.nativeRunNicopediaGenerate(
+            // Phase A warm reuse: prepare (or reuse) the process-local engine
+            // for this exact checkpoint identity + graph options, then run the
+            // generation on the prepared FORWARD_ONLY graph.  The first run on
+            // a new checkpoint pays the cold graph preparation; every later
+            // run with the same identity skips backend init and graph
+            // create/finalize entirely (prepared_graph_reused=true).
+            val prepareErrors = StringBuilder()
+            val handle = NativeBridge.nativePrepareNicopediaGeneration(
                 checkpointPath = checkpoint.path,
-                promptPath = promptFile.absolutePath,
-                seed = checkpoint.seed,
-                layers = checkpoint.layers,
-                heads = checkpoint.heads,
-                tokens = checkpoint.tokens,
+                checkpointFileBytes = checkpoint.fileSizeBytes,
+                checkpointModifiedMs = checkpoint.modifiedAtMs,
                 vocabulary = checkpoint.vocabulary,
+                tokens = checkpoint.tokens,
                 dimension = checkpoint.dimension,
                 feedForwardDimension = checkpoint.feedForwardDimension,
-                maxNewBytes = request.maxNewBytes,
-                generateMode = if (request.mode == GenerationMode.GREEDY) "greedy" else "sample",
-                temperature = request.temperature,
-                topK = request.topK,
-                samplingSeed = request.samplingSeed,
-                gatePolicy = "htp-smoke",
+                layers = checkpoint.layers,
+                heads = checkpoint.heads,
+                seed = checkpoint.seed,
+                checkpointStep = checkpoint.step,
+                tokenizerKind = checkpoint.tokenizerKind,
+                tokenizerHash = checkpoint.tokenizerHash,
+                parameterHash = checkNotNull(checkpoint.parameterHash),
                 htpGraphPrecisionMode = 0,
                 htpGraphPrecisionCompensation = 0,
                 htpGraphWeightsPacking = 0,
                 htpGraphAdvancedActivationFusion = 0,
                 htpContextGraphSplitting = 0,
                 htpNativeTensorFp16 = false,
+                errorOut = prepareErrors,
             )
-            return try {
-                parseReport(report, checkpoint)
-            } catch (error: GenerationBackendException) {
-                throw error
-            } catch (error: Throwable) {
-                throw GenerationBackendException(
-                    error.message ?: "native generation response is invalid",
-                    report,
+            if (handle == 0L) {
+                error(
+                    "Prepared generation engine could not be created: " +
+                        prepareErrors.toString(),
                 )
+            }
+            try {
+                val report = NativeBridge.nativeRunPreparedNicopediaGeneration(
+                    handle = handle,
+                    promptPath = promptFile.absolutePath,
+                    maxNewBytes = request.maxNewBytes,
+                    generateMode = if (request.mode == GenerationMode.GREEDY) "greedy" else "sample",
+                    temperature = request.temperature,
+                    topK = request.topK,
+                    samplingSeed = request.samplingSeed,
+                )
+                return try {
+                    parseReport(report, checkpoint)
+                } catch (error: GenerationBackendException) {
+                    throw error
+                } catch (error: Throwable) {
+                    throw GenerationBackendException(
+                        error.message ?: "native generation response is invalid",
+                        report,
+                    )
+                }
+            } finally {
+                // The engine itself stays resident for the next Generate press;
+                // only the JNI call scope ends here.  Release happens when the
+                // session closes or a different checkpoint prepares.
             }
         } finally {
             progressPoller.shutdownNow()
@@ -533,36 +561,13 @@ class NativeHtpGenerationBackend(
         }
     }
 
-    internal fun parseProgress(report: String): GenerationProgress {
-        val fields = NativeTrainingFieldsParser.parse(report)
-        val phase = when (fields.string("phase")) {
-            "preparing" -> GenerationPhase.PREPARING
-            "checkpoint_validation" -> GenerationPhase.CHECKPOINT_VALIDATION
-            "htp_initialization" -> GenerationPhase.HTP_INITIALIZATION
-            "graph_preparation" -> GenerationPhase.GRAPH_PREPARATION
-            "generating" -> GenerationPhase.GENERATING
-            "completed" -> GenerationPhase.COMPLETED
-            "failed" -> GenerationPhase.FAILED
-            else -> error("native generation progress phase is invalid")
-        }
-        val generated = fields.int("generated_bytes")?.coerceAtLeast(0) ?: 0
-        val max = fields.int("max_new_bytes")?.takeIf { it > 0 } ?: 1
-        val raw = decodeHex(fields.string("generated_hex").orEmpty())
-        require(raw.size == generated) { "live generated byte count differs from payload" }
-        val display = if (raw.isEmpty()) "" else String(NativeBridge.nativeSafeUtf8Display(raw), Charsets.UTF_8)
-        return GenerationProgress(
-            phase = phase,
-            generatedBytes = generated,
-            maxNewBytes = max,
-            elapsedMs = fields.long("elapsed_ms")?.coerceAtLeast(0) ?: 0,
-            qnnExecuteAttempts = fields.long("qnn_execute_attempts")?.coerceAtLeast(0) ?: 0,
-            qnnExecuteSuccesses = fields.long("qnn_execute_successes")?.coerceAtLeast(0) ?: 0,
-            qnnExecuteFailures = fields.long("qnn_execute_failures")?.coerceAtLeast(0) ?: 0,
-            cpuFallback = fields.string("cpu_fallback") == "true",
-            finite = fields.string("finite") != "false",
-            displayText = display,
-            rawBytes = raw,
-        )
+    /**
+     * Releases the process-local prepared engine.  The native side owns the
+     * single engine slot, so releasing with the current handle (or 0 when no
+     * Kotlin-side reference exists) frees whatever engine is resident.
+     */
+    fun releasePreparedEngine() {
+        NativeBridge.nativeReleaseNicopediaGeneration(0L)
     }
 
     internal fun parseReport(report: String, checkpoint: GenerationCheckpoint): GenerationResult {
@@ -594,6 +599,14 @@ class NativeHtpGenerationBackend(
         requireField("generation_health", "true")
         requireField("nan_detected", "false")
         requireField("inf_detected", "false")
+        // Warm-reuse evidence: a prepared run must prove the graph was not
+        // rebuilt (no create/finalize in this run's metrics).
+        if (fields.string("prepared_graph_reused") == "true") {
+            require(fields.string("graph_create_count_this_run") == "0" &&
+                fields.string("graph_finalize_count_this_run") == "0") {
+                "prepared engine report claims reuse but recorded graph rebuild"
+            }
+        }
         val bytes = decodeHex(fields.string("generated_hex") ?: error("generated bytes are missing"))
         val byteCount = fields.int("generated_byte_count") ?: error("generated byte count is missing")
         val tokenCount = fields.int("generated_token_count") ?: error("generated token count is missing")
@@ -620,6 +633,38 @@ class NativeHtpGenerationBackend(
             tokenCount = tokenCount,
             tokenizerKind = checkpoint.tokenizerKind,
             tokenizerHash = checkpoint.tokenizerHash,
+        )
+    }
+
+    internal fun parseProgress(report: String): GenerationProgress {
+        val fields = NativeTrainingFieldsParser.parse(report)
+        val phase = when (fields.string("phase")) {
+            "preparing" -> GenerationPhase.PREPARING
+            "checkpoint_validation" -> GenerationPhase.CHECKPOINT_VALIDATION
+            "htp_initialization" -> GenerationPhase.HTP_INITIALIZATION
+            "graph_preparation" -> GenerationPhase.GRAPH_PREPARATION
+            "generating" -> GenerationPhase.GENERATING
+            "completed" -> GenerationPhase.COMPLETED
+            "failed" -> GenerationPhase.FAILED
+            else -> error("native generation progress phase is invalid")
+        }
+        val generated = fields.int("generated_bytes")?.coerceAtLeast(0) ?: 0
+        val max = fields.int("max_new_bytes")?.takeIf { it > 0 } ?: 1
+        val raw = decodeHex(fields.string("generated_hex").orEmpty())
+        require(raw.size == generated) { "live generated byte count differs from payload" }
+        val display = if (raw.isEmpty()) "" else String(NativeBridge.nativeSafeUtf8Display(raw), Charsets.UTF_8)
+        return GenerationProgress(
+            phase = phase,
+            generatedBytes = generated,
+            maxNewBytes = max,
+            elapsedMs = fields.long("elapsed_ms")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteAttempts = fields.long("qnn_execute_attempts")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteSuccesses = fields.long("qnn_execute_successes")?.coerceAtLeast(0) ?: 0,
+            qnnExecuteFailures = fields.long("qnn_execute_failures")?.coerceAtLeast(0) ?: 0,
+            cpuFallback = fields.string("cpu_fallback") == "true",
+            finite = fields.string("finite") != "false",
+            displayText = display,
+            rawBytes = raw,
         )
     }
 

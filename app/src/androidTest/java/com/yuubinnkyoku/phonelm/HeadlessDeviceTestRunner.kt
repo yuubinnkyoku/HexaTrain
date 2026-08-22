@@ -170,6 +170,8 @@ class HeadlessDeviceTestRunner {
                             runNicopediaEvaluate(context, arguments, runId)
                         suite == "nicopedia-generate" ->
                             runNicopediaGenerate(context, arguments, runId)
+                        suite == "nicopedia-generate-prepared" ->
+                            runNicopediaGeneratePrepared(context, arguments, runId)
                         else ->
                             NativeBridge.nativeRunExecutionMode(
                                 executionMode = requireNotNull(mode).nativeCode, batchSize = 2, dimension = 4, hiddenDimension = 5,
@@ -526,6 +528,100 @@ class HeadlessDeviceTestRunner {
         )
     }
 
+    /**
+     * Warm-reuse suite: prepares the process-local engine once and runs two
+     * generations against it.  Run 1 is the cold prepare; run 2 must report
+     * prepared_graph_reused=true with zero graph create/finalize.  Both runs
+     * must pass QNN success + finite + no fallback with the same checkpoint
+     * identity.  The combined report concatenates both runs separated by a
+     * marker line so the host can verify each phase independently.
+     */
+    private fun runNicopediaGeneratePrepared(
+        context: Context,
+        arguments: android.os.Bundle,
+        runId: String,
+    ): String {
+        val config = parseNicopediaArguments(arguments, "nicopedia-generate-prepared")
+        val directory = nicopediaInputDirectory(context, runId)
+        // Header identity, not the filename, decides which artifact is the
+        // D32 anchor: the untagged name is historically the D16 anchor, so
+        // the canonical-name rule below would otherwise demand the wrong
+        // file for a real V256/T32/D32/FFN32 checkpoint.  Try the tagged
+        // name first, then fall back to the canonical name.
+        val taggedName = "htp-seed${config.seed}-l${config.layers}-t${config.tokens}-d${config.dimension}-f${config.feedForwardDimension}-step${config.checkpointStep}.ckpt"
+        val canonicalName = "htp-seed${config.seed}-l${config.layers}-step${config.checkpointStep}.ckpt"
+        val checkpoint = File(directory, taggedName).takeIf { it.isFile }
+            ?: requiredInputFile(directory, canonicalName)
+        if (config.vocabulary == 1024) requiredInputFile(directory, "byte-bpe-v1024.model")
+        val prompt = requiredInputFile(directory, "prompt.bin")
+
+        fun prepare(): Long {
+            val errors = StringBuilder()
+            val handle =
+                NativeBridge.nativePrepareNicopediaGeneration(
+                    checkpointPath = checkpoint.absolutePath,
+                    checkpointFileBytes = checkpoint.length(),
+                    checkpointModifiedMs = checkpoint.lastModified(),
+                    vocabulary = config.vocabulary,
+                    tokens = config.tokens,
+                    dimension = config.dimension,
+                    feedForwardDimension = config.feedForwardDimension,
+                    layers = config.layers,
+                    heads = config.heads,
+                    seed = config.seed,
+                    checkpointStep = config.checkpointStep,
+                    tokenizerKind = if (config.vocabulary == 1024) "byte_bpe" else "byte",
+                    tokenizerHash = null,
+                    parameterHash = "",
+                    htpGraphPrecisionMode = 0,
+                    htpGraphPrecisionCompensation = 0,
+                    htpGraphWeightsPacking = 0,
+                    htpGraphAdvancedActivationFusion = 0,
+                    htpContextGraphSplitting = 0,
+                    htpNativeTensorFp16 = false,
+                    errorOut = errors,
+                )
+            if (handle == 0L) {
+                throw IllegalArgumentException(
+                    "prepared engine cold prepare failed: ${errors}",
+                )
+            }
+            return handle
+        }
+        try {
+            val coldHandle = prepare()
+            val coldReport = NativeBridge.nativeRunPreparedNicopediaGeneration(
+                handle = coldHandle,
+                promptPath = prompt.absolutePath,
+                maxNewBytes = config.maxNewBytes,
+                generateMode = config.generateMode,
+                temperature = config.temperature,
+                topK = config.topK,
+                samplingSeed = config.samplingSeed,
+            )
+            // Second run on the same process-local engine (same handle).
+            val warmReport = NativeBridge.nativeRunPreparedNicopediaGeneration(
+                handle = coldHandle,
+                promptPath = prompt.absolutePath,
+                maxNewBytes = config.maxNewBytes,
+                generateMode = config.generateMode,
+                temperature = config.temperature,
+                topK = config.topK,
+                samplingSeed = config.samplingSeed,
+            )
+            NativeBridge.nativeReleaseNicopediaGeneration(coldHandle)
+            // Re-prepare after release exercises the fresh-prepare path.
+            val freshHandle = prepare()
+            check(freshHandle != 0L) { "prepared engine post-release re-prepare failed: handle=0" }
+            NativeBridge.nativeReleaseNicopediaGeneration(freshHandle)
+            // Double release must be safe.
+            NativeBridge.nativeReleaseNicopediaGeneration(freshHandle)
+            return "== PREPARED_RUN_1_COLD ==\n$coldReport\n== PREPARED_RUN_2_WARM ==\n$warmReport"
+        } finally {
+            NativeBridge.nativeReleaseNicopediaGeneration(0L)
+        }
+    }
+
     private fun modeFor(suite: String): ExecutionMode = when (suite) {
         "device-probe" -> ExecutionMode.QNN_HTP_DEVICE_PROBE
         "qnn-forward" -> ExecutionMode.QNN_HTP_FORWARD
@@ -640,6 +736,31 @@ class HeadlessDeviceTestRunner {
         if (suite == "nicopedia-parity") arguments.getString("htpContextGraphSplitting")?.toIntOrNull() else null
 
     private fun isSuccessfulSuiteResult(suite: String, report: String, requestedSplit: Int?): Boolean {
+        if (suite == "nicopedia-generate-prepared") {
+            // The combined report holds two runs separated by marker lines.
+            // Both runs must independently pass the full health gate, and the
+            // warm run must additionally prove graph reuse.
+            val markers = listOf("== PREPARED_RUN_1_COLD ==", "== PREPARED_RUN_2_WARM ==")
+            if (markers.any { !report.contains(it) }) {
+                throw AssertionError("prepared generation report is missing run markers")
+            }
+            val coldReport = report.substringAfter(markers[0]).substringBefore(markers[1])
+            val warmReport = report.substringAfter(markers[1])
+            fun healthy(text: String): Boolean =
+                Regex("(?m)^status=SUCCESS$").containsMatchIn(text) &&
+                    Regex("(?m)^cpu_fallback=false$").containsMatchIn(text) &&
+                    Regex("(?m)^qnn_return_code_success=true$").containsMatchIn(text) &&
+                    Regex("(?m)^output_tensors_finite=true$").containsMatchIn(text) &&
+                    Regex("(?m)^generation_gate=true$").containsMatchIn(text) &&
+                    !Regex("(?m)^(?:nan_detected|inf_detected)=true$").containsMatchIn(text)
+            val coldOk = healthy(coldReport) &&
+                Regex("(?m)^prepared_graph_reused=false$").containsMatchIn(coldReport)
+            val warmOk = healthy(warmReport) &&
+                Regex("(?m)^prepared_graph_reused=true$").containsMatchIn(warmReport) &&
+                Regex("(?m)^graph_create_count_this_run=0$").containsMatchIn(warmReport) &&
+                Regex("(?m)^graph_finalize_count_this_run=0$").containsMatchIn(warmReport)
+            return coldOk && warmOk
+        }
         if (suite != "nicopedia-parity") {
             val statusOk = Regex("(?m)^status=SUCCESS$").containsMatchIn(report)
             if (suite !in NICOPEDIA_SUITES) return statusOk
@@ -780,6 +901,7 @@ class HeadlessDeviceTestRunner {
             "nicopedia-dffn-probe",
             "nicopedia-eval",
             "nicopedia-generate",
+            "nicopedia-generate-prepared",
         )
         const val PROGRESS_STATUS_INTERVAL_MS = 1_000L
         val DECIMAL_INTEGER = Regex("[+-]?(?:0|[1-9][0-9]*)")

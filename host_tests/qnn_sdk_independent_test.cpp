@@ -513,6 +513,32 @@ void testQnnDisabledRuntimeIsExplicitlyBlocked() {
     assert(error.find("HTP") != std::string::npos);
 }
 
+// FORWARD_ONLY is a generation-only variant: the stub runtime must reject
+// both its prepare and its execute fail-closed (never silently succeed), and
+// the resource estimator must expose a per-layer forward node budget so the
+// generalized builder can derive forward-only expectations.
+void testForwardOnlyVariantFailsClosedWithoutQnn() {
+    using namespace phonelm::qnn;
+    Runtime runtime;
+    std::string error;
+    assert(!runtime.prepareTinyTransformerTraining(
+        32, 32, 32, 1.0e-5f, true, error, 256,
+        TinyTransformerTrainingVariant::FORWARD_ONLY,
+        TinyTransformerTrainingTapSet::NONE, 2, 2));
+    assert(!runtime.initialize(QnnBackendKind::HTP, error));
+    TinyTransformerParameters parameters = phonelm::tiny_lm::initialParameters(
+        phonelm::tiny_lm::Config{256, 32, 32, 32, 1.0e-5f, 2, 2}, 1);
+    TinyTransformerTrainingOutputs outputs;
+    assert(!runtime.executeTinyTransformerForwardOnly({}, parameters, outputs, error));
+    assert(!runtime.executeTinyTransformerTraining({}, {}, parameters, 0.0f, outputs, error));
+
+    const auto estimate = phonelm::transformer::estimateTrainingResources(
+        32, 256, 32, 32, 19, 2);
+    assert(estimate.ok);
+    // H=2 per-layer forward budget: 30 + 10*2 = 50 nodes.
+    assert(estimate.perLayerForwardNodes == 50);
+}
+
 void testFirstNonfiniteDiagnosticCodecAndSummaries() {
     namespace fnd = phonelm::qnn::first_nonfinite;
     fnd::Checkpoint checkpoint;
@@ -603,6 +629,7 @@ int main() {
     testMockGraphReuseAndRuntimeWeight();
     testMockDWeightAndHybridLossDecrease();
     testQnnDisabledRuntimeIsExplicitlyBlocked();
+    testForwardOnlyVariantFailsClosedWithoutQnn();
     testFirstNonfiniteDiagnosticCodecAndSummaries();
     testFirstNonfiniteCpuReplayDeterminism();
     std::cout << "qnn_sdk_independent_tests=PASS\n";

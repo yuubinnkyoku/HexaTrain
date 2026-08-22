@@ -109,6 +109,7 @@ bool Runtime::prepareTinyTransformer(uint32_t,uint32_t,uint32_t,float,std::strin
 bool Runtime::executeTinyTransformer(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: tiny transformer unavailable";return false;}
 bool Runtime::prepareTinyTransformerTraining(uint32_t,uint32_t,uint32_t,float,bool,std::string&e,uint32_t,TinyTransformerTrainingVariant,TinyTransformerTrainingTapSet,uint32_t numLayers,uint32_t numHeads){(void)numLayers;(void)numHeads;e="QNN_DISABLED: tiny transformer training unavailable";return false;}
 bool Runtime::executeTinyTransformerTraining(const std::vector<float>&,const std::vector<float>&,const TinyTransformerParameters&,float,TinyTransformerTrainingOutputs&,std::string&e){e="QNN_DISABLED: tiny transformer training unavailable";return false;}
+bool Runtime::executeTinyTransformerForwardOnly(const std::vector<float>&,const TinyTransformerParameters&,TinyTransformerTrainingOutputs&,std::string&e){e="QNN_DISABLED: tiny transformer training unavailable";return false;}
 bool Runtime::prepareMlpFullStep(uint32_t,uint32_t,uint32_t,uint32_t,bool,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 bool Runtime::executeMlpFullStep(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,float,MlpFullStepOutputs&,std::string&e){e="QNN_DISABLED: full step unavailable";return false;}
 }  // namespace phonelm::qnn

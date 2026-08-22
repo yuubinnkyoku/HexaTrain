@@ -19,6 +19,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   g = {};
   g.state = State::PREPARING;
+  // A fresh prepare must re-emit the bind manifest for the new graph.
+  // (g = {} already cleared the flag; assert the invariant explicitly.)
   apiTrace_.fullStepGraphCreateCalled = false;
   apiTrace_.fullStepGraphFinalizeCalled = false;
   apiTrace_.fullStepGraphCreateResult = -1;
@@ -35,7 +37,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       numLayers == 0 || numHeads == 0 ||
       dimension % numHeads != 0 || vocabularySize == 0 ||
       !diagnosticOutputs ||
-      variant != TinyTransformerTrainingVariant::FULL ||
+      (variant != TinyTransformerTrainingVariant::FULL &&
+       variant != TinyTransformerTrainingVariant::FORWARD_ONLY) ||
       (tapSet != TinyTransformerTrainingTapSet::NONE &&
        tapSet != TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES &&
        tapSet != TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS &&
@@ -63,7 +66,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // First pass: register every tensor before graph creation. QNN keeps the
   // name, dimension and static-client-buffer pointers, so all three backing
   // collections are reserved for the complete N-layer/H-head topology before
-  // tensor() writes those pointers.
+  // tensor() writes those pointers.  FORWARD_ONLY skips the FULL-only
+  // gradient/backward tensors, so its registry is smaller than FULL's; the
+  // FULL-sized capacity is still a safe upper bound.
   constexpr std::uint64_t kAdamTensorSlots = 35;
   if (resourceEstimate.tensorCount < kAdamTensorSlots ||
       resourceEstimate.tensorCount - kAdamTensorSlots >
@@ -83,6 +88,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.numHeads = numHeads;
   g.languageModel = true;
   g.diagnosticOutputs = diagnosticOutputs;
+  g.forwardOnly = variant == TinyTransformerTrainingVariant::FORWARD_ONLY;
   g.tapSet = tapSet;
   g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
@@ -169,27 +175,48 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                                     {dimension, vocabularySize});
   const auto logits = add("logits", QNN_TENSOR_TYPE_APP_READ,
                           {tokens, vocabularySize});
-  const auto probabilities = add("lm_probabilities",
-                                 diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
-                                 {tokens, vocabularySize});
-  const auto target = add("target", QNN_TENSOR_TYPE_APP_WRITE,
-                          {tokens, vocabularySize});
-  const auto difference = add("lm_difference", QNN_TENSOR_TYPE_NATIVE,
-                              {tokens, vocabularySize});
-  const auto gradientScale = add("gradient_scale", QNN_TENSOR_TYPE_STATIC, {1, 1});
-  const auto zeroFf = add("zero_ff", QNN_TENSOR_TYPE_STATIC,
-                          {tokens, feedForwardDimension});
-  const auto dLogits = add("dlogits",
-                           diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
-                           {tokens, vocabularySize});
-  const auto dOutput = add("doutput",
-                            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
-                           {tokens, dimension});
-  const auto dOutputProjection = add("doutput_projection",
-                                     QNN_TENSOR_TYPE_APP_READ,
-                                     {dimension, vocabularySize});
-  const auto dEmbedding = add("dembedding", QNN_TENSOR_TYPE_APP_READ,
-                              {vocabularySize, dimension});
+  const auto probabilities = g.forwardOnly
+      ? 0u
+      : add("lm_probabilities",
+            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+            {tokens, vocabularySize});
+  const auto target = g.forwardOnly
+      ? 0u
+      : add("target", QNN_TENSOR_TYPE_APP_WRITE,
+            {tokens, vocabularySize});
+  const auto difference = g.forwardOnly
+      ? 0u
+      : add("lm_difference", QNN_TENSOR_TYPE_NATIVE,
+            {tokens, vocabularySize});
+  const auto gradientScale = g.forwardOnly
+      ? 0u
+      : add("gradient_scale", QNN_TENSOR_TYPE_STATIC, {1, 1});
+  // zero_ff feeds the FULL-only ReLU-mask backward select; FORWARD_ONLY has
+  // no backward, so the STATIC tensor is not registered at all (a registered
+  // STATIC tensor without a client buffer fails tensorCreate).
+  const auto zeroFf = g.forwardOnly
+      ? 0u
+      : add("zero_ff", QNN_TENSOR_TYPE_STATIC,
+            {tokens, feedForwardDimension});
+  const auto dLogits = g.forwardOnly
+      ? 0u
+      : add("dlogits",
+            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+            {tokens, vocabularySize});
+  const auto dOutput = g.forwardOnly
+      ? 0u
+      : add("doutput",
+            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+            {tokens, dimension});
+  const auto dOutputProjection = g.forwardOnly
+      ? 0u
+      : add("doutput_projection",
+            QNN_TENSOR_TYPE_APP_READ,
+            {dimension, vocabularySize});
+  const auto dEmbedding = g.forwardOnly
+      ? 0u
+      : add("dembedding", QNN_TENSOR_TYPE_APP_READ,
+            {vocabularySize, dimension});
   g.tokenOneHot = oneHot;
   g.tokenEmbedding = embedding;
   g.target = target;
@@ -315,7 +342,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                          activationName == "attention_masked" ||
                          activationName == "attention_probabilities";
       const bool ff = std::string(name) == "ff1" || std::string(name) == "relu";
-      const bool establishedOutput = diagnosticOutputs &&
+      // The last layer's "output" is an APP_READ diagnostic only in the FULL
+      // graph (its execute registry binds it).  FORWARD_ONLY binds logits
+      // alone; leaving this tensor APP_READ would finalize a graph with one
+      // more APP_READ tensor than the execute registry binds, and QNN
+      // graphExecute would reject the binding with INVALID_TENSOR.
+      const bool establishedOutput = diagnosticOutputs && !g.forwardOnly &&
           layer + 1 == numLayers && activationName == "output";
       const std::uint32_t targetLayer =
           (g.diagnosticLayerIndex != std::numeric_limits<std::uint32_t>::max() &&
@@ -341,59 +373,63 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       if (selectedTap) g.tapRegistry.push_back(record.activations.back());
     }
     record.output = record.activations.back();
-    for (const char *name : {"dwq", "dwk", "dwv", "dwo", "dg1", "db1",
-         "dg2", "db2", "dw1", "dw2"}) {
-      const std::string gradientName(name);
-      const bool norm = gradientName == "dg1" || gradientName == "db1" ||
-                        gradientName == "dg2" || gradientName == "db2";
-      const bool ff1Gradient = gradientName == "dw1";
-      const bool ff2Gradient = gradientName == "dw2";
-      record.gradients.push_back(add(prefix + name, QNN_TENSOR_TYPE_APP_READ,
-          norm ? std::initializer_list<uint32_t>{dimension} :
-          ff1Gradient ? std::initializer_list<uint32_t>{dimension, feedForwardDimension} :
-          ff2Gradient ? std::initializer_list<uint32_t>{feedForwardDimension, dimension} :
-                        std::initializer_list<uint32_t>{dimension, dimension}));
+    if (!g.forwardOnly) {
+      for (const char *name : {"dwq", "dwk", "dwv", "dwo", "dg1", "db1",
+           "dg2", "db2", "dw1", "dw2"}) {
+        const std::string gradientName(name);
+        const bool norm = gradientName == "dg1" || gradientName == "db1" ||
+                          gradientName == "dg2" || gradientName == "db2";
+        const bool ff1Gradient = gradientName == "dw1";
+        const bool ff2Gradient = gradientName == "dw2";
+        record.gradients.push_back(add(prefix + name, QNN_TENSOR_TYPE_APP_READ,
+            norm ? std::initializer_list<uint32_t>{dimension} :
+            ff1Gradient ? std::initializer_list<uint32_t>{dimension, feedForwardDimension} :
+            ff2Gradient ? std::initializer_list<uint32_t>{feedForwardDimension, dimension} :
+                          std::initializer_list<uint32_t>{dimension, dimension}));
+      }
     }
-    for (const char *name : {"drelu", "relu_mask", "dff1", "dln2",
-         "dxhat2", "sum_dxhat2", "dxhat_xhat2", "dy_xhat2",
-         "sum_dxhat_xhat2", "d_times_dxhat2", "first_diff2",
-         "xhat_times_sum2", "bracket2", "inv_std_over_d2",
-         "dresidual1_ln", "dresidual1", "dcontext", "dprobabilities",
-         "dv", "softmax_product", "softmax_dot", "softmax_centered",
-         "dscores", "dq_raw", "dk_raw", "dq", "dk", "dln1_q",
-         "dln1_k", "dln1_v", "dln1_qk", "dln1", "dxhat1",
-         "sum_dxhat1", "dxhat_xhat1", "dy_xhat1",
-         "sum_dxhat_xhat1", "d_times_dxhat1", "first_diff1",
-         "xhat_times_sum1", "bracket1", "inv_std_over_d1",
-         "dinput_norm", "dinput"}) {
-      const std::string backwardName(name);
-      const bool score = backwardName == "dprobabilities" ||
-                         backwardName == "softmax_product" ||
-                         backwardName == "softmax_centered" ||
-                         backwardName == "dscores";
-      const bool row = backwardName == "sum_dxhat2" ||
-                       backwardName == "sum_dxhat_xhat2" ||
-                       backwardName == "inv_std_over_d2" ||
-                       backwardName == "softmax_dot" ||
-                       backwardName == "sum_dxhat1" ||
-                       backwardName == "sum_dxhat_xhat1" ||
-                       backwardName == "inv_std_over_d1";
-      const bool ff = backwardName == "drelu" || backwardName == "relu_mask" ||
-                      backwardName == "dff1";
-      const bool establishedBackward = diagnosticOutputs &&
-          backwardName == "dinput";
-      const bool selectedTap = tapBackward(backwardName) &&
-          !establishedBackward;
-      const Qnn_TensorType_t backwardType = establishedBackward || selectedTap
-          ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
-      record.backward.push_back(add(
-          prefix + name, backwardType,
-          score ? std::initializer_list<uint32_t>{tokens, tokens} :
-          ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
-          row ? std::initializer_list<uint32_t>{tokens, 1} :
-                std::initializer_list<uint32_t>{tokens, dimension},
-          backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
-      if (selectedTap) g.tapRegistry.push_back(record.backward.back());
+    if (!g.forwardOnly) {
+      for (const char *name : {"drelu", "relu_mask", "dff1", "dln2",
+           "dxhat2", "sum_dxhat2", "dxhat_xhat2", "dy_xhat2",
+           "sum_dxhat_xhat2", "d_times_dxhat2", "first_diff2",
+           "xhat_times_sum2", "bracket2", "inv_std_over_d2",
+           "dresidual1_ln", "dresidual1", "dcontext", "dprobabilities",
+           "dv", "softmax_product", "softmax_dot", "softmax_centered",
+           "dscores", "dq_raw", "dk_raw", "dq", "dk", "dln1_q",
+           "dln1_k", "dln1_v", "dln1_qk", "dln1", "dxhat1",
+           "sum_dxhat1", "dxhat_xhat1", "dy_xhat1",
+           "sum_dxhat_xhat1", "d_times_dxhat1", "first_diff1",
+           "xhat_times_sum1", "bracket1", "inv_std_over_d1",
+           "dinput_norm", "dinput"}) {
+        const std::string backwardName(name);
+        const bool score = backwardName == "dprobabilities" ||
+                           backwardName == "softmax_product" ||
+                           backwardName == "softmax_centered" ||
+                           backwardName == "dscores";
+        const bool row = backwardName == "sum_dxhat2" ||
+                         backwardName == "sum_dxhat_xhat2" ||
+                         backwardName == "inv_std_over_d2" ||
+                         backwardName == "softmax_dot" ||
+                         backwardName == "sum_dxhat1" ||
+                         backwardName == "sum_dxhat_xhat1" ||
+                         backwardName == "inv_std_over_d1";
+        const bool ff = backwardName == "drelu" || backwardName == "relu_mask" ||
+                        backwardName == "dff1";
+        const bool establishedBackward = diagnosticOutputs &&
+            backwardName == "dinput";
+        const bool selectedTap = tapBackward(backwardName) &&
+            !establishedBackward;
+        const Qnn_TensorType_t backwardType = establishedBackward || selectedTap
+            ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
+        record.backward.push_back(add(
+            prefix + name, backwardType,
+            score ? std::initializer_list<uint32_t>{tokens, tokens} :
+            ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
+            row ? std::initializer_list<uint32_t>{tokens, 1} :
+                  std::initializer_list<uint32_t>{tokens, dimension},
+            backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
+        if (selectedTap) g.tapRegistry.push_back(record.backward.back());
+      }
     }
     if (numHeads > 1) {
       const uint32_t headDimension = dimension / numHeads;
@@ -466,8 +502,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   // Binding order is an execution ABI: inputs first, then canonical flattened
   // parameters.  Keep target ahead of token_embedding so no name lookup or
-  // incidental tensor-creation order can change it.
-  g.appWriteRegistry = {oneHot, target, embedding};
+  // incidental tensor-creation order can change it.  FORWARD_ONLY drops the
+  // target APP_WRITE entirely; the one-hot and parameters keep their order.
+  g.appWriteRegistry = g.forwardOnly
+      ? std::vector<uint32_t>{oneHot, embedding}
+      : std::vector<uint32_t>{oneHot, target, embedding};
   g.parameterRegistry.push_back(embedding);
   for (const auto &record : g.layers) {
     for (uint32_t parameter : {record.gamma1, record.beta1,
@@ -480,23 +519,27 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   g.appWriteRegistry.push_back(outputProjection);
   g.parameterRegistry.push_back(outputProjection);
-  g.gradientRegistry.push_back(dEmbedding);
+  if (!g.forwardOnly) {
+    g.gradientRegistry.push_back(dEmbedding);
+  }
   g.appReadRegistry.push_back(logits);
-  if (diagnosticOutputs) {
+  if (diagnosticOutputs && !g.forwardOnly) {
     g.appReadRegistry.insert(g.appReadRegistry.end(),
                              {g.layers.back().output, probabilities, dLogits,
                               dOutput});
   }
-  for (const auto &record : g.layers) {
-    for (uint32_t gradient :
-         {record.gradients[DG1], record.gradients[DB1],
-          record.gradients[DWQ], record.gradients[DWK],
-          record.gradients[DWV], record.gradients[DWO],
-          record.gradients[DG2], record.gradients[DB2],
-          record.gradients[DW1], record.gradients[DW2]})
-      g.gradientRegistry.push_back(gradient);
+  if (!g.forwardOnly) {
+    for (const auto &record : g.layers) {
+      for (uint32_t gradient :
+           {record.gradients[DG1], record.gradients[DB1],
+            record.gradients[DWQ], record.gradients[DWK],
+            record.gradients[DWV], record.gradients[DWO],
+            record.gradients[DG2], record.gradients[DB2],
+            record.gradients[DW1], record.gradients[DW2]})
+        g.gradientRegistry.push_back(gradient);
+    }
+    g.gradientRegistry.push_back(dOutputProjection);
   }
-  g.gradientRegistry.push_back(dOutputProjection);
   if (size_t(numLayers) >
       (std::numeric_limits<size_t>::max() - 2) / size_t(10)) {
     return fail("APP_RESOURCE_ESTIMATOR: parameter registry count overflow");
@@ -508,21 +551,29 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           g.parameterRegistry.size()) {
     return fail("generalized tiny training parameter registry is not canonical");
   }
-  if (g.gradientRegistry.size() != g.parameterRegistry.size() ||
-      std::unordered_set<uint32_t>(g.gradientRegistry.begin(),
-                                   g.gradientRegistry.end()).size() !=
-          g.gradientRegistry.size()) {
-    return fail("generalized tiny training gradient registry is not canonical");
-  }
-  for (size_t index = 0; index < g.parameterRegistry.size(); ++index) {
-    if (g.dimensions[g.parameterRegistry[index]] !=
-        g.dimensions[g.gradientRegistry[index]]) {
-      return fail("generalized tiny training gradient shape does not match parameter");
+  if (g.forwardOnly) {
+    // FORWARD_ONLY has no gradient tensors: the gradient registry stays
+    // empty and the parameter/gradient shape pairing is meaningless.
+    if (!g.gradientRegistry.empty()) {
+      return fail("generalized tiny training forward-only gradient registry must be empty");
+    }
+  } else {
+    if (g.gradientRegistry.size() != g.parameterRegistry.size() ||
+        std::unordered_set<uint32_t>(g.gradientRegistry.begin(),
+                                     g.gradientRegistry.end()).size() !=
+            g.gradientRegistry.size()) {
+      return fail("generalized tiny training gradient registry is not canonical");
+    }
+    for (size_t index = 0; index < g.parameterRegistry.size(); ++index) {
+      if (g.dimensions[g.parameterRegistry[index]] !=
+          g.dimensions[g.gradientRegistry[index]]) {
+        return fail("generalized tiny training gradient shape does not match parameter");
+      }
     }
   }
   g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin(),
                            g.gradientRegistry.end());
-  if (diagnosticOutputs) {
+  if (diagnosticOutputs && !g.forwardOnly) {
     for (const auto &record : g.layers)
       g.appReadRegistry.push_back(record.backward[DINPUT]);
   }
@@ -558,8 +609,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return fail("generalized tiny training duplicate tensor name: " + name);
     }
   }
-  if (g.tensors.size() != registryCapacity || g.names.size() != registryCapacity ||
-      g.dimensions.size() != registryCapacity) {
+  if (g.forwardOnly) {
+    // FORWARD_ONLY registers fewer tensors than the FULL-sized capacity
+    // reserved above; require only that it did not exceed that bound.
+    if (g.tensors.size() > registryCapacity || g.names.size() > registryCapacity ||
+        g.dimensions.size() > registryCapacity) {
+      return fail("generalized tiny training forward-only registry capacity exceeded");
+    }
+  } else if (g.tensors.size() != registryCapacity ||
+             g.names.size() != registryCapacity ||
+             g.dimensions.size() != registryCapacity) {
     return fail("generalized tiny training registry capacity mismatch");
   }
   size_t maskElements = 0, positionElements = 0, zeroFfElements = 0;
@@ -572,7 +631,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   for (uint32_t r = 0; r < tokens; ++r)
     for (uint32_t c = r + 1; c < tokens; ++c) g.maskData[size_t(r) * tokens + c] = -10000.0f;
   g.positionData.assign(positionElements, 0.0f);
-  g.zeroFfData.assign(zeroFfElements, 0.0f);
+  if (!g.forwardOnly) {
+    // zero_ff feeds the FULL-only ReLU-mask backward select.
+    g.zeroFfData.assign(zeroFfElements, 0.0f);
+  }
   const uint32_t headDimension = dimension / numHeads;
   size_t selectorElements = 0;
   if (numHeads > 1) {
@@ -621,9 +683,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[rowAxis].v1.clientBuf = {g.rowAxisData, sizeof(g.rowAxisData)};
   g.tensors[centerScale].v1.clientBuf = {&g.centeredScale, sizeof(float)};
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
-  g.tensors[gradientScale].v1.clientBuf = {&g.gradientScale, sizeof(float)};
-  g.tensors[zeroFf].v1.clientBuf = {
-      g.zeroFfData.data(), uint32_t(g.zeroFfData.size() * sizeof(float))};
+  if (!g.forwardOnly) {
+    g.tensors[gradientScale].v1.clientBuf = {&g.gradientScale, sizeof(float)};
+    g.tensors[zeroFf].v1.clientBuf = {
+        g.zeroFfData.data(), uint32_t(g.zeroFfData.size() * sizeof(float))};
+  }
   for (const auto &record : g.layers) {
     for (const auto &head : record.heads) {
       const size_t selectorBytes = size_t(dimension) * headDimension * sizeof(float);
@@ -657,7 +721,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     declared.key = shapeOf(record.activations[K]);
     declared.value = shapeOf(record.activations[V]);
     declared.concat = shapeOf(record.activations[ATTENTION_CONTEXT]);
-    declared.inputGradient = shapeOf(record.backward[DINPUT]);
+    if (!g.forwardOnly) {
+      declared.inputGradient = shapeOf(record.backward[DINPUT]);
+    }
     declared.norm1Gamma = shapeOf(record.gamma1);
     declared.norm1Beta = shapeOf(record.beta1);
     declared.norm2Gamma = shapeOf(record.gamma2);
@@ -668,16 +734,18 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     declared.wo = shapeOf(record.wo);
     declared.ffnW1 = shapeOf(record.w1);
     declared.ffnW2 = shapeOf(record.w2);
-    declared.dNorm1Gamma = shapeOf(record.gradients[DG1]);
-    declared.dNorm1Beta = shapeOf(record.gradients[DB1]);
-    declared.dNorm2Gamma = shapeOf(record.gradients[DG2]);
-    declared.dNorm2Beta = shapeOf(record.gradients[DB2]);
-    declared.dWq = shapeOf(record.gradients[DWQ]);
-    declared.dWk = shapeOf(record.gradients[DWK]);
-    declared.dWv = shapeOf(record.gradients[DWV]);
-    declared.dWo = shapeOf(record.gradients[DWO]);
-    declared.dFfnW1 = shapeOf(record.gradients[DW1]);
-    declared.dFfnW2 = shapeOf(record.gradients[DW2]);
+    if (!g.forwardOnly) {
+      declared.dNorm1Gamma = shapeOf(record.gradients[DG1]);
+      declared.dNorm1Beta = shapeOf(record.gradients[DB1]);
+      declared.dNorm2Gamma = shapeOf(record.gradients[DG2]);
+      declared.dNorm2Beta = shapeOf(record.gradients[DB2]);
+      declared.dWq = shapeOf(record.gradients[DWQ]);
+      declared.dWk = shapeOf(record.gradients[DWK]);
+      declared.dWv = shapeOf(record.gradients[DWV]);
+      declared.dWo = shapeOf(record.gradients[DWO]);
+      declared.dFfnW1 = shapeOf(record.gradients[DW1]);
+      declared.dFfnW2 = shapeOf(record.gradients[DW2]);
+    }
     declared.norm1Mean = shapeOf(record.activations[LN1_MEAN]);
     declared.norm1Variance = shapeOf(record.activations[LN1_VARIANCE]);
     declared.norm2Mean = shapeOf(record.activations[LN2_MEAN]);
@@ -939,18 +1007,22 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return fail(error);
   }
   if (!matmul(topologyName + "_lm_logits", g.layers.back().output, outputProjection,
-              logits, "logits") ||
-       !softmax(topologyName + "_lm_softmax", logits, probabilities, "lm softmax") ||
-       !binary(topologyName + "_lm_difference", QNN_OP_ELEMENT_WISE_SUBTRACT,
-              probabilities, target, difference, "lm difference") ||
-       !binary(topologyName + "_lm_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY, difference,
-              gradientScale, dLogits, "lm dlogits") ||
-       !matmul(topologyName + "_lm_doutput", dLogits, outputProjection, dOutput,
-              "lm doutput", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
-       !matmul(topologyName + "_lm_doutput_projection", g.layers.back().output, dLogits,
-              dOutputProjection, "lm doutput projection",
-              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
+              logits, "logits"))
     return fail(error);
+  if (!g.forwardOnly) {
+    if (!softmax(topologyName + "_lm_softmax", logits, probabilities, "lm softmax") ||
+        !binary(topologyName + "_lm_difference", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                probabilities, target, difference, "lm difference") ||
+        !binary(topologyName + "_lm_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY, difference,
+                gradientScale, dLogits, "lm dlogits") ||
+        !matmul(topologyName + "_lm_doutput", dLogits, outputProjection, dOutput,
+                "lm doutput", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
+        !matmul(topologyName + "_lm_doutput_projection", g.layers.back().output, dLogits,
+                dOutputProjection, "lm doutput projection",
+                QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
+      return fail(error);
+  }
+  if (!g.forwardOnly)
   for (int layer = int(numLayers) - 1; layer >= 0; --layer) {
     const auto &record = g.layers[size_t(layer)];
     const auto cache = [&](LayerActivation value) {
@@ -1131,14 +1203,23 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                 "dinput"))
       return fail(error);
   }
-  if (!matmul(topologyName + "_lm_dembedding", oneHot,
-              g.layers.front().backward[DINPUT], dEmbedding, "dembedding",
-              QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
-    return fail(error);
+  if (!g.forwardOnly) {
+    if (!matmul(topologyName + "_lm_dembedding", oneHot,
+                g.layers.front().backward[DINPUT], dEmbedding, "dembedding",
+                QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))
+      return fail(error);
+  }
+  // FORWARD_ONLY emits the shared forward chain only: the per-layer forward
+  // nodes plus the three global nodes (embedding, position, logits).  FULL
+  // additionally emits the loss/backward chain (five lm backward nodes,
+  // dembedding, and every per-layer backward node).  The resource estimator
+  // records the per-layer forward budget explicitly, so both expectations
+  // derive from it without duplicating arithmetic.
   constexpr std::uint64_t kAdamNodeCount = 20;
-  if (resourceEstimate.nodeCount < kAdamNodeCount ||
-      g.graphAddNodeSuccessCount !=
-          resourceEstimate.nodeCount - kAdamNodeCount ||
+  const std::uint64_t expectedNodes = g.forwardOnly
+      ? numLayers * resourceEstimate.perLayerForwardNodes + 3u
+      : resourceEstimate.nodeCount - kAdamNodeCount;
+  if (g.graphAddNodeSuccessCount != expectedNodes ||
       nodeNames.size() != g.graphAddNodeSuccessCount) {
     return fail("APP_RESOURCE_ESTIMATOR: emitted node count mismatch");
   }
@@ -1155,8 +1236,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.active = true;
   g.state = State::ACTIVE;
   const std::string graphLabel = "L" + std::to_string(numLayers) + "H" +
-      std::to_string(numHeads) + "_EXPLICIT_FORWARD_BACKWARD";
+      std::to_string(numHeads) +
+      (g.forwardOnly ? "_FORWARD_ONLY" : "_EXPLICIT_FORWARD_BACKWARD");
   diagnostics_ += "tiny_transformer_training_graph=" + graphLabel + '\n' +
+                  "tiny_transformer_training_forward_only=" +
+                  std::string(g.forwardOnly ? "true\n" : "false\n") +
                   "tiny_transformer_training_graph_count=1\n"
                   "tiny_transformer_training_forward_layers=" +
                   std::to_string(numLayers) + '\n' +

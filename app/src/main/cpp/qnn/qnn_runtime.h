@@ -14,11 +14,15 @@ enum class QnnBackendKind {
 };
 
 // Selects the terminal node for diagnostic language-model training graphs.
-// FULL preserves the normal forward/backward/SGD graph.
+// FULL preserves the normal forward/backward/SGD graph.  FORWARD_ONLY is the
+// generation-only generalized graph: forward nodes and logits APP_READ only,
+// no target/loss/backward tensors or nodes.  It is rejected by the fixed L1
+// builder and only served by the generalized N-layer/H-head builder.
 enum class TinyTransformerTrainingVariant {
     FULL,
     STOP_AFTER_DINPUT,
     STOP_AFTER_DEMBEDDING,
+    FORWARD_ONLY,
 };
 
 // Selects graph-preserving APP_READ taps for language-model backward
@@ -405,6 +409,15 @@ public:
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,
+        TinyTransformerTrainingOutputs& outputs, std::string& error);
+    // Forward-only generation execute: binds the token one-hot and every
+    // parameter APP_WRITE tensor, reads back logits only.  The target input
+    // and every backward/gradient output of the FULL graph do not exist in
+    // this graph; learningRate is rejected (must be 0) exactly like the
+    // training execute.
+    bool executeTinyTransformerForwardOnly(
+        const std::vector<float>& input,
+        const TinyTransformerParameters& current,
         TinyTransformerTrainingOutputs& outputs, std::string& error);
     bool prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
                             uint32_t hiddenDimension, uint32_t outputDimension,

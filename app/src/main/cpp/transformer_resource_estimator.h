@@ -54,6 +54,11 @@ struct ResourceEstimate {
   bool bestCheckpointFitsApplicationPolicy = false;
   std::uint64_t nodeCount = 0;
   std::uint64_t tensorCount = 0;
+  // Nodes emitted by one layer's forward chain (the FULL builder's forward
+  // half).  FORWARD_ONLY graphs reuse this budget per layer plus the three
+  // global nodes, so the generation-only expectation is derivable without
+  // duplicating the estimator's arithmetic.
+  std::uint64_t perLayerForwardNodes = 0;
 };
 
 inline ResourceEstimate estimateTrainingResources(
@@ -277,6 +282,7 @@ inline ResourceEstimate estimateTrainingResources(
        !add(41, backwardNodes, &backwardNodes))) {
     return fail("APP_RESOURCE_ESTIMATOR", "node count overflow");
   }
+  result.perLayerForwardNodes = forwardNodes;
   if (!add(forwardNodes, backwardNodes, &perLayerNodes) ||
       !multiply(l, perLayerNodes, &result.nodeCount) ||
       !add(9 + 20, result.nodeCount, &result.nodeCount)) {

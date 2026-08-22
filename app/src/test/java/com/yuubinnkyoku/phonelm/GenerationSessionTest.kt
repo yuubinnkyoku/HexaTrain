@@ -188,6 +188,15 @@ class GenerationSessionTest {
         assertEquals(null, session.snapshot().selectedCheckpointPath)
     }
 
+    @Test fun backendResultWithoutReuseEvidenceIsAcceptedForColdRuns() {
+        // A cold (non-prepared) report has no prepared_graph_reused field;
+        // the parser must not demand reuse evidence from it.
+        val backend = FakeBackend()
+        val session = session(backend, FakeCheckpointRepository(mutableListOf(checkpoint(8_000))))
+        session.updatePrompt("prompt")
+        assertTrue(session.generate())
+    }
+
     private fun session(
         backend: FakeBackend,
         repository: FakeCheckpointRepository,
