@@ -30,6 +30,23 @@ class ModelConfigurationTest {
         assertEquals(32, ModelConfigurationCatalog.config(1024, 64, 64).architecture.headDimension)
     }
 
+    @Test fun generationPolicyAcceptsFfn128WithoutExpandingTrainingCatalog() {
+        val ffn128 = ModelConfigurationCatalog.config(1024, 48, 64).architecture.copy(
+            feedForwardDimension = 128,
+        )
+        assertNull(SupportedGenerationModelPolicy.validationError(ffn128))
+        assertNotNull(SupportedTrainingModelPolicy.validationError(
+            ModelConfigurationCatalog.config(1024, 48, 64).copy(feedForwardDimension = 128),
+        ))
+    }
+
+    @Test fun generationPolicyRejectsUnsupportedFeedForwardDimension() {
+        val unsupported = ModelConfigurationCatalog.config(1024, 48, 64).architecture.copy(
+            feedForwardDimension = 96,
+        )
+        assertNotNull(SupportedGenerationModelPolicy.validationError(unsupported))
+    }
+
     @Test fun codecRoundTripsWithoutChangingFloatBitIdentity() {
         val source = ModelConfigurationCatalog.config(1024, 64, 48)
         val encoded = TrainingModelConfigCodec.encode(source)

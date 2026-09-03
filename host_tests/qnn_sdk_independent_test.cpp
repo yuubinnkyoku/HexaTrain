@@ -1,13 +1,18 @@
+#include <cmath>
+
 #include "qnn/qnn_host_quantization.h"
 #include "qnn/qnn_hybrid_training.h"
 #include "qnn/qnn_runtime.h"
 #include "qnn/qnn_graph_shape_validator.h"
 #include "qnn/qnn_first_nonfinite_diagnostics.h"
+#include "qnn/nicopedia_checkpoint_loader.h"
 #include "tiny_language_model_cpu.h"
 
 #include <cassert>
-#include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -19,6 +24,58 @@ namespace {
 
 void near(double actual, double expected, double tolerance = 1.0e-6) {
     assert(std::fabs(actual - expected) <= tolerance);
+}
+
+void writeU32(std::ostream& output, std::uint32_t value) {
+    const std::uint8_t bytes[] = {
+        static_cast<std::uint8_t>(value >> 24),
+        static_cast<std::uint8_t>(value >> 16),
+        static_cast<std::uint8_t>(value >> 8),
+        static_cast<std::uint8_t>(value),
+    };
+    output.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+void writeU64(std::ostream& output, std::uint64_t value) {
+    const std::uint8_t bytes[] = {
+        static_cast<std::uint8_t>(value >> 56),
+        static_cast<std::uint8_t>(value >> 48),
+        static_cast<std::uint8_t>(value >> 40),
+        static_cast<std::uint8_t>(value >> 32),
+        static_cast<std::uint8_t>(value >> 24),
+        static_cast<std::uint8_t>(value >> 16),
+        static_cast<std::uint8_t>(value >> 8),
+        static_cast<std::uint8_t>(value),
+    };
+    output.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+void writeGenerationCheckpoint(const std::string& path,
+                               const phonelm::tiny_lm::Config& config,
+                               std::uint32_t seed, std::uint32_t step) {
+    const auto parameters = phonelm::tiny_lm::initialParameters(config, seed);
+    const auto registry = phonelm::tiny_lm::parameterRegistry(parameters);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    assert(output);
+    output.write("NPRTCKPTV1\n", 11);
+    writeU32(output, config.vocabularySize);
+    writeU32(output, config.tokens);
+    writeU32(output, config.dimension);
+    writeU32(output, config.feedForwardDimension);
+    writeU32(output, config.numLayers);
+    writeU32(output, config.numHeads);
+    writeU32(output, seed);
+    writeU32(output, step);
+    writeU32(output, static_cast<std::uint32_t>(registry.size()));
+    for (const auto& entry : registry) {
+        writeU32(output, static_cast<std::uint32_t>(entry.name.size()));
+        output.write(entry.name.data(),
+                     static_cast<std::streamsize>(entry.name.size()));
+        writeU64(output, static_cast<std::uint64_t>(entry.values->size()));
+        output.write(reinterpret_cast<const char*>(entry.values->data()),
+                     static_cast<std::streamsize>(entry.values->size() * sizeof(float)));
+    }
+    assert(output);
 }
 
 phonelm::qnn::shape::Node makeShapeNode(
@@ -618,6 +675,52 @@ void testFirstNonfiniteCpuReplayDeterminism() {
     assert(first.dLogits == replay.dLogits);
 }
 
+void testPreparedGenerationUsesHeaderStepInsteadOfFilename() {
+    namespace qnn = phonelm::qnn;
+    phonelm::tiny_lm::Config config;
+    config.vocabularySize = 4;
+    config.tokens = 2;
+    config.dimension = 2;
+    config.feedForwardDimension = 4;
+    config.numLayers = 1;
+    config.numHeads = 1;
+    constexpr std::uint32_t kSeed = 7;
+    constexpr std::uint32_t kHeaderStep = 37;
+    const std::string importedPath = "model.ckpt";
+    const std::string canonicalPath = "htp-seed7-l1-t2-d2-f4-step37.ckpt";
+    std::remove(importedPath.c_str());
+    std::remove(canonicalPath.c_str());
+
+    writeGenerationCheckpoint(importedPath, config, kSeed, kHeaderStep);
+    writeGenerationCheckpoint(canonicalPath, config, kSeed, kHeaderStep);
+    const auto validatePreparedIdentity =
+        [&](const std::string& path, std::uint32_t keyStep) {
+            const auto loaded = qnn::nprtLoadCheckpointForGeneration(
+                path, config, kSeed);
+            if (loaded.step != keyStep) {
+                throw std::runtime_error("CHECKPOINT_STEP_MISMATCH");
+            }
+            return loaded;
+        };
+
+    // Prepared generation compares the registry-validated header step with
+    // PreparedGenerationKey::step, so a generic import filename is accepted.
+    const auto imported = validatePreparedIdentity(importedPath, kHeaderStep);
+    const auto canonical = validatePreparedIdentity(canonicalPath, kHeaderStep);
+    assert(imported.step == kHeaderStep && canonical.step == kHeaderStep);
+    // A mismatched key must still be rejected after the same full loader
+    // validation; a filename cannot make this comparison pass.
+    try {
+        static_cast<void>(validatePreparedIdentity(importedPath, kHeaderStep + 1));
+        assert(false && "header/key step mismatch must reject");
+    } catch (const std::runtime_error& error) {
+        assert(std::string(error.what()) == "CHECKPOINT_STEP_MISMATCH");
+    }
+
+    assert(std::remove(importedPath.c_str()) == 0);
+    assert(std::remove(canonicalPath.c_str()) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -632,6 +735,7 @@ int main() {
     testForwardOnlyVariantFailsClosedWithoutQnn();
     testFirstNonfiniteDiagnosticCodecAndSummaries();
     testFirstNonfiniteCpuReplayDeterminism();
+    testPreparedGenerationUsesHeaderStepInsteadOfFilename();
     std::cout << "qnn_sdk_independent_tests=PASS\n";
     return 0;
 }

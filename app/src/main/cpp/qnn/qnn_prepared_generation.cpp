@@ -103,15 +103,6 @@ PreparedGenerationHandle prepareNicopediaGeneration(
 
     const auto prepareStarted = std::chrono::steady_clock::now();
     if (progress) progress("phase=checkpoint_validation");
-    uint32_t expectedStep = 0;
-    if (!nprtParseCheckpointStep(key.checkpointPath, key.seed, key.layers,
-                                 &expectedStep, key.tokens, key.dimension,
-                                 key.feedForward) ||
-        expectedStep != key.step) {
-        error = "CHECKPOINT_FILENAME_IDENTITY";
-        return nullptr;
-    }
-
     std::unique_ptr<nicopedia_bpe::Model> bpeModel;
     try {
         if (config.vocabularySize == nicopedia_bpe::kVocabulary) {
@@ -140,7 +131,11 @@ PreparedGenerationHandle prepareNicopediaGeneration(
         error = std::string("CHECKPOINT_DECODE:") + exception.what();
         return nullptr;
     }
-    if (engine->loaded.step != expectedStep) {
+    // The loaded checkpoint header is the identity authority.  Production
+    // imports may use a content-addressed or generic filename (for example,
+    // model.ckpt), while the loader has already verified configuration, seed,
+    // registry order, and finiteness and has derived the parameter hash.
+    if (engine->loaded.step != key.step) {
         error = "CHECKPOINT_STEP_MISMATCH";
         return nullptr;
     }

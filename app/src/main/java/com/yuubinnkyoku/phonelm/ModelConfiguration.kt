@@ -65,6 +65,13 @@ object ModelConfigurationCatalog {
     val dimensions = listOf(32, 48, 64)
     val feedForwardDimensions = listOf(32, 48, 64)
 
+    /**
+     * Checkpoint architectures accepted by the generic production generation backend.
+     * This is deliberately separate from the training catalog: imports may support a
+     * verified architecture that the in-app training UI does not offer.
+     */
+    val generationFeedForwardDimensions = listOf(32, 48, 64, 128)
+
     val defaultConfig: TrainingModelConfig get() = TrainingModelConfig.NICOPEDIA_L19
 
     fun config(vocabularySize: Int, dimension: Int, feedForwardDimension: Int): TrainingModelConfig =
@@ -102,7 +109,7 @@ object SupportedGenerationModelPolicy {
             architecture.heads !in ModelConfigurationCatalog.headCounts ||
             architecture.tokens !in ModelConfigurationCatalog.tokenCounts ||
             architecture.dimension !in ModelConfigurationCatalog.dimensions ||
-            architecture.feedForwardDimension !in ModelConfigurationCatalog.feedForwardDimensions ||
+            architecture.feedForwardDimension !in ModelConfigurationCatalog.generationFeedForwardDimensions ||
             architecture.vocabularySize !in ModelConfigurationCatalog.vocabularySizes
         ) return "checkpoint architecture is not supported by this build"
         return null

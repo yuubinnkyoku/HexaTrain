@@ -101,6 +101,10 @@ class StandaloneTrainingActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // A host-side generation import can complete while this Activity is
+        // stopped. Re-scan the existing app-private Production store so the
+        // selector reflects atomically published checkpoints on return.
+        generationSession.refreshCheckpoints()
         val generation = synchronized(subscriptionLock) {
             activityStarted = true
             ++subscriptionGeneration
