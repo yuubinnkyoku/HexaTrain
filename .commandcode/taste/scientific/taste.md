@@ -23,3 +23,7 @@
 - 改善の採用判定は単一fixture/metric（特定prefix等）だけでなく、全prefix・別checkpoint step・good prefixでの一般化（改善または非劣化）を要求し、特定fixtureへの過適合や「良い出力探し」をしない。Confidence: 0.85
 - 指定された不変条件（parity gate・checkpoint・追加training・参照実装）は変更せず、対象システム（HTP等）の数値経路自体を改善する。gate緩和・出力補正・温度補正・checkpoint修正など参照側に合わせる操作や、特定fixtureだけ通す特殊ケースを禁止する。Confidence: 0.9
 - 実装バグ修正とprecision mitigation（数値経路の改善）を明確に区別して報告する。Confidence: 0.7
+- cross-tokenizer比較（tokenizer設定が異なるモデル間の比較）のprimary metricはoriginal UTF-8 byte基準のbits/nats per byteとし、token NLLをprimary metricにしない。Confidence: 0.9
+- checkpoint選別は軽いheld-out eval（例: 64+64 chunk）で候補全stepを走査して行い、重いeval（例: 256+256）はbest-vs-best＋可能ならsame-step 1点だけ実行する。全checkpointへの一括heavy evalはしない。Confidence: 0.85
+- baseline比較の前提条件としてtraining exposureの一致（target tokens / original UTF-8 bytes / unique chunks / articles等）を確認し、不一致なら比較前に原因を調査する。Confidence: 0.85
+- capacity/training実験では初期plateau（step1000前後）のlossだけを根拠に早期打ち切りせず、nonfinite・QNN failure等の明確な異常がない限り計画step数までは走らせる。Confidence: 0.85

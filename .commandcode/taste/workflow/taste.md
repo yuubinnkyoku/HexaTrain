@@ -31,3 +31,11 @@
 - 実checkpoint等のartifact選定はfilenameでなくheader実測（V/T/D/FFN/L/H/seed/step等の直接parse）でidentity確認する。名前tagと実体が乖離している場合（canonical無tag名が歴史的に別shape anchorである等）はheader基準で選定・打ち切りとし、変換・再学習で都合の良いartifactを作らない。解決規則の修正が必要な場合はテストハーネス等の最小範囲（tagged名優先→canonical名fallback等）に留め、loader/QNN実装は不変とする。Confidence: 0.8
 - PASSしたregression・実験結果は対応するdocsファイルに追記して記録し、docsを最新状態に保つ。Confidence: 0.8
 - 目的の達成が証拠で確認できた時点でタスクを完了とみなし、追加検証・フォローアップ最適化（詳細benchmark比較、次の最適化案、gate短縮、180分級の長時間検証など）を同じタスクで続けない。それらは別タスクとして明記して残し、その時点でcommitして区切ることを好む。Confidence: 0.85
+- 研究実験ではまず既存code path（research/headless runner・native validation等）が対象configをgenericに受入できるか確認し、受入できるならproduction変更や専用special-caseを追加しない。実験で良好な結果が出てもproduction UI/catalog拡張は別タスクとし、実験中に広げない。Confidence: 0.9
+- 期待parameter count等のconfig事前検証はhardcodedな算術だけで済ませず、リポジトリ自身のregistry/resource-estimate helperを使った小さいhost検証programで裏取りする。Confidence: 0.85
+- QNN ms/update系counterにはwall clockと逆方向に動く既知metric artifactがあるため、runtime cost比較はwall ms/updateとbytes/sを主指標とし、QNN counterは参考記録にとどめる。thermal条件差などによる見かけの差をspeedup/slowdownと主張しない。Confidence: 0.85
+- 長時間device training中はforce-stopせず、ADB transport断時はreconnect→headless status確認→最高COMPLETE checkpointのheader/hash/finite検証→そこからのみresumeで対応する。runner進捗表示からcheckpoint存在を推定しない。単発wrapper実行がtransport断で脆弱なことが示されたら、COMPLETE checkpoint起点のsegment分割resume（fresh segmentのみcpu replayあり）に切り替えてよい。Confidence: 0.85
+- generation health smokeは生成内容の品質を評価対象とせず、QNN execute success・finite・cpu_fallback=false・checkpoint/tokenizer identity一致といったruntime健全性のみでPASS/FAIL/SKIPを判定する。parity true/falseをquality evidenceにしない。Confidence: 0.8
+- fresh学習smokeのterminal FAILEDがloss-decrease等のquality gate発火のみでQNN success・finite・fallback=falseが全てgreenの場合はコード回帰として扱わず、CPU参照の同一挙動確認で初期transientかHTP数値問題かを切り分けてから次へ進む。Confidence: 0.75
+- Windows PowerShellでgradlewに渡す-Pプロパティ引数はwhole argumentをquoteする（例: "-Pphonelm.enableQnn=true"）。Confidence: 0.75
+- このharnessのbackground実行は失敗時にoutput logが空になる場合があるため、失敗原因の調査が必要な長時間runはforeground実行＋Tee-Objectで出力を確保する。Confidence: 0.6
