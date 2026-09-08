@@ -55,6 +55,18 @@ object NativeBridge {
         diagnosticCheckpointDir: String?,
         diagnosticResumeStep: Int,
         diagnosticCheckpointInterval: Int,
+        nicopediaLearningRateSchedule: Int,
+        nicopediaDecayStartStep: Int,
+        nicopediaDecayEndStep: Int,
+        nicopediaScheduleTotalSteps: Int,
+        nicopediaTargetLearningRate: Float,
+        nicopediaExperimentFork: Boolean,
+        nicopediaParentLearningRate: Float,
+        nicopediaOptimizer: Int,
+        nicopediaMuonLearningRate: Float,
+        nicopediaMuonMomentum: Float,
+        nicopediaMuonNsSteps: Int,
+        nicopediaMuonNesterov: Boolean,
         progressCallback: ProgressCallback,
     ): String
 

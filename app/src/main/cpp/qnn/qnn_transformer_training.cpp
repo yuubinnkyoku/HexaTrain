@@ -5,10 +5,13 @@
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
 #include "../nicopedia_checkpoint_policy.h"
+#include "../nicopedia_muon_checkpoint.h"
+#include "../nicopedia_muon_optimizer.h"
 #include "../nicopedia_byte_bpe.h"
 #include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
 #include "../training_stability.h"
+#include "../nicopedia_learning_rate_schedule.h"
 #include "../validation_checkpoint.h"
 #include "../validation_selection.h"
 #include <algorithm>
@@ -4980,13 +4983,17 @@ std::uint64_t nprtSplitMix(std::uint64_t value) {
 }
 
 // Identical to the CPU pilot trainingOrder(recordCount, steps, batch, 20260806).
+// This is the data-order identity, not the model initialization seed.  Keep it
+// explicit so mixed-optimizer checkpoints cannot accidentally use the model
+// seed as a data cursor identity.
+constexpr std::uint64_t kNprtCanonicalTrainingOrderSeed = 20260806ull;
 std::vector<std::size_t> nprtTrainingOrder(std::size_t recordCount,
                                            uint32_t steps,
                                            uint32_t batchSize) {
   if (!recordCount) throw std::runtime_error("NPRT_TRAIN_CACHE_EMPTY");
   std::vector<std::size_t> order;
   order.reserve(std::size_t(steps) * batchSize);
-  std::uint64_t state = 20260806;
+  std::uint64_t state = kNprtCanonicalTrainingOrderSeed;
   for (std::size_t i = 0; i < std::size_t(steps) * batchSize; ++i) {
     state = nprtSplitMix(state + i);
     order.push_back(static_cast<std::size_t>(state % recordCount));
@@ -5378,6 +5385,7 @@ struct LoadedNprtCheckpoint {
   bool hasAdam = false;
   bool v2 = false;
   bool v3 = false;
+  bool v4 = false;
   std::string tokenizerKind;
   std::string tokenizerHash;
   Params parameters;
@@ -5400,6 +5408,39 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.fileBytes = static_cast<std::uint64_t>(size);
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+  if (magic == "NPRTCKPTV4\n") {
+    input.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    input.read(reinterpret_cast<char*>(bytes.data()), size);
+    nicopedia_muon_checkpoint::Checkpoint checkpoint;
+    std::string decodeError;
+    if (!nicopedia_muon_checkpoint::decodeCheckpoint(bytes, &checkpoint,
+                                                      &decodeError))
+      throw std::runtime_error(decodeError);
+    if (checkpoint.identity.seed != expectedSeed ||
+        checkpoint.identity.tokenizerHash != expectedTokenizerHash)
+      throw std::runtime_error("NPRT_CKPT_V4_IDENTITY_MISMATCH");
+    if (!nicopedia_muon_checkpoint::extractParameters(
+            checkpoint, expected, expectedSeed, &result.parameters,
+            &decodeError))
+      throw std::runtime_error(decodeError);
+    result.vocabulary = expected.vocabularySize;
+    result.tokens = expected.tokens;
+    result.dimension = expected.dimension;
+    result.feedForward = expected.feedForwardDimension;
+    result.layers = expected.numLayers;
+    result.heads = expected.numHeads;
+    result.seed = expectedSeed;
+    result.step = static_cast<uint32_t>(checkpoint.identity.globalStep);
+    result.registryCount = static_cast<uint32_t>(checkpoint.parameters.size());
+    result.parameterElements = tiny_lm::parameterElementCount(result.parameters);
+    result.tokenizerKind = checkpoint.identity.tokenizerKind;
+    result.tokenizerHash = checkpoint.identity.tokenizerHash;
+    result.parameterHash = nprtParameterHash(result.parameters);
+    result.v4 = true;
+    result.finite = finiteParams(result.parameters);
+    return result;
+  }
   if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n" &&
       magic != "NPRTCKPTV3\n")
     throw std::runtime_error("NPRT_CKPT_MAGIC");
@@ -6420,8 +6461,9 @@ std::string nicopediaHtpGeneration(
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
-         << "\ncheckpoint_format=" << (loaded.v3 ? "NPRTCKPTV3" :
-             (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1"))
+         << "\ncheckpoint_format=" << (loaded.v4 ? "NPRTCKPTV4" :
+             (loaded.v3 ? "NPRTCKPTV3" :
+              (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1")))
          << "\ntokenizer_kind=" << (bpeModel ? "byte_bpe" : "byte")
          << "\ntokenizer_hash=" << (bpeModel ? bpeModel->identity() : "legacy-byte-v1")
          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
@@ -6928,10 +6970,535 @@ std::string nicopediaHtpDivergenceLocalization(
   return report.str();
 }
 
+// Compare two model-shaped registries before any positional indexing.  The
+// QNN training output is an ABI boundary: matching only the entry count can
+// silently apply a gradient to the wrong semantic tensor after a registry
+// change.  Validate the complete semantic identity, shape, axes, and element
+// count for every entry before callers dereference a values pointer.
+bool nprtValidateRegistryIdentity(const Params& expected,
+                                  const Params& actual,
+                                  const char* actualLabel,
+                                  std::string* error) {
+  static_assert(sizeof(float) == 4, "Muon checkpoint/gradient values are FP32");
+  std::string expectedError;
+  const auto expectedRegistry = tiny_lm::parameterRegistry(expected);
+  const auto actualRegistry = tiny_lm::parameterRegistry(actual);
+  if (!tiny_lm::validateParameterRegistry(expectedRegistry, &expectedError)) {
+    if (error) *error = "expected_registry_invalid:" + expectedError;
+    return false;
+  }
+  if (!tiny_lm::validateParameterRegistry(actualRegistry, &expectedError)) {
+    if (error) *error = std::string(actualLabel) + "_registry_invalid:" +
+                        expectedError;
+    return false;
+  }
+  if (expectedRegistry.size() != actualRegistry.size()) {
+    if (error) *error = std::string(actualLabel) + "_registry_count";
+    return false;
+  }
+  for (std::size_t index = 0; index < expectedRegistry.size(); ++index) {
+    const auto& expectedEntry = expectedRegistry[index];
+    const auto& actualEntry = actualRegistry[index];
+    if (!expectedEntry.values || !actualEntry.values ||
+        expectedEntry.name != actualEntry.name ||
+        expectedEntry.role != actualEntry.role ||
+        expectedEntry.shape != actualEntry.shape ||
+        expectedEntry.fanOut != actualEntry.fanOut ||
+        expectedEntry.fanIn != actualEntry.fanIn ||
+        expectedEntry.values->size() != actualEntry.values->size()) {
+      if (error) {
+        *error = std::string(actualLabel) + "_registry_entry:" +
+                 expectedEntry.name;
+      }
+      return false;
+    }
+    std::size_t elements = 1;
+    for (const std::uint32_t extent : expectedEntry.shape) {
+      if (extent == 0 || elements > std::numeric_limits<std::size_t>::max() /
+                              static_cast<std::size_t>(extent)) {
+        if (error) *error = "expected_registry_shape:" + expectedEntry.name;
+        return false;
+      }
+      elements *= extent;
+    }
+    if (elements != expectedEntry.values->size() ||
+        elements * sizeof(float) != actualEntry.values->size() * sizeof(float)) {
+      if (error) *error = std::string(actualLabel) + "_registry_elements:" +
+                          expectedEntry.name;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool nprtWriteMuonCheckpoint(
+    const std::string& path, const tiny_lm::Config& config, uint32_t seed,
+    uint32_t step, const Params& parameters, const Params& momentum,
+    const Params& adamM, const Params& adamV, const NprtCache& cache,
+    const nicopedia_muon_checkpoint::Hyperparameters& hyperparameters,
+    uint32_t batchSize, std::string* error) {
+  namespace checkpoint = nicopedia_muon_checkpoint;
+  checkpoint::Checkpoint value;
+  value.identity.config = config;
+  value.identity.seed = seed;
+  value.identity.globalStep = step;
+  value.identity.tokenizerKind = cache.tokenizerKind;
+  value.identity.tokenizerHash = cache.tokenizerHash;
+  value.identity.dataCursor.datasetHash = cache.contentHash;
+  value.identity.dataCursor.recordIndex = std::uint64_t(step) * batchSize;
+  value.identity.dataCursor.tokenOffset = 0;
+  value.identity.dataCursor.epoch = 0;
+  value.identity.dataCursor.exposedTokens =
+      std::uint64_t(step) * batchSize * config.tokens;
+  value.identity.dataCursor.orderSeed = kNprtCanonicalTrainingOrderSeed;
+  value.hyperparameters = hyperparameters;
+  const auto p = tiny_lm::parameterRegistry(parameters);
+  const auto mu = tiny_lm::parameterRegistry(momentum);
+  const auto m = tiny_lm::parameterRegistry(adamM);
+  const auto v = tiny_lm::parameterRegistry(adamV);
+  std::string registryError;
+  if (!nprtValidateRegistryIdentity(parameters, momentum, "momentum",
+                                     &registryError) ||
+      !nprtValidateRegistryIdentity(parameters, adamM, "adam_m",
+                                     &registryError) ||
+      !nprtValidateRegistryIdentity(parameters, adamV, "adam_v",
+                                     &registryError)) {
+    if (error) *error = "NPRT_CKPT_V4_REGISTRY_IDENTITY:" + registryError;
+    return false;
+  }
+  for (size_t i = 0; i < p.size(); ++i) {
+    checkpoint::ParameterState state;
+    state.name = p[i].name;
+    state.role = p[i].role == tiny_lm::ParameterRole::MUON
+        ? checkpoint::ParameterRole::MUON
+        : checkpoint::ParameterRole::AUX_ADAM;
+    state.shape.rows = p[i].shape.size() == 1 ? 1 : p[i].shape[0];
+    state.shape.columns = p[i].shape.size() == 1 ? p[i].shape[0] : p[i].shape[1];
+    state.values = *p[i].values;
+    if (state.role == checkpoint::ParameterRole::MUON)
+      state.momentum = *mu[i].values;
+    else {
+      state.adamM = *m[i].values;
+      state.adamV = *v[i].values;
+    }
+    value.parameters.push_back(std::move(state));
+  }
+  std::vector<std::uint8_t> bytes;
+  if (!checkpoint::encodeCheckpoint(value, &bytes, error)) return false;
+  const std::string temporary = path + ".tmp";
+  std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+  output.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  output.flush();
+  output.close();
+  if (!output || std::rename(temporary.c_str(), path.c_str()) != 0) {
+    std::remove(temporary.c_str());
+    if (error) *error = "NPRT_CKPT_V4_ATOMIC_WRITE";
+    return false;
+  }
+  return true;
+}
+
+bool nprtReadMuonCheckpoint(
+    const std::string& path, const tiny_lm::Config& config, uint32_t seed,
+    const std::string& tokenizerHash, const std::string& datasetHash,
+    uint32_t expectedStep, uint32_t expectedBatchSize,
+    std::uint64_t expectedOrderSeed,
+    const nicopedia_muon_checkpoint::Hyperparameters& expectedHyperparameters,
+    Params* parameters, Params* momentum, Params* adamM, Params* adamV,
+    std::string* error) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) { if (error) *error = "NPRT_CKPT_V4_OPEN"; return false; }
+  const auto size = input.tellg();
+  if (size <= 0 || std::uint64_t(size) > kNprtMaxCheckpointBytes) return false;
+  input.seekg(0);
+  std::vector<std::uint8_t> bytes(static_cast<size_t>(size));
+  input.read(reinterpret_cast<char*>(bytes.data()), size);
+  nicopedia_muon_checkpoint::Checkpoint checkpoint;
+  if (!nicopedia_muon_checkpoint::decodeCheckpoint(bytes, &checkpoint, error))
+    return false;
+  const auto& actual = checkpoint.hyperparameters;
+  const bool hyperparametersMatch =
+      actual.muonLearningRate == expectedHyperparameters.muonLearningRate &&
+      actual.auxAdamLearningRate == expectedHyperparameters.auxAdamLearningRate &&
+      actual.muonTargetLearningRate == expectedHyperparameters.muonTargetLearningRate &&
+      actual.auxAdamTargetLearningRate == expectedHyperparameters.auxAdamTargetLearningRate &&
+      actual.muonMomentum == expectedHyperparameters.muonMomentum &&
+      actual.muonNesterov == expectedHyperparameters.muonNesterov &&
+      actual.muonNsSteps == expectedHyperparameters.muonNsSteps &&
+      actual.auxAdamBeta1 == expectedHyperparameters.auxAdamBeta1 &&
+      actual.auxAdamBeta2 == expectedHyperparameters.auxAdamBeta2 &&
+      actual.auxAdamEpsilon == expectedHyperparameters.auxAdamEpsilon &&
+      actual.muonWeightDecay == expectedHyperparameters.muonWeightDecay &&
+      actual.auxAdamWeightDecay == expectedHyperparameters.auxAdamWeightDecay &&
+      actual.decayStartStep == expectedHyperparameters.decayStartStep &&
+      actual.decayEndStep == expectedHyperparameters.decayEndStep &&
+      actual.scheduleTotalSteps == expectedHyperparameters.scheduleTotalSteps;
+  const std::uint64_t expectedRecordIndex =
+      std::uint64_t(expectedStep) * expectedBatchSize;
+  const std::uint64_t expectedExposedTokens =
+      expectedRecordIndex * config.tokens;
+  const bool dataCursorMatch =
+      expectedBatchSize > 0 &&
+      checkpoint.identity.dataCursor.datasetHash == datasetHash &&
+      checkpoint.identity.dataCursor.recordIndex == expectedRecordIndex &&
+      checkpoint.identity.dataCursor.tokenOffset == 0 &&
+      checkpoint.identity.dataCursor.epoch == 0 &&
+      checkpoint.identity.dataCursor.exposedTokens == expectedExposedTokens &&
+      checkpoint.identity.dataCursor.orderSeed == expectedOrderSeed;
+  const bool optimizerIdentityMatch =
+      checkpoint.optimizerIdentity ==
+      nicopedia_muon_checkpoint::kOptimizerIdentity;
+  if (!optimizerIdentityMatch || checkpoint.identity.seed != seed ||
+      checkpoint.identity.globalStep != expectedStep ||
+      checkpoint.identity.tokenizerHash != tokenizerHash ||
+      !dataCursorMatch || !hyperparametersMatch) {
+    if (error) *error = "NPRT_CKPT_V4_RESUME_IDENTITY";
+    return false;
+  }
+  if (!nicopedia_muon_checkpoint::extractParameters(
+          checkpoint, config, seed, parameters, error)) return false;
+  *momentum = zeroLanguageParameters(*parameters);
+  *adamM = zeroLanguageParameters(*parameters);
+  *adamV = zeroLanguageParameters(*parameters);
+  const auto mu = tiny_lm::parameterRegistry(*momentum);
+  const auto m = tiny_lm::parameterRegistry(*adamM);
+  const auto v = tiny_lm::parameterRegistry(*adamV);
+  const auto p = tiny_lm::parameterRegistry(*parameters);
+  if (checkpoint.parameters.size() != mu.size() || p.size() != mu.size()) {
+    if (error) *error = "NPRT_CKPT_V4_REGISTRY_COUNT";
+    return false;
+  }
+  for (size_t i = 0; i < checkpoint.parameters.size(); ++i) {
+    const auto& source = checkpoint.parameters[i];
+    const auto expectedRole = p[i].role == tiny_lm::ParameterRole::MUON
+        ? nicopedia_muon_checkpoint::ParameterRole::MUON
+        : nicopedia_muon_checkpoint::ParameterRole::AUX_ADAM;
+    const std::uint32_t expectedRows = p[i].shape.size() == 1
+        ? 1u : p[i].shape[0];
+    const std::uint32_t expectedColumns = p[i].shape.size() == 1
+        ? p[i].shape[0] : p[i].shape[1];
+    if (source.name != p[i].name || source.name != mu[i].name ||
+        source.role != expectedRole || source.shape.rows != expectedRows ||
+        source.shape.columns != expectedColumns ||
+        source.values.size() != p[i].values->size()) {
+      if (error) *error = "NPRT_CKPT_V4_REGISTRY_IDENTITY";
+      return false;
+    }
+    if (source.role == nicopedia_muon_checkpoint::ParameterRole::MUON) {
+      if (source.momentum.size() != p[i].values->size()) {
+        if (error) *error = "NPRT_CKPT_V4_MUON_STATE_IDENTITY";
+        return false;
+      }
+      *const_cast<std::vector<float>*>(mu[i].values) = source.momentum;
+    } else {
+      if (source.adamM.size() != p[i].values->size() ||
+          source.adamV.size() != p[i].values->size()) {
+        if (error) *error = "NPRT_CKPT_V4_AUX_ADAM_STATE_IDENTITY";
+        return false;
+      }
+      *const_cast<std::vector<float>*>(m[i].values) = source.adamM;
+      *const_cast<std::vector<float>*>(v[i].values) = source.adamV;
+    }
+  }
+  return true;
+}
+
+std::string nicopediaMuonHybridTraining(
+    const tiny_lm::Config& config, const TrainingConfig& trainingConfig,
+    const LogSink& progress, std::atomic_bool* stopRequested) {
+  if (config.vocabularySize != 1024 || config.tokens != 32 ||
+      config.dimension != 64 || config.feedForwardDimension != 128 ||
+      config.numLayers != 19 || config.numHeads != 2 ||
+      trainingConfig.batchSize != 8 ||
+      trainingConfig.nicopediaMuonMomentum != 0.95f ||
+      trainingConfig.nicopediaMuonNsSteps != 5 ||
+      !trainingConfig.nicopediaMuonNesterov)
+    return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=APP_CONFIGURATION_VALIDATION\nerror=muon_v1_identity_mismatch\n";
+  const std::string cachePath = trainingConfig.diagnosticCheckpointDir;
+  NprtCache cache;
+  std::unique_ptr<nicopedia_bpe::Model> bpeModel;
+  try {
+    bpeModel = std::make_unique<nicopedia_bpe::Model>(
+        nicopedia_bpe::loadModel(cachePath + "/byte-bpe-v1024.model"));
+    cache = loadNprtCache(cachePath + "/train_pilot.bin", bpeModel.get());
+  } catch (const std::exception& exception) {
+    return std::string("NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=CACHE_DECODE\nerror=") + exception.what() + '\n';
+  }
+  const uint32_t seed = static_cast<uint32_t>(trainingConfig.seed);
+  const uint32_t steps = static_cast<uint32_t>(trainingConfig.steps);
+  const uint32_t resumeStep = std::max(0, trainingConfig.diagnosticResumeStep);
+  const uint32_t checkpointInterval = trainingConfig.diagnosticCheckpointInterval > 0
+      ? static_cast<uint32_t>(trainingConfig.diagnosticCheckpointInterval) : 250u;
+  constexpr std::uint32_t kMuonProgressTelemetryCadenceSteps = 8;
+  if (seed == 0 || steps == 0 || resumeStep >= steps)
+    return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=APP_CONFIGURATION_VALIDATION\nerror=muon_steps_seed_invalid\n";
+  nicopedia_schedule::Config auxSchedule{
+      static_cast<nicopedia_schedule::Kind>(trainingConfig.nicopediaLearningRateSchedule),
+      trainingConfig.learningRate, trainingConfig.nicopediaTargetLearningRate,
+      static_cast<uint32_t>(trainingConfig.nicopediaDecayStartStep),
+      static_cast<uint32_t>(trainingConfig.nicopediaDecayEndStep),
+      trainingConfig.nicopediaExperimentFork};
+  const uint32_t scheduleTotal = trainingConfig.nicopediaScheduleTotalSteps > 0
+      ? static_cast<uint32_t>(trainingConfig.nicopediaScheduleTotalSteps) : steps;
+  if (!nicopedia_schedule::validate(auxSchedule, scheduleTotal) ||
+      !(trainingConfig.nicopediaMuonLearningRate > 0.0f))
+    return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=APP_CONFIGURATION_VALIDATION\nerror=muon_schedule_invalid\n";
+  const float muonTarget = trainingConfig.nicopediaMuonLearningRate *
+      (auxSchedule.targetLearningRate / auxSchedule.peakLearningRate);
+  nicopedia_muon_checkpoint::Hyperparameters checkpointHparams;
+  checkpointHparams.muonLearningRate = trainingConfig.nicopediaMuonLearningRate;
+  checkpointHparams.auxAdamLearningRate = auxSchedule.peakLearningRate;
+  checkpointHparams.muonTargetLearningRate = muonTarget;
+  checkpointHparams.auxAdamTargetLearningRate = auxSchedule.targetLearningRate;
+  checkpointHparams.muonMomentum = trainingConfig.nicopediaMuonMomentum;
+  checkpointHparams.muonNesterov = true;
+  checkpointHparams.muonNsSteps = 5;
+  checkpointHparams.decayStartStep = auxSchedule.decayStartStep;
+  checkpointHparams.decayEndStep = auxSchedule.decayEndStep;
+  checkpointHparams.scheduleTotalSteps = scheduleTotal;
+  Params current = tiny_lm::initialParameters(config, seed);
+  Params momentum = zeroLanguageParameters(current);
+  Params adamM = zeroLanguageParameters(current), adamV = adamM;
+  std::string error;
+  if (resumeStep > 0) {
+    const std::string path = cachePath + "/" + nprtCheckpointName(
+        seed, config.numLayers, config.tokens, config.dimension,
+        config.feedForwardDimension, resumeStep);
+    if (!nprtReadMuonCheckpoint(
+            path, config, seed, cache.tokenizerHash, cache.contentHash,
+            resumeStep, trainingConfig.batchSize,
+            kNprtCanonicalTrainingOrderSeed, checkpointHparams, &current,
+            &momentum, &adamM, &adamV, &error))
+      return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=RESUME_CHECKPOINT_DECODE\nerror=" + error + "\n";
+  }
+  const auto order = nprtTrainingOrder(cache.records.size(), steps, 8);
+  const std::string orderHash = nprtOrderHash(order);
+  Runtime runtime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  runtime.setOptions(options);
+  if (!runtime.initialize(QnnBackendKind::HTP, error) ||
+      !runtime.prepareTinyTransformerTraining(
+          config.tokens, config.dimension, config.feedForwardDimension,
+          config.epsilon, true, error, config.vocabularySize,
+          TinyTransformerTrainingVariant::FULL,
+          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          config.numHeads))
+    return failure("nicopedia_muon_prepare", error, runtime);
+  std::ofstream telemetry(cachePath + "/learning-rate-telemetry.csv",
+                          std::ios::trunc);
+  telemetry << "step,scheduled_lr,aux_adam_lr,muon_lr,learning_rate_schedule\n" << std::setprecision(10);
+  double fwdBwdUs = 0.0, muonUs = 0.0, auxUs = 0.0;
+  double inputBindUs = 0.0, outputBindUs = 0.0;
+  double gradientAccumulationUs = 0.0, optimizerUpdateWallUs = 0.0;
+  double optimizerResultMoveUs = 0.0;
+  std::uint64_t qnnExecuteCount = 0;
+  uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
+  std::vector<std::pair<uint32_t, float>> curve;
+  bool allFinite = true, interrupted = false;
+  float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
+  const auto trainingStarted = std::chrono::steady_clock::now();
+  for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
+    if (stopRequested && stopRequested->load()) { interrupted = true; break; }
+    const auto stepStarted = std::chrono::steady_clock::now();
+    Params gradient = zeroLanguageParameters(current);
+    double loss = 0.0;
+    for (uint32_t batch = 0; batch < 8; ++batch) {
+      const auto data = nprtBatch(config, cache, order[std::size_t(step - 1) * 8 + batch]);
+      TinyTransformerTrainingOutputs output;
+      const size_t executeBefore = runtime.metrics().executeUs.size();
+      const size_t inputBefore = runtime.metrics().inputBindUs.size();
+      const size_t outputBefore = runtime.metrics().outputBindUs.size();
+      if (!runtime.executeTinyTransformerTraining(data.input, data.target,
+                                                  current, 0.0f, output, error))
+        return failure("nicopedia_muon_fwd_bwd", error, runtime);
+      for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)
+        fwdBwdUs += runtime.metrics().executeUs[i];
+      for (size_t i = inputBefore; i < runtime.metrics().inputBindUs.size(); ++i)
+        inputBindUs += runtime.metrics().inputBindUs[i];
+      for (size_t i = outputBefore; i < runtime.metrics().outputBindUs.size(); ++i)
+        outputBindUs += runtime.metrics().outputBindUs[i];
+      ++qnnExecuteCount;
+      loss += output.loss;
+      allFinite = allFinite && finiteTrainingOutputs(output);
+      const auto accum = tiny_lm::parameterRegistry(gradient);
+      const auto source = tiny_lm::parameterRegistry(output.gradients);
+      std::string registryError;
+      if (!nprtValidateRegistryIdentity(gradient, output.gradients,
+                                        "htp_gradient", &registryError))
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=APP_PARAMETER_SCHEMA\nerror=gradient_registry_mismatch:" + registryError + "\n";
+      const auto accumulationStarted = std::chrono::steady_clock::now();
+      for (size_t i = 0; i < accum.size(); ++i) {
+        auto& destination = *const_cast<std::vector<float>*>(accum[i].values);
+        for (size_t j = 0; j < destination.size(); ++j)
+          destination[j] += (*source[i].values)[j] * 0.125f;
+      }
+      gradientAccumulationUs += std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - accumulationStarted).count();
+    }
+    const float auxLr = nicopedia_schedule::at(auxSchedule, step);
+    const float muonLr = trainingConfig.nicopediaMuonLearningRate *
+        (auxLr / auxSchedule.peakLearningRate);
+    nicopedia_muon::Config updateConfig;
+    updateConfig.muonLearningRate = muonLr;
+    updateConfig.auxiliaryAdamLearningRate = auxLr;
+    updateConfig.momentum = 0.95f;
+    updateConfig.nesterov = true;
+    updateConfig.nsSteps = 5;
+    updateConfig.optimizerStep = step;
+    const auto optimizerUpdateStarted = std::chrono::steady_clock::now();
+    auto update = nicopedia_muon::update(current, gradient, momentum, adamM,
+                                         adamV, updateConfig);
+    optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
+    if (!update.error.empty())
+      return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_CPU_UPDATE\nerror=" + update.error + "\n";
+    const auto resultMoveStarted = std::chrono::steady_clock::now();
+    current = std::move(update.parameters);
+    momentum = std::move(update.muonMomentum);
+    adamM = std::move(update.auxiliaryAdamM);
+    adamV = std::move(update.auxiliaryAdamV);
+    optimizerResultMoveUs += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - resultMoveStarted).count();
+    muonUs += update.muonMicroseconds;
+    auxUs += update.auxiliaryAdamMicroseconds;
+    allFinite = allFinite && update.health.gradientFinite &&
+        update.health.momentumFinite && update.health.normalizedFinite &&
+        update.health.nsOutputFinite && update.health.updateFinite &&
+        update.health.parametersFinite;
+    if (!allFinite) break;
+    ++completed;
+    lastStep = step;
+    const float meanLoss = float(loss / 8.0);
+    if (completed == 1) firstLoss = meanLoss;
+    lastLoss = meanLoss;
+    if (step % 25 == 0 || step == steps) curve.emplace_back(step, meanLoss);
+    telemetry << step << ',' << auxLr << ',' << auxLr << ',' << muonLr << ','
+              << nicopedia_schedule::kindName(auxSchedule.kind) << '\n';
+    bool checkpointWritten = false;
+    if (step % checkpointInterval == 0 || step == steps) {
+      const std::string path = cachePath + "/" + nprtCheckpointName(
+          seed, config.numLayers, config.tokens, config.dimension,
+          config.feedForwardDimension, step);
+      if (!nprtWriteMuonCheckpoint(path, config, seed, step, current, momentum,
+                                   adamM, adamV, cache, checkpointHparams, 8,
+                                   &error))
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=CHECKPOINT_WRITE\nerror=" + error + "\n";
+      ++checkpointCount;
+      checkpointWritten = true;
+    }
+    if (progress && (step == resumeStep + 1 || checkpointWritten ||
+                     step % kMuonProgressTelemetryCadenceSteps == 0 || step == steps)) {
+      std::ostringstream status;
+      status << "phase=training\nstep=" << step << "\nsteps=" << steps
+             << "\nloss=" << meanLoss << "\noptimizer=muon_aux_adam"
+             << "\nforward_backward_backend=HTP\noptimizer_muon_backend=CPU"
+             << "\noptimizer_aux_adam_backend=CPU\nqnn_return_code_success=true"
+             << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
+             << "\ncpu_fallback=false";
+      progress(status.str());
+    }
+    (void)stepStarted;
+  }
+  const double seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - trainingStarted).count();
+  if (!curve.empty()) {
+    std::ofstream curveOut(cachePath + "/training-curve-" +
+                               std::to_string(lastStep) + ".csv",
+                           std::ios::trunc);
+    for (const auto& point : curve) curveOut << point.first << ',' << point.second << '\n';
+  }
+  const auto& trace = runtime.apiTrace();
+  const bool qnnOk = qnnExecuteCount > 0 &&
+      trace.graphExecuteFailureCount == 0 &&
+      trace.graphExecuteSuccessCount == runtime.metrics().graphExecuteCount &&
+      trace.graphExecuteLastResult == 0 && trace.lastQnnResult == 0;
+  const bool ok = !interrupted && allFinite && qnnOk && lastStep == steps;
+  std::ostringstream report;
+  report << std::setprecision(10) << "NICOPEDIA_HTP\ntest=nicopedia_muon_hybrid_training\nstatus="
+         << (interrupted ? "CANCELLED" : (ok ? "SUCCESS" : "FAILED"))
+         << "\noptimizer=muon_aux_adam\noptimizer_identity="
+         << nicopedia_muon_checkpoint::kOptimizerIdentity
+         << "\nmuon_algorithm_identity="
+         << nicopedia_muon::kAlgorithmIdentity
+         << "\nseed=" << seed << "\nsteps=" << steps
+         << "\ncompleted_steps=" << lastStep << "\nrun_completed_steps=" << completed
+         << "\nbatch_size=8\nmodel_dimension=64\nfeed_forward_dimension=128"
+         << "\ninitial_parameter_hash=" << nprtParameterHash(tiny_lm::initialParameters(config, seed))
+          << "\ntraining_order_seed=" << kNprtCanonicalTrainingOrderSeed
+          << "\ntraining_order_hash=" << orderHash
+          << "\ndataset_hash=" << cache.contentHash
+         << "\nmuon_lr=" << trainingConfig.nicopediaMuonLearningRate
+         << "\nmuon_target_lr=" << muonTarget
+         << "\naux_adam_lr=" << auxSchedule.peakLearningRate
+         << "\naux_adam_target_lr=" << auxSchedule.targetLearningRate
+         << "\nlearning_rate=" << auxSchedule.peakLearningRate
+         << "\nlearning_rate_peak=" << auxSchedule.peakLearningRate
+         << "\nlearning_rate_target=" << auxSchedule.targetLearningRate
+         << "\nlearning_rate_schedule=" << nicopedia_schedule::kindName(auxSchedule.kind)
+         << "\nlearning_rate_decay_start_step=" << auxSchedule.decayStartStep
+         << "\nlearning_rate_decay_end_step=" << auxSchedule.decayEndStep
+         << "\nlearning_rate_schedule_total_steps=" << scheduleTotal
+         << "\nexperiment_fork=" << (auxSchedule.experimentFork ? "true" : "false")
+         << "\nparent_learning_rate=" << trainingConfig.nicopediaParentLearningRate
+         << "\nmuon_momentum=0.95\nmuon_nesterov=true\nmuon_ns_steps=5"
+         << "\nmuon_matrix_count=114\nmuon_parameter_count=622592"
+         << "\naux_adam_parameter_count=135936\nfirst_loss=" << firstLoss
+         << "\nlast_loss=" << lastLoss
+         << "\nforward_backward_backend=HTP\noptimizer_muon_backend=CPU"
+         << "\noptimizer_aux_adam_backend=CPU\nfwd_backward_ms=" << fwdBwdUs / 1000.0
+         << "\nmuon_ms=" << muonUs / 1000.0 << "\naux_adam_ms=" << auxUs / 1000.0
+          << "\nparameter_transfer_ms="
+          << (inputBindUs + outputBindUs) / 1000.0
+          << "\nparameter_transfer_semantics=graph_input_output_bind"
+          << "\ngraph_input_bind_ms=" << inputBindUs / 1000.0
+          << "\ngraph_output_bind_ms=" << outputBindUs / 1000.0
+          << "\ngradient_accumulation_ms=" << gradientAccumulationUs / 1000.0
+          << "\noptimizer_update_wall_ms=" << optimizerUpdateWallUs / 1000.0
+          << "\noptimizer_result_move_ms=" << optimizerResultMoveUs / 1000.0
+          << "\noptimizer_result_move_semantics=vector_ownership_move"
+          << "\ntotal_update_ms=" << seconds * 1000.0
+          << "\ntraining_total_seconds=" << seconds
+          << "\ntraining_step_ms=" << (completed ? seconds * 1000.0 / completed : 0.0)
+          << "\nfwd_backward_ms_per_update="
+          << (completed ? fwdBwdUs / 1000.0 / completed : 0.0)
+          << "\nmuon_ms_per_update="
+          << (completed ? muonUs / 1000.0 / completed : 0.0)
+          << "\naux_adam_ms_per_update="
+          << (completed ? auxUs / 1000.0 / completed : 0.0)
+          << "\nparameter_transfer_ms_per_update="
+          << (completed ? (inputBindUs + outputBindUs) / 1000.0 / completed : 0.0)
+          << "\ngradient_accumulation_ms_per_update="
+          << (completed ? gradientAccumulationUs / 1000.0 / completed : 0.0)
+          << "\noptimizer_update_wall_ms_per_update="
+          << (completed ? optimizerUpdateWallUs / 1000.0 / completed : 0.0)
+          << "\noptimizer_result_move_ms_per_update="
+          << (completed ? optimizerResultMoveUs / 1000.0 / completed : 0.0)
+         << "\nqnn_execute_count=" << qnnExecuteCount
+         << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
+         << "\nqnn_failures=" << trace.graphExecuteFailureCount
+         << "\nqnn_return_code_success=" << (qnnOk ? "true" : "false")
+         << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
+         << "\nfinal_finite=" << (allFinite ? "true" : "false")
+         << "\nall_steps_finite=" << (allFinite ? "true" : "false")
+         << "\ncheckpoint_written=" << (checkpointCount > 0 ? "true" : "false")
+         << "\ncheckpoint_count=" << checkpointCount << "\ncheckpoint_format=NPRTCKPTV4"
+         << "\nfinal_parameter_hash=" << nprtParameterHash(current)
+         << "\ncpu_fallback=false\nfallback=false\nnan_detected=" << (allFinite ? "false" : "true")
+         << "\ninf_detected=" << (allFinite ? "false" : "true") << '\n'
+         << runtime.apiTraceSummary();
+  return report.str();
+}
+
 std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const TrainingConfig &trainingConfig,
                                  const LogSink &progress,
                                  std::atomic_bool *stopRequested) {
+  if (trainingConfig.nicopediaOptimizer == 1)
+    return nicopediaMuonHybridTraining(config, trainingConfig, progress,
+                                       stopRequested);
   // Cache path: app-private file pushed by the host runner.  The parameter is
   // carried in diagnosticCheckpointDir to avoid extending the JNI ABI; the
   // Kotlin side validates it to stay below the app files directory.
@@ -6974,6 +7541,67 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   const float lr = trainingConfig.learningRate > 0.0f
                        ? trainingConfig.learningRate
                        : 0.003f;
+  const int scheduleCode = trainingConfig.nicopediaLearningRateSchedule;
+  nicopedia_schedule::Kind scheduleKind;
+  switch (scheduleCode) {
+    case 0:
+      scheduleKind = nicopedia_schedule::Kind::CONSTANT;
+      break;
+    case 1:
+      scheduleKind = nicopedia_schedule::Kind::LINEAR_DECAY;
+      break;
+    case 2:
+      scheduleKind = nicopedia_schedule::Kind::SQRT_DECAY;
+      break;
+    default:
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=learning_rate_schedule_code_unsupported\n";
+  }
+  const bool decayingSchedule =
+      scheduleKind == nicopedia_schedule::Kind::LINEAR_DECAY ||
+      scheduleKind == nicopedia_schedule::Kind::SQRT_DECAY;
+  const float targetLearningRate =
+      decayingSchedule
+          ? trainingConfig.nicopediaTargetLearningRate
+          : (trainingConfig.nicopediaTargetLearningRate > 0.0f
+                 ? trainingConfig.nicopediaTargetLearningRate
+                 : lr);
+  if (trainingConfig.nicopediaDecayStartStep < 0 ||
+      trainingConfig.nicopediaDecayEndStep < 0 ||
+      trainingConfig.nicopediaScheduleTotalSteps < 0)
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=learning_rate_schedule_bounds_negative\n";
+  nicopedia_schedule::Config schedule{
+      scheduleKind,
+      lr,
+      targetLearningRate,
+      static_cast<std::uint32_t>(std::max(0, trainingConfig.nicopediaDecayStartStep)),
+      static_cast<std::uint32_t>(std::max(0, trainingConfig.nicopediaDecayEndStep)),
+      trainingConfig.nicopediaExperimentFork};
+  const std::uint32_t scheduleTotalSteps =
+      trainingConfig.nicopediaScheduleTotalSteps > 0
+          ? static_cast<std::uint32_t>(trainingConfig.nicopediaScheduleTotalSteps)
+          : steps;
+  if (!nicopedia_schedule::validate(schedule, scheduleTotalSteps))
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=learning_rate_schedule_invalid\n";
+  if (decayingSchedule &&
+      (!std::isfinite(trainingConfig.nicopediaParentLearningRate) ||
+       trainingConfig.nicopediaParentLearningRate <= 0.0f ||
+       !trainingConfig.nicopediaExperimentFork))
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=decay_schedule_requires_fork_parent_learning_rate\n";
+  if (schedule.kind == nicopedia_schedule::Kind::SQRT_DECAY &&
+      (lr != 0.0022f || targetLearningRate != 0.0001f ||
+       trainingConfig.nicopediaParentLearningRate != 0.0022f))
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+           "error=sqrt_schedule_requires_peak_0022_target_0001\n";
+  const char *scheduleName = nicopedia_schedule::kindName(schedule.kind);
   // Resume/checkpoint-interval settings arrive via the dedicated
   // TrainingConfig fields (phonelm.resume_step / phonelm.checkpoint_interval
   // in the intent path). Values must be explicit; there is no implicit
@@ -7185,9 +7813,16 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
         const auto htpRegistry = tiny_lm::parameterRegistry(htpGradientAccum);
         const auto htpGradRegistry =
             tiny_lm::parameterRegistry(htpGradient.gradients);
-        if (cpuRegistry.size() != cpuGradRegistry.size() ||
-            htpRegistry.size() != htpGradRegistry.size())
+        std::string registryError;
+        if (!nprtValidateRegistryIdentity(cpuGradientAccum,
+                                          cpuGradient.gradients,
+                                          "cpu_gradient", &registryError) ||
+            !nprtValidateRegistryIdentity(htpGradientAccum,
+                                          htpGradient.gradients,
+                                          "htp_gradient", &registryError)) {
+          error = "gradient_registry_mismatch:" + registryError;
           return false;
+        }
         for (size_t i = 0; i < cpuRegistry.size(); ++i) {
           auto &cpuAccum = *const_cast<std::vector<float> *>(cpuRegistry[i].values);
           auto &htpAccum = *const_cast<std::vector<float> *>(htpRegistry[i].values);
@@ -7203,13 +7838,14 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       const float htpMeanLoss = float(htpLossSum / batchSize);
       const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
       const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+      const float trajectoryLearningRate = nicopedia_schedule::at(schedule, step);
       const auto cpuUpdate = tiny_lm::adamUpdate(
-          tCpu, cpuGradientAccum, tCpuFirst, tCpuSecond, lr, .9f, .999f,
+          tCpu, cpuGradientAccum, tCpuFirst, tCpuSecond, trajectoryLearningRate, .9f, .999f,
           1e-8f, c1, c2);
       Params htpNext, htpFirstNext, htpSecondNext;
       AdamOptimizerOutputs raw;
       if (!executeLanguageAdam(optimizerRuntime, tHtp, htpGradientAccum, tHtpFirst,
-                               tHtpSecond, lr, int(step), 1.0f, htpNext,
+                               tHtpSecond, trajectoryLearningRate, int(step), 1.0f, htpNext,
                                htpFirstNext, htpSecondNext, &raw, error,
                                optimizerGraphElements))
         return false;
@@ -7257,6 +7893,12 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   std::string lastCheckpointPath;
   bool lastCheckpointWritten = false;
   std::vector<std::pair<uint32_t, float>> curve;
+  const std::string telemetryPath = cachePath + "/learning-rate-telemetry.csv";
+  std::ofstream telemetry(telemetryPath, std::ios::trunc);
+  if (!telemetry)
+    return failure("nicopedia_learning_rate_telemetry", "telemetry open failed", runtime);
+  telemetry << "step,scheduled_lr,learning_rate_schedule\n"
+            << std::setprecision(10);
   // RuntimeMetrics.executeUs is measured around the actual QNN execute call.
   // The Nicopedia training graph fuses forward and backward into one execute,
   // so it is reported as a fused phase rather than attributed to either one.
@@ -7316,10 +7958,14 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       stepFinite = stepFinite && outputFinite;
       const auto registry = tiny_lm::parameterRegistry(gradientAccum);
       const auto gradientRegistry = tiny_lm::parameterRegistry(htpGradient.gradients);
-      if (registry.size() != gradientRegistry.size()) {
+      std::string registryError;
+      if (!nprtValidateRegistryIdentity(gradientAccum,
+                                        htpGradient.gradients,
+                                        "htp_gradient", &registryError)) {
+        error = "gradient_registry_mismatch:" + registryError;
         return "NICOPEDIA_HTP\nstatus=FAILED\n"
                "failure_classification=APP_PARAMETER_SCHEMA\n"
-               "error=gradient registry mismatch\n";
+               "error=" + error + "\n";
       }
       for (size_t i = 0; i < registry.size(); ++i) {
         auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
@@ -7332,9 +7978,10 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     const float meanLoss = float(lossSum / batchSize);
     Params next, firstNext, secondNext;
     AdamOptimizerOutputs raw;
+    const float stepLearningRate = nicopedia_schedule::at(schedule, step);
     const std::size_t adamExecuteCountBefore = optimizerRuntime.metrics().executeUs.size();
     if (!executeLanguageAdam(optimizerRuntime, current, gradientAccum, currentFirst,
-                             currentSecond, lr, int(step), 1.0f, next,
+                             currentSecond, stepLearningRate, int(step), 1.0f, next,
                              firstNext, secondNext, &raw, error,
                              optimizerGraphElements))
       return failure("nicopedia_train_adam", error, optimizerRuntime);
@@ -7352,6 +7999,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
     if (!stepFinite) break;
     ++completedSteps;
     lastCompletedStep = step;
+    telemetry << step << ',' << stepLearningRate << ',' << scheduleName << '\n';
     if (step % 25 == 0 || step == steps)
       curve.emplace_back(step, meanLoss);
     bool stepCheckpointWritten = false;
@@ -7408,6 +8056,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
              << (stepCheckpointWritten ? "saving_checkpoint" : "training")
              << "\nseed=" << seed
              << "\nstep=" << step << "\nsteps=" << steps << "\nloss=" << meanLoss
+             << "\nscheduled_lr=" << stepLearningRate
+             << "\nlearning_rate_schedule=" << scheduleName
              << "\ntiming_sample_steps=" << intervalSteps
              << "\nfused_forward_backward_qnn_us="
              << (intervalSteps ? intervalFusedUs : 0.0)
@@ -7492,6 +8142,15 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
         const auto registry = tiny_lm::parameterRegistry(gradientAccum);
         const auto gradientRegistry =
             tiny_lm::parameterRegistry(cpuGradient.gradients);
+        std::string registryError;
+        if (!nprtValidateRegistryIdentity(gradientAccum,
+                                          cpuGradient.gradients,
+                                          "cpu_gradient", &registryError)) {
+          if (progress) progress("phase=cpu_replay_registry_failure\nerror=" +
+                                 registryError);
+          interrupted = true;
+          break;
+        }
         for (size_t i = 0; i < registry.size(); ++i) {
           auto &accum = *const_cast<std::vector<float> *>(registry[i].values);
           const auto &values = *gradientRegistry[i].values;
@@ -7501,8 +8160,9 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
       }
       const float c1 = float(1.0 / (1.0 - std::pow(0.9, double(step))));
       const float c2 = float(1.0 / (1.0 - std::pow(0.999, double(step))));
+      const float replayLearningRate = nicopedia_schedule::at(schedule, step);
       const auto cpuUpdate = tiny_lm::adamUpdate(
-          cpuFinal, gradientAccum, cpuFinalFirst, cpuFinalSecond, lr, .9f,
+          cpuFinal, gradientAccum, cpuFinalFirst, cpuFinalSecond, replayLearningRate, .9f,
           .999f, 1e-8f, c1, c2);
       cpuFinal = cpuUpdate.next;
       cpuFinalFirst = cpuUpdate.firstMoment;
@@ -7633,6 +8293,16 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nrun_unique_chunks_seen=" << runUniqueChunksSeen.size()
          << "\nrun_unique_articles_seen=" << runUniqueArticlesSeen.size()
          << "\nlearning_rate=" << lr
+         << "\nlearning_rate_schedule=" << scheduleName
+         << "\nlearning_rate_schedule_identity=" << scheduleName
+         << "\nlearning_rate_peak=" << schedule.peakLearningRate
+         << "\nlearning_rate_target=" << schedule.targetLearningRate
+         << "\nlearning_rate_decay_start_step=" << schedule.decayStartStep
+         << "\nlearning_rate_decay_end_step=" << schedule.decayEndStep
+         << "\nlearning_rate_schedule_total_steps=" << scheduleTotalSteps
+         << "\nexperiment_fork=" << (trainingConfig.nicopediaExperimentFork ? "true" : "false")
+         << "\nparent_learning_rate=" << trainingConfig.nicopediaParentLearningRate
+         << "\nlearning_rate_telemetry_file=learning-rate-telemetry.csv"
          << "\nresume_from_step=" << resumeStep
          << "\nresume_checkpoint_format=" << resumeCheckpointFormat
          << "\nresume_checkpoint_hash=" << resumeCheckpointHash
@@ -7681,6 +8351,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nloss_decreased=" << (lossDecreased ? "true" : "false")
          << "\nloss_decrease_required=" << (oneStepBpeSmoke ? "false" : "true")
          << "\ncompleted_steps=" << lastCompletedStep
+         << "\nrun_completed_steps=" << completedSteps
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\nfinal_parameter_max_abs_error=" << finalParameterError
          << "\nfinal_first_moment_max_abs_error=" << finalFirstError
@@ -7940,8 +8611,11 @@ std::string runNicopediaHtpOneUpdateProbe(
     outputsFinite = outputsFinite && finiteOutput;
     const auto accumRegistry = tiny_lm::parameterRegistry(gradientAccum);
     const auto outputRegistry = tiny_lm::parameterRegistry(output.gradients);
-    if (accumRegistry.size() != outputRegistry.size())
-      return emit("FAILED", "first_execute_done", "gradient_registry_mismatch",
+    std::string registryError;
+    if (!nprtValidateRegistryIdentity(gradientAccum, output.gradients,
+                                      "htp_gradient", &registryError))
+      return emit("FAILED", "first_execute_done",
+                  "gradient_registry_mismatch:" + registryError,
                   0.0, runtime.metrics().graphExecuteCount);
     for (std::size_t i = 0; i < accumRegistry.size(); ++i) {
       auto &accum = *const_cast<std::vector<float> *>(accumRegistry[i].values);
@@ -8250,7 +8924,9 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
           << "\ncheckpoint_step=" << checkpointStep
           << "\ncheckpoint_format="
-          << (loaded.v3 ? "NPRTCKPTV3" : (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1"))
+          << (loaded.v4 ? "NPRTCKPTV4" :
+              (loaded.v3 ? "NPRTCKPTV3" :
+               (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")))
           << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
           << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
           << "\ncheckpoint_parameter_hash=" << loaded.parameterHash

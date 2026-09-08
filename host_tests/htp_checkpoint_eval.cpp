@@ -7,6 +7,7 @@
 // checkpoint itself never enters the repository.
 #include "tiny_language_model_cpu.h"
 #include "nicopedia_byte_bpe.h"
+#include "nicopedia_muon_checkpoint.h"
 
 #include <algorithm>
 #include <array>
@@ -129,6 +130,29 @@ Checkpoint loadCheckpoint(const std::string& path) {
   if (!input) throw std::runtime_error("CHECKPOINT_OPEN_FAILED");
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+  if (magic == "NPRTCKPTV4\n") {
+    input.seekg(0, std::ios::end);
+    const auto size = input.tellg();
+    input.seekg(0);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    input.read(reinterpret_cast<char*>(bytes.data()), size);
+    phonelm::nicopedia_muon_checkpoint::Checkpoint mixed;
+    std::string error;
+    if (!phonelm::nicopedia_muon_checkpoint::decodeCheckpoint(bytes, &mixed,
+                                                               &error))
+      throw std::runtime_error(error);
+    Checkpoint checkpoint;
+    checkpoint.config = mixed.identity.config;
+    checkpoint.seed = mixed.identity.seed;
+    checkpoint.step = static_cast<std::uint32_t>(mixed.identity.globalStep);
+    checkpoint.tokenizerKind = mixed.identity.tokenizerKind;
+    checkpoint.tokenizerHash = mixed.identity.tokenizerHash;
+    if (!phonelm::nicopedia_muon_checkpoint::extractParameters(
+            mixed, checkpoint.config, checkpoint.seed, &checkpoint.parameters,
+            &error))
+      throw std::runtime_error(error);
+    return checkpoint;
+  }
   if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n" && magic != "NPRTCKPTV3\n")
     throw std::runtime_error("CHECKPOINT_MAGIC");
   const bool v2 = magic == "NPRTCKPTV2\n";

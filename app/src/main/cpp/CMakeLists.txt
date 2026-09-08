@@ -155,6 +155,8 @@ add_library(phonelm_native SHARED
     benchmark_runner.cpp
     cpu_reference_training.cpp
     tiny_language_model_cpu.cpp
+    nicopedia_muon_optimizer.cpp
+    nicopedia_muon_checkpoint.cpp
     validation_checkpoint.cpp
     mnn_training_test.cpp
     training_engine.cpp

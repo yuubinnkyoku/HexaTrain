@@ -12,7 +12,54 @@ struct Config {
   float epsilon=1e-5f;
   uint32_t numLayers=1,numHeads=1;
 };
-struct ParameterInfo { std::string name; const std::vector<float>* values=nullptr; };
+// Semantic ownership of a trainable tensor.  Keep this metadata alongside
+// the established name/pointer pair so optimizer pilots cannot infer role
+// from a fragile name substring.  The default values preserve the existing
+// two-field aggregate initialization used by host diagnostics.
+enum class ParameterRole : std::uint8_t {
+  UNKNOWN = 0,
+  MUON = 1,
+  AUX_ADAM = 2,
+  // Source-compatible spelling for callers that use the repository's
+  // k-prefixed enum convention.
+  kUnknown = UNKNOWN,
+  kMuon = MUON,
+  kAuxAdam = AUX_ADAM,
+};
+using ParameterSemanticRole = ParameterRole;
+
+struct ParameterInfo {
+  std::string name;
+  const std::vector<float>* values = nullptr;
+  ParameterRole role = ParameterRole::UNKNOWN;
+  std::vector<std::uint32_t> shape;
+  // Semantic linear-map axes used by Keller-original Muon LR adjustment.
+  // Storage is [input, output] in this model, while Muon defines the ratio as
+  // fan_out/fan_in; keeping both avoids name-based inference.
+  std::uint32_t fanOut = 0;
+  std::uint32_t fanIn = 0;
+};
+
+const char* parameterRoleName(ParameterRole role);
+
+// Validate a registry's identity, shapes, and semantic ownership.  The
+// checks are deliberately fail-closed: an unknown role, duplicate name,
+// null storage, empty shape, or shape/count mismatch is rejected.
+bool validateParameterRegistry(const std::vector<ParameterInfo>& registry,
+                               std::string* error = nullptr);
+bool validateParameterRegistry(const qnn::TinyTransformerParameters& parameters,
+                               std::string* error = nullptr);
+
+struct ParameterPartition {
+  std::vector<ParameterInfo> muon;
+  std::vector<ParameterInfo> auxiliaryAdam;
+};
+
+// Split the explicit registry roles exactly once.  No name matching is used;
+// malformed/unknown registries are rejected before an optimizer can run.
+bool splitParameterRegistry(const qnn::TinyTransformerParameters& parameters,
+                            ParameterPartition* partition,
+                            std::string* error = nullptr);
 // Checks all derived element and byte counts before graph or CPU work starts.
 bool validateConfig(const Config&, std::string* error=nullptr);
 transformer::ResourceEstimate resourceEstimate(const Config&);

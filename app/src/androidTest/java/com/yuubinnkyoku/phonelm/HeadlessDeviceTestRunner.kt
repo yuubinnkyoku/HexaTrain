@@ -186,6 +186,18 @@ class HeadlessDeviceTestRunner {
                                 diagnosticCheckpointDir = null,
                                 diagnosticResumeStep = 0,
                                 diagnosticCheckpointInterval = 250,
+                                nicopediaLearningRateSchedule = 0,
+                                nicopediaDecayStartStep = 0,
+                                nicopediaDecayEndStep = 0,
+                                nicopediaScheduleTotalSteps = 0,
+                                nicopediaTargetLearningRate = 0f,
+                                nicopediaExperimentFork = false,
+                                nicopediaParentLearningRate = 0f,
+                                nicopediaOptimizer = 0,
+                                nicopediaMuonLearningRate = 0f,
+                                nicopediaMuonMomentum = 0.95f,
+                                nicopediaMuonNsSteps = 5,
+                                nicopediaMuonNesterov = true,
                                 progressCallback = progressCallback,
                             )
                     }
@@ -197,7 +209,14 @@ class HeadlessDeviceTestRunner {
                 activitySnapshots += activitySnapshot("after_native")
                 notification?.onProgress(RunProgress.Completed(null))
                 reportPath = state.writeReport(runId, report)
+                val allowQualityFailure = arguments.getString("allowQualityFailure")?.let {
+                    it.toBooleanStrictOrNull() ?: throw IllegalArgumentException(
+                        "allowQualityFailure must be true or false",
+                    )
+                } ?: false
                 val success = isSuccessfulSuiteResult(suite, report, splitForSuite(suite, arguments)) ||
+                    (allowQualityFailure && suite == "nicopedia-long-training" &&
+                        isHealthyNicopediaTrainingReport(report)) ||
                     (suite == "generation-diagnostics" &&
                         Regex("(?m)^status=PARTIAL_SUCCESS$").containsMatchIn(report))
                 val countersOk = HeadlessActivityCounters.create.get() == 0 &&
@@ -240,6 +259,19 @@ class HeadlessDeviceTestRunner {
         val tokens: Int,
         val dimension: Int,
         val feedForwardDimension: Int,
+        val learningRate: Float,
+        val learningRateSchedule: Int,
+        val decayStartStep: Int,
+        val decayEndStep: Int,
+        val scheduleTotalSteps: Int,
+        val targetLearningRate: Float,
+        val experimentFork: Boolean,
+        val parentLearningRate: Float,
+        val optimizer: Int,
+        val muonLearningRate: Float,
+        val muonMomentum: Float,
+        val muonNsSteps: Int,
+        val muonNesterov: Boolean,
         val steps: Int,
         val batchSize: Int,
         val resumeStep: Int,
@@ -270,7 +302,33 @@ class HeadlessDeviceTestRunner {
         val tokens = intArgument(arguments, "tokens", 32, 8..256)
         val dimension = intArgument(arguments, "dimension", 32, 2..256)
         val feedForwardDimension = intArgument(arguments, "feedForwardDimension", 32, 2..1024)
+        val learningRate = floatArgument(arguments, "learningRate", 0.003f, 0.000001f..1f)
         val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
+        val scheduleName = stringArgument(arguments, "learningRateSchedule", "constant")
+        val learningRateSchedule = when (scheduleName) {
+            "constant" -> 0
+            "linear_decay" -> 1
+            "sqrt_decay" -> 2
+            else -> throw IllegalArgumentException(
+                "learningRateSchedule must be constant, linear_decay, or sqrt_decay",
+            )
+        }
+        val decayStartStep = intArgument(arguments, "decayStartStep", 0, 0..100_000)
+        val decayEndStep = intArgument(arguments, "decayEndStep", 0, 0..100_000)
+        val scheduleTotalSteps = intArgument(arguments, "scheduleTotalSteps", steps, 1..100_000)
+        val targetLearningRate = floatArgument(arguments, "targetLearningRate", learningRate, 0f..1f)
+        val experimentFork = booleanArgument(arguments, "experimentFork", false)
+        val parentLearningRate = floatArgument(arguments, "parentLearningRate", learningRate, 0.000001f..1f)
+        val optimizerName = stringArgument(arguments, "optimizer", "Adam")
+        val optimizer = when (optimizerName) {
+            "Adam" -> 0
+            "Muon" -> 1
+            else -> throw IllegalArgumentException("optimizer must be Adam or Muon")
+        }
+        val muonLearningRate = floatArgument(arguments, "muonLearningRate", 0.01f, 0.000001f..1f)
+        val muonMomentum = floatArgument(arguments, "muonMomentum", 0.95f, 0f..0.999999f)
+        val muonNsSteps = intArgument(arguments, "muonNsSteps", 5, 1..99)
+        val muonNesterov = booleanArgument(arguments, "muonNesterov", true)
         val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
         val resumeStep = intArgument(arguments, "resumeStep", 0, 0..100_000)
         val checkpointInterval = intArgument(arguments, "checkpointInterval", 250, 1..10_000)
@@ -297,6 +355,39 @@ class HeadlessDeviceTestRunner {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
             require(steps in 1..12_000) { "nicopedia-long-training hard ceiling is step 12000" }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
+            if (optimizer == 1) {
+                require(vocabulary == 1024 && tokens == 32 && dimension == 64 && feedForwardDimension == 128) {
+                    "Muon pilot is restricted to V1024/T32/D64/FFN128"
+                }
+                require(batchSize == 8 && layers == 19 && heads == 2) { "Muon pilot architecture mismatch" }
+                require(muonMomentum.toBits() == 0.95f.toBits() && muonNsSteps == 5 && muonNesterov) {
+                    "Muon v1 requires momentum=.95, nsSteps=5, nesterov=true"
+                }
+            }
+            if (learningRateSchedule == 0) {
+                require(decayStartStep == 0 && decayEndStep == 0) { "constant schedule cannot define decay boundaries" }
+                require(!experimentFork) { "constant schedule cannot be an experiment fork" }
+            } else {
+                require(learningRateSchedule == 1 || learningRateSchedule == 2) {
+                    "unsupported learning rate schedule"
+                }
+                require(learningRate.toBits() == 0.0022f.toBits()) {
+                    "decay schedule requires peak LR=.0022"
+                }
+                if (learningRateSchedule == 1) {
+                    require(targetLearningRate in setOf(0.0015f, 0.0010f, 0.0007f, 0.0004f, 0.0002f, 0.0001f, 0f)) {
+                        "linear schedule target LR is outside the HPO allow-list"
+                    }
+                } else {
+                    require(targetLearningRate.toBits() == 0.0001f.toBits()) {
+                        "sqrt schedule requires target LR=.0001"
+                    }
+                }
+                require(decayStartStep > 0 && decayStartStep < decayEndStep) { "decay schedule boundaries are invalid" }
+                require(decayEndStep <= scheduleTotalSteps) { "decay schedule end exceeds schedule total" }
+                require(experimentFork) { "decay schedule requires experimentFork=true" }
+                require(parentLearningRate.toBits() == 0.0022f.toBits()) { "decay schedule requires parent LR=.0022" }
+            }
         }
         if (suite == "nicopedia-dffn-probe") {
             require(batchSize == 8) { "nicopedia-dffn-probe requires batchSize=8" }
@@ -314,6 +405,19 @@ class HeadlessDeviceTestRunner {
             tokens = tokens,
             dimension = dimension,
             feedForwardDimension = feedForwardDimension,
+            learningRate = learningRate,
+            learningRateSchedule = learningRateSchedule,
+            decayStartStep = decayStartStep,
+            decayEndStep = decayEndStep,
+            scheduleTotalSteps = scheduleTotalSteps,
+            targetLearningRate = targetLearningRate,
+            experimentFork = experimentFork,
+            parentLearningRate = parentLearningRate,
+            optimizer = optimizer,
+            muonLearningRate = muonLearningRate,
+            muonMomentum = muonMomentum,
+            muonNsSteps = muonNsSteps,
+            muonNesterov = muonNesterov,
             steps = steps,
             batchSize = batchSize,
             resumeStep = resumeStep,
@@ -366,6 +470,13 @@ class HeadlessDeviceTestRunner {
         val value = raw.toFloatOrNull() ?: throw IllegalArgumentException("$name is out of range")
         require(value.isFinite() && value in range) { "$name must be in ${range.start}..${range.endInclusive}" }
         return value
+    }
+
+    private fun booleanArgument(arguments: android.os.Bundle, name: String, default: Boolean): Boolean {
+        if (!arguments.containsKey(name)) return default
+        val raw = arguments.get(name)
+        require(raw is String) { "$name must be true or false" }
+        return raw.toBooleanStrictOrNull() ?: throw IllegalArgumentException("$name must be true or false")
     }
 
     private fun nicopediaInputDirectory(context: Context, runId: String): File {
@@ -423,7 +534,7 @@ class HeadlessDeviceTestRunner {
             outputDimension = config.vocabulary,
             steps = config.steps,
             warmupSteps = 0,
-            learningRate = 0.003f,
+            learningRate = config.learningRate,
             seed = config.seed,
             sampleCount = config.tokens,
             epochs = config.layers,
@@ -438,6 +549,18 @@ class HeadlessDeviceTestRunner {
             diagnosticCheckpointDir = directory.absolutePath,
             diagnosticResumeStep = config.resumeStep,
             diagnosticCheckpointInterval = config.checkpointInterval,
+            nicopediaLearningRateSchedule = config.learningRateSchedule,
+            nicopediaDecayStartStep = config.decayStartStep,
+            nicopediaDecayEndStep = config.decayEndStep,
+            nicopediaScheduleTotalSteps = config.scheduleTotalSteps,
+            nicopediaTargetLearningRate = config.targetLearningRate,
+            nicopediaExperimentFork = config.experimentFork,
+            nicopediaParentLearningRate = config.parentLearningRate,
+            nicopediaOptimizer = config.optimizer,
+            nicopediaMuonLearningRate = config.muonLearningRate,
+            nicopediaMuonMomentum = config.muonMomentum,
+            nicopediaMuonNsSteps = config.muonNsSteps,
+            nicopediaMuonNesterov = config.muonNesterov,
             progressCallback = progressCallback,
         )
     }
@@ -893,6 +1016,20 @@ class HeadlessDeviceTestRunner {
                 generated == 64)
         }
         return rejected || required("status") == "SUCCESS"
+    }
+
+    private fun isHealthyNicopediaTrainingReport(report: String): Boolean {
+        fun has(name: String, value: String): Boolean =
+            Regex("(?m)^${Regex.escape(name)}=${Regex.escape(value)}$").containsMatchIn(report)
+        return report.startsWith("NICOPEDIA_HTP\n") &&
+            has("qnn_return_code_success", "true") &&
+            has("output_tensors_finite", "true") &&
+            has("cpu_fallback", "false") &&
+            has("nan_detected", "false") &&
+            has("inf_detected", "false") &&
+            has("api_trace_graph_execute_failure_count", "0") &&
+            has("api_trace_fallback_attempted", "false") &&
+            has("api_trace_fallback_succeeded", "false")
     }
 
     private companion object {

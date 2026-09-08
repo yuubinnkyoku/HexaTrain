@@ -7,6 +7,19 @@
 
 Set-StrictMode -Version Latest
 
+# A native held-out evaluation can occupy the instrumentation process long
+# enough that the nominal 30-second heartbeat thread misses several writes.
+# Preflight treats a heartbeat older than ten minutes as stale only when there
+# is no live process/service/activity evidence; the in-run poll keeps a wider
+# thirty-minute fail-closed window so legitimate 256+256 evaluations are not
+# force-stopped at two minutes.
+$PhoneLmStatusStaleMilliseconds = 600000
+# V1024/D64/FFN128 HTP training can spend several hours across native graph
+# phases while checkpoint progress is still advancing. Keep the bound finite
+# (6 h) and continue to fail closed on an actually stale heartbeat; the device,
+# process, checkpoint, thermal, focus, and identity checks remain unchanged.
+$PhoneLmHeartbeatStaleMilliseconds = 21600000
+
 function Stop-PhoneLmProcessTree {
     param([Parameter(Mandatory = $true)][int]$RootProcessId)
     $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$RootProcessId" -ErrorAction SilentlyContinue)
@@ -232,7 +245,7 @@ function Get-PhoneLmRunEvidence {
                     # process/task/service/activity evidence below still gates
                     # the decision; stale status alone is retained as an
                     # auditable inactive reason and never treated as success.
-                    if ($statusHeartbeatAgeMs -gt 120000) { $statusState = 'stale' }
+                    if ($statusHeartbeatAgeMs -gt $PhoneLmStatusStaleMilliseconds) { $statusState = 'stale' }
                 }
             }
         } catch { $statusUncertain = $true }
@@ -454,7 +467,7 @@ function Assert-PhoneLmHealthReport {
         if ($map.all_steps_finite -ne 'true' -or $map.final_finite -ne 'true' -or $map.checkpoint_written -ne 'true' -or $map.final_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_TRAINING_HEALTH_REJECTED' }
     } elseif ($Kind -eq 'eval') {
         foreach ($key in @('validation_nll', 'development_nll', 'validation_nonfinite_chunks', 'development_nonfinite_chunks', 'checkpoint_format', 'checkpoint_finite', 'checkpoint_parameter_hash')) { if (-not $map.Contains($key)) { throw "REPORT_FIELD_MISSING: eval $key" } }
-        if ($map.checkpoint_format -notin @('NPRTCKPTV1', 'NPRTCKPTV2', 'NPRTCKPTV3') -or $map.checkpoint_finite -ne 'true' -or $map.validation_nonfinite_chunks -ne '0' -or $map.development_nonfinite_chunks -ne '0' -or $map.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_EVAL_HEALTH_REJECTED' }
+        if ($map.checkpoint_format -notin @('NPRTCKPTV1', 'NPRTCKPTV2', 'NPRTCKPTV3', 'NPRTCKPTV4') -or $map.checkpoint_finite -ne 'true' -or $map.validation_nonfinite_chunks -ne '0' -or $map.development_nonfinite_chunks -ne '0' -or $map.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_EVAL_HEALTH_REJECTED' }
     }
     return $map
 }
@@ -464,10 +477,20 @@ function Get-PhoneLmCheckpointHeaders {
     $bytes = [IO.File]::ReadAllBytes($Path)
     if ($bytes.Length -lt 43) { throw 'CHECKPOINT_TOO_SMALL' }
     $magic = [Text.Encoding]::ASCII.GetString($bytes, 0, 11)
-    if ($magic -notin @("NPRTCKPTV1`n", "NPRTCKPTV2`n", "NPRTCKPTV3`n")) { throw 'CHECKPOINT_MAGIC_MISMATCH' }
+    if ($magic -notin @("NPRTCKPTV1`n", "NPRTCKPTV2`n", "NPRTCKPTV3`n", "NPRTCKPTV4`n")) { throw 'CHECKPOINT_MAGIC_MISMATCH' }
     function U32([byte[]]$b, [int]$o) { return [uint32](([uint64]$b[$o] * 16777216) + ([uint64]$b[$o + 1] * 65536) + ([uint64]$b[$o + 2] * 256) + [uint64]$b[$o + 3]) }
+    function U64([byte[]]$b, [int]$o) {
+        $value = [uint64]0
+        for ($i = 0; $i -lt 8; $i++) { $value = ($value * 256) + [uint64]$b[$o + $i] }
+        return $value
+    }
+    function F32([byte[]]$b, [int]$o) {
+        $bits = U32 $b $o
+        return [BitConverter]::ToSingle([BitConverter]::GetBytes([uint32]$bits), 0)
+    }
     $kind = ''
     $tokenizerHash = ''
+    $datasetHash = ''
     if ($magic -eq "NPRTCKPTV3`n") {
         $offset = 43
         if ($bytes.Length -lt $offset + 4) { throw 'CHECKPOINT_V3_TOKENIZER_TRUNCATED' }
@@ -479,7 +502,58 @@ function Get-PhoneLmCheckpointHeaders {
         $tokenizerHash = [Text.Encoding]::ASCII.GetString($bytes, $offset, $hashLength)
         if ($kind -ne 'byte_bpe' -or $tokenizerHash -notmatch '^sha256:[0-9a-f]{64}$') { throw 'CHECKPOINT_V3_TOKENIZER_IDENTITY_INVALID' }
     }
-    [pscustomobject][ordered]@{ Magic = $magic.Trim(); Vocabulary = U32 $bytes 11; Tokens = U32 $bytes 15; Dimension = U32 $bytes 19; FeedForward = U32 $bytes 23; Layers = U32 $bytes 27; Heads = U32 $bytes 31; Seed = U32 $bytes 35; Step = U32 $bytes 39; TokenizerKind = $kind; TokenizerHash = $tokenizerHash }
+    if ($magic -eq "NPRTCKPTV4`n") {
+        if ($bytes.Length -lt 51) { throw 'CHECKPOINT_V4_HEADER_TRUNCATED' }
+        $offset = 51
+        function V4String([byte[]]$b, [ref]$cursor, [string]$label) {
+            if ($cursor.Value -gt $b.Length - 4) { throw "CHECKPOINT_V4_${label}_LENGTH_TRUNCATED" }
+            $length = [int](U32 $b $cursor.Value); $cursor.Value += 4
+            if ($length -lt 1 -or $length -gt 4096 -or $cursor.Value -gt $b.Length - $length) { throw "CHECKPOINT_V4_${label}_INVALID" }
+            $value = [Text.Encoding]::UTF8.GetString($b, $cursor.Value, $length); $cursor.Value += $length
+            return $value
+        }
+        $kind = V4String $bytes ([ref]$offset) 'TOKENIZER_KIND'
+        $tokenizerHash = V4String $bytes ([ref]$offset) 'TOKENIZER_HASH'
+        $datasetHash = V4String $bytes ([ref]$offset) 'DATASET_HASH'
+        if ($kind -ne 'byte_bpe' -or $tokenizerHash -notmatch '^sha256:[0-9a-f]{64}$' -or $datasetHash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'CHECKPOINT_V4_DATA_IDENTITY_INVALID' }
+        if ($offset -gt $bytes.Length - 40) { throw 'CHECKPOINT_V4_CURSOR_TRUNCATED' }
+        $recordIndex = U64 $bytes $offset; $offset += 8
+        $tokenOffset = U64 $bytes $offset; $offset += 8
+        $epoch = U64 $bytes $offset; $offset += 8
+        $exposedTokens = U64 $bytes $offset; $offset += 8
+        $orderSeed = U64 $bytes $offset; $offset += 8
+        $optimizerIdentity = V4String $bytes ([ref]$offset) 'OPTIMIZER_IDENTITY'
+        # The V4 optimizer/config block has 18 big-endian 32-bit fields.
+        # Check the complete block before decoding any field so malformed
+        # recovered artifacts fail closed with a useful identity error.
+        if ($offset -gt $bytes.Length - 72) { throw 'CHECKPOINT_V4_HYPERPARAMETERS_TRUNCATED' }
+        $muonLearningRate = F32 $bytes $offset; $offset += 4
+        $auxAdamLearningRate = F32 $bytes $offset; $offset += 4
+        $muonTargetLearningRate = F32 $bytes $offset; $offset += 4
+        $auxAdamTargetLearningRate = F32 $bytes $offset; $offset += 4
+        $muonMomentum = F32 $bytes $offset; $offset += 4
+        $muonNesterov = U32 $bytes $offset; $offset += 4
+        $muonNsSteps = U32 $bytes $offset; $offset += 4
+        $auxAdamBeta1 = F32 $bytes $offset; $offset += 4
+        $auxAdamBeta2 = F32 $bytes $offset; $offset += 4
+        $auxAdamEpsilon = F32 $bytes $offset; $offset += 4
+        $muonWeightDecay = F32 $bytes $offset; $offset += 4
+        $auxAdamWeightDecay = F32 $bytes $offset; $offset += 4
+        $decayStartStep = U32 $bytes $offset; $offset += 4
+        $decayEndStep = U32 $bytes $offset; $offset += 4
+        $scheduleTotalSteps = U32 $bytes $offset; $offset += 4
+        $schemaVersion = U32 $bytes $offset; $offset += 4
+        $registryVersion = U32 $bytes $offset; $offset += 4
+        $registryCount = U32 $bytes $offset; $offset += 4
+    }
+    $seed = if ($magic -eq "NPRTCKPTV4`n") { U32 $bytes 39 } else { U32 $bytes 35 }
+    $step = if ($magic -eq "NPRTCKPTV4`n") { U64 $bytes 43 } else { U32 $bytes 39 }
+    [pscustomobject][ordered]@{
+        Magic = $magic.Trim(); Vocabulary = U32 $bytes 11; Tokens = U32 $bytes 15; Dimension = U32 $bytes 19; FeedForward = U32 $bytes 23; Layers = U32 $bytes 27; Heads = U32 $bytes 31; Epsilon = if ($magic -eq "NPRTCKPTV4`n") { F32 $bytes 35 } else { $null }; Seed = $seed; Step = $step; TokenizerKind = $kind; TokenizerHash = $tokenizerHash; DatasetHash = $datasetHash;
+        RecordIndex = if ($magic -eq "NPRTCKPTV4`n") { $recordIndex } else { $null }; TokenOffset = if ($magic -eq "NPRTCKPTV4`n") { $tokenOffset } else { $null }; Epoch = if ($magic -eq "NPRTCKPTV4`n") { $epoch } else { $null }; ExposedTokens = if ($magic -eq "NPRTCKPTV4`n") { $exposedTokens } else { $null }; OrderSeed = if ($magic -eq "NPRTCKPTV4`n") { $orderSeed } else { $null };
+        OptimizerIdentity = if ($magic -eq "NPRTCKPTV4`n") { $optimizerIdentity } else { '' }; MuonLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $muonLearningRate } else { $null }; AuxAdamLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamLearningRate } else { $null }; MuonTargetLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $muonTargetLearningRate } else { $null }; AuxAdamTargetLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamTargetLearningRate } else { $null }; MuonMomentum = if ($magic -eq "NPRTCKPTV4`n") { $muonMomentum } else { $null }; MuonNesterov = if ($magic -eq "NPRTCKPTV4`n") { $muonNesterov } else { $null }; MuonNsSteps = if ($magic -eq "NPRTCKPTV4`n") { $muonNsSteps } else { $null }; AuxAdamBeta1 = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamBeta1 } else { $null }; AuxAdamBeta2 = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamBeta2 } else { $null }; AuxAdamEpsilon = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamEpsilon } else { $null }; MuonWeightDecay = if ($magic -eq "NPRTCKPTV4`n") { $muonWeightDecay } else { $null }; AuxAdamWeightDecay = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamWeightDecay } else { $null }; DecayStartStep = if ($magic -eq "NPRTCKPTV4`n") { $decayStartStep } else { $null }; DecayEndStep = if ($magic -eq "NPRTCKPTV4`n") { $decayEndStep } else { $null }; ScheduleTotalSteps = if ($magic -eq "NPRTCKPTV4`n") { $scheduleTotalSteps } else { $null }; SchemaVersion = if ($magic -eq "NPRTCKPTV4`n") { $schemaVersion } else { $null }; RegistryVersion = if ($magic -eq "NPRTCKPTV4`n") { $registryVersion } else { $null }; RegistryCount = if ($magic -eq "NPRTCKPTV4`n") { $registryCount } else { $null };
+        FileSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant(); V4HeaderDecoded = ($magic -eq "NPRTCKPTV4`n")
+    }
 }
 
 function Receive-PhoneLmBinary {
@@ -721,7 +795,7 @@ function Wait-PhoneLmHeadlessStatus {
                         $foreignLive = $lastStatus -match '"status"\s*:\s*"(STARTING|RUNNING)"'
                         $foreignHeartbeatStale = $false
                         if ($foreignLive -and $lastStatus -match '"last_heartbeat"\s*:\s*(\d+)') {
-                            $foreignHeartbeatStale = ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$Matches[1]) -gt 120000
+                            $foreignHeartbeatStale = ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$Matches[1]) -gt $PhoneLmStatusStaleMilliseconds
                         }
                         if ($seenExpectedStatus -or ($foreignLive -and -not $foreignHeartbeatStale)) {
                             throw 'HEADLESS_STATUS_IDENTITY_MISMATCH'
@@ -754,10 +828,18 @@ function Wait-PhoneLmHeadlessStatus {
             if (-not $terminal -and $lastStatus -match '"last_heartbeat"\s*:\s*(\d+)') {
                 $heartbeatMs = [int64]$Matches[1]
                 $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                if ($heartbeatMs -le 0 -or $nowMs - $heartbeatMs -gt 120000) { throw 'HEADLESS_HEARTBEAT_STALE' }
+                if ($heartbeatMs -le 0 -or $nowMs - $heartbeatMs -gt $PhoneLmHeartbeatStaleMilliseconds) { throw 'HEADLESS_HEARTBEAT_STALE' }
             }
             if ($terminal -and $Process.HasExited) { break }
-            if ($Process.HasExited -and -not $terminal) { break }
+            # The adb `am instrument -w` wrapper can exit after a long period
+            # without stdout even while the device-side instrumentation keeps
+            # running and updating the atomic heartbeat.  Do not classify that
+            # host-wrapper exit as a training timeout; continue using the
+            # device status as the source of truth until it becomes terminal.
+            if ($Process.HasExited -and -not $terminal) {
+                Start-Sleep -Seconds $PollSeconds
+                continue
+            }
             if ($elapsed -ge ($PollLimit * $PollSeconds)) { break }
             Start-Sleep -Seconds $PollSeconds
         }

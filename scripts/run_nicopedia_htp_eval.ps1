@@ -3,7 +3,8 @@
 # HTP-native held-out evaluation runner for the Nicopedia L19 model.
 #
 # Pushes the private validation/development caches and a private checkpoint
-# (legacy NPRTCKPTV1/V2 or tokenizer-bound NPRTCKPTV3) into the app files directory, drives
+# (legacy NPRTCKPTV1/V2, tokenizer-bound NPRTCKPTV3, or mixed-optimizer
+# NPRTCKPTV4) into the app files directory, drives
 # QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL (teacher-forced forward runs on
 # the HTP graph), and pulls the aggregate NLL/perplexity/top-1/top-5/metrics
 # report.  The host CPU evaluator runs on the same checkpoint/caches for the
@@ -30,6 +31,7 @@ param(
   [string]$CheckpointPath = "",
   [string]$CacheRoot = "",
   [string]$TokenizerModelPath = "",
+  [string]$ReportRoot = "",
   [int]$PollLimit = 7200,
   [int]$PollSeconds = 2,
   [int]$ProgressEverySeconds = 30,
@@ -68,7 +70,12 @@ $reportDirectory = if ($Vocabulary -eq 1024) {
 $trainingDirectory = if ($Vocabulary -eq 1024) {
   "build\reports\nicopedia-htp-training-v1024"
 } else { "build\reports\nicopedia-htp-training" }
-$reportRoot = Join-Path $root $reportDirectory
+$reportCandidate = if ($ReportRoot) {
+  if ([IO.Path]::IsPathRooted($ReportRoot)) { $ReportRoot } else { Join-Path $root $ReportRoot }
+} else { Join-Path $root $reportDirectory }
+$reportRoot = [IO.Path]::GetFullPath($reportCandidate)
+$allowedReportRoot = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
+if (-not $reportRoot.StartsWith($allowedReportRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'ReportRoot must resolve below the repository build directory' }
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
 $modelTag = if ($Tokens -eq 32 -and $Dimension -eq 32 -and $FeedForwardDimension -eq 32) { '' } else { "-t$Tokens-d$Dimension-f$FeedForwardDimension" }
@@ -82,8 +89,8 @@ if (-not $CheckpointPath) {
 }
 if (-not (Test-Path -LiteralPath $CheckpointPath -PathType Leaf)) { throw "CHECKPOINT_MISSING: $CheckpointPath" }
 $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $CheckpointPath
-$expectedCheckpointFormat = if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }
-if ($checkpointHeader.Magic -ne $expectedCheckpointFormat -or $checkpointHeader.Seed -ne $Seed -or
+$expectedCheckpointFormats = if ($Vocabulary -eq 1024) { @('NPRTCKPTV3','NPRTCKPTV4') } else { @('NPRTCKPTV2') }
+if ($checkpointHeader.Magic -notin $expectedCheckpointFormats -or $checkpointHeader.Seed -ne $Seed -or
     $checkpointHeader.Layers -ne $Layers -or $checkpointHeader.Heads -ne $Heads -or
     $checkpointHeader.Vocabulary -ne $Vocabulary -or $checkpointHeader.Tokens -ne $Tokens -or
     $checkpointHeader.Dimension -ne $Dimension -or
@@ -236,6 +243,7 @@ if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf)) {
   & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $root 'app\src\main\cpp') `
     (Join-Path $root 'app\src\main\cpp\tiny_language_model_cpu.cpp') `
+    (Join-Path $root 'app\src\main\cpp\nicopedia_muon_checkpoint.cpp') `
     (Join-Path $root 'host_tests\htp_checkpoint_eval.cpp') `
     -o $hostEvalExe
   if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval build failed" }

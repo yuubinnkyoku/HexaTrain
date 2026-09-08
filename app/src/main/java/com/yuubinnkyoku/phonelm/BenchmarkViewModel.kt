@@ -122,6 +122,18 @@ object NativeBenchmarkEngine : BenchmarkEngine {
             diagnosticCheckpointDir = config.diagnosticCheckpointDir,
             diagnosticResumeStep = config.diagnosticResumeStep,
             diagnosticCheckpointInterval = config.diagnosticCheckpointInterval,
+            nicopediaLearningRateSchedule = 0,
+            nicopediaDecayStartStep = 0,
+            nicopediaDecayEndStep = 0,
+            nicopediaScheduleTotalSteps = 0,
+            nicopediaTargetLearningRate = 0f,
+            nicopediaExperimentFork = false,
+            nicopediaParentLearningRate = 0f,
+            nicopediaOptimizer = 0,
+            nicopediaMuonLearningRate = 0f,
+            nicopediaMuonMomentum = 0.95f,
+            nicopediaMuonNsSteps = 5,
+            nicopediaMuonNesterov = true,
             progressCallback = ProgressCallback(progress),
         )
     }

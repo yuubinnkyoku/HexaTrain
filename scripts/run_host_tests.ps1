@@ -320,6 +320,45 @@ try {
 }
 Write-Host "nicopedia_resume_host_test=PASS"
 
+$NicopediaScheduleExecutable = Join-Path $OutputDirectory "nicopedia_learning_rate_schedule_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "host_tests\nicopedia_learning_rate_schedule_test.cpp") `
+    -o $NicopediaScheduleExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia learning-rate schedule host test compilation failed"
+}
+& $NicopediaScheduleExecutable
+if ($LASTEXITCODE -ne 0) {
+    throw "Nicopedia learning-rate schedule host test failed"
+}
+Write-Host "nicopedia_learning_rate_schedule_host_test=PASS"
+
+$NicopediaMuonExecutable = Join-Path $OutputDirectory "nicopedia_muon_optimizer_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_optimizer.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_muon_optimizer_test.cpp") `
+    -o $NicopediaMuonExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon optimizer host test compilation failed" }
+& $NicopediaMuonExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon optimizer host test failed" }
+Write-Host "nicopedia_muon_optimizer_host_test=PASS"
+
+$NicopediaMuonCheckpointExecutable = Join-Path $OutputDirectory "nicopedia_muon_checkpoint_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_optimizer.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_checkpoint.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_muon_checkpoint_test.cpp") `
+    -o $NicopediaMuonCheckpointExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon checkpoint host test compilation failed" }
+& $NicopediaMuonCheckpointExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon checkpoint host test failed" }
+Write-Host "nicopedia_muon_checkpoint_host_test=PASS"
+
 $NicopediaCpuGenerateExecutable = Join-Path $OutputDirectory "nicopedia_cpu_generate.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `

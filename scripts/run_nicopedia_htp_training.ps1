@@ -22,8 +22,21 @@ param(
   [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
   [int]$BatchSize = 8,   # canonical pilot config (protocol.json): 8 samples/step
+  [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$LearningRate = '0.003',
+  [ValidateSet('constant','linear_decay','sqrt_decay')][string]$LearningRateSchedule = 'constant',
+  [ValidateRange(0,100000)][int]$DecayStartStep = 0,
+  [ValidateRange(0,100000)][int]$DecayEndStep = 0,
+  [ValidateRange(0,100000)][int]$ScheduleTotalSteps = 0,
+  [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$TargetLearningRate = '',
+  [switch]$ExperimentFork,
+  [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
+  [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
+  [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',
+  [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonMomentum = '0.95',
+  [ValidateRange(1,99)][int]$MuonNsSteps = 5,
   [string]$CachePath = "",
   [string]$TokenizerModelPath = "",
+  [string]$ReportRoot = "",
   [int]$PollLimit = 7200,
   [int]$PollSeconds = 2,
   [int]$ProgressEverySeconds = 30,
@@ -33,12 +46,32 @@ param(
   [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
   [switch]$BuildInstallOnly,
   [switch]$OneUpdateProbe,
+  [switch]$AllowQualityFailure,
   [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
+
+function Get-PhoneLmExpectedLearningRate {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet('constant','linear_decay','sqrt_decay')][string]$Schedule,
+    [Parameter(Mandatory = $true)][double]$PeakLearningRate,
+    [Parameter(Mandatory = $true)][double]$TargetLearningRate,
+    [Parameter(Mandatory = $true)][int]$DecayStartStep,
+    [Parameter(Mandatory = $true)][int]$DecayEndStep,
+    [Parameter(Mandatory = $true)][int]$Step
+  )
+  if ($Schedule -eq 'constant' -or $Step -le $DecayStartStep) { return $PeakLearningRate }
+  if ($Step -ge $DecayEndStep) { return $TargetLearningRate }
+  $progress = ($Step - $DecayStartStep) / [double]($DecayEndStep - $DecayStartStep)
+  if ($Schedule -eq 'sqrt_decay') {
+    $shape = 1.0 - [math]::Sqrt($progress)
+    return $TargetLearningRate + (($PeakLearningRate - $TargetLearningRate) * $shape)
+  }
+  return $PeakLearningRate + ($progress * ($TargetLearningRate - $PeakLearningRate))
+}
 
 if ($SelfTest) {
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
@@ -48,6 +81,22 @@ if ($SelfTest) {
   if ($Dimension -ne 32 -or $FeedForwardDimension -ne 32) {
       throw "SELFTEST_MODEL_DIMENSIONS_DEFAULT: expected=D32/FFN32 actual=D$Dimension/FFN$FeedForwardDimension"
   }
+  if ($LearningRate -ne '0.003') { throw "SELFTEST_LEARNING_RATE_DEFAULT: expected=0.003 actual=$LearningRate" }
+  if ($LearningRateSchedule -ne 'constant' -or $DecayStartStep -ne 0 -or $DecayEndStep -ne 0 -or $ScheduleTotalSteps -ne 0 -or $TargetLearningRate -ne '' -or $ExperimentFork -or $ParentLearningRate -ne '0') { throw 'SELFTEST_SCHEDULE_DEFAULT' }
+  if ($Optimizer -ne 'Adam' -or $MuonLearningRate -ne '0.010' -or $MuonMomentum -ne '0.95' -or $MuonNsSteps -ne 5) { throw 'SELFTEST_OPTIMIZER_DEFAULT' }
+  $sqrtCases = @(
+    [pscustomobject]@{ Step = 6000; Expected = 0.0022 },
+    [pscustomobject]@{ Step = 6001; Expected = 0.002153042572472504 },
+    [pscustomobject]@{ Step = 7000; Expected = 0.00071507575950825 },
+    [pscustomobject]@{ Step = 7999; Expected = 0.000100525065641411 },
+    [pscustomobject]@{ Step = 8000; Expected = 0.0001 }
+  )
+  foreach ($case in $sqrtCases) {
+    $actual = Get-PhoneLmExpectedLearningRate -Schedule 'sqrt_decay' -PeakLearningRate 0.0022 -TargetLearningRate 0.0001 -DecayStartStep 6000 -DecayEndStep 8000 -Step $case.Step
+    if ([math]::Abs($actual - $case.Expected) -gt 1.0e-12) { throw "SELFTEST_SQRT_FORMULA: step=$($case.Step) actual=$actual expected=$($case.Expected)" }
+  }
+  $scaledMidpoint = Get-PhoneLmExpectedLearningRate -Schedule 'sqrt_decay' -PeakLearningRate 0.0022 -TargetLearningRate 0.0005 -DecayStartStep 6000 -DecayEndStep 8000 -Step 7000
+  if ([math]::Abs($scaledMidpoint - 0.000997918471982869) -gt 1.0e-12) { throw "SELFTEST_SQRT_TARGET_SCALING: actual=$scaledMidpoint" }
 
   # Production anchor: T32/D32/FFN32 uses the canonical untagged filename.
   $canonicalName = Get-PhoneLmCheckpointName `
@@ -111,6 +160,42 @@ if ($SelfTest) {
 }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 if ($Steps -lt 1 -or $Steps -gt 12000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..12000' }
+try { $muonLearningRateValue = [double]::Parse($MuonLearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
+try { $muonMomentumValue = [double]::Parse($MuonMomentum, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_MOMENTUM_INVALID' }
+if (-not [double]::IsFinite($muonLearningRateValue) -or $muonLearningRateValue -le 0 -or $muonLearningRateValue -gt 1) { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
+if (-not [double]::IsFinite($muonMomentumValue) -or $muonMomentumValue -lt 0 -or $muonMomentumValue -ge 1) { throw 'NICOPEDIA_MUON_MOMENTUM_INVALID' }
+if ($Optimizer -eq 'Muon') {
+  if ($Vocabulary -ne 1024 -or $Tokens -ne 32 -or $Dimension -ne 64 -or $FeedForwardDimension -ne 128 -or $Layers -ne 19 -or $BatchSize -ne 8) { throw 'NICOPEDIA_MUON_ARCHITECTURE_MISMATCH' }
+  if ($MuonMomentum -ne '0.95' -or $MuonNsSteps -ne 5) { throw 'NICOPEDIA_MUON_V1_HYPERPARAMETER_MISMATCH' }
+}
+try { $learningRateValue = [double]::Parse($LearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_LEARNING_RATE_INVALID' }
+if (-not [double]::IsFinite($learningRateValue) -or $learningRateValue -le 0 -or $learningRateValue -gt 1) { throw 'NICOPEDIA_LEARNING_RATE_INVALID' }
+if (-not $TargetLearningRate) { $TargetLearningRate = $LearningRate }
+try { $targetLearningRateValue = [double]::Parse($TargetLearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_TARGET_LEARNING_RATE_INVALID' }
+try { $parentLearningRateValue = [double]::Parse($ParentLearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_PARENT_LEARNING_RATE_INVALID' }
+if (-not [double]::IsFinite($targetLearningRateValue) -or $targetLearningRateValue -lt 0 -or $targetLearningRateValue -gt 1) { throw 'NICOPEDIA_TARGET_LEARNING_RATE_INVALID' }
+if (-not [double]::IsFinite($parentLearningRateValue) -or $parentLearningRateValue -lt 0 -or $parentLearningRateValue -gt 1) { throw 'NICOPEDIA_PARENT_LEARNING_RATE_INVALID' }
+if ($ScheduleTotalSteps -eq 0) { $ScheduleTotalSteps = $Steps }
+if ($LearningRateSchedule -eq 'constant') {
+  if ($DecayStartStep -ne 0 -or $DecayEndStep -ne 0 -or $ExperimentFork) { throw 'NICOPEDIA_CONSTANT_SCHEDULE_INVALID' }
+} elseif ($LearningRateSchedule -eq 'linear_decay') {
+  # Linear HPO forks keep the validated peak/parent LR and may vary only the
+  # declared target endpoint.  Restrict the endpoint to the Schedule-v2a
+  # allow-list so an accidental cross-experiment resume cannot silently run.
+  $allowedLinearTargetLearningRates = @('0.0015', '0.0010', '0.0007', '0.0004', '0.0002', '0.0001', '0.0000')
+  if ($learningRateValue -ne 0.0022 -or
+      -not ($allowedLinearTargetLearningRates -contains $TargetLearningRate) -or
+      $DecayStartStep -le 0 -or $DecayStartStep -ge $DecayEndStep -or
+      $DecayEndStep -gt $ScheduleTotalSteps -or -not $ExperimentFork -or
+      $parentLearningRateValue -ne 0.0022) { throw 'NICOPEDIA_LINEAR_SCHEDULE_INVALID' }
+} else {
+  # Schedule-v2c is deliberately a single fixed-target shape comparison.  Do
+  # not allow the runner to silently turn this into another LR/parent sweep.
+  if ($learningRateValue -ne 0.0022 -or $TargetLearningRate -ne '0.0001' -or
+      $DecayStartStep -le 0 -or $DecayStartStep -ge $DecayEndStep -or
+      $DecayEndStep -gt $ScheduleTotalSteps -or -not $ExperimentFork -or
+      $parentLearningRateValue -ne 0.0022) { throw 'NICOPEDIA_SQRT_SCHEDULE_INVALID' }
+}
 if ($OneUpdateProbe -and $Steps -ne 1) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_STEPS_1' }
 if ($OneUpdateProbe -and $BatchSize -ne 8) { throw 'NICOPEDIA_DFFN_PROBE_REQUIRES_BATCH_8' }
 if ($OneUpdateProbe -and $ResumeStep -ne 0) { throw 'NICOPEDIA_DFFN_PROBE_DOES_NOT_SUPPORT_RESUME' }
@@ -131,7 +216,12 @@ $testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-an
 $reportDirectory = if ($Vocabulary -eq 1024) {
   "build\reports\nicopedia-htp-training-v1024"
 } else { "build\reports\nicopedia-htp-training" }
-$reportRoot = Join-Path $root $reportDirectory
+$reportCandidate = if ($ReportRoot) {
+  if ([IO.Path]::IsPathRooted($ReportRoot)) { $ReportRoot } else { Join-Path $root $ReportRoot }
+} else { Join-Path $root $reportDirectory }
+$reportRoot = [IO.Path]::GetFullPath($reportCandidate)
+$allowedReportRoot = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
+if (-not $reportRoot.StartsWith($allowedReportRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'ReportRoot must resolve below the repository build directory' }
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
 # The private token cache lives under build/private-data and is never
@@ -172,8 +262,13 @@ function Adb([string[]]$Arguments) {
 
 if (-not $SkipInstall) {
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
-  Adb @('install', '-r', $apk) | Out-Null
-  Adb @('install', '-r', '-t', $testApk) | Out-Null
+  # The verified QNN-enabled app APK is large (~190 MB) and may legitimately
+  # exceed the ordinary command timeout over a TCP ADB transport.  Keep the
+  # normal short timeout for health/control operations, but give installation
+  # a bounded one-shot window so a transport timeout is not mistaken for a
+  # trial numerical failure.
+  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', $apk) -TimeoutSeconds 300 | Out-Null
+  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', '-t', $testApk) -TimeoutSeconds 300 | Out-Null
   # `adb install -r` can restore a retained task and start the app process.
   # Re-establish the headless baseline before instrumentation; this does not
   # clear app data or weaken the later activity/focus invariant.
@@ -237,7 +332,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -282,7 +377,8 @@ if ($OneUpdateProbe) {
   $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt") -Encoding utf8
 }
 Assert-PhoneLmHeadlessNoActivity -Text $result
-$deviceCompleted = $waited.StatusJson -match '"status"\s*:\s*"PASSED"' -and $result -match '(?m)^status=SUCCESS\s*$'
+$deviceCompleted = $waited.StatusJson -match '"status"\s*:\s*"PASSED"' -and
+  (($result -match '(?m)^status=SUCCESS\s*$') -or ($AllowQualityFailure -and $result -match '(?m)^status=FAILED\s*$'))
 if (-not $deviceCompleted) {
   if ($waited.ProcessExitCode -ne 0) { throw "INSTRUMENTATION_EXIT_FAILURE: code=$($waited.ProcessExitCode)" }
   $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt") -Encoding utf8
@@ -317,12 +413,50 @@ $reportMap = if ($OneUpdateProbe) {
       [int]$probeMap.api_trace_graph_execute_success_count -ne [int]$probeMap.graph_execute_count -or
       [int]$probeMap.api_trace_graph_execute_failure_count -ne 0) { throw 'PROBE_REPORT_EXECUTE_COUNT_MISMATCH' }
   $probeMap
+} elseif ($Optimizer -eq 'Muon') {
+  $muonMap = Get-PhoneLmKeyValueMap -Text $result
+  foreach ($key in @('optimizer','qnn_return_code_success','output_tensors_finite','final_finite','all_steps_finite','cpu_fallback','fallback','checkpoint_format','completed_steps','muon_matrix_count','muon_parameter_count','aux_adam_parameter_count','forward_backward_backend','optimizer_muon_backend','optimizer_aux_adam_backend','api_trace_graph_execute_failure_count','api_trace_fallback_attempted','api_trace_fallback_succeeded')) {
+    if (-not $muonMap.Contains($key)) { throw "MUON_REPORT_FIELD_MISSING: $key" }
+  }
+  if ($muonMap.optimizer -ne 'muon_aux_adam' -or $muonMap.qnn_return_code_success -ne 'true' -or
+      $muonMap.output_tensors_finite -ne 'true' -or $muonMap.final_finite -ne 'true' -or $muonMap.all_steps_finite -ne 'true' -or
+      $muonMap.cpu_fallback -ne 'false' -or $muonMap.fallback -ne 'false' -or $muonMap.checkpoint_format -ne 'NPRTCKPTV4' -or
+      [int]$muonMap.completed_steps -ne $Steps -or [int]$muonMap.muon_matrix_count -ne 114 -or
+      [long]$muonMap.muon_parameter_count -ne 622592 -or [long]$muonMap.aux_adam_parameter_count -ne 135936 -or
+      $muonMap.forward_backward_backend -ne 'HTP' -or $muonMap.optimizer_muon_backend -ne 'CPU' -or
+      $muonMap.optimizer_aux_adam_backend -ne 'CPU' -or $muonMap.api_trace_graph_execute_failure_count -ne '0' -or
+      $muonMap.api_trace_fallback_attempted -ne 'false' -or $muonMap.api_trace_fallback_succeeded -ne 'false') { throw 'MUON_REPORT_HEALTH_REJECTED' }
+  $muonMap
+} elseif ($AllowQualityFailure) {
+  $smokeMap = Get-PhoneLmKeyValueMap -Text $result
+  foreach ($key in @('qnn_return_code_success', 'output_tensors_finite', 'cpu_fallback', 'nan_detected', 'inf_detected', 'completed_steps', 'api_trace_graph_execute_failure_count', 'api_trace_last_qnn_result', 'api_trace_effective_result', 'api_trace_cpu_backend_initialized', 'api_trace_fallback_attempted', 'api_trace_fallback_succeeded')) {
+    if (-not $smokeMap.Contains($key)) { throw "SMOKE_REPORT_FIELD_MISSING: $key" }
+  }
+  if ($smokeMap.qnn_return_code_success -ne 'true' -or $smokeMap.output_tensors_finite -ne 'true' -or
+      $smokeMap.cpu_fallback -ne 'false' -or $smokeMap.nan_detected -ne 'false' -or $smokeMap.inf_detected -ne 'false' -or
+      $smokeMap.api_trace_graph_execute_failure_count -ne '0' -or $smokeMap.api_trace_last_qnn_result -ne '0' -or
+      $smokeMap.api_trace_effective_result -ne '0' -or $smokeMap.api_trace_cpu_backend_initialized -ne 'false' -or
+      $smokeMap.api_trace_fallback_attempted -ne 'false' -or $smokeMap.api_trace_fallback_succeeded -ne 'false' -or
+      [int]$smokeMap.completed_steps -ne $Steps) { throw 'SMOKE_REPORT_HEALTH_REJECTED' }
+  $smokeMap
 } else {
   Assert-PhoneLmHealthReport -Text $result -ExpectedBuildId $ExpectedBuildId -ExpectedStep $Steps -Kind training
 }
 if (-not $reportMap.Contains('model_dimension') -or -not $reportMap.Contains('feed_forward_dimension') -or
     [int]$reportMap.model_dimension -ne $Dimension -or [int]$reportMap.feed_forward_dimension -ne $FeedForwardDimension) {
   throw 'TRAINING_REPORT_MODEL_IDENTITY_MISMATCH'
+}
+if (-not $reportMap.Contains('learning_rate') -or [single]$reportMap.learning_rate -ne [single]$LearningRate) {
+  throw 'TRAINING_REPORT_LEARNING_RATE_MISMATCH'
+}
+if (-not $reportMap.Contains('learning_rate_schedule') -or $reportMap.learning_rate_schedule -ne $LearningRateSchedule -or
+    -not $reportMap.Contains('learning_rate_decay_start_step') -or [int]$reportMap.learning_rate_decay_start_step -ne $DecayStartStep -or
+    -not $reportMap.Contains('learning_rate_decay_end_step') -or [int]$reportMap.learning_rate_decay_end_step -ne $DecayEndStep -or
+    -not $reportMap.Contains('learning_rate_schedule_total_steps') -or [int]$reportMap.learning_rate_schedule_total_steps -ne $ScheduleTotalSteps -or
+    -not $reportMap.Contains('learning_rate_target') -or [single]$reportMap.learning_rate_target -ne [single]$TargetLearningRate -or
+    -not $reportMap.Contains('experiment_fork') -or ($reportMap.experiment_fork -ne $ExperimentFork.ToString().ToLowerInvariant()) -or
+    -not $reportMap.Contains('parent_learning_rate') -or [single]$reportMap.parent_learning_rate -ne [single]$ParentLearningRate) {
+  throw 'TRAINING_REPORT_SCHEDULE_MISMATCH'
 }
 $stateAfter = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'after'
 $annotated = $result.TrimEnd() + "`n" +
@@ -374,15 +508,18 @@ foreach ($name in $checkpointNames) {
   $local = Join-Path $reportRoot $name
   $pulled = Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
-  $header = Get-PhoneLmCheckpointHeaders -Path $local
-  if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne $Vocabulary -or $header.Tokens -ne $Tokens -or $header.Dimension -ne $Dimension -or $header.FeedForward -ne $FeedForwardDimension) {
-    throw "CHECKPOINT_IDENTITY_MISMATCH: $name"
-  }
-  $expectedCheckpointFormat = if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }
-  if ($header.Magic -ne $expectedCheckpointFormat) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
-  if ($Vocabulary -eq 1024) {
-    $modelHash = 'sha256:' + (Get-FileHash -LiteralPath $tokenizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($header.TokenizerKind -ne 'byte_bpe' -or $header.TokenizerHash -ne $modelHash) { throw "CHECKPOINT_TOKENIZER_IDENTITY_MISMATCH: $name" }
+  if ($Optimizer -eq 'Muon') {
+    $magic = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($local), 0, 11)
+    if ($magic -ne "NPRTCKPTV4`n") { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
+  } else {
+    $header = Get-PhoneLmCheckpointHeaders -Path $local
+    if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne $Vocabulary -or $header.Tokens -ne $Tokens -or $header.Dimension -ne $Dimension -or $header.FeedForward -ne $FeedForwardDimension) { throw "CHECKPOINT_IDENTITY_MISMATCH: $name" }
+    $expectedCheckpointFormat = if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }
+    if ($header.Magic -ne $expectedCheckpointFormat) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
+    if ($Vocabulary -eq 1024) {
+      $modelHash = 'sha256:' + (Get-FileHash -LiteralPath $tokenizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($header.TokenizerKind -ne 'byte_bpe' -or $header.TokenizerHash -ne $modelHash) { throw "CHECKPOINT_TOKENIZER_IDENTITY_MISMATCH: $name" }
+    }
   }
   # When the production evaluator and held-out caches are available, decode
   # every pulled checkpoint through the same host path used by the eval runner
@@ -414,7 +551,44 @@ $curveLocal = if ($modelTag) { "training-curve$modelTag-$Steps.csv" } else { $cu
 if ($checkpointNames.Count -eq 0) { throw 'CHECKPOINT_PULL_VERIFY_FAILED: no checkpoints' }
 Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
   -RemotePath "$remoteDir/$curveRemote" -LocalPath (Join-Path $reportRoot $curveLocal) -MinimumBytes 1 | Out-Null
-Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveLocal"
+$telemetryLocal = Join-Path $reportRoot 'learning-rate-telemetry.csv'
+# A smoke and its later final continuation share a report directory, while
+# each native invocation emits a segment-local telemetry file. Preserve a
+# prior segment instead of letting the generic binary receiver reject the
+# legitimate new target as a stale mismatch.
+if (Test-Path -LiteralPath $telemetryLocal -PathType Leaf) {
+  $priorTelemetryRows = @(Import-Csv -LiteralPath $telemetryLocal -ErrorAction SilentlyContinue)
+  $expectedTelemetryRows = if ($reportMap.Contains('run_completed_steps')) { [int]$reportMap.run_completed_steps } else { -1 }
+  $firstTelemetryStep = if ($priorTelemetryRows.Count -gt 0) { [int]$priorTelemetryRows[0].step } else { -1 }
+  if ($priorTelemetryRows.Count -ne $expectedTelemetryRows -or $firstTelemetryStep -ne ($ResumeStep + 1)) {
+    $priorPath = Join-Path $reportRoot ("learning-rate-telemetry-prior-$ResumeStep.csv")
+    if (Test-Path -LiteralPath $priorPath -PathType Leaf) {
+      $priorPath = Join-Path $reportRoot ("learning-rate-telemetry-prior-$ResumeStep-" + [guid]::NewGuid().ToString('N') + '.csv')
+    }
+    Move-Item -LiteralPath $telemetryLocal -Destination $priorPath
+  }
+}
+Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
+  -RemotePath "$remoteDir/learning-rate-telemetry.csv" -LocalPath $telemetryLocal -MinimumBytes 1 | Out-Null
+$telemetryRows = @(Import-Csv -LiteralPath $telemetryLocal)
+if (-not $reportMap.Contains('run_completed_steps') -or $telemetryRows.Count -ne [int]$reportMap.run_completed_steps) { throw 'LEARNING_RATE_TELEMETRY_COUNT_MISMATCH' }
+foreach ($row in $telemetryRows) {
+  $telemetryStep = [int]$row.step
+  if ($telemetryStep -lt ($ResumeStep + 1) -or $telemetryStep -gt $Steps) { throw 'LEARNING_RATE_TELEMETRY_STEP_RANGE_MISMATCH' }
+  if (-not $row.PSObject.Properties['learning_rate_schedule'] -or $row.learning_rate_schedule -ne $LearningRateSchedule) { throw "LEARNING_RATE_TELEMETRY_SCHEDULE_MISMATCH: step=$telemetryStep" }
+  $expectedLr = Get-PhoneLmExpectedLearningRate -Schedule $LearningRateSchedule -PeakLearningRate $learningRateValue -TargetLearningRate $targetLearningRateValue -DecayStartStep $DecayStartStep -DecayEndStep $DecayEndStep -Step $telemetryStep
+  if ([math]::Abs(([double]$row.scheduled_lr) - $expectedLr) -gt 2.0e-8) { throw "LEARNING_RATE_TELEMETRY_MISMATCH: step=$telemetryStep" }
+}
+$requiredTelemetrySteps = if ($LearningRateSchedule -eq 'sqrt_decay') {
+  @(6000,6250,6500,6750,7000,7250,7500,7750,8000)
+} else {
+  @(4000,4500,5000,5500,6000,6500,7000,7500,8000)
+}
+$requiredTelemetrySteps = @($requiredTelemetrySteps | Where-Object { $_ -gt $ResumeStep -and $_ -le $Steps })
+foreach ($requiredStep in $requiredTelemetrySteps) {
+  if (@($telemetryRows | Where-Object { [int]$_.step -eq $requiredStep }).Count -ne 1) { throw "LEARNING_RATE_TELEMETRY_ANCHOR_MISSING: $requiredStep" }
+}
+Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveLocal + learning-rate-telemetry.csv"
 Write-Host "PASS NICOPEDIA_HTP seed=$Seed layers=$Layers steps=$Steps"
 Write-Host "Reports: $reportRoot"
 } finally {

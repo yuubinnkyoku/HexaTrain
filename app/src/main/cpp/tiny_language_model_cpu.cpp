@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 namespace phonelm::tiny_lm { namespace {
 using P=qnn::TinyTransformerParameters;
 using LP=qnn::TinyTransformerLayerParameters;
@@ -60,7 +62,170 @@ transformer::ResourceEstimate resourceEstimate(const Config& c){
       c.feedForwardDimension,c.numLayers,c.numHeads);
 }
 uint32_t headDim(const Config& c){std::string e;if(!validateConfig(c,&e))throw std::invalid_argument(e);return c.dimension/c.numHeads;}
-std::vector<ParameterInfo> parameterRegistry(const P&p){std::vector<ParameterInfo>r;auto addLayer=[&](uint32_t i,const LP&l){std::ostringstream index;index<<std::setw(3)<<std::setfill('0')<<i;const std::string pre="layer_"+index.str()+".";for(auto e:{std::pair<const char*,const std::vector<float>*>{"norm1_gamma",&l.gamma1},{"norm1_beta",&l.beta1},{"wq",&l.wq},{"wk",&l.wk},{"wv",&l.wv},{"wo",&l.wo},{"norm2_gamma",&l.gamma2},{"norm2_beta",&l.beta2},{"ffn_w1",&l.w1},{"ffn_w2",&l.w2}})r.push_back({pre+e.first,e.second});};r.push_back({"token_embedding",&p.tokenEmbedding});addLayer(0,layer(p,0));for(uint32_t i=1;i<=p.layers.size();++i)addLayer(i,p.layers[i-1]);r.push_back({"output_projection",&p.outputProjection});return r;}
+std::vector<ParameterInfo> parameterRegistry(const P& p) {
+  // The model keeps layer zero flattened for ABI compatibility.  Infer the
+  // dimensions only to describe the registry; semantic ownership comes from
+  // this explicit field table below, never from a name substring.
+  const uint32_t dimension = static_cast<uint32_t>(p.gamma1.size());
+  const uint32_t feedForward =
+      dimension != 0 && p.w1.size() % dimension == 0
+          ? static_cast<uint32_t>(p.w1.size() / dimension)
+          : 0;
+  const uint32_t vocabulary =
+      dimension != 0 && p.tokenEmbedding.size() % dimension == 0
+          ? static_cast<uint32_t>(p.tokenEmbedding.size() / dimension)
+          : 0;
+  const auto shape = [](std::initializer_list<uint32_t> dimensions) {
+    std::vector<uint32_t> result(dimensions);
+    for (const uint32_t extent : result)
+      if (extent == 0) return std::vector<uint32_t>{};
+    return result;
+  };
+  std::vector<ParameterInfo> result;
+  auto addLayer = [&](uint32_t index, const LP& values) {
+    std::ostringstream indexText;
+    indexText << std::setw(3) << std::setfill('0') << index;
+    const std::string prefix = "layer_" + indexText.str() + ".";
+    // Keep this mapping explicit.  These six hidden matrices are the only
+    // tensors eligible for Muon in the v1 research pilot.
+    result.push_back({prefix + "norm1_gamma", &values.gamma1,
+                      ParameterRole::AUX_ADAM, shape({dimension})});
+    result.push_back({prefix + "norm1_beta", &values.beta1,
+                      ParameterRole::AUX_ADAM, shape({dimension})});
+    result.push_back({prefix + "wq", &values.wq, ParameterRole::MUON,
+                      shape({dimension, dimension}), dimension, dimension});
+    result.push_back({prefix + "wk", &values.wk, ParameterRole::MUON,
+                      shape({dimension, dimension}), dimension, dimension});
+    result.push_back({prefix + "wv", &values.wv, ParameterRole::MUON,
+                      shape({dimension, dimension}), dimension, dimension});
+    result.push_back({prefix + "wo", &values.wo, ParameterRole::MUON,
+                      shape({dimension, dimension}), dimension, dimension});
+    result.push_back({prefix + "norm2_gamma", &values.gamma2,
+                      ParameterRole::AUX_ADAM, shape({dimension})});
+    result.push_back({prefix + "norm2_beta", &values.beta2,
+                      ParameterRole::AUX_ADAM, shape({dimension})});
+    result.push_back({prefix + "ffn_w1", &values.w1, ParameterRole::MUON,
+                      shape({dimension, feedForward}), feedForward, dimension});
+    result.push_back({prefix + "ffn_w2", &values.w2, ParameterRole::MUON,
+                      shape({feedForward, dimension}), dimension, feedForward});
+  };
+  result.push_back({"token_embedding", &p.tokenEmbedding,
+                    ParameterRole::AUX_ADAM,
+                    shape({vocabulary, dimension})});
+  addLayer(0, layer(p, 0));
+  for (uint32_t index = 1; index <= p.layers.size(); ++index)
+    addLayer(index, p.layers[index - 1]);
+  result.push_back({"output_projection", &p.outputProjection,
+                    ParameterRole::AUX_ADAM,
+                    shape({dimension, vocabulary})});
+  return result;
+}
+const char* parameterRoleName(ParameterRole role) {
+  switch (role) {
+    case ParameterRole::MUON:
+      return "MUON";
+    case ParameterRole::AUX_ADAM:
+      return "AUX_ADAM";
+    case ParameterRole::UNKNOWN:
+      return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+namespace {
+bool setRegistryError(std::string* error, const std::string& value) {
+  if (error) *error = value;
+  return false;
+}
+bool checkedShapeElementCount(const std::vector<uint32_t>& shape,
+                              size_t* count) {
+  if (shape.empty() || !count) return false;
+  size_t product = 1;
+  for (const uint32_t extent : shape) {
+    if (extent == 0 || product > std::numeric_limits<size_t>::max() / extent)
+      return false;
+    product *= extent;
+  }
+  *count = product;
+  return true;
+}
+}
+bool validateParameterRegistry(const std::vector<ParameterInfo>& registry,
+                               std::string* error) {
+  if (registry.empty()) return setRegistryError(error, "REGISTRY_EMPTY");
+  std::unordered_set<std::string> names;
+  for (const auto& entry : registry) {
+    if (entry.name.empty()) return setRegistryError(error, "REGISTRY_NAME_EMPTY");
+    if (!names.insert(entry.name).second)
+      return setRegistryError(error, "REGISTRY_NAME_DUPLICATE:" + entry.name);
+    if (!entry.values) return setRegistryError(error, "REGISTRY_VALUES_NULL:" + entry.name);
+    size_t expected = 0;
+    if (!checkedShapeElementCount(entry.shape, &expected) ||
+        expected != entry.values->size())
+      return setRegistryError(error, "REGISTRY_SHAPE_MISMATCH:" + entry.name);
+    if (entry.role != ParameterRole::MUON &&
+        entry.role != ParameterRole::AUX_ADAM)
+      return setRegistryError(error, "REGISTRY_ROLE_UNKNOWN:" + entry.name);
+    if (entry.role == ParameterRole::MUON && entry.shape.size() != 2)
+      return setRegistryError(error, "REGISTRY_MUON_NOT_MATRIX:" + entry.name);
+    if (entry.role == ParameterRole::MUON &&
+        (entry.fanOut == 0 || entry.fanIn == 0))
+      return setRegistryError(error, "REGISTRY_MUON_AXES_MISSING:" + entry.name);
+    if (entry.role == ParameterRole::AUX_ADAM &&
+        (entry.fanOut != 0 || entry.fanIn != 0))
+      return setRegistryError(error, "REGISTRY_AUX_AXES_PRESENT:" + entry.name);
+  }
+  return true;
+}
+bool validateParameterRegistry(const P& parameters, std::string* error) {
+  const auto registry = parameterRegistry(parameters);
+  if (!validateParameterRegistry(registry, error)) return false;
+  // The registry is intentionally generated from the model's semantic field
+  // table.  This second pass verifies the complete partition expected by a
+  // Transformer parameter object, including all six Muon matrices per layer.
+  const size_t expectedLayers = parameters.layers.size() + 1;
+  size_t muonCount = 0;
+  size_t auxCount = 0;
+  for (const auto& entry : registry) {
+    if (entry.role == ParameterRole::MUON) {
+      ++muonCount;
+      if (entry.shape.size() != 2)
+        return setRegistryError(error, "REGISTRY_MUON_SHAPE_INVALID:" + entry.name);
+    } else if (entry.role == ParameterRole::AUX_ADAM) {
+      ++auxCount;
+    } else {
+      return setRegistryError(error, "REGISTRY_ROLE_UNKNOWN:" + entry.name);
+    }
+  }
+  if (muonCount != expectedLayers * 6)
+    return setRegistryError(error, "REGISTRY_MUON_COUNT_MISMATCH");
+  if (auxCount != expectedLayers * 4 + 2)
+    return setRegistryError(error, "REGISTRY_AUX_ADAM_COUNT_MISMATCH");
+  return true;
+}
+bool splitParameterRegistry(const P& parameters, ParameterPartition* partition,
+                            std::string* error) {
+  if (!partition) return setRegistryError(error, "REGISTRY_PARTITION_NULL");
+  partition->muon.clear();
+  partition->auxiliaryAdam.clear();
+  const auto registry = parameterRegistry(parameters);
+  if (!validateParameterRegistry(registry, error)) return false;
+  for (const auto& entry : registry) {
+    switch (entry.role) {
+      case ParameterRole::MUON:
+        partition->muon.push_back(entry);
+        break;
+      case ParameterRole::AUX_ADAM:
+        partition->auxiliaryAdam.push_back(entry);
+        break;
+      case ParameterRole::UNKNOWN:
+        return setRegistryError(error, "REGISTRY_ROLE_UNKNOWN:" + entry.name);
+    }
+  }
+  if (partition->muon.size() + partition->auxiliaryAdam.size() !=
+      registry.size())
+    return setRegistryError(error, "REGISTRY_PARTITION_INCOMPLETE");
+  return true;
+}
 size_t parameterElementCount(const P&p){size_t n=0;for(const auto&e:parameterRegistry(p))n+=e.values->size();return n;}
 bool storageRangesHaveNoAliases(const std::vector<ParameterInfo>&r){for(size_t i=0;i<r.size();++i)for(size_t j=0;j<i;++j){if(!r[i].values||!r[j].values)return false;if(r[i].values->empty()||r[j].values->empty())continue;const auto ai=reinterpret_cast<std::uintptr_t>(r[i].values->data());const auto ae=ai+r[i].values->size()*sizeof(float);const auto bi=reinterpret_cast<std::uintptr_t>(r[j].values->data());const auto be=bi+r[j].values->size()*sizeof(float);if(ai<be&&bi<ae)return false;}return true;}
 bool parameterStorageHasNoAliases(const P&p){return storageRangesHaveNoAliases(parameterRegistry(p));}

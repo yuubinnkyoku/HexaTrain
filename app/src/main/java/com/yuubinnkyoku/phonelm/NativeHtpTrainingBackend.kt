@@ -489,6 +489,18 @@ class NativeHtpTrainingBackend(
                 runDirectory.absolutePath,
                 request.resumeFrom?.completedStep ?: 0,
                 request.modelConfig.checkpointInterval,
+                0,
+                0,
+                0,
+                0,
+                0f,
+                false,
+                0f,
+                0,
+                0f,
+                0.95f,
+                5,
+                true,
                 callback,
             )
             // The native guard clears its entered bit before returning. Close

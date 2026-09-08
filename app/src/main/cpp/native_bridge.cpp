@@ -275,6 +275,18 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jstring diagnosticCheckpointDir,
     jint diagnosticResumeStep,
     jint diagnosticCheckpointInterval,
+    jint nicopediaLearningRateSchedule,
+    jint nicopediaDecayStartStep,
+    jint nicopediaDecayEndStep,
+    jint nicopediaScheduleTotalSteps,
+    jfloat nicopediaTargetLearningRate,
+    jboolean nicopediaExperimentFork,
+    jfloat nicopediaParentLearningRate,
+    jint nicopediaOptimizer,
+    jfloat nicopediaMuonLearningRate,
+    jfloat nicopediaMuonMomentum,
+    jint nicopediaMuonNsSteps,
+    jboolean nicopediaMuonNesterov,
     jobject progressCallback) {
     bool expected = false;
     if (!gRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -346,6 +358,20 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.diagnosticResumeStep = static_cast<int>(diagnosticResumeStep);
     config.diagnosticCheckpointInterval =
         static_cast<int>(diagnosticCheckpointInterval);
+    config.nicopediaLearningRateSchedule =
+        static_cast<int>(nicopediaLearningRateSchedule);
+    config.nicopediaDecayStartStep = static_cast<int>(nicopediaDecayStartStep);
+    config.nicopediaDecayEndStep = static_cast<int>(nicopediaDecayEndStep);
+    config.nicopediaScheduleTotalSteps =
+        static_cast<int>(nicopediaScheduleTotalSteps);
+    config.nicopediaTargetLearningRate = nicopediaTargetLearningRate;
+    config.nicopediaExperimentFork = nicopediaExperimentFork == JNI_TRUE;
+    config.nicopediaParentLearningRate = nicopediaParentLearningRate;
+    config.nicopediaOptimizer = static_cast<int>(nicopediaOptimizer);
+    config.nicopediaMuonLearningRate = nicopediaMuonLearningRate;
+    config.nicopediaMuonMomentum = nicopediaMuonMomentum;
+    config.nicopediaMuonNsSteps = static_cast<int>(nicopediaMuonNsSteps);
+    config.nicopediaMuonNesterov = nicopediaMuonNesterov == JNI_TRUE;
     if (diagnosticCheckpointDir != nullptr) {
         const char* chars = env->GetStringUTFChars(diagnosticCheckpointDir, nullptr);
         if (chars != nullptr) {

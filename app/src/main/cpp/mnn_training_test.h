@@ -63,6 +63,22 @@ struct TrainingConfig {
     // NICOPEDIA training: save NPRTCKPTV2 checkpoints every N steps and at
     // the final step. 0 = default 250.
     int diagnosticCheckpointInterval = 0;
+    // Nicopedia-only schedule controls. 0 = constant; 1 = exact linear
+    // decay. Non-constant schedules require an explicit experiment fork.
+    int nicopediaLearningRateSchedule = 0;
+    int nicopediaDecayStartStep = 0;
+    int nicopediaDecayEndStep = 0;
+    int nicopediaScheduleTotalSteps = 0;
+    float nicopediaTargetLearningRate = 0.0f;
+    bool nicopediaExperimentFork = false;
+    float nicopediaParentLearningRate = 0.0f;
+    // Research-only optimizer placement. 0 keeps the production HTP Adam
+    // path; 1 selects HTP forward/backward with CPU Muon + auxiliary Adam.
+    int nicopediaOptimizer = 0;
+    float nicopediaMuonLearningRate = 0.0f;
+    float nicopediaMuonMomentum = 0.95f;
+    int nicopediaMuonNsSteps = 5;
+    bool nicopediaMuonNesterov = true;
 };
 
 struct TrainingOutcome {
