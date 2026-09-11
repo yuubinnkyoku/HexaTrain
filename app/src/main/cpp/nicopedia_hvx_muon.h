@@ -4,6 +4,7 @@
 
 #include "nicopedia_muon_optimizer.h"
 
+#include <cstddef>
 #include <string>
 
 namespace phonelm::nicopedia_hvx_muon {
@@ -14,6 +15,11 @@ struct Timings {
   double packUs = 0.0;
   double packRegistryTraversalUs = 0.0;
   double packAllocationResizeUs = 0.0;
+  double packActualReallocationUs = 0.0;
+  double packResizeGrowthInitializationUs = 0.0;
+  double packResizeOtherUs = 0.0;
+  std::size_t packActualReallocationCount = 0;
+  std::size_t packResizeGrowthInitializationCount = 0;
   double packMetadataSetupUs = 0.0;
   double packSquareWeightCopyUs = 0.0;
   double packW1WeightCopyUs = 0.0;

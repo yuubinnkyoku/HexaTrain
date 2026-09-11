@@ -24,25 +24,47 @@ bool finite(const std::vector<float>& values) {
                      [](float value) { return std::isfinite(value); });
 }
 
-void appendMatrix(const std::vector<float>& source, std::uint32_t rows,
-                   std::uint32_t columns, bool transpose,
-                   std::vector<float>* destination, double* resizeUs,
-                   double* copyUs) {
-  const std::size_t offset = destination->size();
+void ensurePlaneSize(std::vector<float>* destination, std::size_t size,
+                     PackTimings* timings) {
+  if (destination->size() == size) return;
+  const std::size_t oldSize = destination->size();
+  const std::size_t oldCapacity = destination->capacity();
   auto phase = Clock::now();
-  destination->resize(offset + source.size());
-  if (resizeUs) *resizeUs += elapsedUs(phase);
-  phase = Clock::now();
+  destination->resize(size);
+  const double resizeUs = elapsedUs(phase);
+  if (timings) {
+    timings->allocationResizeUs += resizeUs;
+    if (size > oldCapacity) {
+      timings->actualReallocationUs += resizeUs;
+      ++timings->actualReallocationCount;
+    } else if (size > oldSize) {
+      timings->resizeGrowthInitializationUs += resizeUs;
+      ++timings->resizeGrowthInitializationCount;
+    } else {
+      timings->resizeOtherUs += resizeUs;
+    }
+  }
+}
+
+bool writeMatrixAtOffset(const std::vector<float>& source, std::uint32_t rows,
+                         std::uint32_t columns, bool transpose,
+                         std::size_t offset,
+                         std::vector<float>* destination, double* copyUs) {
+  if (offset > destination->size() ||
+      destination->size() - offset < source.size())
+    return false;
+  const auto phase = Clock::now();
   if (!transpose) {
     std::copy(source.begin(), source.end(), destination->begin() + offset);
     if (copyUs) *copyUs += elapsedUs(phase);
-    return;
+    return true;
   }
   for (std::uint32_t row = 0; row < rows; ++row)
     for (std::uint32_t column = 0; column < columns; ++column)
       (*destination)[offset + std::size_t(column) * rows + row] =
           source[std::size_t(row) * columns + column];
   if (copyUs) *copyUs += elapsedUs(phase);
+  return true;
 }
 
 bool appendBinding(const tiny_lm::ParameterInfo& parameter,
@@ -68,17 +90,17 @@ bool appendBinding(const tiny_lm::ParameterInfo& parameter,
                           : (transpose ? &timings->w2WeightTransposeUs
                                        : &timings->w1WeightCopyUs);
   }
-  appendMatrix(*parameter.values, parameter.shape[0], parameter.shape[1],
-               transpose, current,
-               timings ? &timings->allocationResizeUs : nullptr, weightCopyUs);
-  appendMatrix(*gradient.values, parameter.shape[0], parameter.shape[1],
-               transpose, gradients,
-               timings ? &timings->allocationResizeUs : nullptr,
-               timings ? &timings->gradientCopyUs : nullptr);
-  appendMatrix(*momentum.values, parameter.shape[0], parameter.shape[1],
-               transpose, momenta,
-               timings ? &timings->allocationResizeUs : nullptr,
-               timings ? &timings->momentumCopyUs : nullptr);
+  const std::size_t offset = bindings->size() * parameter.values->size();
+  if (!writeMatrixAtOffset(*parameter.values, parameter.shape[0],
+                           parameter.shape[1], transpose, offset, current,
+                           weightCopyUs) ||
+      !writeMatrixAtOffset(*gradient.values, parameter.shape[0],
+                           parameter.shape[1], transpose, offset, gradients,
+                           timings ? &timings->gradientCopyUs : nullptr) ||
+      !writeMatrixAtOffset(*momentum.values, parameter.shape[0],
+                           parameter.shape[1], transpose, offset, momenta,
+                           timings ? &timings->momentumCopyUs : nullptr))
+    return fail(error, "PACK_DESTINATION_BOUNDS:" + parameter.name);
   const auto metadataStarted = Clock::now();
   scales->push_back(scale);
   bindings->push_back({registryIndex, parameter.name, parameter.shape[0],
@@ -120,13 +142,20 @@ bool packImpl(const qnn::TinyTransformerParameters& parameters,
   if (!packed) return fail(error, "PACK_NULL_OUTPUT");
   if (timings) *timings = {};
   const auto totalStarted = Clock::now();
-  packed->currentSquare.clear();
-  packed->gradientSquare.clear();
-  packed->momentumSquare.clear();
+  constexpr std::size_t kSquarePlaneElements =
+      kSquareBatch * kRows * kSquareColumns;
+  constexpr std::size_t kRectangularPlaneElements =
+      kRectangularBatch * kRows * kRectangularColumns;
+  ensurePlaneSize(&packed->currentSquare, kSquarePlaneElements, timings);
+  ensurePlaneSize(&packed->gradientSquare, kSquarePlaneElements, timings);
+  ensurePlaneSize(&packed->momentumSquare, kSquarePlaneElements, timings);
+  ensurePlaneSize(&packed->currentRectangular, kRectangularPlaneElements,
+                  timings);
+  ensurePlaneSize(&packed->gradientRectangular, kRectangularPlaneElements,
+                  timings);
+  ensurePlaneSize(&packed->momentumRectangular, kRectangularPlaneElements,
+                  timings);
   packed->scaleSquare.clear();
-  packed->currentRectangular.clear();
-  packed->gradientRectangular.clear();
-  packed->momentumRectangular.clear();
   packed->scaleRectangular.clear();
   packed->squareBindings.clear();
   packed->rectangularBindings.clear();

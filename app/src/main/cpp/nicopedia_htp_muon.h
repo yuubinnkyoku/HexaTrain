@@ -41,6 +41,11 @@ struct PackedInputs {
 struct PackTimings {
   double registryTraversalUs = 0.0;
   double allocationResizeUs = 0.0;
+  double actualReallocationUs = 0.0;
+  double resizeGrowthInitializationUs = 0.0;
+  double resizeOtherUs = 0.0;
+  std::size_t actualReallocationCount = 0;
+  std::size_t resizeGrowthInitializationCount = 0;
   double metadataSetupUs = 0.0;
   double squareWeightCopyUs = 0.0;
   double w1WeightCopyUs = 0.0;

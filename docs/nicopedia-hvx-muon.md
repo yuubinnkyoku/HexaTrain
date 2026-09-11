@@ -353,3 +353,33 @@ self-test, and headless device gate passed. QNN return status and returned
 tensor finiteness were checked independently; focus takeover was zero.
 `verify_local.ps1 -Fast -SkipAndroidBuild` passed 6 checks with 0 failures and
 22 intentional skips. Full verification and long training were not run.
+
+## 2026-09-12 continuation: steady-state pack initialization removal
+
+The persistent `PackedInputs` path was further profiled without changing the
+RPC layout or Muon arithmetic. Across one warm-up plus five measured actual
+full-114 optimizer updates, every measured update performed zero vector
+reallocations. All 342 data-plane `resize` calls per update grew vectors within
+existing capacity, and their value-initialization accounted for the entire
+allocation/resize timer: best/median/mean 17,752 / 17,783 / 17,798 us.
+
+The single optimization sizes the six weight/gradient/momentum pack planes once
+during warm-up, retains their final sizes, and writes every matrix directly to
+its checked canonical offset. Metadata, the flat RPC copy, unpack, auxiliary
+Adam, input/output validation, and the DSP implementation remain unchanged.
+
+| measurement | before best / median / mean (us) | after best / median / mean (us) |
+| --- | ---: | ---: |
+| actual HVX optimizer update | 124,444 / 126,333 / 126,486 | 103,327 / 104,137 / 105,553 |
+| pack | 21,541 / 21,741 / 21,702 | 3,800 / 3,814 / 3,933 |
+| allocation/resize | 17,752 / 17,783 / 17,798 | 0 / 0 / 0 |
+
+Median actual-update time improved by 17.57%, and median pack time improved by
+82.46%. The before and after runs both held Android thermal status 0 and 34.0 C.
+The after run passed 114/114 weight and momentum comparisons with maximum
+absolute difference `1.490116119e-8`, worst relative L2 `4.40269854e-8`, and
+minimum cosine `1`. RPC status succeeded, all returned tensors were finite,
+and fallback was false. The targeted host sentinel, QNN/HVX builds, pinned
+QAIRT APK audits, and Fast verification passed. Full verification, direct RPC
+packing, unpack changes, auxiliary-Adam changes, and kernel profiling were not
+run.

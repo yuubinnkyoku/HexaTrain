@@ -233,6 +233,14 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   }
   result.timings.packRegistryTraversalUs = packTimings.registryTraversalUs;
   result.timings.packAllocationResizeUs = packTimings.allocationResizeUs;
+  result.timings.packActualReallocationUs = packTimings.actualReallocationUs;
+  result.timings.packResizeGrowthInitializationUs =
+      packTimings.resizeGrowthInitializationUs;
+  result.timings.packResizeOtherUs = packTimings.resizeOtherUs;
+  result.timings.packActualReallocationCount =
+      packTimings.actualReallocationCount;
+  result.timings.packResizeGrowthInitializationCount =
+      packTimings.resizeGrowthInitializationCount;
   result.timings.packMetadataSetupUs = packTimings.metadataSetupUs;
   result.timings.packSquareWeightCopyUs = packTimings.squareWeightCopyUs;
   result.timings.packW1WeightCopyUs = packTimings.w1WeightCopyUs;
@@ -378,7 +386,9 @@ std::string benchmarkActualOptimizerPath() {
       packMomentum{}, packFlatRpc{}, packHyper{}, unpackDecode{},
       unpackCandidate{}, unpackRegistry{}, unpackSquare{}, unpackW1{}, unpackW2{},
       unpackAuxAdam{}, unpackFinalCommit{}, unpackDecodedValidation{}, mutexWait{},
-      sessionSetup{};
+      sessionSetup{}, packActualReallocation{}, packResizeGrowthInitialization{},
+      packResizeOther{}, packActualReallocationCount{},
+      packResizeGrowthInitializationCount{};
   nicopedia_muon::Result cpuReference;
   Result hvxReference;
   for (std::size_t repetition = 0; repetition <= kMeasured; ++repetition) {
@@ -406,6 +416,15 @@ std::string benchmarkActualOptimizerPath() {
     unpackApply[index] = hvxResult.timings.unpackApplyUs;
     packRegistry[index] = hvxResult.timings.packRegistryTraversalUs;
     packAllocation[index] = hvxResult.timings.packAllocationResizeUs;
+    packActualReallocation[index] =
+        hvxResult.timings.packActualReallocationUs;
+    packResizeGrowthInitialization[index] =
+        hvxResult.timings.packResizeGrowthInitializationUs;
+    packResizeOther[index] = hvxResult.timings.packResizeOtherUs;
+    packActualReallocationCount[index] =
+        double(hvxResult.timings.packActualReallocationCount);
+    packResizeGrowthInitializationCount[index] =
+        double(hvxResult.timings.packResizeGrowthInitializationCount);
     packMetadata[index] = hvxResult.timings.packMetadataSetupUs;
     packSquareWeight[index] = hvxResult.timings.packSquareWeightCopyUs;
     packW1Weight[index] = hvxResult.timings.packW1WeightCopyUs;
@@ -492,6 +511,14 @@ std::string benchmarkActualOptimizerPath() {
   };
   appendSummary("pack_registry_traversal", packRegistry);
   appendSummary("pack_allocation_resize", packAllocation);
+  appendSummary("pack_actual_reallocation", packActualReallocation);
+  appendSummary("pack_resize_growth_initialization",
+                packResizeGrowthInitialization);
+  appendSummary("pack_resize_other", packResizeOther);
+  report << "pack_actual_reallocation_count_median="
+         << median(packActualReallocationCount) << '\n'
+         << "pack_resize_growth_initialization_count_median="
+         << median(packResizeGrowthInitializationCount) << '\n';
   appendSummary("pack_metadata_setup", packMetadata);
   appendSummary("pack_square_weight_copy", packSquareWeight);
   appendSummary("pack_w1_weight_copy", packW1Weight);
@@ -519,6 +546,16 @@ std::string benchmarkActualOptimizerPath() {
     run("pack", pack[i]);
     run("pack_registry_traversal", packRegistry[i]);
     run("pack_allocation_resize", packAllocation[i]);
+    run("pack_actual_reallocation", packActualReallocation[i]);
+    run("pack_resize_growth_initialization",
+        packResizeGrowthInitialization[i]);
+    run("pack_resize_other", packResizeOther[i]);
+    report << "measured_run_" << (i + 1)
+           << "_pack_actual_reallocation_count="
+           << packActualReallocationCount[i] << '\n'
+           << "measured_run_" << (i + 1)
+           << "_pack_resize_growth_initialization_count="
+           << packResizeGrowthInitializationCount[i] << '\n';
     run("pack_metadata_setup", packMetadata[i]);
     run("pack_square_weight_copy", packSquareWeight[i]);
     run("pack_w1_weight_copy", packW1Weight[i]);
