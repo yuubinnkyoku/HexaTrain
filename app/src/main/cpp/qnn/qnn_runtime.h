@@ -233,6 +233,14 @@ struct AdamOptimizerOutputs {
     std::vector<float> denominator, dividedUpdate, normalizedUpdate;
     std::vector<float> scaledUpdate, weightNext;
 };
+struct MuonOptimizerOutputs {
+    std::vector<float> nextMomentumSquare, nextWeightsSquare;
+    std::vector<float> nextMomentumRectangular, nextWeightsRectangular;
+    std::vector<float> normalizedSquare, nsIteration1Square;
+    std::vector<float> orthogonalSquare, orthogonalRectangular;
+    double bindUs = 0.0;
+    double executeUs = 0.0;
+};
 struct MlpFullStepOutputs {
     float loss = 0.0f;
     std::vector<float> w1Next;
@@ -246,6 +254,19 @@ struct MlpFullStepOutputs {
     std::vector<std::uint8_t> mask;
     std::vector<float> dZ1;
     std::vector<float> dW1;
+};
+struct MuonNsStageOutputs {
+    static constexpr std::uint32_t kRows = 64;
+    static constexpr std::uint32_t kColumns = 64;
+    std::vector<float> x0;
+    std::vector<float> a;
+    std::vector<float> a2;
+    std::vector<float> b;
+    std::vector<float> bx;
+    std::vector<float> x1;
+    std::vector<float> standaloneA;
+    double bindUs = 0.0;
+    double executeUs = 0.0;
 };
 class Runtime {
 public:
@@ -367,6 +388,33 @@ public:
                               float secondCorrection,
                               AdamOptimizerOutputs& outputs,
                               std::string& error);
+    bool prepareMuonOptimizer(uint32_t squareBatch,
+                              uint32_t rectangularBatch,
+                              uint32_t rows,
+                              uint32_t rectangularColumns,
+                              uint32_t nsSteps,
+                              bool diagnosticOutputs,
+                              std::string& error);
+    bool executeMuonOptimizer(
+        const std::vector<float>& currentSquare,
+        const std::vector<float>& gradientSquare,
+        const std::vector<float>& momentumSquare,
+        const std::vector<float>& scaleSquare,
+        const std::vector<float>& currentRectangular,
+        const std::vector<float>& gradientRectangular,
+        const std::vector<float>& momentumRectangular,
+        const std::vector<float>& scaleRectangular,
+        float learningRate, MuonOptimizerOutputs& outputs,
+        std::string& error);
+    // Diagnostic-only single-matrix Newton-Schulz stage probe. Uses the
+    // frozen 64x64 normalized input as the graph APP_WRITE tensor and reads
+    // back iteration-1 X0/A/A2/B/BX/X1 plus a standalone A=XX^T tap with the
+    // exact A node configuration. No optimizer state, packing, NS steps, or
+    // production ABI change is involved.
+    bool prepareMuonNsStageProbe(std::string& error);
+    bool executeMuonNsStageProbe(const std::vector<float>& normalizedInput,
+                                 MuonNsStageOutputs& outputs,
+                                 std::string& error);
     bool prepareCrossEntropyGradient(uint32_t rows, uint32_t columns,
                                      std::string& error);
     bool executeCrossEntropyGradient(const std::vector<float>& logits,

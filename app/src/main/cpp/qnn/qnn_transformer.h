@@ -21,6 +21,17 @@ std::string runTinyTransformerTrainingExperiment(
 std::string runNicopediaHtpOneUpdateProbe(
     const tiny_lm::Config& config, const TrainingConfig& trainingConfig,
     const LogSink& progress, std::atomic_bool* stopRequested = nullptr);
+// Synthetic, corpus-free Phase A-E validator for the HTP-native Muon graph.
+// It exercises B=1, B=2, and the production 76+38 packing and reports
+// CPU-oracle parity plus optimizer-only timing. No checkpoint is read/written.
+std::string runHtpMuonValidation();
+// Diagnostic-only single-matrix Newton-Schulz stage localization. Uses the
+// frozen 64x64 normalized input (SHA256 62749421...59e4f) with no new random
+// input, training integration, or 114-matrix work. Reports direct APP_READ
+// HTP taps for iteration-1 stages X0/A/A2/B/BX/X1 plus a standalone A probe,
+// each compared against CPU_DOUBLE and CPU_FLOAT references in exact oracle
+// order. The CPU oracle and frozen gate are unchanged.
+std::string runHtpMuonNsStageProbe();
 // Nicopedia byte-level generation on the HTP graph (device-side loop).
 // `checkpointPath`/`promptPath` are app-private files; the checkpoint is the
 // NPRTCKPTV1 private checkpoint written by the HTP training milestone and its

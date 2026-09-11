@@ -7,7 +7,9 @@ plugins {
 }
 
 val phoneLmEnableQnn = providers.gradleProperty("phonelm.enableQnn").orElse("false")
+val phoneLmEnableHvxMuon = providers.gradleProperty("phonelm.enableHvxMuon").orElse("false")
 val qairtSdkRoot = providers.gradleProperty("qairt.sdkRoot").orElse("")
+val hexagonSdkRoot = providers.gradleProperty("hexagon.sdkRoot").orElse("")
 val expectedQairtBuildId = providers.gradleProperty("qairt.expectedBuildId")
 val qairtPolicyText = rootProject.file("scripts/qairt_version.ps1").readText()
 fun pinnedQairtValue(name: String): String =
@@ -90,9 +92,60 @@ fun inspectQairt(): QairtMetadata {
     return QairtMetadata(version, headerId, api, skel.sha256())
 }
 val selectedQairt = if (phoneLmEnableQnn.get().toBoolean()) inspectQairt() else null
+if (phoneLmEnableHvxMuon.get().toBoolean()) {
+    require(phoneLmEnableQnn.get().toBoolean()) {
+        "HVX Muon requires the QNN hybrid-training build"
+    }
+}
 val selectedQairtBuildId = selectedQairt?.buildId ?: "DISABLED"
 val qnnJniDir = layout.buildDirectory.dir("generated/qnnJni/arm64-v8a")
 val qnnDspAssetDir = layout.buildDirectory.dir("generated/qnnDspAssets/qnn")
+val hvxRpcDir = layout.buildDirectory.dir("generated/hvxMuonRpc")
+val hvxDspAssetDir = layout.buildDirectory.dir("generated/hvxDspAssets/hvx")
+val generateHvxMuonRpc by tasks.registering {
+    onlyIf { phoneLmEnableHvxMuon.get().toBoolean() }
+    inputs.files(
+        rootProject.file("host_tests/hvx_rpc/hexatrain_hvx_probe.idl"),
+        rootProject.file("host_tests/hvx_rpc/probe_dsp.c"),
+        rootProject.file("host_tests/hvx_rpc/original_qhl.c"),
+        rootProject.file("host_tests/hvx_rpc/original_qhl.h"),
+    )
+    outputs.dir(hvxRpcDir)
+    outputs.dir(hvxDspAssetDir)
+    doLast {
+        val sdk = file(hexagonSdkRoot.get()).canonicalFile
+        require(sdk.isDirectory) { "Explicit Hexagon SDK root does not exist: $sdk" }
+        val qaic = sdk.resolve("ipc/fastrpc/qaic/WinNT/qaic.exe")
+        val clang = sdk.resolve("tools/HEXAGON_Tools/19.0.07/Tools/bin/hexagon-clang.exe")
+        require(qaic.isFile && clang.isFile) { "Hexagon SDK 6.6 V81 tools are incomplete" }
+        val generated = hvxRpcDir.get().asFile.also { it.mkdirs() }
+        val assets = hvxDspAssetDir.get().asFile.also { it.mkdirs() }
+        exec {
+            commandLine(qaic, "-mdll", "-I", sdk.resolve("incs/stddef"),
+                "-I", sdk.resolve("incs"), "-o", generated,
+                rootProject.file("host_tests/hvx_rpc/hexatrain_hvx_probe.idl"))
+        }
+        val skel = assets.resolve("libhexatrain_hvx_probe_skel.so")
+        exec {
+            commandLine(clang, "-mv81", "-mhvx", "-mhvx-length=128B", "-O2",
+                "-G0", "-fPIC", "-shared", "-Wl,-Bsymbolic", "-Wall", "-Wextra",
+                "-I${sdk.resolve("incs")}", "-I${sdk.resolve("incs/stddef")}",
+                "-I$generated", "-I${sdk.resolve("rtos/qurt/computev81/include/qurt")}",
+                "-I${sdk.resolve("libs/qhl_hvx/inc/qhblas_hvx")}",
+                rootProject.file("host_tests/hvx_rpc/original_qhl.c"),
+                rootProject.file("host_tests/hvx_rpc/probe_dsp.c"),
+                generated.resolve("hexatrain_hvx_probe_skel.c"),
+                sdk.resolve("libs/qhl_hvx/prebuilt/hexagon_toolv19_v81/libqhblas_hvx.a"),
+                sdk.resolve("libs/qhl_hvx/prebuilt/hexagon_toolv19_v81/libqhmath_hvx.a"),
+                sdk.resolve("libs/qhl/prebuilt/hexagon_toolv19_v81/libqhmath.a"),
+                "-o", skel)
+        }
+        assets.resolve("hvx.properties").writeText(
+            "architecture=v81\nworkers=8\nalgorithm=keller_original_64560829_fp32\n" +
+                "skelSha256=${skel.sha256()}\n",
+        )
+    }
+}
 val stageQnnDspAsset by tasks.registering(Sync::class) {
     onlyIf { phoneLmEnableQnn.get().toBoolean() }
     from(provider { file("${qairtSdkRoot.get()}/lib/hexagon-v81/unsigned") }) {
@@ -140,6 +193,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("boolean", "PHONELM_QNN_ENABLED", phoneLmEnableQnn.get())
+        buildConfigField("boolean", "PHONELM_HVX_MUON_ENABLED", phoneLmEnableHvxMuon.get())
         buildConfigField("String", "QAIRT_BUILD_ID", "\"$selectedQairtBuildId\"")
         buildConfigField("String", "HTP_ARCHITECTURE", "\"$htpArchitecture\"")
 
@@ -155,6 +209,9 @@ android {
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
                     "-DPHONELM_ENABLE_QNN=${phoneLmEnableQnn.get()}",
+                    "-DPHONELM_ENABLE_HVX_MUON=${phoneLmEnableHvxMuon.get()}",
+                    "-DPHONELM_HVX_RPC_GENERATED_DIR=${hvxRpcDir.get().asFile.absolutePath}",
+                    "-DHEXAGON_SDK_ROOT=${hexagonSdkRoot.get()}",
                     "-DQAIRT_SDK_ROOT=${qairtSdkRoot.get()}",
                     "-DPHONELM_EXPECTED_QAIRT_BUILD_ID=$selectedQairtBuildId",
                 )
@@ -212,12 +269,20 @@ android {
         sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/qnnJni"))
         sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/qnnDspAssets"))
     }
+    if (phoneLmEnableHvxMuon.get().toBoolean()) {
+        require(hexagonSdkRoot.get().isNotBlank()) { "hexagon.sdkRoot is required when HVX Muon is enabled" }
+        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/hvxDspAssets"))
+    }
 }
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(stageQnnJni) }
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach { dependsOn(stageQnnDspAsset) }
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(generateHvxMuonRpc) }
+tasks.matching { it.name.contains("CMake") || it.name.contains("NativeBuild") }
+    .configureEach { dependsOn(generateHvxMuonRpc) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")

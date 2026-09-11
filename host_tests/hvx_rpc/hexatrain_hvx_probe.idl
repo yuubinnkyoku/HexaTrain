@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 yuubinnkyoku
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+interface hexatrain_hvx_probe : remote_handle64 {
+  long configure(in long high_performance, rout sequence<long> metadata);
+  long transport(in sequence<uint8> left, in sequence<uint8> right,
+                 rout sequence<uint8> result, rout sequence<long> metadata);
+  long run(in long mode, in long m, in long k, in long n,
+           in sequence<float> left, in sequence<float> right,
+           rout sequence<float> result, rout sequence<long> metadata);
+};

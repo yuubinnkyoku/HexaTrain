@@ -11,7 +11,10 @@ get_filename_component(PHONELM_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSO
 set(MNN_ROOT "${PHONELM_ROOT}/third_party/MNN")
 
 option(PHONELM_ENABLE_QNN "Compile the SDK-specific QAIRT/QNN adapter" OFF)
+option(PHONELM_ENABLE_HVX_MUON "Compile the W8 FastRPC Original Muon backend" OFF)
 set(QAIRT_SDK_ROOT "" CACHE PATH "Root of a locally installed QAIRT SDK")
+set(PHONELM_HVX_RPC_GENERATED_DIR "" CACHE PATH "Generated FastRPC stub/header directory")
+set(HEXAGON_SDK_ROOT "" CACHE PATH "Root of the explicitly selected Hexagon SDK")
 set(PHONELM_EXPECTED_QAIRT_BUILD_ID "" CACHE STRING "Expected QAIRT build id")
 
 if(PHONELM_ENABLE_QNN)
@@ -156,6 +159,8 @@ add_library(phonelm_native SHARED
     cpu_reference_training.cpp
     tiny_language_model_cpu.cpp
     nicopedia_muon_optimizer.cpp
+    nicopedia_htp_muon.cpp
+    nicopedia_hvx_muon.cpp
     nicopedia_muon_checkpoint.cpp
     validation_checkpoint.cpp
     mnn_training_test.cpp
@@ -174,6 +179,40 @@ add_library(phonelm_native SHARED
     ${PHONELM_QNN_OPTIONAL_SOURCES}
     qnn/qnn_tensor.cpp
 )
+
+# The headless benchmark is packaged in a debuggable APK, but the compared
+# optimizer implementations must use production optimization on both CPU and
+# host-side HVX packing paths.
+set_source_files_properties(
+    nicopedia_muon_optimizer.cpp
+    nicopedia_htp_muon.cpp
+    nicopedia_hvx_muon.cpp
+    PROPERTIES COMPILE_OPTIONS "-O2")
+
+if(PHONELM_ENABLE_HVX_MUON)
+    if(NOT PHONELM_ENABLE_QNN)
+        message(FATAL_ERROR "HVX Muon is only valid in the QNN hybrid-training build")
+    endif()
+    if(PHONELM_HVX_RPC_GENERATED_DIR STREQUAL "" OR
+       NOT EXISTS "${PHONELM_HVX_RPC_GENERATED_DIR}/hexatrain_hvx_probe_stub.c" OR
+       NOT EXISTS "${PHONELM_HVX_RPC_GENERATED_DIR}/hexatrain_hvx_probe.h")
+        message(FATAL_ERROR "HVX Muon requires explicitly generated QAIC stub/header")
+    endif()
+    if(HEXAGON_SDK_ROOT STREQUAL "" OR
+       NOT EXISTS "${HEXAGON_SDK_ROOT}/incs/rpcmem.h" OR
+       NOT EXISTS "${HEXAGON_SDK_ROOT}/ipc/fastrpc/remote/ship/android_aarch64/libcdsprpc.so")
+        message(FATAL_ERROR "HVX Muon requires an explicit complete Hexagon SDK root")
+    endif()
+    target_sources(phonelm_native PRIVATE
+        "${PHONELM_HVX_RPC_GENERATED_DIR}/hexatrain_hvx_probe_stub.c")
+    target_include_directories(phonelm_native PRIVATE
+        "${PHONELM_HVX_RPC_GENERATED_DIR}"
+        "${HEXAGON_SDK_ROOT}/incs"
+        "${HEXAGON_SDK_ROOT}/incs/stddef")
+    target_link_directories(phonelm_native PRIVATE
+        "${HEXAGON_SDK_ROOT}/ipc/fastrpc/remote/ship/android_aarch64")
+    target_link_libraries(phonelm_native PRIVATE cdsprpc)
+endif()
 
 target_include_directories(phonelm_native PRIVATE
     "${MNN_ROOT}/include"
@@ -199,6 +238,7 @@ target_compile_options(phonelm_native PRIVATE
 
 target_compile_definitions(phonelm_native PRIVATE
     PHONELM_ENABLE_QNN=$<BOOL:${PHONELM_ENABLE_QNN}>
+    PHONELM_ENABLE_HVX_MUON=$<BOOL:${PHONELM_ENABLE_HVX_MUON}>
     PHONELM_QAIRT_SDK_DETECTED=${PHONELM_QAIRT_SDK_DETECTED}
     PHONELM_QAIRT_SDK_ROOT_TEXT="LOCAL_SDK_SELECTED_AT_BUILD_TIME"
 )

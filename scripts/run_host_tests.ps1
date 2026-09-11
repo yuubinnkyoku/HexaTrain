@@ -346,6 +346,44 @@ if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon optimizer host test compilation
 if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon optimizer host test failed" }
 Write-Host "nicopedia_muon_optimizer_host_test=PASS"
 
+$NicopediaHtpMuonPackExecutable = Join-Path $OutputDirectory "nicopedia_htp_muon_pack_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_htp_muon.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_htp_muon_pack_test.cpp") `
+    -o $NicopediaHtpMuonPackExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia HTP Muon pack host test compilation failed" }
+& $NicopediaHtpMuonPackExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia HTP Muon pack host test failed" }
+Write-Host "nicopedia_htp_muon_pack_host_test=PASS"
+
+$NicopediaMuonNumericDiagnosticExecutable = Join-Path $OutputDirectory "nicopedia_muon_numeric_diagnostic.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_optimizer.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_muon_numeric_diagnostic.cpp") `
+    -o $NicopediaMuonNumericDiagnosticExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon numeric diagnostic compilation failed" }
+$NicopediaMuonNumericDiagnosticDir = Join-Path $Root "build\htp-muon\numeric-diagnostic"
+New-Item -ItemType Directory -Force -Path $NicopediaMuonNumericDiagnosticDir | Out-Null
+& $NicopediaMuonNumericDiagnosticExecutable $NicopediaMuonNumericDiagnosticDir
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon numeric diagnostic failed" }
+Write-Host "nicopedia_muon_numeric_diagnostic=PASS"
+
+$NicopediaMuonNsStageExecutable = Join-Path $OutputDirectory "nicopedia_muon_ns_stage_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_optimizer.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_muon_ns_stage_test.cpp") `
+    -o $NicopediaMuonNsStageExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon NS stage host test compilation failed" }
+& $NicopediaMuonNsStageExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon NS stage host test failed" }
+Write-Host "nicopedia_muon_ns_stage_host_test=PASS"
+
 $NicopediaMuonCheckpointExecutable = Join-Path $OutputDirectory "nicopedia_muon_checkpoint_test.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `

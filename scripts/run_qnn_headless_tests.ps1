@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][Alias("SdkRoot")][string]$QairtSdkRoot,
     [Parameter(Mandatory = $true)][string]$ExpectedBuildId,
+    [string]$HexagonSdkRoot,
     [ValidateSet(
         "device-probe", "qnn-forward", "linear", "mlp-split", "mlp-fused", "mlp-full-step",
         "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward",
@@ -25,7 +26,9 @@ param(
         "scale-l1h2-t16d16-smoke", "scale-l1h2-t32d32-smoke",
         "scale-l2h2-t16d16-smoke", "scale-l2h2-t32d32-smoke",
         "scale-l2h1-formal", "scale-l1h2-formal",
-        "scale-l2h2-t32d32-formal", "scale-l2h2-t32d32-diagnostic", "nicopedia-parity"
+        "scale-l2h2-t32d32-formal", "scale-l2h2-t32d32-diagnostic", "nicopedia-parity",
+        "htp-muon-validation", "htp-muon-ns-stage-probe",
+        "hvx-muon-optimizer-benchmark"
     )][string]$Suite = "device-probe",
     [ValidateSet("BACKGROUND_CORRECTNESS", "EXCLUSIVE_BENCHMARK")]
     [string]$TestMode = "BACKGROUND_CORRECTNESS",
@@ -111,6 +114,11 @@ if ($Suite -eq "nicopedia-parity") {
 }
 if (-not (Test-Path -LiteralPath $QairtSdkRoot -PathType Container)) {
     throw "QAIRT SDK root does not exist."
+}
+if ($Suite -eq "hvx-muon-optimizer-benchmark" -and
+    ([string]::IsNullOrWhiteSpace($HexagonSdkRoot) -or
+     -not (Test-Path -LiteralPath $HexagonSdkRoot -PathType Container))) {
+    throw "HVX Muon benchmark requires an explicit existing HexagonSdkRoot."
 }
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA "Android\Sdk"
@@ -241,6 +249,12 @@ try {
             "-Pphonelm.enableQnn=true", "-Pqairt.sdkRoot=$QairtSdkRoot",
             "-Pqairt.expectedBuildId=$ExpectedBuildId", "--no-daemon"
         )
+        if ($Suite -eq "hvx-muon-optimizer-benchmark") {
+            $gradleArguments += @(
+                "-Pphonelm.enableHvxMuon=true",
+                "-Phexagon.sdkRoot=$HexagonSdkRoot"
+            )
+        }
         & .\gradlew.bat $gradleArguments
         if ($LASTEXITCODE -ne 0) { throw "QNN instrumentation build failed" }
     }
@@ -343,16 +357,25 @@ try {
     if ($instrumentOutput -notmatch '(?m)^OK \(') { throw "Instrumentation did not report success" }
     if ($status -notmatch '"status":"PASSED"') { throw "Headless suite did not pass" }
     if ($phoneLmTopCount -ne 0) { throw "PhoneLM became the top activity during headless execution." }
-    foreach ($required in @(
+    $requiredEvidence = @(
         "activity_create_count=0", "activity_resume_count=0",
         "phonelm_became_top_activity_count=0", "focus_takeover_count=0",
-        # The native runtime report owns the compile-time SDK identity.  The
-        # androidTest APK has a separate BuildConfig and must not synthesize
-        # this field from host input.
-        "single_flight_result=ALREADY_RUNNING", "compile_time_sdk_build_id=$ExpectedBuildId",
-        "runtime_backend_build_id=v$ExpectedBuildId", "backend_build_id_match=true",
-        "headless_test_mode=$TestMode", "backend_requested=HTP", "cpu_fallback=false"
-    )) {
+        "single_flight_result=ALREADY_RUNNING", "headless_test_mode=$TestMode"
+    )
+    if ($Suite -eq "hvx-muon-optimizer-benchmark") {
+        $requiredEvidence += @(
+            "backend_requested=HVX", "rpc_status_success=true",
+            "output_tensors_finite=true", "fallback=false"
+        )
+    } else {
+        # The native QNN runtime report owns these SDK identity fields.
+        $requiredEvidence += @(
+            "compile_time_sdk_build_id=$ExpectedBuildId",
+            "runtime_backend_build_id=v$ExpectedBuildId", "backend_build_id_match=true",
+            "backend_requested=HTP", "cpu_fallback=false"
+        )
+    }
+    foreach ($required in $requiredEvidence) {
         if ($deviceReport -notmatch "(?m)^$([regex]::Escape($required))$") {
             throw "Device report is missing required evidence: $required"
         }

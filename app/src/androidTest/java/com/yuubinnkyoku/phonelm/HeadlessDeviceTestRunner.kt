@@ -162,6 +162,12 @@ class HeadlessDeviceTestRunner {
                     when {
                         suite == "nicopedia-parity" ->
                             runNicopediaParity(context, arguments, runId)
+                        suite == "htp-muon-validation" ->
+                            NativeBridge.nativeRunHtpMuonValidation()
+                        suite == "hvx-muon-optimizer-benchmark" ->
+                            NativeBridge.nativeRunHvxMuonOptimizerBenchmark()
+                        suite == "htp-muon-ns-stage-probe" ->
+                            NativeBridge.nativeRunHtpMuonNsStageProbe()
                         suite == "nicopedia-long-training" ->
                             runNicopediaLongTraining(context, arguments, runId, progressCallback)
                         suite == "nicopedia-dffn-probe" ->
@@ -232,7 +238,7 @@ class HeadlessDeviceTestRunner {
                     "\nfocus_takeover_count=${HeadlessActivityCounters.focusTakeover.get()}" +
                     "\nsingle_flight_result=$singleFlightResult" +
                     "\nheadless_test_mode=$testMode" +
-                    "\nbackend_requested=HTP" +
+                    "\nbackend_requested=${if (suite == "hvx-muon-optimizer-benchmark") "HVX" else "HTP"}" +
                     "\nlive_update_notification_enabled=$liveUpdateNotification" +
                     "\n" + activitySnapshots.joinToString("\n") +
                     fallbackAnnotation + "\n"
@@ -859,6 +865,14 @@ class HeadlessDeviceTestRunner {
         if (suite == "nicopedia-parity") arguments.getString("htpContextGraphSplitting")?.toIntOrNull() else null
 
     private fun isSuccessfulSuiteResult(suite: String, report: String, requestedSplit: Int?): Boolean {
+        if (suite == "hvx-muon-optimizer-benchmark") {
+            fun has(name: String, value: String): Boolean =
+                Regex("(?m)^${Regex.escape(name)}=${Regex.escape(value)}$").containsMatchIn(report)
+            return report.startsWith("HVX_MUON_OPTIMIZER_BENCHMARK\n") &&
+                has("status", "SUCCESS") && has("rpc_status_success", "true") &&
+                has("output_tensors_finite", "true") && has("fallback", "false") &&
+                has("full_parity_matrices", "114")
+        }
         if (suite == "nicopedia-generate-prepared") {
             // The combined report holds two runs separated by marker lines.
             // Both runs must independently pass the full health gate, and the
@@ -892,6 +906,9 @@ class HeadlessDeviceTestRunner {
                 "nicopedia-dffn-probe" -> report.startsWith("NICOPEDIA_DFFN_PROBE\n")
                 "nicopedia-eval" -> report.startsWith("NICOPEDIA_HTP_EVAL\n")
                 "nicopedia-generate" -> report.startsWith("NICOPEDIA_HTP_GENERATION\n")
+                "htp-muon-validation" -> report.startsWith("HTP_MUON_VALIDATION\n")
+                "hvx-muon-optimizer-benchmark" -> report.startsWith("HVX_MUON_OPTIMIZER_BENCHMARK\n")
+                "htp-muon-ns-stage-probe" -> report.startsWith("HTP_MUON_NS_STAGE_PROBE\n")
                 else -> false
             }
             val fallbackOk = Regex("(?m)^cpu_fallback=false$").containsMatchIn(report)
@@ -1039,6 +1056,9 @@ class HeadlessDeviceTestRunner {
             "nicopedia-eval",
             "nicopedia-generate",
             "nicopedia-generate-prepared",
+            "htp-muon-validation",
+            "hvx-muon-optimizer-benchmark",
+            "htp-muon-ns-stage-probe",
         )
         const val PROGRESS_STATUS_INTERVAL_MS = 1_000L
         val DECIMAL_INTEGER = Regex("[+-]?(?:0|[1-9][0-9]*)")

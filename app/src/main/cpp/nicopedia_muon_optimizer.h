@@ -70,4 +70,14 @@ Result update(const qnn::TinyTransformerParameters& parameters,
               const qnn::TinyTransformerParameters& auxiliaryAdamV,
               const Config& config);
 
+// Applies only the AUX_ADAM registry entries. MUON parameters and the supplied
+// HTP-produced momentum are copied without optimizer arithmetic.
+Result updateAuxiliaryAdamOnly(
+    const qnn::TinyTransformerParameters& parameters,
+    const qnn::TinyTransformerParameters& gradients,
+    const qnn::TinyTransformerParameters& muonMomentum,
+    const qnn::TinyTransformerParameters& auxiliaryAdamM,
+    const qnn::TinyTransformerParameters& auxiliaryAdamV,
+    const Config& config);
+
 }  // namespace phonelm::nicopedia_muon

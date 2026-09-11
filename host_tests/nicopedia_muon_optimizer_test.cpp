@@ -97,6 +97,20 @@ void classificationAndStep() {
   require(duplicate.error.empty() && tiny_lm::parameterRegistry(first.parameters).size()==tiny_lm::parameterRegistry(duplicate.parameters).size(),"duplicate update failed");
   for(std::size_t i=0;i<tiny_lm::parameterRegistry(first.parameters).size();++i)
     require(*tiny_lm::parameterRegistry(first.parameters)[i].values==*tiny_lm::parameterRegistry(duplicate.parameters)[i].values,"mixed update nondeterministic");
+  auto auxiliaryOnly = nicopedia_muon::updateAuxiliaryAdamOnly(
+      parameters, gradients, first.muonMomentum, zero, zero, updateConfig);
+  require(auxiliaryOnly.error.empty(), auxiliaryOnly.error.c_str());
+  const auto mixedRegistry = tiny_lm::parameterRegistry(first.parameters);
+  const auto auxiliaryRegistry = tiny_lm::parameterRegistry(auxiliaryOnly.parameters);
+  const auto parameterRegistry = tiny_lm::parameterRegistry(parameters);
+  for (std::size_t i = 0; i < mixedRegistry.size(); ++i) {
+    if (mixedRegistry[i].role == tiny_lm::ParameterRole::AUX_ADAM)
+      require(*mixedRegistry[i].values == *auxiliaryRegistry[i].values,
+              "Aux Adam-only result changed");
+    else
+      require(*parameterRegistry[i].values == *auxiliaryRegistry[i].values,
+              "Aux Adam-only changed Muon parameter");
+  }
   auto zeroStep=nicopedia_muon::update(parameters,zero,zero,zero,zero,updateConfig);
   require(zeroStep.error.empty(),zeroStep.error.c_str());
   for(std::size_t i=0;i<tiny_lm::parameterRegistry(parameters).size();++i)

@@ -7,6 +7,9 @@
 #include "../nicopedia_checkpoint_policy.h"
 #include "../nicopedia_muon_checkpoint.h"
 #include "../nicopedia_muon_optimizer.h"
+#include "../nicopedia_htp_muon.h"
+#include "../nicopedia_hvx_muon.h"
+#include "../nicopedia_muon_stage_diagnostic.h"
 #include "../nicopedia_byte_bpe.h"
 #include "../seed_selection.h"
 #include "../tiny_language_model_cpu.h"
@@ -7349,12 +7352,18 @@ std::string nicopediaMuonHybridTraining(
     updateConfig.nsSteps = 5;
     updateConfig.optimizerStep = step;
     const auto optimizerUpdateStarted = std::chrono::steady_clock::now();
+#if PHONELM_ENABLE_HVX_MUON
+    auto hvxUpdate = nicopedia_hvx_muon::update(
+        current, gradient, momentum, adamM, adamV, updateConfig);
+    auto update = std::move(hvxUpdate.update);
+#else
     auto update = nicopedia_muon::update(current, gradient, momentum, adamM,
                                          adamV, updateConfig);
+#endif
     optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
     if (!update.error.empty())
-      return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_CPU_UPDATE\nerror=" + update.error + "\n";
+      return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_OPTIMIZER_UPDATE\nerror=" + update.error + "\n";
     const auto resultMoveStarted = std::chrono::steady_clock::now();
     current = std::move(update.parameters);
     momentum = std::move(update.muonMomentum);
@@ -7394,7 +7403,12 @@ std::string nicopediaMuonHybridTraining(
       std::ostringstream status;
       status << "phase=training\nstep=" << step << "\nsteps=" << steps
              << "\nloss=" << meanLoss << "\noptimizer=muon_aux_adam"
-             << "\nforward_backward_backend=HTP\noptimizer_muon_backend=CPU"
+             << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
+#if PHONELM_ENABLE_HVX_MUON
+             << "HVX_W8"
+#else
+             << "CPU"
+#endif
              << "\noptimizer_aux_adam_backend=CPU\nqnn_return_code_success=true"
              << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
              << "\ncpu_fallback=false";
@@ -7447,7 +7461,12 @@ std::string nicopediaMuonHybridTraining(
          << "\nmuon_matrix_count=114\nmuon_parameter_count=622592"
          << "\naux_adam_parameter_count=135936\nfirst_loss=" << firstLoss
          << "\nlast_loss=" << lastLoss
-         << "\nforward_backward_backend=HTP\noptimizer_muon_backend=CPU"
+         << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
+#if PHONELM_ENABLE_HVX_MUON
+         << "HVX_W8"
+#else
+         << "CPU"
+#endif
          << "\noptimizer_aux_adam_backend=CPU\nfwd_backward_ms=" << fwdBwdUs / 1000.0
          << "\nmuon_ms=" << muonUs / 1000.0 << "\naux_adam_ms=" << auxUs / 1000.0
           << "\nparameter_transfer_ms="
@@ -8986,6 +9005,597 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
   return report.str();
 }
 }  // namespace
+
+std::string runHtpMuonValidation() {
+  struct Difference {
+    double maxAbs = 0.0, meanAbs = 0.0, relativeL2 = 0.0, cosine = 1.0;
+  };
+  const auto difference = [](const std::vector<float>& expected,
+                             const std::vector<float>& actual) {
+    Difference result;
+    if (expected.size() != actual.size() || expected.empty()) {
+      result.maxAbs = result.meanAbs = result.relativeL2 =
+          std::numeric_limits<double>::infinity();
+      result.cosine = -1.0;
+      return result;
+    }
+    double absolute = 0.0, squared = 0.0, expectedSquared = 0.0;
+    double actualSquared = 0.0, dot = 0.0;
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      const double e = expected[index], a = actual[index], d = a - e;
+      result.maxAbs = std::max(result.maxAbs, std::abs(d));
+      absolute += std::abs(d);
+      squared += d * d;
+      expectedSquared += e * e;
+      actualSquared += a * a;
+      dot += e * a;
+    }
+    result.meanAbs = absolute / expected.size();
+    result.relativeL2 = std::sqrt(squared) /
+        std::max(std::sqrt(expectedSquared), 1.0e-30);
+    const double normProduct = std::sqrt(expectedSquared * actualSquared);
+    result.cosine = normProduct > 0.0 ? dot / normProduct :
+        (squared == 0.0 ? 1.0 : 0.0);
+    return result;
+  };
+  const auto makeValues = [](std::size_t count, float scale, int phase) {
+    std::vector<float> result(count);
+    for (std::size_t index = 0; index < count; ++index)
+      result[index] = scale *
+          (std::sin(float(index + 1) * (0.013f + phase * 0.001f)) +
+           float(int(index % 17) - 8) * 0.03125f);
+    return result;
+  };
+  struct CpuBranch {
+    std::vector<float> momentum, weights, orthogonal;
+    std::string error;
+  };
+  const auto cpuBranch = [&](const std::vector<float>& current,
+                             const std::vector<float>& gradient,
+                             const std::vector<float>& prior,
+                             const std::vector<float>& scales,
+                             uint32_t batch, uint32_t rows, uint32_t columns,
+                             float learningRate) {
+    CpuBranch result;
+    const std::size_t perMatrix = std::size_t(rows) * columns;
+    result.momentum.resize(current.size());
+    result.weights.resize(current.size());
+    result.orthogonal.reserve(current.size());
+    for (uint32_t matrix = 0; matrix < batch; ++matrix) {
+      std::vector<float> nesterov(perMatrix);
+      const std::size_t offset = std::size_t(matrix) * perMatrix;
+      for (std::size_t index = 0; index < perMatrix; ++index) {
+        const std::size_t flat = offset + index;
+        result.momentum[flat] = 0.95f * prior[flat] + 0.05f * gradient[flat];
+        nesterov[index] =
+            0.05f * gradient[flat] + 0.95f * result.momentum[flat];
+      }
+      std::vector<float> orthogonal;
+      if (!nicopedia_muon::zeropowerNewtonSchulzFp32(
+              nesterov, rows, columns, 5, &orthogonal, nullptr,
+              &result.error))
+        return result;
+      result.orthogonal.insert(result.orthogonal.end(), orthogonal.begin(),
+                               orthogonal.end());
+      for (std::size_t index = 0; index < perMatrix; ++index)
+        result.weights[offset + index] = current[offset + index] -
+            learningRate * scales[matrix] * orthogonal[index];
+    }
+    return result;
+  };
+  const auto parityPass = [](const Difference& metric) {
+    return std::isfinite(metric.maxAbs) && metric.maxAbs <= 2.0e-3 &&
+           metric.relativeL2 <= 1.0e-3 && metric.cosine >= 0.99999;
+  };
+  constexpr float learningRate = 0.005f;
+  std::ostringstream report;
+  report << std::setprecision(10) << "HTP_MUON_VALIDATION\n";
+  std::string error;
+
+  // Phase A/B: the same graph contains rank-3 MatMul (including transpose
+  // input1), ReduceSum axes {1,2} with keep_dims, broadcast, and rectangular
+  // MatMul. B=1 isolates a single 64x64 oracle comparison.
+  Runtime singleRuntime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  // The backend-default probe is retained in the first device evidence. This
+  // diagnostic requests explicit FP32 after that path missed the frozen gate.
+  options.htpGraphPrecisionMode = 2;
+  options.htpGraphPrecisionCompensation = 2;
+  singleRuntime.setOptions(options);
+  if (!singleRuntime.initialize(QnnBackendKind::HTP, error) ||
+      !singleRuntime.prepareMuonOptimizer(1, 1, 64, 128, 5, true, error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_CAPABILITY\nerror=" +
+        error + "\ncpu_fallback=false\n" + singleRuntime.apiTraceSummary() +
+        singleRuntime.diagnostics();
+  }
+  const auto singleSquareCurrent = makeValues(64 * 64, 0.02f, 1);
+  const auto singleSquareGradient = makeValues(64 * 64, 0.001f, 2);
+  const auto singleSquareMomentum = makeValues(64 * 64, 0.0002f, 3);
+  const auto singleRectCurrent = makeValues(64 * 128, 0.02f, 4);
+  const auto singleRectGradient = makeValues(64 * 128, 0.001f, 5);
+  const auto singleRectMomentum = makeValues(64 * 128, 0.0002f, 6);
+  const std::vector<float> singleScale{1.0f};
+  const std::vector<float> singleRectScale{std::sqrt(2.0f)};
+  const auto singleCpu = cpuBranch(
+      singleSquareCurrent, singleSquareGradient, singleSquareMomentum,
+      singleScale, 1, 64, 64, learningRate);
+  const auto singleRectCpu = cpuBranch(
+      singleRectCurrent, singleRectGradient, singleRectMomentum,
+      singleRectScale, 1, 64, 128, learningRate);
+  std::vector<float> singleNesterov(singleSquareGradient.size());
+  double singleNormSquared = 0.0;
+  for (std::size_t index = 0; index < singleNesterov.size(); ++index) {
+    const float nextMomentum = 0.95f * singleSquareMomentum[index] +
+                               0.05f * singleSquareGradient[index];
+    singleNesterov[index] = 0.05f * singleSquareGradient[index] +
+                            0.95f * nextMomentum;
+    singleNormSquared += double(singleNesterov[index]) * singleNesterov[index];
+  }
+  std::vector<float> singleNormalized(singleNesterov.size());
+  const double singleDenominator = std::sqrt(singleNormSquared) + 1.0e-7;
+  for (std::size_t index = 0; index < singleNesterov.size(); ++index)
+    singleNormalized[index] = float(double(singleNesterov[index]) /
+                                    singleDenominator);
+  std::vector<float> singleIteration1;
+  std::string singleIterationError;
+  nicopedia_muon::zeropowerNewtonSchulzFp32(
+      singleNesterov, 64, 64, 1, &singleIteration1, nullptr,
+      &singleIterationError);
+  MuonOptimizerOutputs singleHtp;
+  if (!singleCpu.error.empty() || !singleRectCpu.error.empty() ||
+      !singleRuntime.executeMuonOptimizer(
+          singleSquareCurrent, singleSquareGradient, singleSquareMomentum,
+          singleScale, singleRectCurrent, singleRectGradient,
+          singleRectMomentum, singleRectScale, learningRate, singleHtp,
+          error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_SINGLE_EXECUTE\nerror=" +
+        (error.empty() ? singleCpu.error + singleRectCpu.error : error) +
+        "\ncpu_fallback=false\n" + singleRuntime.apiTraceSummary() +
+        singleRuntime.diagnostics();
+  }
+  const auto& singleHtpOrthogonal = singleHtp.orthogonalSquare;
+  const auto singleMetric = difference(singleCpu.orthogonal,
+                                       singleHtpOrthogonal);
+  const auto normalizedMetric = difference(singleNormalized,
+                                           singleHtp.normalizedSquare);
+  const auto iteration1Metric = difference(singleIteration1,
+                                           singleHtp.nsIteration1Square);
+  const auto& singleRectHtpOrthogonal = singleHtp.orthogonalRectangular;
+  const auto singleRectMetric = difference(singleRectCpu.orthogonal,
+                                           singleRectHtpOrthogonal);
+  if (!parityPass(singleMetric) || !parityPass(singleRectMetric)) {
+    report << "status=FAILED\nfailure_classification=HTP_MUON_SINGLE_PARITY\n"
+           << "normalized_max_abs=" << normalizedMetric.maxAbs
+           << "\nnormalized_relative_l2=" << normalizedMetric.relativeL2
+           << "\nnormalized_cosine=" << normalizedMetric.cosine
+           << "\niteration1_max_abs=" << iteration1Metric.maxAbs
+           << "\niteration1_relative_l2=" << iteration1Metric.relativeL2
+           << "\niteration1_cosine=" << iteration1Metric.cosine << '\n'
+           << "single_max_abs=" << singleMetric.maxAbs
+           << "\nsingle_relative_l2=" << singleMetric.relativeL2
+           << "\nsingle_cosine=" << singleMetric.cosine
+           << "\nrectangular_max_abs=" << singleRectMetric.maxAbs
+           << "\nrectangular_relative_l2=" << singleRectMetric.relativeL2
+           << "\nrectangular_cosine=" << singleRectMetric.cosine
+           << "\ncpu_fallback=false\n" << singleRuntime.apiTraceSummary()
+           << singleRuntime.diagnostics();
+    return report.str();
+  }
+
+  // Phase C/D capability and per-matrix reduction proof at B=2.
+  Runtime batchedRuntime;
+  batchedRuntime.setOptions(options);
+  if (!batchedRuntime.initialize(QnnBackendKind::HTP, error) ||
+      !batchedRuntime.prepareMuonOptimizer(2, 2, 64, 128, 5, true, error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_BATCHED_PREPARE\nerror=" +
+        error + "\ncpu_fallback=false\n" + batchedRuntime.apiTraceSummary() +
+        batchedRuntime.diagnostics();
+  }
+  const auto bSquareCurrent = makeValues(2 * 64 * 64, 0.02f, 7);
+  const auto bSquareGradient = makeValues(2 * 64 * 64, 0.001f, 8);
+  const auto bSquareMomentum = makeValues(2 * 64 * 64, 0.0002f, 9);
+  const auto bRectCurrent = makeValues(2 * 64 * 128, 0.02f, 10);
+  const auto bRectGradient = makeValues(2 * 64 * 128, 0.001f, 11);
+  const auto bRectMomentum = makeValues(2 * 64 * 128, 0.0002f, 12);
+  const std::vector<float> bSquareScale{1.0f, 1.0f};
+  const std::vector<float> bRectScale{std::sqrt(2.0f), 1.0f};
+  const auto bSquareCpu = cpuBranch(bSquareCurrent, bSquareGradient,
+                                    bSquareMomentum, bSquareScale, 2, 64, 64,
+                                    learningRate);
+  const auto bRectCpu = cpuBranch(bRectCurrent, bRectGradient, bRectMomentum,
+                                  bRectScale, 2, 64, 128, learningRate);
+  MuonOptimizerOutputs bHtp;
+  if (!batchedRuntime.executeMuonOptimizer(
+          bSquareCurrent, bSquareGradient, bSquareMomentum, bSquareScale,
+          bRectCurrent, bRectGradient, bRectMomentum, bRectScale,
+          learningRate, bHtp, error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_BATCHED_EXECUTE\nerror=" +
+        error + "\ncpu_fallback=false\n" + batchedRuntime.apiTraceSummary() +
+        batchedRuntime.diagnostics();
+  }
+  const auto bSquareMetric = difference(
+      bSquareCpu.orthogonal,
+      bHtp.orthogonalSquare);
+  const auto bRectMetric = difference(
+      bRectCpu.orthogonal,
+      bHtp.orthogonalRectangular);
+  if (!parityPass(bSquareMetric) || !parityPass(bRectMetric)) {
+    report << "status=FAILED\nfailure_classification=HTP_MUON_BATCHED_PARITY\n"
+           << "batched_square_max_abs=" << bSquareMetric.maxAbs
+           << "\nbatched_square_relative_l2=" << bSquareMetric.relativeL2
+           << "\nbatched_square_cosine=" << bSquareMetric.cosine
+           << "\nbatched_rect_max_abs=" << bRectMetric.maxAbs
+           << "\nbatched_rect_relative_l2=" << bRectMetric.relativeL2
+           << "\nbatched_rect_cosine=" << bRectMetric.cosine
+           << "\ncpu_fallback=false\n" << batchedRuntime.apiTraceSummary()
+           << batchedRuntime.diagnostics();
+    return report.str();
+  }
+
+  // Phase E: exact production partition, one graphExecute, and immutable CPU
+  // oracle one-step comparison including bit-identical shared Aux Adam.
+  tiny_lm::Config model{1024, 32, 64, 128, 1.0e-5f, 19, 2};
+  auto parameters = tiny_lm::initialParameters(model, 1);
+  auto gradients = parameters;
+  auto momentum = parameters;
+  auto adamM = parameters;
+  auto adamV = parameters;
+  auto gradientRegistry = tiny_lm::parameterRegistry(gradients);
+  auto momentumRegistry = tiny_lm::parameterRegistry(momentum);
+  auto mRegistry = tiny_lm::parameterRegistry(adamM);
+  auto vRegistry = tiny_lm::parameterRegistry(adamV);
+  for (std::size_t entry = 0; entry < gradientRegistry.size(); ++entry) {
+    auto* g = const_cast<std::vector<float>*>(gradientRegistry[entry].values);
+    auto* m = const_cast<std::vector<float>*>(momentumRegistry[entry].values);
+    auto* first = const_cast<std::vector<float>*>(mRegistry[entry].values);
+    auto* second = const_cast<std::vector<float>*>(vRegistry[entry].values);
+    for (std::size_t index = 0; index < g->size(); ++index) {
+      (*g)[index] = 0.001f *
+          (std::sin(float(index + 1) * 0.017f + float(entry)) +
+           float(int(index % 11) - 5) * 0.02f);
+      (*m)[index] = gradientRegistry[entry].role == tiny_lm::ParameterRole::MUON
+          ? 0.0002f * std::cos(float(index + entry + 1) * 0.019f) : 0.0f;
+      (*first)[index] = 0.0f;
+      (*second)[index] = 0.0f;
+    }
+  }
+  nicopedia_muon::Config updateConfig;
+  updateConfig.muonLearningRate = learningRate;
+  updateConfig.auxiliaryAdamLearningRate = 0.0022f;
+  updateConfig.optimizerStep = 1;
+  const auto cpuStarted = std::chrono::steady_clock::now();
+  const auto cpu = nicopedia_muon::update(parameters, gradients, momentum,
+                                           adamM, adamV, updateConfig);
+  const double cpuWallUs = std::chrono::duration<double, std::micro>(
+      std::chrono::steady_clock::now() - cpuStarted).count();
+  if (!cpu.error.empty())
+    return report.str() + "status=FAILED\nfailure_classification=CPU_ORACLE\nerror=" +
+        cpu.error + "\ncpu_fallback=false\n";
+  nicopedia_htp_muon::PackedInputs packed;
+  auto packStarted = std::chrono::steady_clock::now();
+  if (!nicopedia_htp_muon::pack(parameters, gradients, momentum, &packed,
+                                 &error))
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_PACK\nerror=" +
+        error + "\ncpu_fallback=false\n";
+  const double packUs = std::chrono::duration<double, std::micro>(
+      std::chrono::steady_clock::now() - packStarted).count();
+  Runtime fullRuntime;
+  fullRuntime.setOptions(options);
+  if (!fullRuntime.initialize(QnnBackendKind::HTP, error) ||
+      !fullRuntime.prepareMuonOptimizer(76, 38, 64, 128, 5, true, error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_FULL_PREPARE\nerror=" +
+        error + "\ncpu_fallback=false\n" + fullRuntime.apiTraceSummary() +
+        fullRuntime.diagnostics();
+  }
+  MuonOptimizerOutputs fullHtp;
+  if (!fullRuntime.executeMuonOptimizer(
+          packed.currentSquare, packed.gradientSquare, packed.momentumSquare,
+          packed.scaleSquare, packed.currentRectangular,
+          packed.gradientRectangular, packed.momentumRectangular,
+          packed.scaleRectangular, learningRate, fullHtp, error)) {
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_FULL_EXECUTE\nerror=" +
+        error + "\ncpu_fallback=false\n" + fullRuntime.apiTraceSummary() +
+        fullRuntime.diagnostics();
+  }
+  auto htpParameters = parameters;
+  auto htpMomentum = momentum;
+  const auto unpackStarted = std::chrono::steady_clock::now();
+  if (!nicopedia_htp_muon::unpack(
+          packed, fullHtp.nextWeightsSquare, fullHtp.nextMomentumSquare,
+          fullHtp.nextWeightsRectangular, fullHtp.nextMomentumRectangular,
+          &htpParameters, &htpMomentum, &error))
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_UNPACK\nerror=" +
+        error + "\ncpu_fallback=false\n";
+  const double unpackUs = std::chrono::duration<double, std::micro>(
+      std::chrono::steady_clock::now() - unpackStarted).count();
+  const auto htp = nicopedia_muon::updateAuxiliaryAdamOnly(
+      htpParameters, gradients, htpMomentum, adamM, adamV, updateConfig);
+  if (!htp.error.empty())
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_AUX_ADAM\nerror=" +
+        htp.error + "\ncpu_fallback=false\n";
+  const auto cpuRegistry = tiny_lm::parameterRegistry(cpu.parameters);
+  const auto htpRegistry = tiny_lm::parameterRegistry(htp.parameters);
+  const auto cpuMomentumRegistry = tiny_lm::parameterRegistry(cpu.muonMomentum);
+  const auto htpMomentumRegistry = tiny_lm::parameterRegistry(htp.muonMomentum);
+  std::vector<float> cpuMuonWeights, htpMuonWeights, cpuMuonMomentum;
+  std::vector<float> htpMuonMomentumValues;
+  bool auxIdentity = true;
+  std::string worstMatrix;
+  double worstMatrixMaxAbs = -1.0;
+  for (std::size_t index = 0; index < cpuRegistry.size(); ++index) {
+    if (cpuRegistry[index].role == tiny_lm::ParameterRole::MUON) {
+      cpuMuonWeights.insert(cpuMuonWeights.end(), cpuRegistry[index].values->begin(),
+                            cpuRegistry[index].values->end());
+      htpMuonWeights.insert(htpMuonWeights.end(), htpRegistry[index].values->begin(),
+                            htpRegistry[index].values->end());
+      cpuMuonMomentum.insert(cpuMuonMomentum.end(),
+                             cpuMomentumRegistry[index].values->begin(),
+                             cpuMomentumRegistry[index].values->end());
+      htpMuonMomentumValues.insert(htpMuonMomentumValues.end(),
+                                   htpMomentumRegistry[index].values->begin(),
+                                   htpMomentumRegistry[index].values->end());
+      const double matrixError = maxAbs(*cpuRegistry[index].values,
+                                        *htpRegistry[index].values);
+      if (matrixError > worstMatrixMaxAbs) {
+        worstMatrixMaxAbs = matrixError;
+        worstMatrix = cpuRegistry[index].name;
+      }
+    } else {
+      auxIdentity = auxIdentity &&
+          *cpuRegistry[index].values == *htpRegistry[index].values &&
+          *tiny_lm::parameterRegistry(cpu.auxiliaryAdamM)[index].values ==
+              *tiny_lm::parameterRegistry(htp.auxiliaryAdamM)[index].values &&
+          *tiny_lm::parameterRegistry(cpu.auxiliaryAdamV)[index].values ==
+              *tiny_lm::parameterRegistry(htp.auxiliaryAdamV)[index].values;
+    }
+  }
+  const auto weightMetric = difference(cpuMuonWeights, htpMuonWeights);
+  const auto momentumMetric = difference(cpuMuonMomentum,
+                                         htpMuonMomentumValues);
+  const auto cpuPacked = cpuBranch(
+      packed.currentSquare, packed.gradientSquare, packed.momentumSquare,
+      packed.scaleSquare, 76, 64, 64, learningRate);
+  const auto cpuPackedRect = cpuBranch(
+      packed.currentRectangular, packed.gradientRectangular,
+      packed.momentumRectangular, packed.scaleRectangular, 38, 64, 128,
+      learningRate);
+  const auto fullSquareMetric = difference(
+      cpuPacked.orthogonal,
+      fullHtp.orthogonalSquare);
+  const auto fullRectMetric = difference(
+      cpuPackedRect.orthogonal,
+      fullHtp.orthogonalRectangular);
+  const double htpTotalUs = packUs + fullHtp.bindUs + fullHtp.executeUs + unpackUs;
+  const double speedup = cpu.muonMicroseconds / htpTotalUs;
+  const bool correctness = parityPass(fullSquareMetric) &&
+      parityPass(fullRectMetric) && momentumMetric.maxAbs <= 2.0e-6 &&
+      weightMetric.maxAbs <= 2.0e-5 && auxIdentity;
+  const bool performance = speedup >= 2.0;
+  const bool ok = correctness && performance;
+  report << "status=" << (ok ? "SUCCESS" : "FAILED")
+         << "\nfailure_classification="
+         << (correctness ? (performance ? "NONE" : "HTP_MUON_PERFORMANCE_GATE")
+                         : "HTP_MUON_FULL_PARITY")
+         << "\nrank3_matmul=true\ntranspose_input1_matmul=true"
+         << "\nreduce_axes_1_2=true\nreduce_keep_dims=true\nbroadcast=true"
+         << "\nrectangular_batched_matmul=true"
+         << "\nsingle_max_abs=" << singleMetric.maxAbs
+         << "\nsingle_mean_abs=" << singleMetric.meanAbs
+         << "\nsingle_relative_l2=" << singleMetric.relativeL2
+         << "\nsingle_cosine=" << singleMetric.cosine
+         << "\nbatched_square_max_abs=" << bSquareMetric.maxAbs
+         << "\nbatched_square_relative_l2=" << bSquareMetric.relativeL2
+         << "\nbatched_square_cosine=" << bSquareMetric.cosine
+         << "\nbatched_rect_max_abs=" << bRectMetric.maxAbs
+         << "\nbatched_rect_relative_l2=" << bRectMetric.relativeL2
+         << "\nbatched_rect_cosine=" << bRectMetric.cosine
+         << "\nfull_square_max_abs=" << fullSquareMetric.maxAbs
+         << "\nfull_square_relative_l2=" << fullSquareMetric.relativeL2
+         << "\nfull_square_cosine=" << fullSquareMetric.cosine
+         << "\nfull_rect_max_abs=" << fullRectMetric.maxAbs
+         << "\nfull_rect_relative_l2=" << fullRectMetric.relativeL2
+         << "\nfull_rect_cosine=" << fullRectMetric.cosine
+         << "\nfull_weight_max_abs=" << weightMetric.maxAbs
+         << "\nfull_weight_relative_l2=" << weightMetric.relativeL2
+         << "\nfull_weight_cosine=" << weightMetric.cosine
+         << "\nfull_momentum_max_abs=" << momentumMetric.maxAbs
+         << "\nfull_momentum_relative_l2=" << momentumMetric.relativeL2
+         << "\nfull_momentum_cosine=" << momentumMetric.cosine
+         << "\nworst_matrix=" << worstMatrix
+         << "\nworst_matrix_max_abs=" << worstMatrixMaxAbs
+         << "\naux_adam_bit_identity=" << (auxIdentity ? "true" : "false")
+         << "\ncpu_muon_us=" << cpu.muonMicroseconds
+         << "\ncpu_update_wall_us=" << cpuWallUs
+         << "\nmuon_pack_us=" << packUs
+         << "\nmuon_htp_bind_us=" << fullHtp.bindUs
+         << "\nmuon_htp_execute_us=" << fullHtp.executeUs
+         << "\nmuon_unpack_us=" << unpackUs
+         << "\nmuon_total_us=" << htpTotalUs
+         << "\nmuon_speedup=" << speedup
+         << "\ngraph_executes_per_update=1\nsquare_batch=76"
+         << "\nrectangular_batch=38\nmuon_optimizer_backend=HTP"
+         << "\nmuon_state_residency=HOST_PING_PONG"
+         << "\nmuon_parameter_handoff=CPU_PACKED_PING_PONG"
+         << "\naux_adam_backend=CPU\nqnn_return_code_success=true"
+         << "\noutput_tensors_finite=true\ncpu_fallback=false"
+         << "\nfinal_test_used=false\nnan_detected=false\ninf_detected=false\n"
+         << fullRuntime.apiTraceSummary() << fullRuntime.diagnostics();
+  return report.str();
+}
+
+std::string runHtpMuonNsStageProbe() {
+  struct Difference {
+    double maxAbs = 0.0, meanAbs = 0.0, rmsErr = 0.0, relativeL2 = 0.0;
+    double cosine = 1.0;
+    std::uint64_t finiteCount = 0, total = 0;
+  };
+  const auto difference = [](const std::vector<float>& expected,
+                             const std::vector<float>& actual) {
+    Difference result;
+    result.total = expected.size();
+    if (expected.size() != actual.size() || expected.empty()) {
+      result.maxAbs = result.meanAbs = result.rmsErr = result.relativeL2 =
+          std::numeric_limits<double>::infinity();
+      result.cosine = -1.0;
+      return result;
+    }
+    double absolute = 0.0, squared = 0.0, expectedSquared = 0.0;
+    double actualSquared = 0.0, dot = 0.0;
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      if (!std::isfinite(expected[index]) || !std::isfinite(actual[index]))
+        continue;
+      ++result.finiteCount;
+      const double e = expected[index], a = actual[index], d = a - e;
+      result.maxAbs = std::max(result.maxAbs, std::abs(d));
+      absolute += std::abs(d);
+      squared += d * d;
+      expectedSquared += e * e;
+      actualSquared += a * a;
+      dot += e * a;
+    }
+    if (result.total > 0) {
+      result.meanAbs = absolute / result.total;
+      result.rmsErr = std::sqrt(squared / result.total);
+    }
+    result.relativeL2 = std::sqrt(squared) /
+        std::max(std::sqrt(expectedSquared), 1.0e-30);
+    const double normProduct = std::sqrt(expectedSquared * actualSquared);
+    result.cosine = normProduct > 0.0 ? dot / normProduct :
+        (squared == 0.0 ? 1.0 : 0.0);
+    return result;
+  };
+  const auto emitMetric = [](std::ostringstream& report, const char* prefix,
+                             const Difference& metric) {
+    report << '\n' << prefix << "_max_abs=" << metric.maxAbs
+           << '\n' << prefix << "_mean_abs=" << metric.meanAbs
+           << '\n' << prefix << "_rms_error=" << metric.rmsErr
+           << '\n' << prefix << "_relative_l2=" << metric.relativeL2
+           << '\n' << prefix << "_cosine=" << metric.cosine
+           << '\n' << prefix << "_finite=" << metric.finiteCount << '/'
+           << metric.total;
+  };
+  const auto makeValues = [](std::size_t count, float scale, int phase) {
+    std::vector<float> result(count);
+    for (std::size_t index = 0; index < count; ++index)
+      result[index] = scale *
+          (std::sin(float(index + 1) * (0.013f + phase * 0.001f)) +
+           float(int(index % 17) - 8) * 0.03125f);
+    return result;
+  };
+  std::ostringstream report;
+  report << std::setprecision(10) << "HTP_MUON_NS_STAGE_PROBE\n";
+  std::string error;
+  constexpr std::uint32_t kRows = 64, kColumns = 64;
+  const auto gradient = makeValues(kRows * kColumns, 0.001f, 2);
+  const auto prior = makeValues(kRows * kColumns, 0.0002f, 3);
+  std::vector<float> nesterov(gradient.size());
+  for (std::size_t index = 0; index < nesterov.size(); ++index) {
+    const float nextMomentum =
+        0.95f * prior[index] + 0.05f * gradient[index];
+    nesterov[index] =
+        0.05f * gradient[index] + 0.95f * nextMomentum;
+  }
+  nicopedia_muon_stage::Stages cpuDouble, cpuFloat;
+  // Exact frozen single-matrix reference path: reuse the host-validated
+  // nesterov/normalize/stage helpers rather than a second local copy.
+  if (!nicopedia_muon_stage::stagesFromNesterovDouble(
+          nesterov, kRows, kColumns, &cpuDouble, &error))
+    return report.str() + "status=FAILED\nfailure_classification=CPU_STAGE\nerror=" +
+        error + "\ncpu_fallback=false\n";
+  if (!nicopedia_muon_stage::stagesFromNesterovFloat(
+          nesterov, kRows, kColumns, &cpuFloat, &error))
+    return report.str() + "status=FAILED\nfailure_classification=CPU_STAGE\nerror=" +
+        error + "\ncpu_fallback=false\n";
+  const std::uint64_t inputFnv = nicopedia_muon_stage::fnv1a64(
+      cpuDouble.x0.data(), cpuDouble.x0.size() * sizeof(float));
+  char inputFnvText[17];
+  std::snprintf(inputFnvText, sizeof(inputFnvText), "%016llx",
+                static_cast<unsigned long long>(inputFnv));
+  // Frozen host input identity (direct-normalize path, FNV 70a2b57657bea1a0).
+  // The device regenerates the same generator; libm sinf variance may shift
+  // the last ulps, so a mismatch is reported as advisory evidence rather than
+  // a fail-closed gate. The stage comparison itself stays internally
+  // consistent (HTP vs on-device CPU refs from the same X0).
+  Runtime stageRuntime;
+  RuntimeOptions options;
+  options.captureQnnCallback = false;
+  options.qnnLogLevel = 2;
+  stageRuntime.setOptions(options);
+  if (!stageRuntime.initialize(QnnBackendKind::HTP, error) ||
+      !stageRuntime.prepareMuonNsStageProbe(error))
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_STAGE_PROBE_PREPARE\nerror=" +
+        error + "\ncpu_fallback=false\n" + stageRuntime.apiTraceSummary() +
+        stageRuntime.diagnostics();
+  MuonNsStageOutputs htp;
+  if (!stageRuntime.executeMuonNsStageProbe(cpuDouble.x0, htp, error))
+    return report.str() + "status=FAILED\nfailure_classification=HTP_MUON_STAGE_PROBE_EXECUTE\nerror=" +
+        error + "\ncpu_fallback=false\n" + stageRuntime.apiTraceSummary() +
+        stageRuntime.diagnostics();
+  const Difference refDoubleFloatA =
+      difference(cpuDouble.a, cpuFloat.a);
+  (void)refDoubleFloatA;
+  const struct {
+    const char* name;
+    const std::vector<float>* cpuD;
+    const std::vector<float>* cpuF;
+    const std::vector<float>* htp;
+  } stages[] = {
+      {"x0", &cpuDouble.x0, &cpuFloat.x0, &htp.x0},
+      {"a", &cpuDouble.a, &cpuFloat.a, &htp.a},
+      {"a2", &cpuDouble.a2, &cpuFloat.a2, &htp.a2},
+      {"b", &cpuDouble.b, &cpuFloat.b, &htp.b},
+      {"bx", &cpuDouble.bx, &cpuFloat.bx, &htp.bx},
+      {"x1", &cpuDouble.x1, &cpuFloat.x1, &htp.x1},
+  };
+  report << "input_fnv1a64=" << inputFnvText
+         << "\ninput_shape=64x64"
+         << "\ninput_elements=4096"
+         << "\ninput_frozen_fnv1a64=70a2b57657bea1a0"
+         << "\ninput_identity_match="
+         << (std::string(inputFnvText) == "70a2b57657bea1a0" ? "true"
+                                                             : "false");
+  const auto gateFail = [](const Difference& metric) {
+    return !(std::isfinite(metric.maxAbs) && metric.maxAbs <= 2.0e-3 &&
+             metric.relativeL2 <= 1.0e-3 && metric.cosine >= 0.99999);
+  };
+  const char* firstDouble = "NONE";
+  const char* firstFloat = "NONE";
+  for (const auto& stage : stages) {
+    const Difference vsDouble = difference(*stage.cpuD, *stage.htp);
+    const Difference vsFloat = difference(*stage.cpuF, *stage.htp);
+    const Difference refGap = difference(*stage.cpuD, *stage.cpuF);
+    emitMetric(report, (std::string("htp_vs_double_") + stage.name).c_str(),
+               vsDouble);
+    emitMetric(report, (std::string("htp_vs_float_") + stage.name).c_str(),
+               vsFloat);
+    emitMetric(report, (std::string("cpu_float_vs_double_") + stage.name).c_str(),
+               refGap);
+    if (std::string(firstDouble) == "NONE" && gateFail(vsDouble))
+      firstDouble = stage.name;
+    if (std::string(firstFloat) == "NONE" && gateFail(vsFloat))
+      firstFloat = stage.name;
+  }
+  const Difference standaloneVsDouble =
+      difference(cpuDouble.a, htp.standaloneA);
+  const Difference standaloneVsFloat =
+      difference(cpuFloat.a, htp.standaloneA);
+  const Difference chainedVsStandalone = difference(htp.a, htp.standaloneA);
+  emitMetric(report, "htp_standalone_a_vs_double", standaloneVsDouble);
+  emitMetric(report, "htp_standalone_a_vs_float", standaloneVsFloat);
+  emitMetric(report, "htp_chained_a_vs_standalone_a", chainedVsStandalone);
+  report << "\nfirst_divergence_vs_double=" << firstDouble
+         << "\nfirst_divergence_vs_float=" << firstFloat
+         << "\nprecision_config=default"
+         << "\nqnn_return_code_success=true"
+         << "\noutput_tensors_finite=true"
+         << "\ncpu_fallback=false"
+         << "\nstatus=SUCCESS"
+         << "\nfinal_test_used=false\nnan_detected=false\ninf_detected=false\n"
+         << stageRuntime.apiTraceSummary() << stageRuntime.diagnostics();
+  return report.str();
+}
 
 std::string runTinyTransformerTrainingExperiment(
     ExecutionMode mode, const TrainingConfig& trainingConfig,

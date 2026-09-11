@@ -77,6 +77,30 @@ void transpose(const std::vector<float>& input, std::uint32_t rows,
           input[std::size_t(row) * columns + column];
 }
 
+bool applyAuxiliaryAdamEntry(
+    const tiny_lm::ParameterInfo& parameterInfo,
+    const std::vector<float>& gradient, const std::vector<float>& oldM,
+    const std::vector<float>& oldV, double correction1, double correction2,
+    float learningRate, std::vector<float>* parameter, std::vector<float>* m,
+    std::vector<float>* v, StageHealth* health, std::string* error) {
+  if (!parameter || !m || !v || parameter->size() != gradient.size() ||
+      m->size() != gradient.size() || v->size() != gradient.size() ||
+      oldM.size() != gradient.size() || oldV.size() != gradient.size())
+    return fail(error, "MUON_AUX_ADAM_SIZE_MISMATCH:" + parameterInfo.name);
+  for (std::size_t i = 0; i < parameter->size(); ++i) {
+    (*m)[i] = 0.9f * oldM[i] + 0.1f * gradient[i];
+    (*v)[i] = 0.999f * oldV[i] + 0.001f * gradient[i] * gradient[i];
+    const double updateValue = (double((*m)[i]) * correction1) /
+        (std::sqrt(double((*v)[i]) * correction2) + 1.0e-8);
+    (*parameter)[i] -= learningRate * float(updateValue);
+  }
+  if (!finite(*m) || !finite(*v) || !finite(*parameter)) {
+    if (health) health->updateFinite = false;
+    return fail(error, "MUON_AUX_ADAM_STATE_NONFINITE:" + parameterInfo.name);
+  }
+  return true;
+}
+
 }  // namespace
 
 bool validateOptimizerStateRegistry(
@@ -267,18 +291,11 @@ Result update(const Params& parameters, const Params& gradients,
       auto& v = *const_cast<std::vector<float>*>(nextV[index].values);
       const auto& oldMValues = *oldM[index].values;
       const auto& oldVValues = *oldV[index].values;
-      for (std::size_t i = 0; i < parameter.size(); ++i) {
-        m[i] = 0.9f * oldMValues[i] + 0.1f * grad[i];
-        v[i] = 0.999f * oldVValues[i] + 0.001f * grad[i] * grad[i];
-        const double updateValue = (double(m[i]) * correction1) /
-            (std::sqrt(double(v[i]) * correction2) + 1.0e-8);
-        parameter[i] -= config.auxiliaryAdamLearningRate * float(updateValue);
-      }
-      if (!finite(m) || !finite(v)) {
-        result.health.updateFinite = false;
-        result.error = "MUON_AUX_ADAM_STATE_NONFINITE:" + p[index].name;
+      if (!applyAuxiliaryAdamEntry(
+              p[index], grad, oldMValues, oldVValues, correction1, correction2,
+              config.auxiliaryAdamLearningRate, &parameter, &m, &v,
+              &result.health, &result.error))
         return result;
-      }
       result.auxiliaryAdamParameterCount += parameter.size();
       result.auxiliaryAdamMicroseconds += std::chrono::duration<double, std::micro>(
           std::chrono::steady_clock::now() - started).count();
@@ -292,6 +309,89 @@ Result update(const Params& parameters, const Params& gradients,
       result.error = "MUON_PARAMETER_UPDATE_NONFINITE:" + p[index].name;
       return result;
     }
+  }
+  return result;
+}
+
+Result updateAuxiliaryAdamOnly(
+    const Params& parameters, const Params& gradients,
+    const Params& muonMomentum, const Params& auxiliaryAdamM,
+    const Params& auxiliaryAdamV, const Config& config) {
+  Result result;
+  result.parameters = parameters;
+  result.muonMomentum = muonMomentum;
+  result.auxiliaryAdamM = auxiliaryAdamM;
+  result.auxiliaryAdamV = auxiliaryAdamV;
+  if (!(config.auxiliaryAdamLearningRate > 0.0f) ||
+      config.optimizerStep == 0) {
+    result.error = "MUON_CONFIG_INVALID";
+    return result;
+  }
+  std::string registryError;
+  const auto p = tiny_lm::parameterRegistry(parameters);
+  const auto g = tiny_lm::parameterRegistry(gradients);
+  const auto mu = tiny_lm::parameterRegistry(muonMomentum);
+  const auto oldM = tiny_lm::parameterRegistry(auxiliaryAdamM);
+  const auto oldV = tiny_lm::parameterRegistry(auxiliaryAdamV);
+  auto next = tiny_lm::parameterRegistry(result.parameters);
+  auto nextM = tiny_lm::parameterRegistry(result.auxiliaryAdamM);
+  auto nextV = tiny_lm::parameterRegistry(result.auxiliaryAdamV);
+  if (!tiny_lm::validateParameterRegistry(parameters, &registryError) ||
+      !validateStateRegistry(p, g, "GRADIENT", &registryError) ||
+      !validateStateRegistry(p, mu, "MOMENTUM", &registryError) ||
+      !validateStateRegistry(p, oldM, "AUX_ADAM_M", &registryError) ||
+      !validateStateRegistry(p, oldV, "AUX_ADAM_V", &registryError) ||
+      !validateStateRegistry(p, next, "PARAMETERS", &registryError) ||
+      !validateStateRegistry(p, nextM, "NEXT_AUX_ADAM_M", &registryError) ||
+      !validateStateRegistry(p, nextV, "NEXT_AUX_ADAM_V", &registryError)) {
+    result.error = "MUON_REGISTRY_INVALID:" + registryError;
+    return result;
+  }
+  if (!finiteRegistry(p, "PARAMETERS", &registryError)) {
+    result.health.parametersFinite = false;
+    result.error = registryError;
+    return result;
+  }
+  if (!finiteRegistry(g, "GRADIENT", &registryError)) {
+    result.health.gradientFinite = false;
+    result.error = registryError;
+    return result;
+  }
+  if (!finiteRegistry(mu, "MOMENTUM", &registryError)) {
+    result.health.momentumFinite = false;
+    result.error = registryError;
+    return result;
+  }
+  if (!finiteRegistry(oldM, "AUX_ADAM_M", &registryError) ||
+      !finiteRegistry(oldV, "AUX_ADAM_V", &registryError)) {
+    result.health.updateFinite = false;
+    result.error = registryError;
+    return result;
+  }
+  const double correction1 =
+      1.0 / (1.0 - std::pow(0.9, double(config.optimizerStep)));
+  const double correction2 =
+      1.0 / (1.0 - std::pow(0.999, double(config.optimizerStep)));
+  for (std::size_t index = 0; index < p.size(); ++index) {
+    if (p[index].role == tiny_lm::ParameterRole::MUON) continue;
+    if (p[index].role != tiny_lm::ParameterRole::AUX_ADAM) {
+      result.error = "MUON_PARAMETER_UNCLASSIFIED:" + p[index].name;
+      return result;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    auto& parameter = *const_cast<std::vector<float>*>(next[index].values);
+    auto& m = *const_cast<std::vector<float>*>(nextM[index].values);
+    auto& v = *const_cast<std::vector<float>*>(nextV[index].values);
+    if (!applyAuxiliaryAdamEntry(
+            p[index], *g[index].values, *oldM[index].values,
+            *oldV[index].values, correction1, correction2,
+            config.auxiliaryAdamLearningRate, &parameter, &m, &v,
+            &result.health, &result.error))
+      return result;
+    result.auxiliaryAdamParameterCount += parameter.size();
+    result.auxiliaryAdamMicroseconds +=
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - started).count();
   }
   return result;
 }

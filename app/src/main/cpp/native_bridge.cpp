@@ -1,6 +1,7 @@
 #include "benchmark_runner.h"
 #include "training_engine.h"
 #include "qnn/qnn_transformer.h"
+#include "nicopedia_hvx_muon.h"
 
 #include <android/log.h>
 #include <jni.h>
@@ -164,6 +165,83 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeGetQnnStatus(
         return toJavaString(env, report);
     } catch (const std::exception& exception) {
         const auto report = std::string("qnn_status=FAILED\nerror=") + exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunHvxMuonOptimizerBenchmark(
+    JNIEnv* env, jobject /* receiver */) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel))
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    RunningGuard guard;
+    beginNativeCall();
+    try {
+        const auto report = phonelm::nicopedia_hvx_muon::benchmarkActualOptimizerPath();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("HVX_MUON_OPTIMIZER_BENCHMARK\nstatus=FAILED\nerror=") +
+                            exception.what() + "\nfallback=false\n";
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunHtpMuonValidation(
+    JNIEnv* env, jobject /* receiver */) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel))
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    RunningGuard guard;
+    beginNativeCall();
+    try {
+        const auto report = phonelm::qnn::runHtpMuonValidation();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("HTP_MUON_VALIDATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string("HTP_MUON_VALIDATION\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
+        logcat(report);
+        return toJavaString(env, report);
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunHtpMuonNsStageProbe(
+    JNIEnv* env, jobject /* receiver */) {
+    bool expected = false;
+    if (!gRunning.compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel))
+        return toJavaString(env, failedReport("a benchmark is already running"));
+    RunningGuard guard;
+    beginNativeCall();
+    try {
+        const auto report = phonelm::qnn::runHtpMuonNsStageProbe();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (const std::exception& exception) {
+        const auto report = std::string("HTP_MUON_NS_STAGE_PROBE\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\nerror=") +
+                            exception.what();
+        logcat(report);
+        return toJavaString(env, report);
+    } catch (...) {
+        const auto report = std::string("HTP_MUON_NS_STAGE_PROBE\nstatus=FAILED\n"
+                                        "failure_classification=JNI_EXCEPTION\n"
+                                        "error=unknown");
         logcat(report);
         return toJavaString(env, report);
     }

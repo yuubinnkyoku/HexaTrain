@@ -16,6 +16,12 @@ object NativeBridge {
 
     external fun nativeGetQnnStatus(): String
 
+    external fun nativeRunHtpMuonValidation(): String
+
+    external fun nativeRunHvxMuonOptimizerBenchmark(): String
+
+    external fun nativeRunHtpMuonNsStageProbe(): String
+
     external fun nativeRunBenchmark(
         backend: Int,
         batchSize: Int,

@@ -390,6 +390,63 @@ struct Runtime::Impl {
         uint32_t dims[2]{}, scalarDims[2]{1, 1};
         uint32_t elements = 0;
     } adamOptimizer;
+    struct MuonOptimizerGraph {
+        enum TensorIndex : std::size_t {
+            CURRENT, GRADIENT, PRIOR_MOMENTUM, UPDATE_SCALE,
+            MOMENTUM_SCALED, GRADIENT_SCALED, NEXT_MOMENTUM,
+            NESTEROV_MOMENTUM_SCALED, NESTEROV, NORM_INPUT, SQUARED,
+            NORM_SQUARED,
+            NORM, DENOMINATOR, NORMALIZED, ITERATION_BEGIN,
+            ITERATION_STRIDE = 8,
+            SCALED_ORTHOGONAL = ITERATION_BEGIN + 5 * ITERATION_STRIDE,
+            SCALED_UPDATE, NEXT_WEIGHT, TENSOR_COUNT
+        };
+        struct Branch {
+            std::array<Qnn_Tensor_t, TENSOR_COUNT> tensors{};
+            uint32_t matrixDims[3]{}, gramDims[3]{}, normDims[3]{};
+            uint32_t axesDims[1]{2};
+            uint32_t axesData[2]{1, 2};
+            Qnn_Tensor_t axes = QNN_TENSOR_INIT;
+            uint32_t batch = 0, rows = 0, columns = 0;
+            uint32_t elements = 0;
+        } square, rectangular;
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t learningRate = QNN_TENSOR_INIT;
+        Qnn_Tensor_t momentum = QNN_TENSOR_INIT;
+        Qnn_Tensor_t gradientCoefficient = QNN_TENSOR_INIT;
+        Qnn_Tensor_t nsA = QNN_TENSOR_INIT, nsB = QNN_TENSOR_INIT;
+        Qnn_Tensor_t nsC = QNN_TENSOR_INIT, normScale = QNN_TENSOR_INIT;
+        Qnn_Tensor_t epsilon = QNN_TENSOR_INIT;
+        uint32_t scalarDims[3]{1, 1, 1};
+        float momentumData = 0.95f, gradientCoefficientData = 0.05f;
+        float nsAData = 3.4445f, nsBData = -4.7750f, nsCData = 2.0315f;
+        float normScaleData = 1024.0f, epsilonData = 1.024e-4f;
+        uint32_t nsSteps = 0;
+        bool diagnosticOutputs = false;
+        uint32_t nodeCount = 0, tensorCount = 0;
+        std::list<std::string> names;
+    } muonOptimizer;
+    // Diagnostic-only single-matrix Newton-Schulz stage probe. Independent
+    // from the production Muon optimizer graph above: the frozen normalized
+    // input is the only APP_WRITE tensor and iteration-1 X0/A/A2/B/BX/X1
+    // plus a standalone A=XX^T tap are APP_READ. Tensors use rank-3 [1,R,C]
+    // shapes to match the established Muon batched configuration exactly.
+    struct MuonNsStageProbeGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        Qnn_Tensor_t input = QNN_TENSOR_INIT;
+        Qnn_Tensor_t a = QNN_TENSOR_INIT, a2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scaledA = QNN_TENSOR_INIT, scaledA2 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t b = QNN_TENSOR_INIT, bx = QNN_TENSOR_INIT;
+        Qnn_Tensor_t scaledX = QNN_TENSOR_INIT, x1 = QNN_TENSOR_INIT;
+        Qnn_Tensor_t standaloneA = QNN_TENSOR_INIT;
+        Qnn_Tensor_t nsA = QNN_TENSOR_INIT, nsB = QNN_TENSOR_INIT;
+        Qnn_Tensor_t nsC = QNN_TENSOR_INIT;
+        uint32_t matrixDims[3]{}, gramDims[3]{}, scalarDims[3]{1, 1, 1};
+        float nsAData = 3.4445f, nsBData = -4.7750f, nsCData = 2.0315f;
+        uint32_t elements = 0, gramElements = 0;
+        uint32_t nodeCount = 0, tensorCount = 0;
+        std::list<std::string> names;
+    } muonNsStageProbe;
     struct CrossEntropyGradientGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t logits = QNN_TENSOR_INIT, target = QNN_TENSOR_INIT;
@@ -1034,6 +1091,8 @@ bool Runtime::recreateContext(std::string& error) {
         impl_->attentionBackward = {};
         impl_->momentumOptimizer = {};
         impl_->adamOptimizer = {};
+        impl_->muonOptimizer = {};
+        impl_->muonNsStageProbe = {};
         impl_->crossEntropyGradient = {};
         impl_->tinyTransformerTraining = {};
         impl_->generalizedTinyTransformerTraining = {};
@@ -1322,6 +1381,8 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 #include "qnn_runtime_mlp.inc"
 #include "qnn_runtime_full_step.inc"
 #include "qnn_runtime_transformer.inc"
+#include "qnn_runtime_muon.inc"
+#include "qnn_runtime_muon_stage_probe.inc"
 #include "qnn_runtime_transformer_training.inc"
 #include "qnn_runtime_transformer_training_generalized.inc"
 #include "qnn_runtime_transformer_training_generalized_execute.inc"
