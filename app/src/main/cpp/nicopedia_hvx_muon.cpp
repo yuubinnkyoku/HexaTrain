@@ -72,6 +72,7 @@ class Session {
     hyper_ = nullptr;
     output_ = nullptr;
     metadata_ = nullptr;
+    packed_ = {};
     initialized_ = false;
   }
 
@@ -120,6 +121,7 @@ class Session {
   float* hyper_ = nullptr;
   float* output_ = nullptr;
   int* metadata_ = nullptr;
+  nicopedia_htp_muon::PackedInputs packed_;
   remote_handle64 handle_ = 0;
   bool initialized_ = false;
 };
@@ -209,26 +211,43 @@ Result update(const qnn::TinyTransformerParameters& parameters,
     return result;
   }
   Session& rpc = session();
+  auto phase = Clock::now();
   std::lock_guard<std::mutex> lock(rpc.mutex);
+  result.timings.mutexWaitUs = elapsedUs(phase);
+  phase = Clock::now();
   if (!rpc.initialize(&result.update.error)) {
     result.rpcStatus = -1;
     result.timings.totalUs = elapsedUs(totalStarted);
     return result;
   }
-  nicopedia_htp_muon::PackedInputs packed;
-  auto phase = Clock::now();
+  result.timings.sessionSetupUs = elapsedUs(phase);
+  auto& packed = rpc.packed_;
+  nicopedia_htp_muon::PackTimings packTimings;
+  phase = Clock::now();
   if (!nicopedia_htp_muon::packForValidatedRpc(
-          parameters, gradients, muonMomentum, &packed, &result.update.error)) {
+          parameters, gradients, muonMomentum, &packed, &result.update.error,
+          &packTimings)) {
     result.timings.packUs = elapsedUs(phase);
     result.timings.totalUs = elapsedUs(totalStarted);
     return result;
   }
+  result.timings.packRegistryTraversalUs = packTimings.registryTraversalUs;
+  result.timings.packAllocationResizeUs = packTimings.allocationResizeUs;
+  result.timings.packMetadataSetupUs = packTimings.metadataSetupUs;
+  result.timings.packSquareWeightCopyUs = packTimings.squareWeightCopyUs;
+  result.timings.packW1WeightCopyUs = packTimings.w1WeightCopyUs;
+  result.timings.packW2WeightTransposeUs = packTimings.w2WeightTransposeUs;
+  result.timings.packGradientCopyUs = packTimings.gradientCopyUs;
+  result.timings.packMomentumCopyUs = packTimings.momentumCopyUs;
+  auto subphase = Clock::now();
   float* input = rpc.input_;
   appendInterleavedGroup(packed.currentSquare, packed.gradientSquare,
                          packed.momentumSquare, kSquareElements, &input);
   appendInterleavedGroup(packed.currentRectangular,
-                         packed.gradientRectangular,
-                         packed.momentumRectangular, kRectElements, &input);
+                          packed.gradientRectangular,
+                          packed.momentumRectangular, kRectElements, &input);
+  result.timings.packFlatRpcCopyUs = elapsedUs(subphase);
+  subphase = Clock::now();
   float* hyper = rpc.hyper_;
   for (float scale : packed.scaleSquare) {
     *hyper++ = config.muonLearningRate; *hyper++ = scale;
@@ -236,6 +255,7 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   for (float scale : packed.scaleRectangular) {
     *hyper++ = config.muonLearningRate; *hyper++ = scale;
   }
+  result.timings.packHyperSetupUs = elapsedUs(subphase);
   result.timings.packUs = elapsedUs(phase);
 
   phase = Clock::now();
@@ -278,6 +298,7 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   }
 
   phase = Clock::now();
+  subphase = Clock::now();
   std::vector<float> squareWeights(76 * kSquareElements);
   std::vector<float> squareMomentum(76 * kSquareElements);
   std::vector<float> rectWeights(38 * kRectElements);
@@ -293,20 +314,34 @@ Result update(const qnn::TinyTransformerParameters& parameters,
     const float* source = rectOutput + i * 2 * kRectElements;
     std::copy_n(source, kRectElements, rectWeights.begin() + i * kRectElements);
     std::copy_n(source + kRectElements, kRectElements,
-                rectMomentum.begin() + i * kRectElements);
+                 rectMomentum.begin() + i * kRectElements);
   }
+  result.timings.unpackRpcOutputDecodeUs = elapsedUs(subphase);
+  subphase = Clock::now();
   auto candidateParameters = parameters;
   auto candidateMomentum = muonMomentum;
+  result.timings.unpackCandidateGenerationUs = elapsedUs(subphase);
+  nicopedia_htp_muon::UnpackTimings unpackTimings;
   if (!nicopedia_htp_muon::unpack(packed, squareWeights, squareMomentum,
           rectWeights, rectMomentum, &candidateParameters, &candidateMomentum,
-          &result.update.error)) {
+          &result.update.error, &unpackTimings)) {
     result.timings.unpackApplyUs = elapsedUs(phase);
     result.timings.totalUs = elapsedUs(totalStarted);
     return result;
   }
-  result.update = nicopedia_muon::updateAuxiliaryAdamOnly(
+  result.timings.unpackDecodedValidationUs = unpackTimings.decodedValidationUs;
+  result.timings.unpackRegistryTraversalUs = unpackTimings.registryTraversalUs;
+  result.timings.unpackSquareOutputCopyUs = unpackTimings.squareOutputCopyUs;
+  result.timings.unpackW1OutputCopyUs = unpackTimings.w1OutputCopyUs;
+  result.timings.unpackW2TransposeBackUs = unpackTimings.w2TransposeBackUs;
+  subphase = Clock::now();
+  auto auxiliaryUpdate = nicopedia_muon::updateAuxiliaryAdamOnly(
       candidateParameters, gradients, candidateMomentum, auxiliaryAdamM,
       auxiliaryAdamV, config);
+  result.timings.unpackAuxAdamUs = elapsedUs(subphase);
+  subphase = Clock::now();
+  result.update = std::move(auxiliaryUpdate);
+  result.timings.unpackFinalCommitUs = elapsedUs(subphase);
   if (result.update.error.empty()) {
     result.update.muonMatrixCount = 114;
     result.update.muonParameterCount = 622592;
@@ -338,6 +373,12 @@ std::string benchmarkActualOptimizerPath() {
   constexpr std::size_t kMeasured = 5;
   std::array<double, kMeasured> cpu{}, hvx{}, pack{}, inputValidation{}, rpc{},
       kernel{}, outputValidation{}, unpackApply{};
+  std::array<double, kMeasured> packRegistry{}, packAllocation{}, packMetadata{},
+      packSquareWeight{}, packW1Weight{}, packW2Transpose{}, packGradient{},
+      packMomentum{}, packFlatRpc{}, packHyper{}, unpackDecode{},
+      unpackCandidate{}, unpackRegistry{}, unpackSquare{}, unpackW1{}, unpackW2{},
+      unpackAuxAdam{}, unpackFinalCommit{}, unpackDecodedValidation{}, mutexWait{},
+      sessionSetup{};
   nicopedia_muon::Result cpuReference;
   Result hvxReference;
   for (std::size_t repetition = 0; repetition <= kMeasured; ++repetition) {
@@ -363,6 +404,27 @@ std::string benchmarkActualOptimizerPath() {
     rpc[index] = hvxResult.timings.rpcUs; kernel[index] = hvxResult.timings.kernelUs;
     outputValidation[index] = hvxResult.timings.outputValidationUs;
     unpackApply[index] = hvxResult.timings.unpackApplyUs;
+    packRegistry[index] = hvxResult.timings.packRegistryTraversalUs;
+    packAllocation[index] = hvxResult.timings.packAllocationResizeUs;
+    packMetadata[index] = hvxResult.timings.packMetadataSetupUs;
+    packSquareWeight[index] = hvxResult.timings.packSquareWeightCopyUs;
+    packW1Weight[index] = hvxResult.timings.packW1WeightCopyUs;
+    packW2Transpose[index] = hvxResult.timings.packW2WeightTransposeUs;
+    packGradient[index] = hvxResult.timings.packGradientCopyUs;
+    packMomentum[index] = hvxResult.timings.packMomentumCopyUs;
+    packFlatRpc[index] = hvxResult.timings.packFlatRpcCopyUs;
+    packHyper[index] = hvxResult.timings.packHyperSetupUs;
+    unpackDecode[index] = hvxResult.timings.unpackRpcOutputDecodeUs;
+    unpackDecodedValidation[index] = hvxResult.timings.unpackDecodedValidationUs;
+    unpackCandidate[index] = hvxResult.timings.unpackCandidateGenerationUs;
+    unpackRegistry[index] = hvxResult.timings.unpackRegistryTraversalUs;
+    unpackSquare[index] = hvxResult.timings.unpackSquareOutputCopyUs;
+    unpackW1[index] = hvxResult.timings.unpackW1OutputCopyUs;
+    unpackW2[index] = hvxResult.timings.unpackW2TransposeBackUs;
+    unpackAuxAdam[index] = hvxResult.timings.unpackAuxAdamUs;
+    unpackFinalCommit[index] = hvxResult.timings.unpackFinalCommitUs;
+    mutexWait[index] = hvxResult.timings.mutexWaitUs;
+    sessionSetup[index] = hvxResult.timings.sessionSetupUs;
   }
   const auto cpuP = tiny_lm::parameterRegistry(cpuReference.parameters);
   const auto hvxP = tiny_lm::parameterRegistry(hvxReference.update.parameters);
@@ -422,6 +484,62 @@ std::string benchmarkActualOptimizerPath() {
          << "\nrpc_status_success=true\noutput_tensors_finite="
          << (hvxReference.outputFinite ? "true" : "false")
          << "\nfallback=false\n";
+  const auto appendSummary = [&](const char* name,
+                                 const std::array<double, kMeasured>& values) {
+    report << name << "_best_us=" << best(values) << '\n'
+           << name << "_median_us=" << median(values) << '\n'
+           << name << "_mean_us=" << mean(values) << '\n';
+  };
+  appendSummary("pack_registry_traversal", packRegistry);
+  appendSummary("pack_allocation_resize", packAllocation);
+  appendSummary("pack_metadata_setup", packMetadata);
+  appendSummary("pack_square_weight_copy", packSquareWeight);
+  appendSummary("pack_w1_weight_copy", packW1Weight);
+  appendSummary("pack_w2_weight_transpose", packW2Transpose);
+  appendSummary("pack_gradient_copy", packGradient);
+  appendSummary("pack_momentum_copy", packMomentum);
+  appendSummary("pack_flat_rpc_copy", packFlatRpc);
+  appendSummary("pack_hyper_setup", packHyper);
+  appendSummary("unpack_rpc_output_decode", unpackDecode);
+  appendSummary("unpack_decoded_validation", unpackDecodedValidation);
+  appendSummary("unpack_candidate_generation", unpackCandidate);
+  appendSummary("unpack_registry_traversal", unpackRegistry);
+  appendSummary("unpack_square_output_copy", unpackSquare);
+  appendSummary("unpack_w1_output_copy", unpackW1);
+  appendSummary("unpack_w2_transpose_back", unpackW2);
+  appendSummary("unpack_aux_adam", unpackAuxAdam);
+  appendSummary("unpack_final_commit", unpackFinalCommit);
+  appendSummary("mutex_wait", mutexWait);
+  appendSummary("session_setup", sessionSetup);
+  for (std::size_t i = 0; i < kMeasured; ++i) {
+    const auto run = [&](const char* name, double value) {
+      report << "measured_run_" << (i + 1) << '_' << name << "_us="
+             << value << '\n';
+    };
+    run("pack", pack[i]);
+    run("pack_registry_traversal", packRegistry[i]);
+    run("pack_allocation_resize", packAllocation[i]);
+    run("pack_metadata_setup", packMetadata[i]);
+    run("pack_square_weight_copy", packSquareWeight[i]);
+    run("pack_w1_weight_copy", packW1Weight[i]);
+    run("pack_w2_weight_transpose", packW2Transpose[i]);
+    run("pack_gradient_copy", packGradient[i]);
+    run("pack_momentum_copy", packMomentum[i]);
+    run("pack_flat_rpc_copy", packFlatRpc[i]);
+    run("pack_hyper_setup", packHyper[i]);
+    run("unpack_apply", unpackApply[i]);
+    run("unpack_rpc_output_decode", unpackDecode[i]);
+    run("unpack_decoded_validation", unpackDecodedValidation[i]);
+    run("unpack_candidate_generation", unpackCandidate[i]);
+    run("unpack_registry_traversal", unpackRegistry[i]);
+    run("unpack_square_output_copy", unpackSquare[i]);
+    run("unpack_w1_output_copy", unpackW1[i]);
+    run("unpack_w2_transpose_back", unpackW2[i]);
+    run("unpack_aux_adam", unpackAuxAdam[i]);
+    run("unpack_final_commit", unpackFinalCommit[i]);
+    run("mutex_wait", mutexWait[i]);
+    run("session_setup", sessionSetup[i]);
+  }
   return report.str();
 }
 

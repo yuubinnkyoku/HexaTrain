@@ -3,10 +3,16 @@
 #include "nicopedia_htp_muon.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 
 namespace phonelm::nicopedia_htp_muon { namespace {
+
+using Clock = std::chrono::steady_clock;
+double elapsedUs(Clock::time_point started) {
+  return std::chrono::duration<double, std::micro>(Clock::now() - started).count();
+}
 
 bool fail(std::string* error, const std::string& message) {
   if (error) *error = "HTP_MUON_" + message;
@@ -19,18 +25,24 @@ bool finite(const std::vector<float>& values) {
 }
 
 void appendMatrix(const std::vector<float>& source, std::uint32_t rows,
-                  std::uint32_t columns, bool transpose,
-                  std::vector<float>* destination) {
+                   std::uint32_t columns, bool transpose,
+                   std::vector<float>* destination, double* resizeUs,
+                   double* copyUs) {
   const std::size_t offset = destination->size();
+  auto phase = Clock::now();
   destination->resize(offset + source.size());
+  if (resizeUs) *resizeUs += elapsedUs(phase);
+  phase = Clock::now();
   if (!transpose) {
     std::copy(source.begin(), source.end(), destination->begin() + offset);
+    if (copyUs) *copyUs += elapsedUs(phase);
     return;
   }
   for (std::uint32_t row = 0; row < rows; ++row)
     for (std::uint32_t column = 0; column < columns; ++column)
       (*destination)[offset + std::size_t(column) * rows + row] =
           source[std::size_t(row) * columns + column];
+  if (copyUs) *copyUs += elapsedUs(phase);
 }
 
 bool appendBinding(const tiny_lm::ParameterInfo& parameter,
@@ -38,9 +50,9 @@ bool appendBinding(const tiny_lm::ParameterInfo& parameter,
                    const tiny_lm::ParameterInfo& momentum,
                    std::size_t registryIndex, bool transpose,
                    std::vector<float>* current, std::vector<float>* gradients,
-                   std::vector<float>* momenta, std::vector<float>* scales,
-                   std::vector<MatrixBinding>* bindings, bool checkFinite,
-                   std::string* error) {
+                    std::vector<float>* momenta, std::vector<float>* scales,
+                    std::vector<MatrixBinding>* bindings, bool checkFinite,
+                    bool square, PackTimings* timings, std::string* error) {
   if (!parameter.values || !gradient.values || !momentum.values ||
       parameter.values->size() != gradient.values->size() ||
       parameter.values->size() != momentum.values->size())
@@ -50,15 +62,28 @@ bool appendBinding(const tiny_lm::ParameterInfo& parameter,
     return fail(error, "PACK_NONFINITE:" + parameter.name);
   const float scale = std::sqrt(std::max(
       1.0f, float(parameter.fanOut) / float(parameter.fanIn)));
+  double* weightCopyUs = nullptr;
+  if (timings) {
+    weightCopyUs = square ? &timings->squareWeightCopyUs
+                          : (transpose ? &timings->w2WeightTransposeUs
+                                       : &timings->w1WeightCopyUs);
+  }
   appendMatrix(*parameter.values, parameter.shape[0], parameter.shape[1],
-               transpose, current);
+               transpose, current,
+               timings ? &timings->allocationResizeUs : nullptr, weightCopyUs);
   appendMatrix(*gradient.values, parameter.shape[0], parameter.shape[1],
-               transpose, gradients);
+               transpose, gradients,
+               timings ? &timings->allocationResizeUs : nullptr,
+               timings ? &timings->gradientCopyUs : nullptr);
   appendMatrix(*momentum.values, parameter.shape[0], parameter.shape[1],
-               transpose, momenta);
+               transpose, momenta,
+               timings ? &timings->allocationResizeUs : nullptr,
+               timings ? &timings->momentumCopyUs : nullptr);
+  const auto metadataStarted = Clock::now();
   scales->push_back(scale);
   bindings->push_back({registryIndex, parameter.name, parameter.shape[0],
                        parameter.shape[1], transpose, scale});
+  if (timings) timings->metadataSetupUs += elapsedUs(metadataStarted);
   return true;
 }
 
@@ -90,9 +115,21 @@ bool writeMatrix(const std::vector<float>& source, std::size_t matrixIndex,
 bool packImpl(const qnn::TinyTransformerParameters& parameters,
               const qnn::TinyTransformerParameters& gradients,
               const qnn::TinyTransformerParameters& momentum,
-              bool checkFinite, PackedInputs* packed, std::string* error) {
+               bool checkFinite, PackedInputs* packed, std::string* error,
+               PackTimings* timings = nullptr) {
   if (!packed) return fail(error, "PACK_NULL_OUTPUT");
-  *packed = {};
+  if (timings) *timings = {};
+  const auto totalStarted = Clock::now();
+  packed->currentSquare.clear();
+  packed->gradientSquare.clear();
+  packed->momentumSquare.clear();
+  packed->scaleSquare.clear();
+  packed->currentRectangular.clear();
+  packed->gradientRectangular.clear();
+  packed->momentumRectangular.clear();
+  packed->scaleRectangular.clear();
+  packed->squareBindings.clear();
+  packed->rectangularBindings.clear();
   std::string registryError;
   const auto p = tiny_lm::parameterRegistry(parameters);
   const auto g = tiny_lm::parameterRegistry(gradients);
@@ -113,8 +150,9 @@ bool packImpl(const qnn::TinyTransformerParameters& parameters,
     if (p[index].shape == std::vector<std::uint32_t>{64, 64}) {
       if (!appendBinding(p[index], g[index], m[index], index, false,
                          &packed->currentSquare, &packed->gradientSquare,
-                         &packed->momentumSquare, &packed->scaleSquare,
-                         &packed->squareBindings, checkFinite, error))
+                          &packed->momentumSquare, &packed->scaleSquare,
+                          &packed->squareBindings, checkFinite, true, timings,
+                          error))
         return false;
     } else if (p[index].shape == std::vector<std::uint32_t>{64, 128} &&
                p[index].fanOut == 128 && p[index].fanIn == 64) {
@@ -133,8 +171,9 @@ bool packImpl(const qnn::TinyTransformerParameters& parameters,
                          &packed->currentRectangular,
                          &packed->gradientRectangular,
                          &packed->momentumRectangular,
-                         &packed->scaleRectangular,
-                         &packed->rectangularBindings, checkFinite, error))
+                          &packed->scaleRectangular,
+                          &packed->rectangularBindings, checkFinite, false,
+                          timings, error))
         return false;
     return true;
   };
@@ -145,6 +184,13 @@ bool packImpl(const qnn::TinyTransformerParameters& parameters,
       rectangularWide.size() != 19 || rectangularTall.size() != 19 ||
       packed->rectangularBindings.size() != kRectangularBatch)
     return fail(error, "PACK_PARTITION_COUNT_MISMATCH");
+  if (timings) {
+    timings->registryTraversalUs = elapsedUs(totalStarted) -
+        timings->allocationResizeUs - timings->metadataSetupUs -
+        timings->squareWeightCopyUs - timings->w1WeightCopyUs -
+        timings->w2WeightTransposeUs - timings->gradientCopyUs -
+        timings->momentumCopyUs;
+  }
   return true;
 }
 
@@ -158,8 +204,10 @@ bool pack(const qnn::TinyTransformerParameters& parameters,
 bool packForValidatedRpc(const qnn::TinyTransformerParameters& parameters,
                          const qnn::TinyTransformerParameters& gradients,
                          const qnn::TinyTransformerParameters& momentum,
-                         PackedInputs* packed, std::string* error) {
-  return packImpl(parameters, gradients, momentum, false, packed, error);
+                         PackedInputs* packed, std::string* error,
+                         PackTimings* timings) {
+  return packImpl(parameters, gradients, momentum, false, packed, error,
+                  timings);
 }
 
 bool validateFinite(const PackedInputs& packed, std::string* error) {
@@ -180,14 +228,19 @@ bool unpack(const PackedInputs& packed,
             const std::vector<float>& nextRectangularMomentum,
             qnn::TinyTransformerParameters* parameters,
             qnn::TinyTransformerParameters* momentum,
-            std::string* error) {
+            std::string* error, UnpackTimings* timings) {
   if (!parameters || !momentum)
     return fail(error, "UNPACK_NULL_OUTPUT");
+  if (timings) *timings = {};
+  const auto validationStarted = Clock::now();
   if (!finite(nextSquareWeights) || !finite(nextSquareMomentum) ||
       !finite(nextRectangularWeights) || !finite(nextRectangularMomentum))
     return fail(error, "UNPACK_NONFINITE");
+  if (timings) timings->decodedValidationUs = elapsedUs(validationStarted);
+  const auto registryStarted = Clock::now();
   auto p = tiny_lm::parameterRegistry(*parameters);
   auto m = tiny_lm::parameterRegistry(*momentum);
+  if (timings) timings->registryTraversalUs = elapsedUs(registryStarted);
   if (p.size() != m.size()) return fail(error, "UNPACK_REGISTRY_MISMATCH");
   const auto unpackGroup = [&](const std::vector<MatrixBinding>& bindings,
                                const std::vector<float>& weights,
@@ -202,9 +255,18 @@ bool unpack(const PackedInputs& packed,
           p[binding.registryIndex].values);
       auto* nextMomentum = const_cast<std::vector<float>*>(
           m[binding.registryIndex].values);
+      const auto copyStarted = Clock::now();
       if (!writeMatrix(weights, index, binding, weight, error) ||
           !writeMatrix(momenta, index, binding, nextMomentum, error))
         return false;
+      if (timings) {
+        double* target = binding.originalRows == 64 &&
+                                 binding.originalColumns == 64
+            ? &timings->squareOutputCopyUs
+            : (binding.transposed ? &timings->w2TransposeBackUs
+                                  : &timings->w1OutputCopyUs);
+        *target += elapsedUs(copyStarted);
+      }
     }
     return true;
   };

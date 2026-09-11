@@ -38,6 +38,25 @@ struct PackedInputs {
   std::vector<MatrixBinding> rectangularBindings;
 };
 
+struct PackTimings {
+  double registryTraversalUs = 0.0;
+  double allocationResizeUs = 0.0;
+  double metadataSetupUs = 0.0;
+  double squareWeightCopyUs = 0.0;
+  double w1WeightCopyUs = 0.0;
+  double w2WeightTransposeUs = 0.0;
+  double gradientCopyUs = 0.0;
+  double momentumCopyUs = 0.0;
+};
+
+struct UnpackTimings {
+  double decodedValidationUs = 0.0;
+  double registryTraversalUs = 0.0;
+  double squareOutputCopyUs = 0.0;
+  double w1OutputCopyUs = 0.0;
+  double w2TransposeBackUs = 0.0;
+};
+
 bool pack(const qnn::TinyTransformerParameters& parameters,
           const qnn::TinyTransformerParameters& gradients,
           const qnn::TinyTransformerParameters& momentum,
@@ -49,8 +68,9 @@ bool pack(const qnn::TinyTransformerParameters& parameters,
 bool packForValidatedRpc(const qnn::TinyTransformerParameters& parameters,
                          const qnn::TinyTransformerParameters& gradients,
                          const qnn::TinyTransformerParameters& momentum,
-                         PackedInputs* packed,
-                         std::string* error = nullptr);
+                          PackedInputs* packed,
+                          std::string* error = nullptr,
+                          PackTimings* timings = nullptr);
 
 bool validateFinite(const PackedInputs& packed,
                     std::string* error = nullptr);
@@ -62,6 +82,7 @@ bool unpack(const PackedInputs& packed,
             const std::vector<float>& nextRectangularMomentum,
             qnn::TinyTransformerParameters* parameters,
             qnn::TinyTransformerParameters* momentum,
-            std::string* error = nullptr);
+            std::string* error = nullptr,
+            UnpackTimings* timings = nullptr);
 
 }  // namespace phonelm::nicopedia_htp_muon
