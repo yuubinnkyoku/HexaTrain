@@ -90,4 +90,15 @@ bool unpack(const PackedInputs& packed,
             std::string* error = nullptr,
             UnpackTimings* timings = nullptr);
 
+// Directly unpacks the production RPC wire layout after the caller has
+// successfully completed a full-buffer finite validation. The destination
+// objects must be isolated candidates; this function never publishes them.
+bool unpackValidatedRpcOutput(
+    const PackedInputs& packed, const float* rpcOutput,
+    std::size_t rpcOutputElements,
+    qnn::TinyTransformerParameters* parameters,
+    qnn::TinyTransformerParameters* momentum,
+    std::string* error = nullptr,
+    UnpackTimings* timings = nullptr);
+
 }  // namespace phonelm::nicopedia_htp_muon

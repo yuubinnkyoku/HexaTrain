@@ -37,6 +37,13 @@ typedef struct hexatrain_qhl_profile {
   uint32_t matrix_count;
 } hexatrain_qhl_profile_t;
 
+// Timing-only production-output variant. It writes the same two output planes
+// as hexatrain_original_qhl_release while collecting stage timings.
+int hexatrain_original_qhl_release_profiled(
+    const float* input, int columns, float learning_rate, float aspect_scale,
+    float* output, hexatrain_qhl_profile_t* profile,
+    void* scratch, size_t scratch_bytes);
+
 // Optional profiling/scratch entry point.  scratch_override is a caller-owned
 // 128-byte-aligned buffer with at least the bytes returned by
 // hexatrain_original_qhl_scratch_bytes(columns).  Passing NULL preserves the

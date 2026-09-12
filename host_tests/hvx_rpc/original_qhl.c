@@ -192,6 +192,16 @@ int hexatrain_original_qhl_release(
       scratch, scratch_bytes, 0);
 }
 
+int hexatrain_original_qhl_release_profiled(
+    const float* input, int columns, float learning_rate, float aspect_scale,
+    float* output, hexatrain_qhl_profile_t* profile,
+    void* scratch, size_t scratch_bytes) {
+  if (!scratch || !profile) return 1103;
+  return hexatrain_original_qhl_impl(
+      input, columns, learning_rate, aspect_scale, output, profile,
+      scratch, scratch_bytes, 0);
+}
+
 int hexatrain_original_qhl(const float* input, int columns, float learning_rate,
                            float aspect_scale, float* output) {
   return hexatrain_original_qhl_profiled(

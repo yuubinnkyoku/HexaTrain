@@ -33,6 +33,7 @@ constexpr std::size_t kRectElements = 64 * 128;
 constexpr std::size_t kInputFloats = 76 * 3 * kSquareElements + 38 * 3 * kRectElements;
 constexpr std::size_t kHyperFloats = 2 * (76 + 38);
 constexpr std::size_t kOutputFloats = 76 * 2 * kSquareElements + 38 * 2 * kRectElements;
+constexpr std::size_t kMetadataInts = 64;
 
 template <typename T> bool allFinite(const T* values, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
@@ -85,7 +86,7 @@ class Session {
     output_ = static_cast<float*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
         RPCMEM_DEFAULT_FLAGS, kOutputFloats * sizeof(float)));
     metadata_ = static_cast<int*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
-        RPCMEM_DEFAULT_FLAGS, 32 * sizeof(int)));
+        RPCMEM_DEFAULT_FLAGS, kMetadataInts * sizeof(int)));
     if (!input_ || !hyper_ || !output_ || !metadata_) {
       *error = "HVX_RPCMEM_ALLOCATION_FAILED";
       reset();
@@ -276,14 +277,15 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   }
   std::fill_n(rpc.output_, kOutputFloats,
               std::numeric_limits<float>::quiet_NaN());
-  std::fill_n(rpc.metadata_, 32, 0);
+  std::fill_n(rpc.metadata_, kMetadataInts, 0);
   result.timings.inputValidationUs = elapsedUs(phase);
 
   phase = Clock::now();
   result.rpcStatus = hexatrain_hvx_probe_run(
       rpc.handle_, 5, 8, 0, 0, rpc.input_, static_cast<int>(kInputFloats),
       rpc.hyper_, static_cast<int>(kHyperFloats), rpc.output_,
-      static_cast<int>(kOutputFloats), rpc.metadata_, 32);
+      static_cast<int>(kOutputFloats), rpc.metadata_,
+      static_cast<int>(kMetadataInts));
   result.timings.rpcUs = elapsedUs(phase);
   result.timings.kernelUs = rpc.metadata_[3];
   if (result.rpcStatus || rpc.metadata_[0] != 0x48565831 ||
@@ -307,48 +309,86 @@ Result update(const qnn::TinyTransformerParameters& parameters,
 
   phase = Clock::now();
   subphase = Clock::now();
-  std::vector<float> squareWeights(76 * kSquareElements);
-  std::vector<float> squareMomentum(76 * kSquareElements);
-  std::vector<float> rectWeights(38 * kRectElements);
-  std::vector<float> rectMomentum(38 * kRectElements);
-  for (std::size_t i = 0; i < 76; ++i) {
-    const float* source = rpc.output_ + i * 2 * kSquareElements;
-    std::copy_n(source, kSquareElements, squareWeights.begin() + i * kSquareElements);
-    std::copy_n(source + kSquareElements, kSquareElements,
-                squareMomentum.begin() + i * kSquareElements);
-  }
-  const float* rectOutput = rpc.output_ + 76 * 2 * kSquareElements;
-  for (std::size_t i = 0; i < 38; ++i) {
-    const float* source = rectOutput + i * 2 * kRectElements;
-    std::copy_n(source, kRectElements, rectWeights.begin() + i * kRectElements);
-    std::copy_n(source + kRectElements, kRectElements,
-                 rectMomentum.begin() + i * kRectElements);
-  }
-  result.timings.unpackRpcOutputDecodeUs = elapsedUs(subphase);
-  subphase = Clock::now();
-  auto candidateParameters = parameters;
-  auto candidateMomentum = muonMomentum;
+  nicopedia_muon::Result candidateUpdate;
+  auto candidateCopyStarted = Clock::now();
+  candidateUpdate.parameters = parameters;
+  result.timings.unpackCandidateParameterCopyUs =
+      elapsedUs(candidateCopyStarted);
+  candidateCopyStarted = Clock::now();
+  candidateUpdate.muonMomentum = muonMomentum;
+  result.timings.unpackCandidateMomentumCopyUs =
+      elapsedUs(candidateCopyStarted);
   result.timings.unpackCandidateGenerationUs = elapsedUs(subphase);
   nicopedia_htp_muon::UnpackTimings unpackTimings;
-  if (!nicopedia_htp_muon::unpack(packed, squareWeights, squareMomentum,
-          rectWeights, rectMomentum, &candidateParameters, &candidateMomentum,
-          &result.update.error, &unpackTimings)) {
+  subphase = Clock::now();
+  if (!nicopedia_htp_muon::unpackValidatedRpcOutput(
+          packed, rpc.output_, kOutputFloats, &candidateUpdate.parameters,
+          &candidateUpdate.muonMomentum, &result.update.error,
+          &unpackTimings)) {
+    result.timings.unpackRpcOutputDecodeUs = elapsedUs(subphase);
     result.timings.unpackApplyUs = elapsedUs(phase);
     result.timings.totalUs = elapsedUs(totalStarted);
     return result;
   }
+  result.timings.unpackRpcOutputDecodeUs = elapsedUs(subphase);
   result.timings.unpackDecodedValidationUs = unpackTimings.decodedValidationUs;
   result.timings.unpackRegistryTraversalUs = unpackTimings.registryTraversalUs;
   result.timings.unpackSquareOutputCopyUs = unpackTimings.squareOutputCopyUs;
   result.timings.unpackW1OutputCopyUs = unpackTimings.w1OutputCopyUs;
   result.timings.unpackW2TransposeBackUs = unpackTimings.w2TransposeBackUs;
   subphase = Clock::now();
-  auto auxiliaryUpdate = nicopedia_muon::updateAuxiliaryAdamOnly(
-      candidateParameters, gradients, candidateMomentum, auxiliaryAdamM,
-      auxiliaryAdamV, config);
+  auto stateCopyStarted = Clock::now();
+  candidateUpdate.auxiliaryAdamM = auxiliaryAdamM;
+  candidateUpdate.auxiliaryAdamTimings.auxiliaryAdamMCopyUs =
+      elapsedUs(stateCopyStarted);
+  stateCopyStarted = Clock::now();
+  candidateUpdate.auxiliaryAdamV = auxiliaryAdamV;
+  candidateUpdate.auxiliaryAdamTimings.auxiliaryAdamVCopyUs =
+      elapsedUs(stateCopyStarted);
+  const bool auxiliarySuccess =
+      nicopedia_muon::updateAuxiliaryAdamCandidateInPlace(
+          // Pack validation covers MUON gradients. Full RPC-output validation
+          // plus direct unpack covers candidate MUON parameters and momentum.
+          gradients, auxiliaryAdamM, auxiliaryAdamV, config, true,
+          &candidateUpdate);
   result.timings.unpackAuxAdamUs = elapsedUs(subphase);
+  result.timings.auxParameterCopyUs =
+      candidateUpdate.auxiliaryAdamTimings.parameterCopyUs;
+  result.timings.auxMuonMomentumCopyUs =
+      candidateUpdate.auxiliaryAdamTimings.muonMomentumCopyUs;
+  result.timings.auxAdamMCopyUs =
+      candidateUpdate.auxiliaryAdamTimings.auxiliaryAdamMCopyUs;
+  result.timings.auxAdamVCopyUs =
+      candidateUpdate.auxiliaryAdamTimings.auxiliaryAdamVCopyUs;
+  result.timings.auxRegistryConstructionUs =
+      candidateUpdate.auxiliaryAdamTimings.registryConstructionUs;
+  result.timings.auxRegistryValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.registryValidationUs;
+  result.timings.auxPreUpdateFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preUpdateFiniteValidationUs;
+  result.timings.auxPreParameterFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preParameterFiniteValidationUs;
+  result.timings.auxPreGradientFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preGradientFiniteValidationUs;
+  result.timings.auxPreMomentumFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preMomentumFiniteValidationUs;
+  result.timings.auxPreAdamMFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preAdamMFiniteValidationUs;
+  result.timings.auxPreAdamVFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.preAdamVFiniteValidationUs;
+  result.timings.auxArithmeticUs =
+      candidateUpdate.auxiliaryAdamTimings.arithmeticUs;
+  result.timings.auxPostUpdateFiniteValidationUs =
+      candidateUpdate.auxiliaryAdamTimings.postUpdateFiniteValidationUs;
+  if (!auxiliarySuccess) {
+    result.update.error = candidateUpdate.error;
+    result.update.health = candidateUpdate.health;
+    result.timings.unpackApplyUs = elapsedUs(phase);
+    result.timings.totalUs = elapsedUs(totalStarted);
+    return result;
+  }
   subphase = Clock::now();
-  result.update = std::move(auxiliaryUpdate);
+  result.update = std::move(candidateUpdate);
   result.timings.unpackFinalCommitUs = elapsedUs(subphase);
   if (result.update.error.empty()) {
     result.update.muonMatrixCount = 114;
@@ -380,15 +420,23 @@ std::string benchmarkActualOptimizerPath() {
 
   constexpr std::size_t kMeasured = 5;
   std::array<double, kMeasured> cpu{}, hvx{}, pack{}, inputValidation{}, rpc{},
-      kernel{}, outputValidation{}, unpackApply{};
+      kernel{}, rpcKernelExternal{}, outputValidation{}, unpackApply{};
   std::array<double, kMeasured> packRegistry{}, packAllocation{}, packMetadata{},
       packSquareWeight{}, packW1Weight{}, packW2Transpose{}, packGradient{},
       packMomentum{}, packFlatRpc{}, packHyper{}, unpackDecode{},
-      unpackCandidate{}, unpackRegistry{}, unpackSquare{}, unpackW1{}, unpackW2{},
+      unpackCandidate{}, unpackCandidateParameterCopy{},
+      unpackCandidateMomentumCopy{}, unpackCandidateOther{}, unpackRegistry{},
+      unpackSquare{}, unpackW1{}, unpackW2{},
       unpackAuxAdam{}, unpackFinalCommit{}, unpackDecodedValidation{}, mutexWait{},
       sessionSetup{}, packActualReallocation{}, packResizeGrowthInitialization{},
       packResizeOther{}, packActualReallocationCount{},
-      packResizeGrowthInitializationCount{};
+      packResizeGrowthInitializationCount{}, auxParameterCopy{},
+      auxMuonMomentumCopy{}, auxAdamMCopy{}, auxAdamVCopy{},
+      auxRegistryConstruction{}, auxRegistryValidation{},
+      auxPreUpdateFiniteValidation{}, auxPreParameterFiniteValidation{},
+      auxPreGradientFiniteValidation{}, auxPreMomentumFiniteValidation{},
+      auxPreAdamMFiniteValidation{}, auxPreAdamVFiniteValidation{},
+      auxArithmetic{}, auxPostUpdateFiniteValidation{}, auxOther{};
   nicopedia_muon::Result cpuReference;
   Result hvxReference;
   for (std::size_t repetition = 0; repetition <= kMeasured; ++repetition) {
@@ -412,6 +460,7 @@ std::string benchmarkActualOptimizerPath() {
     pack[index] = hvxResult.timings.packUs;
     inputValidation[index] = hvxResult.timings.inputValidationUs;
     rpc[index] = hvxResult.timings.rpcUs; kernel[index] = hvxResult.timings.kernelUs;
+    rpcKernelExternal[index] = std::max(0.0, rpc[index] - kernel[index]);
     outputValidation[index] = hvxResult.timings.outputValidationUs;
     unpackApply[index] = hvxResult.timings.unpackApplyUs;
     packRegistry[index] = hvxResult.timings.packRegistryTraversalUs;
@@ -436,15 +485,103 @@ std::string benchmarkActualOptimizerPath() {
     unpackDecode[index] = hvxResult.timings.unpackRpcOutputDecodeUs;
     unpackDecodedValidation[index] = hvxResult.timings.unpackDecodedValidationUs;
     unpackCandidate[index] = hvxResult.timings.unpackCandidateGenerationUs;
+    unpackCandidateParameterCopy[index] =
+        hvxResult.timings.unpackCandidateParameterCopyUs;
+    unpackCandidateMomentumCopy[index] =
+        hvxResult.timings.unpackCandidateMomentumCopyUs;
+    unpackCandidateOther[index] = std::max(0.0,
+        unpackCandidate[index] - unpackCandidateParameterCopy[index] -
+            unpackCandidateMomentumCopy[index]);
     unpackRegistry[index] = hvxResult.timings.unpackRegistryTraversalUs;
     unpackSquare[index] = hvxResult.timings.unpackSquareOutputCopyUs;
     unpackW1[index] = hvxResult.timings.unpackW1OutputCopyUs;
     unpackW2[index] = hvxResult.timings.unpackW2TransposeBackUs;
     unpackAuxAdam[index] = hvxResult.timings.unpackAuxAdamUs;
+    auxParameterCopy[index] = hvxResult.timings.auxParameterCopyUs;
+    auxMuonMomentumCopy[index] = hvxResult.timings.auxMuonMomentumCopyUs;
+    auxAdamMCopy[index] = hvxResult.timings.auxAdamMCopyUs;
+    auxAdamVCopy[index] = hvxResult.timings.auxAdamVCopyUs;
+    auxRegistryConstruction[index] =
+        hvxResult.timings.auxRegistryConstructionUs;
+    auxRegistryValidation[index] = hvxResult.timings.auxRegistryValidationUs;
+    auxPreUpdateFiniteValidation[index] =
+        hvxResult.timings.auxPreUpdateFiniteValidationUs;
+    auxPreParameterFiniteValidation[index] =
+        hvxResult.timings.auxPreParameterFiniteValidationUs;
+    auxPreGradientFiniteValidation[index] =
+        hvxResult.timings.auxPreGradientFiniteValidationUs;
+    auxPreMomentumFiniteValidation[index] =
+        hvxResult.timings.auxPreMomentumFiniteValidationUs;
+    auxPreAdamMFiniteValidation[index] =
+        hvxResult.timings.auxPreAdamMFiniteValidationUs;
+    auxPreAdamVFiniteValidation[index] =
+        hvxResult.timings.auxPreAdamVFiniteValidationUs;
+    auxArithmetic[index] = hvxResult.timings.auxArithmeticUs;
+    auxPostUpdateFiniteValidation[index] =
+        hvxResult.timings.auxPostUpdateFiniteValidationUs;
+    auxOther[index] = std::max(0.0,
+        unpackAuxAdam[index] - auxParameterCopy[index] -
+            auxMuonMomentumCopy[index] - auxAdamMCopy[index] -
+            auxAdamVCopy[index] - auxRegistryConstruction[index] -
+            auxRegistryValidation[index] -
+            auxPreUpdateFiniteValidation[index] - auxArithmetic[index] -
+            auxPostUpdateFiniteValidation[index]);
     unpackFinalCommit[index] = hvxResult.timings.unpackFinalCommitUs;
     mutexWait[index] = hvxResult.timings.mutexWaitUs;
     sessionSetup[index] = hvxResult.timings.sessionSetupUs;
   }
+  std::array<double, kMeasured> profileKernel{}, profileTotalWork{},
+      profileMomentum{}, profileNorm{}, profileFinalUpdate{}, profileGemm{},
+      profileNonGemm{}, profileVector{}, profileTranspose{}, profileLongest{},
+      profileShortest{}, profileImbalance{};
+  std::array<std::array<double, kMeasured>, 5> profileNs{};
+  std::array<std::array<double, kMeasured>, 8> profileWorkerUs{},
+      profileWorkerPcycles{}, profileWorkerMatrices{};
+#if PHONELM_ENABLE_HVX_MUON
+  {
+    Session& rpc = session();
+    std::lock_guard<std::mutex> lock(rpc.mutex);
+    for (std::size_t repetition = 0; repetition <= kMeasured; ++repetition) {
+      std::fill_n(rpc.output_, kOutputFloats,
+                  std::numeric_limits<float>::quiet_NaN());
+      std::fill_n(rpc.metadata_, kMetadataInts, 0);
+      const int status = hexatrain_hvx_probe_run(
+          rpc.handle_, 7, 8, 0, 0, rpc.input_, static_cast<int>(kInputFloats),
+          rpc.hyper_, static_cast<int>(kHyperFloats), rpc.output_,
+          static_cast<int>(kOutputFloats), rpc.metadata_,
+          static_cast<int>(kMetadataInts));
+      if (status || rpc.metadata_[4] || rpc.metadata_[7] != 7 ||
+          rpc.metadata_[10] != 8 || rpc.metadata_[11] != 8 ||
+          rpc.metadata_[30] != 114 || !allFinite(rpc.output_, kOutputFloats)) {
+        return "HVX_MUON_OPTIMIZER_BENCHMARK\nstatus=FAILED\nerror="
+            "HVX_W8_PROFILE_FAILED:" + std::to_string(status) +
+            ":kernel=" + std::to_string(rpc.metadata_[4]) +
+            "\nfallback=false\n";
+      }
+      if (repetition == 0) continue;
+      const std::size_t index = repetition - 1;
+      profileKernel[index] = rpc.metadata_[3];
+      profileTotalWork[index] = rpc.metadata_[16];
+      profileMomentum[index] = rpc.metadata_[17];
+      profileNorm[index] = rpc.metadata_[18];
+      for (std::size_t stage = 0; stage < 5; ++stage)
+        profileNs[stage][index] = rpc.metadata_[19 + stage];
+      profileFinalUpdate[index] = rpc.metadata_[24];
+      profileGemm[index] = rpc.metadata_[25];
+      profileVector[index] = rpc.metadata_[26];
+      profileTranspose[index] = rpc.metadata_[27];
+      profileNonGemm[index] = rpc.metadata_[28];
+      profileLongest[index] = rpc.metadata_[56];
+      profileShortest[index] = rpc.metadata_[57];
+      profileImbalance[index] = rpc.metadata_[58];
+      for (std::size_t worker = 0; worker < 8; ++worker) {
+        profileWorkerUs[worker][index] = rpc.metadata_[32 + worker];
+        profileWorkerPcycles[worker][index] = rpc.metadata_[40 + worker];
+        profileWorkerMatrices[worker][index] = rpc.metadata_[48 + worker];
+      }
+    }
+  }
+#endif
   const auto cpuP = tiny_lm::parameterRegistry(cpuReference.parameters);
   const auto hvxP = tiny_lm::parameterRegistry(hvxReference.update.parameters);
   const auto cpuM = tiny_lm::parameterRegistry(cpuReference.muonMomentum);
@@ -509,6 +646,13 @@ std::string benchmarkActualOptimizerPath() {
            << name << "_median_us=" << median(values) << '\n'
            << name << "_mean_us=" << mean(values) << '\n';
   };
+  const auto appendUnitlessSummary = [&](const char* name,
+      const std::array<double, kMeasured>& values) {
+    report << name << "_best=" << best(values) << '\n'
+           << name << "_median=" << median(values) << '\n'
+           << name << "_mean=" << mean(values) << '\n';
+  };
+  appendSummary("rpc_kernel_external", rpcKernelExternal);
   appendSummary("pack_registry_traversal", packRegistry);
   appendSummary("pack_allocation_resize", packAllocation);
   appendSummary("pack_actual_reallocation", packActualReallocation);
@@ -530,20 +674,78 @@ std::string benchmarkActualOptimizerPath() {
   appendSummary("unpack_rpc_output_decode", unpackDecode);
   appendSummary("unpack_decoded_validation", unpackDecodedValidation);
   appendSummary("unpack_candidate_generation", unpackCandidate);
+  appendSummary("unpack_candidate_parameter_copy",
+                unpackCandidateParameterCopy);
+  appendSummary("unpack_candidate_momentum_copy",
+                unpackCandidateMomentumCopy);
+  appendSummary("unpack_candidate_other", unpackCandidateOther);
   appendSummary("unpack_registry_traversal", unpackRegistry);
   appendSummary("unpack_square_output_copy", unpackSquare);
   appendSummary("unpack_w1_output_copy", unpackW1);
   appendSummary("unpack_w2_transpose_back", unpackW2);
   appendSummary("unpack_aux_adam", unpackAuxAdam);
+  appendSummary("aux_parameter_deep_copy", auxParameterCopy);
+  appendSummary("aux_muon_momentum_deep_copy", auxMuonMomentumCopy);
+  appendSummary("aux_adam_m_deep_copy", auxAdamMCopy);
+  appendSummary("aux_adam_v_deep_copy", auxAdamVCopy);
+  appendSummary("aux_registry_construction", auxRegistryConstruction);
+  appendSummary("aux_registry_validation", auxRegistryValidation);
+  appendSummary("aux_pre_update_finite_validation",
+                auxPreUpdateFiniteValidation);
+  appendSummary("aux_pre_parameter_finite_validation",
+                auxPreParameterFiniteValidation);
+  appendSummary("aux_pre_gradient_finite_validation",
+                auxPreGradientFiniteValidation);
+  appendSummary("aux_pre_momentum_finite_validation",
+                auxPreMomentumFiniteValidation);
+  appendSummary("aux_pre_adam_m_finite_validation",
+                auxPreAdamMFiniteValidation);
+  appendSummary("aux_pre_adam_v_finite_validation",
+                auxPreAdamVFiniteValidation);
+  appendSummary("aux_actual_arithmetic", auxArithmetic);
+  appendSummary("aux_post_update_finite_validation",
+                auxPostUpdateFiniteValidation);
+  appendSummary("aux_other", auxOther);
   appendSummary("unpack_final_commit", unpackFinalCommit);
   appendSummary("mutex_wait", mutexWait);
   appendSummary("session_setup", sessionSetup);
+  appendSummary("dsp_profile_kernel", profileKernel);
+  appendSummary("dsp_profile_total_worker_work", profileTotalWork);
+  appendSummary("dsp_profile_momentum_nesterov", profileMomentum);
+  appendSummary("dsp_profile_frobenius_normalization", profileNorm);
+  for (std::size_t stage = 0; stage < 5; ++stage) {
+    const std::string name = "dsp_profile_ns" + std::to_string(stage + 1);
+    appendSummary(name.c_str(), profileNs[stage]);
+  }
+  appendSummary("dsp_profile_final_parameter_update", profileFinalUpdate);
+  appendSummary("dsp_profile_qhl_gemm_total", profileGemm);
+  appendSummary("dsp_profile_non_gemm", profileNonGemm);
+  appendSummary("dsp_profile_vector_ops", profileVector);
+  appendSummary("dsp_profile_transpose", profileTranspose);
+  appendSummary("dsp_profile_longest_worker", profileLongest);
+  appendSummary("dsp_profile_shortest_worker", profileShortest);
+  appendSummary("dsp_profile_worker_imbalance", profileImbalance);
+  for (std::size_t worker = 0; worker < 8; ++worker) {
+    const std::string prefix = "dsp_profile_worker_" +
+        std::to_string(worker);
+    appendSummary((prefix + "_elapsed").c_str(), profileWorkerUs[worker]);
+    appendUnitlessSummary((prefix + "_pcycles").c_str(),
+                          profileWorkerPcycles[worker]);
+    appendUnitlessSummary((prefix + "_matrices").c_str(),
+                          profileWorkerMatrices[worker]);
+  }
   for (std::size_t i = 0; i < kMeasured; ++i) {
     const auto run = [&](const char* name, double value) {
       report << "measured_run_" << (i + 1) << '_' << name << "_us="
              << value << '\n';
     };
+    run("optimizer_total", hvx[i]);
     run("pack", pack[i]);
+    run("input_validation", inputValidation[i]);
+    run("rpc", rpc[i]);
+    run("kernel", kernel[i]);
+    run("rpc_kernel_external", rpcKernelExternal[i]);
+    run("output_validation", outputValidation[i]);
     run("pack_registry_traversal", packRegistry[i]);
     run("pack_allocation_resize", packAllocation[i]);
     run("pack_actual_reallocation", packActualReallocation[i]);
@@ -568,14 +770,64 @@ std::string benchmarkActualOptimizerPath() {
     run("unpack_rpc_output_decode", unpackDecode[i]);
     run("unpack_decoded_validation", unpackDecodedValidation[i]);
     run("unpack_candidate_generation", unpackCandidate[i]);
+    run("unpack_candidate_parameter_copy", unpackCandidateParameterCopy[i]);
+    run("unpack_candidate_momentum_copy", unpackCandidateMomentumCopy[i]);
+    run("unpack_candidate_other", unpackCandidateOther[i]);
     run("unpack_registry_traversal", unpackRegistry[i]);
     run("unpack_square_output_copy", unpackSquare[i]);
     run("unpack_w1_output_copy", unpackW1[i]);
     run("unpack_w2_transpose_back", unpackW2[i]);
     run("unpack_aux_adam", unpackAuxAdam[i]);
+    run("aux_parameter_deep_copy", auxParameterCopy[i]);
+    run("aux_muon_momentum_deep_copy", auxMuonMomentumCopy[i]);
+    run("aux_adam_m_deep_copy", auxAdamMCopy[i]);
+    run("aux_adam_v_deep_copy", auxAdamVCopy[i]);
+    run("aux_registry_construction", auxRegistryConstruction[i]);
+    run("aux_registry_validation", auxRegistryValidation[i]);
+    run("aux_pre_update_finite_validation",
+        auxPreUpdateFiniteValidation[i]);
+    run("aux_pre_parameter_finite_validation",
+        auxPreParameterFiniteValidation[i]);
+    run("aux_pre_gradient_finite_validation",
+        auxPreGradientFiniteValidation[i]);
+    run("aux_pre_momentum_finite_validation",
+        auxPreMomentumFiniteValidation[i]);
+    run("aux_pre_adam_m_finite_validation",
+        auxPreAdamMFiniteValidation[i]);
+    run("aux_pre_adam_v_finite_validation",
+        auxPreAdamVFiniteValidation[i]);
+    run("aux_actual_arithmetic", auxArithmetic[i]);
+    run("aux_post_update_finite_validation",
+        auxPostUpdateFiniteValidation[i]);
+    run("aux_other", auxOther[i]);
     run("unpack_final_commit", unpackFinalCommit[i]);
     run("mutex_wait", mutexWait[i]);
     run("session_setup", sessionSetup[i]);
+    run("dsp_profile_kernel", profileKernel[i]);
+    run("dsp_profile_total_worker_work", profileTotalWork[i]);
+    run("dsp_profile_momentum_nesterov", profileMomentum[i]);
+    run("dsp_profile_frobenius_normalization", profileNorm[i]);
+    for (std::size_t stage = 0; stage < 5; ++stage) {
+      const std::string name = "dsp_profile_ns" + std::to_string(stage + 1);
+      run(name.c_str(), profileNs[stage][i]);
+    }
+    run("dsp_profile_final_parameter_update", profileFinalUpdate[i]);
+    run("dsp_profile_qhl_gemm_total", profileGemm[i]);
+    run("dsp_profile_non_gemm", profileNonGemm[i]);
+    run("dsp_profile_vector_ops", profileVector[i]);
+    run("dsp_profile_transpose", profileTranspose[i]);
+    run("dsp_profile_longest_worker", profileLongest[i]);
+    run("dsp_profile_shortest_worker", profileShortest[i]);
+    run("dsp_profile_worker_imbalance", profileImbalance[i]);
+    for (std::size_t worker = 0; worker < 8; ++worker) {
+      const std::string prefix = "dsp_profile_worker_" +
+          std::to_string(worker);
+      run((prefix + "_elapsed").c_str(), profileWorkerUs[worker][i]);
+      report << "measured_run_" << (i + 1) << '_' << prefix
+             << "_pcycles=" << profileWorkerPcycles[worker][i] << '\n'
+             << "measured_run_" << (i + 1) << '_' << prefix
+             << "_matrices=" << profileWorkerMatrices[worker][i] << '\n';
+    }
   }
   return report.str();
 }

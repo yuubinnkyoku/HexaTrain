@@ -10,6 +10,12 @@
 namespace phonelm::nicopedia_muon { namespace {
 
 using Params = qnn::TinyTransformerParameters;
+using Clock = std::chrono::steady_clock;
+
+double elapsedUs(Clock::time_point started) {
+  return std::chrono::duration<double, std::micro>(Clock::now() - started)
+      .count();
+}
 
 bool finite(const std::vector<float>& values) {
   return std::all_of(values.begin(), values.end(),
@@ -68,6 +74,18 @@ bool finiteRegistry(const std::vector<tiny_lm::ParameterInfo>& registry,
   return true;
 }
 
+bool finiteRegistryForRole(
+    const std::vector<tiny_lm::ParameterInfo>& registry,
+    tiny_lm::ParameterRole role, const char* stateName, std::string* error) {
+  const std::string prefix = statePrefix(stateName);
+  for (const auto& entry : registry) {
+    if (entry.role != role) continue;
+    if (!entry.values || !finite(*entry.values))
+      return fail(error, prefix + "NONFINITE:" + entry.name);
+  }
+  return true;
+}
+
 void transpose(const std::vector<float>& input, std::uint32_t rows,
                std::uint32_t columns, std::vector<float>* output) {
   output->assign(input.size(), 0.0f);
@@ -82,11 +100,15 @@ bool applyAuxiliaryAdamEntry(
     const std::vector<float>& gradient, const std::vector<float>& oldM,
     const std::vector<float>& oldV, double correction1, double correction2,
     float learningRate, std::vector<float>* parameter, std::vector<float>* m,
-    std::vector<float>* v, StageHealth* health, std::string* error) {
+    std::vector<float>* v, StageHealth* health, std::string* error,
+    double* arithmeticUs = nullptr,
+    double* postUpdateFiniteValidationUs = nullptr) {
   if (!parameter || !m || !v || parameter->size() != gradient.size() ||
       m->size() != gradient.size() || v->size() != gradient.size() ||
       oldM.size() != gradient.size() || oldV.size() != gradient.size())
     return fail(error, "MUON_AUX_ADAM_SIZE_MISMATCH:" + parameterInfo.name);
+  Clock::time_point arithmeticStarted;
+  if (arithmeticUs) arithmeticStarted = Clock::now();
   for (std::size_t i = 0; i < parameter->size(); ++i) {
     (*m)[i] = 0.9f * oldM[i] + 0.1f * gradient[i];
     (*v)[i] = 0.999f * oldV[i] + 0.001f * gradient[i] * gradient[i];
@@ -94,10 +116,17 @@ bool applyAuxiliaryAdamEntry(
         (std::sqrt(double((*v)[i]) * correction2) + 1.0e-8);
     (*parameter)[i] -= learningRate * float(updateValue);
   }
+  if (arithmeticUs) *arithmeticUs += elapsedUs(arithmeticStarted);
+  Clock::time_point validationStarted;
+  if (postUpdateFiniteValidationUs) validationStarted = Clock::now();
   if (!finite(*m) || !finite(*v) || !finite(*parameter)) {
+    if (postUpdateFiniteValidationUs)
+      *postUpdateFiniteValidationUs += elapsedUs(validationStarted);
     if (health) health->updateFinite = false;
     return fail(error, "MUON_AUX_ADAM_STATE_NONFINITE:" + parameterInfo.name);
   }
+  if (postUpdateFiniteValidationUs)
+    *postUpdateFiniteValidationUs += elapsedUs(validationStarted);
   return true;
 }
 
@@ -318,25 +347,47 @@ Result updateAuxiliaryAdamOnly(
     const Params& muonMomentum, const Params& auxiliaryAdamM,
     const Params& auxiliaryAdamV, const Config& config) {
   Result result;
+  auto timingStarted = Clock::now();
   result.parameters = parameters;
+  result.auxiliaryAdamTimings.parameterCopyUs = elapsedUs(timingStarted);
+  timingStarted = Clock::now();
   result.muonMomentum = muonMomentum;
+  result.auxiliaryAdamTimings.muonMomentumCopyUs = elapsedUs(timingStarted);
+  timingStarted = Clock::now();
   result.auxiliaryAdamM = auxiliaryAdamM;
+  result.auxiliaryAdamTimings.auxiliaryAdamMCopyUs = elapsedUs(timingStarted);
+  timingStarted = Clock::now();
   result.auxiliaryAdamV = auxiliaryAdamV;
+  result.auxiliaryAdamTimings.auxiliaryAdamVCopyUs = elapsedUs(timingStarted);
+  (void)updateAuxiliaryAdamCandidateInPlace(
+      gradients, auxiliaryAdamM, auxiliaryAdamV, config, false, &result);
+  return result;
+}
+
+bool updateAuxiliaryAdamCandidateInPlace(
+    const Params& gradients, const Params& oldAuxiliaryAdamM,
+    const Params& oldAuxiliaryAdamV, const Config& config,
+    bool muonInputsAlreadyFinite, Result* result) {
+  if (!result) return false;
   if (!(config.auxiliaryAdamLearningRate > 0.0f) ||
       config.optimizerStep == 0) {
-    result.error = "MUON_CONFIG_INVALID";
-    return result;
+    result->error = "MUON_CONFIG_INVALID";
+    return false;
   }
   std::string registryError;
-  const auto p = tiny_lm::parameterRegistry(parameters);
+  auto timingStarted = Clock::now();
+  const auto p = tiny_lm::parameterRegistry(result->parameters);
   const auto g = tiny_lm::parameterRegistry(gradients);
-  const auto mu = tiny_lm::parameterRegistry(muonMomentum);
-  const auto oldM = tiny_lm::parameterRegistry(auxiliaryAdamM);
-  const auto oldV = tiny_lm::parameterRegistry(auxiliaryAdamV);
-  auto next = tiny_lm::parameterRegistry(result.parameters);
-  auto nextM = tiny_lm::parameterRegistry(result.auxiliaryAdamM);
-  auto nextV = tiny_lm::parameterRegistry(result.auxiliaryAdamV);
-  if (!tiny_lm::validateParameterRegistry(parameters, &registryError) ||
+  const auto mu = tiny_lm::parameterRegistry(result->muonMomentum);
+  const auto oldM = tiny_lm::parameterRegistry(oldAuxiliaryAdamM);
+  const auto oldV = tiny_lm::parameterRegistry(oldAuxiliaryAdamV);
+  auto next = tiny_lm::parameterRegistry(result->parameters);
+  auto nextM = tiny_lm::parameterRegistry(result->auxiliaryAdamM);
+  auto nextV = tiny_lm::parameterRegistry(result->auxiliaryAdamV);
+  result->auxiliaryAdamTimings.registryConstructionUs =
+      elapsedUs(timingStarted);
+  timingStarted = Clock::now();
+  if (!tiny_lm::validateParameterRegistry(result->parameters, &registryError) ||
       !validateStateRegistry(p, g, "GRADIENT", &registryError) ||
       !validateStateRegistry(p, mu, "MOMENTUM", &registryError) ||
       !validateStateRegistry(p, oldM, "AUX_ADAM_M", &registryError) ||
@@ -344,30 +395,83 @@ Result updateAuxiliaryAdamOnly(
       !validateStateRegistry(p, next, "PARAMETERS", &registryError) ||
       !validateStateRegistry(p, nextM, "NEXT_AUX_ADAM_M", &registryError) ||
       !validateStateRegistry(p, nextV, "NEXT_AUX_ADAM_V", &registryError)) {
-    result.error = "MUON_REGISTRY_INVALID:" + registryError;
-    return result;
+    result->auxiliaryAdamTimings.registryValidationUs =
+        elapsedUs(timingStarted);
+    result->error = "MUON_REGISTRY_INVALID:" + registryError;
+    return false;
   }
-  if (!finiteRegistry(p, "PARAMETERS", &registryError)) {
-    result.health.parametersFinite = false;
-    result.error = registryError;
-    return result;
+  result->auxiliaryAdamTimings.registryValidationUs = elapsedUs(timingStarted);
+  const auto preValidationStarted = Clock::now();
+  timingStarted = Clock::now();
+  const auto finiteRequired = [&](const auto& registry,
+                                  const char* stateName) {
+    return muonInputsAlreadyFinite
+        ? finiteRegistryForRole(registry, tiny_lm::ParameterRole::AUX_ADAM,
+                                stateName, &registryError)
+        : finiteRegistry(registry, stateName, &registryError);
+  };
+  if (!finiteRequired(p, "PARAMETERS")) {
+    result->auxiliaryAdamTimings.preParameterFiniteValidationUs =
+        elapsedUs(timingStarted);
+    result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+        elapsedUs(preValidationStarted);
+    result->health.parametersFinite = false;
+    result->error = registryError;
+    return false;
   }
-  if (!finiteRegistry(g, "GRADIENT", &registryError)) {
-    result.health.gradientFinite = false;
-    result.error = registryError;
-    return result;
+  result->auxiliaryAdamTimings.preParameterFiniteValidationUs =
+      elapsedUs(timingStarted);
+  timingStarted = Clock::now();
+  if (!finiteRequired(g, "GRADIENT")) {
+    result->auxiliaryAdamTimings.preGradientFiniteValidationUs =
+        elapsedUs(timingStarted);
+    result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+        elapsedUs(preValidationStarted);
+    result->health.gradientFinite = false;
+    result->error = registryError;
+    return false;
   }
-  if (!finiteRegistry(mu, "MOMENTUM", &registryError)) {
-    result.health.momentumFinite = false;
-    result.error = registryError;
-    return result;
+  result->auxiliaryAdamTimings.preGradientFiniteValidationUs =
+      elapsedUs(timingStarted);
+  timingStarted = Clock::now();
+  if (!muonInputsAlreadyFinite &&
+      !finiteRegistry(mu, "MOMENTUM", &registryError)) {
+    result->auxiliaryAdamTimings.preMomentumFiniteValidationUs =
+        elapsedUs(timingStarted);
+    result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+        elapsedUs(preValidationStarted);
+    result->health.momentumFinite = false;
+    result->error = registryError;
+    return false;
   }
-  if (!finiteRegistry(oldM, "AUX_ADAM_M", &registryError) ||
-      !finiteRegistry(oldV, "AUX_ADAM_V", &registryError)) {
-    result.health.updateFinite = false;
-    result.error = registryError;
-    return result;
+  result->auxiliaryAdamTimings.preMomentumFiniteValidationUs =
+      elapsedUs(timingStarted);
+  timingStarted = Clock::now();
+  if (!finiteRequired(oldM, "AUX_ADAM_M")) {
+    result->auxiliaryAdamTimings.preAdamMFiniteValidationUs =
+        elapsedUs(timingStarted);
+    result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+        elapsedUs(preValidationStarted);
+    result->health.updateFinite = false;
+    result->error = registryError;
+    return false;
   }
+  result->auxiliaryAdamTimings.preAdamMFiniteValidationUs =
+      elapsedUs(timingStarted);
+  timingStarted = Clock::now();
+  if (!finiteRequired(oldV, "AUX_ADAM_V")) {
+    result->auxiliaryAdamTimings.preAdamVFiniteValidationUs =
+        elapsedUs(timingStarted);
+    result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+        elapsedUs(preValidationStarted);
+    result->health.updateFinite = false;
+    result->error = registryError;
+    return false;
+  }
+  result->auxiliaryAdamTimings.preAdamVFiniteValidationUs =
+      elapsedUs(timingStarted);
+  result->auxiliaryAdamTimings.preUpdateFiniteValidationUs =
+      elapsedUs(preValidationStarted);
   const double correction1 =
       1.0 / (1.0 - std::pow(0.9, double(config.optimizerStep)));
   const double correction2 =
@@ -375,8 +479,8 @@ Result updateAuxiliaryAdamOnly(
   for (std::size_t index = 0; index < p.size(); ++index) {
     if (p[index].role == tiny_lm::ParameterRole::MUON) continue;
     if (p[index].role != tiny_lm::ParameterRole::AUX_ADAM) {
-      result.error = "MUON_PARAMETER_UNCLASSIFIED:" + p[index].name;
-      return result;
+      result->error = "MUON_PARAMETER_UNCLASSIFIED:" + p[index].name;
+      return false;
     }
     const auto started = std::chrono::steady_clock::now();
     auto& parameter = *const_cast<std::vector<float>*>(next[index].values);
@@ -386,14 +490,16 @@ Result updateAuxiliaryAdamOnly(
             p[index], *g[index].values, *oldM[index].values,
             *oldV[index].values, correction1, correction2,
             config.auxiliaryAdamLearningRate, &parameter, &m, &v,
-            &result.health, &result.error))
-      return result;
-    result.auxiliaryAdamParameterCount += parameter.size();
-    result.auxiliaryAdamMicroseconds +=
+            &result->health, &result->error,
+            &result->auxiliaryAdamTimings.arithmeticUs,
+            &result->auxiliaryAdamTimings.postUpdateFiniteValidationUs))
+      return false;
+    result->auxiliaryAdamParameterCount += parameter.size();
+    result->auxiliaryAdamMicroseconds +=
         std::chrono::duration<double, std::micro>(
             std::chrono::steady_clock::now() - started).count();
   }
-  return result;
+  return true;
 }
 
 }  // namespace phonelm::nicopedia_muon

@@ -100,17 +100,81 @@ void classificationAndStep() {
   auto auxiliaryOnly = nicopedia_muon::updateAuxiliaryAdamOnly(
       parameters, gradients, first.muonMomentum, zero, zero, updateConfig);
   require(auxiliaryOnly.error.empty(), auxiliaryOnly.error.c_str());
+  nicopedia_muon::Result inPlaceCandidate;
+  inPlaceCandidate.parameters = parameters;
+  inPlaceCandidate.muonMomentum = first.muonMomentum;
+  inPlaceCandidate.auxiliaryAdamM = zero;
+  inPlaceCandidate.auxiliaryAdamV = zero;
+  require(nicopedia_muon::updateAuxiliaryAdamCandidateInPlace(
+              gradients, zero, zero, updateConfig, false, &inPlaceCandidate),
+          inPlaceCandidate.error.c_str());
   const auto mixedRegistry = tiny_lm::parameterRegistry(first.parameters);
   const auto auxiliaryRegistry = tiny_lm::parameterRegistry(auxiliaryOnly.parameters);
+  const auto inPlaceRegistry =
+      tiny_lm::parameterRegistry(inPlaceCandidate.parameters);
   const auto parameterRegistry = tiny_lm::parameterRegistry(parameters);
   for (std::size_t i = 0; i < mixedRegistry.size(); ++i) {
     if (mixedRegistry[i].role == tiny_lm::ParameterRole::AUX_ADAM)
-      require(*mixedRegistry[i].values == *auxiliaryRegistry[i].values,
-              "Aux Adam-only result changed");
+      require(*mixedRegistry[i].values == *auxiliaryRegistry[i].values &&
+                  *mixedRegistry[i].values == *inPlaceRegistry[i].values,
+              "Aux Adam candidate result changed");
     else
-      require(*parameterRegistry[i].values == *auxiliaryRegistry[i].values,
-              "Aux Adam-only changed Muon parameter");
+      require(*parameterRegistry[i].values == *auxiliaryRegistry[i].values &&
+                  *parameterRegistry[i].values == *inPlaceRegistry[i].values,
+              "Aux Adam candidate changed Muon parameter");
   }
+  require(inPlaceCandidate.auxiliaryAdamM.gamma1 ==
+              auxiliaryOnly.auxiliaryAdamM.gamma1 &&
+              inPlaceCandidate.auxiliaryAdamV.gamma1 ==
+                  auxiliaryOnly.auxiliaryAdamV.gamma1,
+          "Aux Adam candidate state changed");
+  const auto liveParametersBeforeFailure = parameters;
+  const auto liveMomentumBeforeFailure = first.muonMomentum;
+  const auto liveMBeforeFailure = zero;
+  const auto liveVBeforeFailure = zero;
+  auto rejectedCandidate = inPlaceCandidate;
+  auto nonfiniteGradients = gradients;
+  nonfiniteGradients.tokenEmbedding.front() =
+      std::numeric_limits<float>::quiet_NaN();
+  require(!nicopedia_muon::updateAuxiliaryAdamCandidateInPlace(
+              nonfiniteGradients, zero, zero, updateConfig, true,
+              &rejectedCandidate),
+          "validated-Muon Aux candidate accepted nonfinite AUX gradient");
+  auto nonfiniteCandidate = inPlaceCandidate;
+  nonfiniteCandidate.parameters.tokenEmbedding.front() =
+      std::numeric_limits<float>::infinity();
+  require(!nicopedia_muon::updateAuxiliaryAdamCandidateInPlace(
+              gradients, zero, zero, updateConfig, true,
+              &nonfiniteCandidate),
+          "validated-Muon Aux candidate accepted nonfinite AUX parameter");
+  auto nonfiniteOldM = zero;
+  nonfiniteOldM.tokenEmbedding.front() =
+      std::numeric_limits<float>::infinity();
+  nonfiniteCandidate = inPlaceCandidate;
+  require(!nicopedia_muon::updateAuxiliaryAdamCandidateInPlace(
+              gradients, nonfiniteOldM, zero, updateConfig, true,
+              &nonfiniteCandidate),
+          "validated-Muon Aux candidate accepted nonfinite old Adam M");
+  const auto requireStateUnchanged = [&](const auto& expectedState,
+                                         const auto& actualState,
+                                         const char* message) {
+    const auto expectedStateRegistry =
+        tiny_lm::parameterRegistry(expectedState);
+    const auto actualStateRegistry = tiny_lm::parameterRegistry(actualState);
+    require(expectedStateRegistry.size() == actualStateRegistry.size(), message);
+    for (std::size_t i = 0; i < expectedStateRegistry.size(); ++i)
+      require(*expectedStateRegistry[i].values ==
+                  *actualStateRegistry[i].values,
+              message);
+  };
+  requireStateUnchanged(liveParametersBeforeFailure, parameters,
+                        "Aux failure changed live parameters");
+  requireStateUnchanged(liveMomentumBeforeFailure, first.muonMomentum,
+                        "Aux failure changed live Muon momentum");
+  requireStateUnchanged(liveMBeforeFailure, zero,
+                        "Aux failure changed live Adam M");
+  requireStateUnchanged(liveVBeforeFailure, zero,
+                        "Aux failure changed live Adam V");
   auto zeroStep=nicopedia_muon::update(parameters,zero,zero,zero,zero,updateConfig);
   require(zeroStep.error.empty(),zeroStep.error.c_str());
   for(std::size_t i=0;i<tiny_lm::parameterRegistry(parameters).size();++i)

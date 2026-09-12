@@ -92,6 +92,11 @@ typedef struct release_worker {
   int status;
   int lock_status;
   int unlock_status;
+  int collect_profile;
+  int matrix_count;
+  uint64_t elapsed_us;
+  uint64_t elapsed_pcycles;
+  hexatrain_qhl_profile_t profile;
 } release_worker_t;
 
 static void run_release_worker(release_worker_t* worker) {
@@ -105,25 +110,54 @@ static void run_release_worker(release_worker_t* worker) {
     worker->status = 1201;
     return;
   }
+  const uint64_t started_us = worker->collect_profile
+      ? HAP_perf_get_time_us() : 0;
+  const uint64_t started_pcycles = worker->collect_profile
+      ? HAP_perf_get_pcycles() : 0;
   for (int matrix = worker->index; matrix < 114 && !worker->status;
        matrix += worker->count) {
+    hexatrain_qhl_profile_t one_profile;
+    if (worker->collect_profile) memset(&one_profile, 0, sizeof(one_profile));
     if (matrix < 76) {
-      worker->status = hexatrain_original_qhl_release(
-          worker->input + (size_t)matrix * 3 * square_elements, 64,
-          worker->hyper[2 * matrix], worker->hyper[2 * matrix + 1],
-          worker->output + (size_t)matrix * 2 * square_elements,
-          worker->scratch, worker->scratch_bytes);
+      worker->status = worker->collect_profile
+          ? hexatrain_original_qhl_release_profiled(
+                worker->input + (size_t)matrix * 3 * square_elements, 64,
+                worker->hyper[2 * matrix], worker->hyper[2 * matrix + 1],
+                worker->output + (size_t)matrix * 2 * square_elements,
+                &one_profile, worker->scratch, worker->scratch_bytes)
+          : hexatrain_original_qhl_release(
+                worker->input + (size_t)matrix * 3 * square_elements, 64,
+                worker->hyper[2 * matrix], worker->hyper[2 * matrix + 1],
+                worker->output + (size_t)matrix * 2 * square_elements,
+                worker->scratch, worker->scratch_bytes);
     } else {
       const int rect = matrix - 76;
-      worker->status = hexatrain_original_qhl_release(
-          worker->input + square_input_count +
-              (size_t)rect * 3 * rect_elements,
-          128, worker->hyper[square_hyper_count + 2 * rect],
-          worker->hyper[square_hyper_count + 2 * rect + 1],
-          worker->output + square_output_count +
-              (size_t)rect * 2 * rect_elements,
-          worker->scratch, worker->scratch_bytes);
+      worker->status = worker->collect_profile
+          ? hexatrain_original_qhl_release_profiled(
+                worker->input + square_input_count +
+                    (size_t)rect * 3 * rect_elements,
+                128, worker->hyper[square_hyper_count + 2 * rect],
+                worker->hyper[square_hyper_count + 2 * rect + 1],
+                worker->output + square_output_count +
+                    (size_t)rect * 2 * rect_elements,
+                &one_profile, worker->scratch, worker->scratch_bytes)
+          : hexatrain_original_qhl_release(
+                worker->input + square_input_count +
+                    (size_t)rect * 3 * rect_elements,
+                128, worker->hyper[square_hyper_count + 2 * rect],
+                worker->hyper[square_hyper_count + 2 * rect + 1],
+                worker->output + square_output_count +
+                    (size_t)rect * 2 * rect_elements,
+                worker->scratch, worker->scratch_bytes);
     }
+    if (!worker->status) {
+      ++worker->matrix_count;
+      if (worker->collect_profile) add_qhl_profile(&worker->profile, &one_profile);
+    }
+  }
+  if (worker->collect_profile) {
+    worker->elapsed_pcycles = HAP_perf_get_pcycles() - started_pcycles;
+    worker->elapsed_us = HAP_perf_get_time_us() - started_us;
   }
   worker->unlock_status = qurt_hvx_unlock();
   if (!worker->status && worker->unlock_status) worker->status = 1203;
@@ -138,7 +172,11 @@ static void release_worker_entry(void* opaque) {
 static int run_release_parallel(const float* input, const float* hyper,
                                 float* output, int workers,
                                 int reported_units, int* locks_acquired,
-                                int* threads_created) {
+                                int* threads_created, int collect_profile,
+                                hexatrain_qhl_profile_t* total_profile,
+                                uint64_t* worker_us,
+                                uint64_t* worker_pcycles,
+                                int* worker_matrices) {
   const size_t scratch_bytes = hexatrain_original_qhl_scratch_bytes(128);
   const size_t stack_bytes = 32768;
   int result = 0;
@@ -159,6 +197,7 @@ static int run_release_parallel(const float* input, const float* hyper,
     args[i].output = output;
     args[i].index = i;
     args[i].count = workers;
+    args[i].collect_profile = collect_profile;
     args[i].lock_status = -1;
     args[i].scratch_bytes = scratch_bytes;
     args[i].scratch = memalign(128, scratch_bytes);
@@ -211,6 +250,11 @@ join:
   for (int i = 0; i < workers; ++i) {
     if (!args[i].lock_status) ++*locks_acquired;
     if (!result && args[i].status) result = args[i].status;
+    if (worker_us) worker_us[i] = args[i].elapsed_us;
+    if (worker_pcycles) worker_pcycles[i] = args[i].elapsed_pcycles;
+    if (worker_matrices) worker_matrices[i] = args[i].matrix_count;
+    if (collect_profile && total_profile)
+      add_qhl_profile(total_profile, &args[i].profile);
   }
 
 cleanup:
@@ -309,7 +353,8 @@ int hexatrain_hvx_probe_transport(remote_handle64 handle,
 int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int n,
     const float* left, int leftLen, const float* right, int rightLen,
     float* result, int resultLen, int* metadata, int metadataLen) {
-  if (!handle || !left || !right || !result || !metadata || metadataLen < 8)
+  if (!handle || !left || !right || !result || !metadata || metadataLen < 8 ||
+      (mode == 7 && metadataLen < 64))
     return 1003;
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
   const int wrapper_profile = mode == 6;
@@ -330,14 +375,15 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
         rightLen != 2 * (leftLen / (3 * m * k)) ||
         resultLen != 8 * leftLen / 3)
       return 1005;
-  } else if (mode == 4 || mode == 5 || mode == 6) {
+  } else if (mode == 4 || mode == 5 || mode == 6 || mode == 7) {
     const int square_left = 76 * 3 * 64 * 64;
     const int rect_left = 38 * 3 * 64 * 128;
-    const int output_planes = (mode == 5 || mode == 6) ? 2 : 8;
+    const int output_planes = (mode == 5 || mode == 6 || mode == 7) ? 2 : 8;
     const int square_result = 76 * output_planes * 64 * 64;
     const int rect_result = 38 * output_planes * 64 * 128;
     if (((mode == 4 && (m != 64 || k != 64 || n != 64)) ||
-         ((mode == 5 || mode == 6) && (m < 1 || k != 0 || n != 0))) ||
+         ((mode == 5 || mode == 6 || mode == 7) &&
+          (m < 1 || k != 0 || n != 0))) ||
         leftLen != square_left + rect_left ||
         rightLen != 2 * 76 + 2 * 38 ||
         resultLen != square_result + rect_result)
@@ -345,13 +391,13 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
   } else return 1006;
   // The production probe's immutable input fixture is checked once while the
   // host packs it. Mode 6 retains the DSP-side scans for overhead attribution.
-  if (mode != 5) {
+  if (mode != 5 && mode != 7) {
     for (int i = 0; i < leftLen; ++i) if (!isfinite(left[i])) return 1007;
     for (int i = 0; i < rightLen; ++i) if (!isfinite(right[i])) return 1007;
   }
   if (wrapper_profile)
     metadata[16] = (int)(HAP_perf_get_time_us() - validation_start);
-  const int direct_buffers = mode == 5 || mode == 6;
+  const int direct_buffers = mode == 5 || mode == 6 || mode == 7;
   float* a = direct_buffers ? (float*)left :
       memalign(128, (size_t)leftLen * sizeof(float));
   float* b = direct_buffers ? (float*)right :
@@ -407,7 +453,7 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
     }
     if (vtcm_status) status = vtcm_status;
   }
-  if (!status && mode != 5 && mode != 6) {
+  if (!status && mode != 5 && mode != 6 && mode != 7) {
     status = qurt_hvx_lock(QURT_HVX_MODE_128B);
     locked = status == 0;
   }
@@ -443,8 +489,13 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
       const int units_128b = hardware > 0 ? (hardware >> 8) & 0xff : 0;
       int locks_acquired = 0;
       int threads_created = 0;
+      uint64_t worker_us[8] = {0};
+      uint64_t worker_pcycles[8] = {0};
+      int worker_matrices[8] = {0};
       status = run_release_parallel(a, b, c, m, units_128b,
-                                    &locks_acquired, &threads_created);
+                                    &locks_acquired, &threads_created,
+                                    mode == 7, &group_profile, worker_us,
+                                    worker_pcycles, worker_matrices);
       metadata[8] = hardware;
       metadata[9] = units_128b;
       metadata[10] = m;
@@ -453,6 +504,43 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
       metadata[13] = (int)((size_t)leftLen * sizeof(float));
       metadata[14] = (int)((size_t)rightLen * sizeof(float));
       metadata[15] = (int)((size_t)resultLen * sizeof(float));
+      if (mode == 7) {
+        uint64_t gemm_total = 0;
+        uint64_t longest_worker = 0;
+        uint64_t shortest_worker = UINT64_MAX;
+        metadata[16] = profile_int(group_profile.total_us);
+        metadata[17] = profile_int(group_profile.momentum_nesterov_us);
+        metadata[18] = profile_int(group_profile.norm_normalization_us);
+        for (int i = 0; i < 5; ++i) {
+          metadata[19 + i] = profile_int(group_profile.ns_us[i]);
+          gemm_total += group_profile.gemm_xxt_us[i] +
+                        group_profile.gemm_a2_us[i] +
+                        group_profile.gemm_bx_us[i];
+        }
+        metadata[24] = profile_int(group_profile.final_update_us);
+        metadata[25] = profile_int(gemm_total);
+        metadata[26] = profile_int(group_profile.vector_ops_us);
+        metadata[27] = profile_int(group_profile.transpose_us);
+        metadata[28] = profile_int(
+            group_profile.total_us > gemm_total
+                ? group_profile.total_us - gemm_total : 0);
+        metadata[29] = (int)group_profile.gemm_calls;
+        metadata[30] = (int)group_profile.matrix_count;
+        metadata[31] = 1;
+        for (int i = 0; i < m; ++i) {
+          metadata[32 + i] = profile_int(worker_us[i]);
+          metadata[40 + i] = profile_int(worker_pcycles[i]);
+          metadata[48 + i] = worker_matrices[i];
+          if (worker_us[i] > longest_worker) longest_worker = worker_us[i];
+          if (worker_us[i] < shortest_worker) shortest_worker = worker_us[i];
+        }
+        metadata[56] = profile_int(longest_worker);
+        metadata[57] = profile_int(shortest_worker == UINT64_MAX
+                                       ? 0 : shortest_worker);
+        metadata[58] = profile_int(
+            shortest_worker == UINT64_MAX
+                ? 0 : longest_worker - shortest_worker);
+      }
     }
     metadata[3] = (int)(HAP_perf_get_time_us() - start);
     if (mode == 2 || mode == 3 || mode == 4) {
@@ -483,7 +571,7 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
       metadata[26] = mode == 3 && !vtcm_status ? 1 : 0;
       metadata[27] = profile_int(gemm_total);
     }
-    if (!status && mode != 5) {
+    if (!status && mode != 5 && mode != 7) {
       const uint64_t output_validation_start =
           wrapper_profile ? HAP_perf_get_time_us() : 0;
       for (int i = 0; i < resultLen; ++i) if (!isfinite(c[i])) { status = 1009; break; }
@@ -512,7 +600,8 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
   metadata[2] = 128;
   metadata[4] = status;
   metadata[5] = mode == 3 && !vtcm_status ? 2 : 1;
-  metadata[6] = (mode == 5 || mode == 6) ? (metadata[11] == m) : locked;
+  metadata[6] = (mode == 5 || mode == 6 || mode == 7)
+      ? (metadata[11] == m) : locked;
   metadata[7] = mode;
   if (mode == 2 || mode == 3 || mode == 4) {
     const size_t stride = (size_t)3 * m * k;

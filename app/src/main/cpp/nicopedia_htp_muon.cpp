@@ -132,6 +132,28 @@ bool writeMatrix(const std::vector<float>& source, std::size_t matrixIndex,
   return true;
 }
 
+bool writeRpcMatrix(const float* source, std::size_t sourceElements,
+                    const MatrixBinding& binding,
+                    std::vector<float>* destination, std::string* error) {
+  if (!source || !destination)
+    return fail(error, "UNPACK_NULL_DESTINATION");
+  const std::size_t elements = std::size_t(binding.originalRows) *
+                               binding.originalColumns;
+  if (sourceElements != elements || destination->size() != elements)
+    return fail(error, "UNPACK_ELEMENT_COUNT_MISMATCH:" + binding.name);
+  if (!binding.transposed) {
+    std::copy_n(source, elements, destination->begin());
+    return true;
+  }
+  const std::uint32_t canonicalRows = binding.originalColumns;
+  const std::uint32_t canonicalColumns = binding.originalRows;
+  for (std::uint32_t row = 0; row < canonicalRows; ++row)
+    for (std::uint32_t column = 0; column < canonicalColumns; ++column)
+      (*destination)[std::size_t(column) * canonicalRows + row] =
+          source[std::size_t(row) * canonicalColumns + column];
+  return true;
+}
+
 }  // namespace
 
 bool packImpl(const qnn::TinyTransformerParameters& parameters,
@@ -303,6 +325,85 @@ bool unpack(const PackedInputs& packed,
                      nextSquareMomentum) &&
          unpackGroup(packed.rectangularBindings, nextRectangularWeights,
                      nextRectangularMomentum);
+}
+
+bool unpackValidatedRpcOutput(
+    const PackedInputs& packed, const float* rpcOutput,
+    std::size_t rpcOutputElements, qnn::TinyTransformerParameters* parameters,
+    qnn::TinyTransformerParameters* momentum, std::string* error,
+    UnpackTimings* timings) {
+  constexpr std::size_t kSquareElements = kRows * kSquareColumns;
+  constexpr std::size_t kRectangularElements =
+      kRows * kRectangularColumns;
+  constexpr std::size_t kSquareOutputElements =
+      kSquareBatch * 2 * kSquareElements;
+  constexpr std::size_t kExpectedOutputElements =
+      kSquareOutputElements +
+      kRectangularBatch * 2 * kRectangularElements;
+  if (!rpcOutput || !parameters || !momentum)
+    return fail(error, "UNPACK_NULL_OUTPUT");
+  if (rpcOutputElements != kExpectedOutputElements ||
+      packed.squareBindings.size() != kSquareBatch ||
+      packed.rectangularBindings.size() != kRectangularBatch)
+    return fail(error, "UNPACK_RPC_LAYOUT_MISMATCH");
+  if (timings) *timings = {};
+  const auto registryStarted = Clock::now();
+  auto p = tiny_lm::parameterRegistry(*parameters);
+  auto m = tiny_lm::parameterRegistry(*momentum);
+  if (timings) timings->registryTraversalUs = elapsedUs(registryStarted);
+  if (p.size() != m.size()) return fail(error, "UNPACK_REGISTRY_MISMATCH");
+
+  const auto validateBindings = [&](const std::vector<MatrixBinding>& bindings) {
+    for (const auto& binding : bindings) {
+      if (binding.registryIndex >= p.size() ||
+          p[binding.registryIndex].name != binding.name ||
+          m[binding.registryIndex].name != binding.name ||
+          !p[binding.registryIndex].values ||
+          !m[binding.registryIndex].values) {
+        return fail(error, "UNPACK_IDENTITY_MISMATCH:" + binding.name);
+      }
+      const std::size_t elements = std::size_t(binding.originalRows) *
+                                   binding.originalColumns;
+      if (p[binding.registryIndex].values->size() != elements ||
+          m[binding.registryIndex].values->size() != elements)
+        return fail(error, "UNPACK_ELEMENT_COUNT_MISMATCH:" + binding.name);
+    }
+    return true;
+  };
+  if (!validateBindings(packed.squareBindings) ||
+      !validateBindings(packed.rectangularBindings))
+    return false;
+
+  const auto unpackGroup = [&](const std::vector<MatrixBinding>& bindings,
+                               const float* groupOutput,
+                               std::size_t elements) {
+    for (std::size_t index = 0; index < bindings.size(); ++index) {
+      const auto& binding = bindings[index];
+      auto* weight = const_cast<std::vector<float>*>(
+          p[binding.registryIndex].values);
+      auto* nextMomentum = const_cast<std::vector<float>*>(
+          m[binding.registryIndex].values);
+      const float* matrixOutput = groupOutput + index * 2 * elements;
+      const auto copyStarted = Clock::now();
+      if (!writeRpcMatrix(matrixOutput, elements, binding, weight, error) ||
+          !writeRpcMatrix(matrixOutput + elements, elements, binding,
+                          nextMomentum, error))
+        return false;
+      if (timings) {
+        double* target = binding.originalRows == 64 &&
+                                 binding.originalColumns == 64
+            ? &timings->squareOutputCopyUs
+            : (binding.transposed ? &timings->w2TransposeBackUs
+                                  : &timings->w1OutputCopyUs);
+        *target += elapsedUs(copyStarted);
+      }
+    }
+    return true;
+  };
+  return unpackGroup(packed.squareBindings, rpcOutput, kSquareElements) &&
+      unpackGroup(packed.rectangularBindings,
+                  rpcOutput + kSquareOutputElements,
+                  kRectangularElements);
 }
 
 }  // namespace phonelm::nicopedia_htp_muon

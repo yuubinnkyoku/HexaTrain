@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -74,6 +75,44 @@ int main() {
       require(*expectedMomentum[i].values == *actualMomentum[i].values,
               "momentum roundtrip");
     }
+    std::vector<float> rpcOutput;
+    rpcOutput.reserve(2 * (packed.currentSquare.size() +
+                           packed.currentRectangular.size()));
+    const auto appendInterleaved = [&](const std::vector<float>& weights,
+                                       const std::vector<float>& momenta,
+                                       std::size_t elements) {
+      const std::size_t matrices = weights.size() / elements;
+      for (std::size_t matrix = 0; matrix < matrices; ++matrix) {
+        const auto weight = weights.begin() + matrix * elements;
+        const auto state = momenta.begin() + matrix * elements;
+        rpcOutput.insert(rpcOutput.end(), weight, weight + elements);
+        rpcOutput.insert(rpcOutput.end(), state, state + elements);
+      }
+    };
+    appendInterleaved(packed.currentSquare, packed.momentumSquare, 64 * 64);
+    appendInterleaved(packed.currentRectangular,
+                      packed.momentumRectangular, 64 * 128);
+    auto directRestored = original;
+    auto directRestoredMomentum = momentum;
+    require(nicopedia_htp_muon::unpackValidatedRpcOutput(
+                packed, rpcOutput.data(), rpcOutput.size(), &directRestored,
+                &directRestoredMomentum, &error), error.c_str());
+    const auto directActual = tiny_lm::parameterRegistry(directRestored);
+    const auto directActualMomentum =
+        tiny_lm::parameterRegistry(directRestoredMomentum);
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+      if (expected[i].role != tiny_lm::ParameterRole::MUON) continue;
+      require(*expected[i].values == *directActual[i].values,
+              "direct weight roundtrip");
+      require(*expectedMomentum[i].values == *directActualMomentum[i].values,
+              "direct momentum roundtrip");
+    }
+    require(!nicopedia_htp_muon::unpackValidatedRpcOutput(
+                packed, rpcOutput.data(), rpcOutput.size() - 1,
+                &directRestored, &directRestoredMomentum, &error) &&
+                error.find("HTP_MUON_UNPACK_RPC_LAYOUT_MISMATCH") !=
+                    std::string::npos,
+            "direct unpack accepted bad RPC layout");
     gradients.wq.front() = std::numeric_limits<float>::quiet_NaN();
     require(!nicopedia_htp_muon::pack(parameters, gradients, momentum, &packed,
                                       &error) &&

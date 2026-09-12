@@ -33,6 +33,23 @@ struct StageHealth {
   bool parametersFinite = true;
 };
 
+struct AuxiliaryAdamTimings {
+  double parameterCopyUs = 0.0;
+  double muonMomentumCopyUs = 0.0;
+  double auxiliaryAdamMCopyUs = 0.0;
+  double auxiliaryAdamVCopyUs = 0.0;
+  double registryConstructionUs = 0.0;
+  double registryValidationUs = 0.0;
+  double preUpdateFiniteValidationUs = 0.0;
+  double preParameterFiniteValidationUs = 0.0;
+  double preGradientFiniteValidationUs = 0.0;
+  double preMomentumFiniteValidationUs = 0.0;
+  double preAdamMFiniteValidationUs = 0.0;
+  double preAdamVFiniteValidationUs = 0.0;
+  double arithmeticUs = 0.0;
+  double postUpdateFiniteValidationUs = 0.0;
+};
+
 struct Result {
   qnn::TinyTransformerParameters parameters;
   qnn::TinyTransformerParameters muonMomentum;
@@ -44,6 +61,7 @@ struct Result {
   std::uint64_t auxiliaryAdamParameterCount = 0;
   double muonMicroseconds = 0.0;
   double auxiliaryAdamMicroseconds = 0.0;
+  AuxiliaryAdamTimings auxiliaryAdamTimings;
   std::string error;
 };
 
@@ -79,5 +97,17 @@ Result updateAuxiliaryAdamOnly(
     const qnn::TinyTransformerParameters& auxiliaryAdamM,
     const qnn::TinyTransformerParameters& auxiliaryAdamV,
     const Config& config);
+
+// Updates AUX_ADAM entries in caller-owned fail-closed candidate storage.
+// The caller must not publish candidate until this returns true.
+// muonInputsAlreadyFinite may be true only when MUON parameters/momentum and
+// gradients were already fully validated by the immediately preceding path.
+bool updateAuxiliaryAdamCandidateInPlace(
+    const qnn::TinyTransformerParameters& gradients,
+    const qnn::TinyTransformerParameters& oldAuxiliaryAdamM,
+    const qnn::TinyTransformerParameters& oldAuxiliaryAdamV,
+    const Config& config,
+    bool muonInputsAlreadyFinite,
+    Result* candidate);
 
 }  // namespace phonelm::nicopedia_muon
