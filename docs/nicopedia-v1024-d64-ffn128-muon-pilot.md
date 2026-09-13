@@ -380,3 +380,11 @@ Seed-2 confirmation recommended: freeze the Muon recipe and run the paired
 seed-2 confirmation as a separate task. Do not add LR candidates, retune
 momentum/NS/architecture, or open final_test. This pilot does not implement
 QNN Newton--Schulz, batched NS, HMX tuning, or an all-HTP optimizer.
+
+## Status update (later)
+
+This CPU Muon pilot is historical reference only. Production-quality
+promotion used the HVX W8 path with two 8000-step seeds and is recorded in
+`docs/nicopedia-hvx-muon.md` under "Formal baseline freeze (HVX Muon)".
+Do not treat this pilot's CPU-backend wall times or single-seed quality as
+the current formal baseline.

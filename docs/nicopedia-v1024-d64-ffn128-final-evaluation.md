@@ -162,3 +162,7 @@ S4000 remains the frozen best-observed recipe from HPO. No final-driven HPO,
 checkpoint fishing, seed selection, architecture change, or new training was
 performed. The final split must not be reused to tune this recipe. Further
 architecture research should start with a new Val/Dev workflow.
+
+Later, HVX Muon + Aux Adam was promoted as the primary quality baseline
+beside Adam S4000 (control). That freeze did not open this final sample.
+See `docs/nicopedia-hvx-muon.md` ("Formal baseline freeze (HVX Muon)").

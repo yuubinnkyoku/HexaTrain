@@ -468,3 +468,118 @@ Step-8000 paired deltas (HVX − Adam) Balanced: seed1 `-0.075295`, seed2
 Adam for architecture research. Untouched final sample was not opened for
 this decision. Full table and artifacts:
 `build/reports/hvx-promotion/FINAL_8000_MATCHED_PROMOTE.md`.
+
+## Formal baseline freeze (HVX Muon)
+
+This section is the canonical record that HVX Muon + Aux Adam is promoted to
+a formal quality baseline beside frozen Adam S4000. It does not change code,
+training logic, or any checkpoint. Commit
+`e128732 feat(qnn): promote HVX Muon to real training` already wired runtime
+CPU/HVX selection, fail-closed publication, and NPRTCKPTV4 resume.
+
+### Model identity (fixed)
+
+| field | value |
+| --- | --- |
+| vocabulary / context | V1024 / T32 |
+| dimension / FFN | D64 / FFN128 |
+| layers / heads | L19 / H2 |
+| parameter count | 758,528 |
+| tokenizer | Byte-BPE V1024 (`sha256:9a70e592…`) |
+| dataset / cache / order | existing train_pilot identity, unchanged |
+| eval | fixed 256 Val + 256 Dev, HTP teacher-forced, bits/UTF-8 byte |
+
+Tokenizer, dataset, split, and training-order identity stay frozen from the
+Adam S4000 comparison. The untouched final split remains unopened.
+
+### Optimizer identity (frozen)
+
+**Muon matrices**
+
+- 114 matrices / 622,592 parameters
+- Original Muon `keller_original_64560829_fp32`
+- backend: HVX FP32 W8 (`optimizer_muon_backend=HVX_W8`)
+- momentum `0.95`, Nesterov `true`, Newton–Schulz iterations `5`
+- CPU fallback forbidden (fail-closed; no candidate state published on
+  RPC failure, fallback, or non-finite output)
+
+**Auxiliary Adam parameters**
+
+- 135,936 parameters
+- existing Adam recipe (β1=.9, β2=.999, ε=1e-8, weight decay 0)
+- backend: CPU
+
+**Checkpoint**
+
+- `NPRTCKPTV4`
+- HVX uninterrupted vs HVX resume: bitwise PASS
+
+### Learning-rate schedule (S4000-style, frozen)
+
+| phase | Muon LR | Aux Adam LR |
+| --- | ---: | ---: |
+| steps 1–4000 | `0.005` | `0.0022` |
+| steps 4000–8000 | linear decay | linear decay |
+| step 8000 | `0.0002272727…` | `0.0001` |
+
+Muon target LR is scaled from the Aux Adam target:
+
+`0.005 × (0.0001 / 0.0022) = 0.0002272727…`
+
+### Quality evidence (8000-step × 2 seeds)
+
+| optimizer | seed 1 | seed 2 | mean |
+| --- | ---: | ---: | ---: |
+| Adam S4000 Balanced | 2.413116060 | 2.405908 | 2.409512 |
+| HVX Muon Balanced | 2.337821 | 2.350119 | 2.343970 |
+| Muon − Adam | −0.075295 | −0.055789 | **−0.065542 bpb** |
+
+- Both seeds improve versus Adam S4000 Balanced.
+- Both seeds improve both Val and Dev.
+- Through step 8000: RPC failure / fallback / non-finite = `0 / 0 / 0`.
+- HVX resume reproducibility: bitwise PASS.
+
+**Formal decision: PROMOTE.** Treat **Muon + Aux Adam / HVX W8** as the
+primary baseline for quality-first experiments. Retain **Adam S4000** as an
+independent stable control. Do not open the untouched final split for this
+decision.
+
+### Correctness caveat (keep separate)
+
+| gate | result |
+| --- | --- |
+| single-update CPU oracle parity | **PASS** — maxAbs ≈ `1.49e-8`, relative L2 ≈ `4.4e-8` |
+| HVX uninterrupted vs HVX resume | **PASS** (bitwise) |
+| multi-step trajectory vs CPU double oracle | **NOT SATISFIED** |
+
+CPU-double multi-step trajectory divergence is first visible at step 8 and
+grows through step 32. Do **not** claim that HVX Muon remains near-bitwise
+equal to the CPU double implementation over long training. This is not a
+quality-promotion FAIL condition; HVX Muon is an independent numerical
+implementation of Original Muon.
+
+### Runtime evidence (historical measured comparison only)
+
+| measurement | value |
+| --- | ---: |
+| HVX Muon seed1 | `1307.45 ms/update` (7000-step resume segment) |
+| HVX Muon seed2 | `1319.12 ms/update` (fresh 8000) |
+| HVX Muon mean | `1313.29 ms/update` |
+| HVX Muon seed2 fresh 8000-step wall | `10552.95 s ≈ 2.93 h` |
+| historical Adam S4000 tail (4000→8000) | `4806.93 ms/update`, wall `19227.725 s / 4000 steps` |
+
+Historical end-to-end measured throughput comparison: **~3.66×**
+(`4806.93 / 1313.29`). Caveats:
+
+- Adam side is the historical S4000 tail, not a fresh 8000-step run.
+- Runner / implementation generations differ.
+- Therefore this is **not** a claim that the Muon optimizer primitive alone
+  is 3.66× faster than Adam.
+
+### Canonical artifact pointers
+
+- quality + decision: `build/reports/hvx-promotion/FINAL_8000_MATCHED_PROMOTE.md`
+- per-seed training reports: `build/reports/hvx-promotion/quality-hvx-seed{1,2}-step8000/`
+- evals: `build/reports/hvx-promotion/eval-hvx-seed{1,2}-step{2000,4000,6000,8000}/`
+- CPU Muon pilot (historical reference only): `docs/nicopedia-v1024-d64-ffn128-muon-pilot.md`
+- frozen Adam S4000 control: `docs/nicopedia-hpo-v1024-d64-ffn128-schedule-seed2-validation.md`
