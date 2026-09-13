@@ -326,10 +326,18 @@ class HeadlessDeviceTestRunner {
         val experimentFork = booleanArgument(arguments, "experimentFork", false)
         val parentLearningRate = floatArgument(arguments, "parentLearningRate", learningRate, 0.000001f..1f)
         val optimizerName = stringArgument(arguments, "optimizer", "Adam")
+        // MuonBackend selects the production Original-Muon placement:
+        // CPU (default, nicopediaOptimizer=1) or HVX (W8 FastRPC, =2).
+        // Adam remains 0 and ignores muonBackend.
+        val muonBackendName = stringArgument(arguments, "muonBackend", "CPU")
         val optimizer = when (optimizerName) {
             "Adam" -> 0
-            "Muon" -> 1
-            else -> throw IllegalArgumentException("optimizer must be Adam or Muon")
+            "Muon", "MuonHVX" -> when (if (optimizerName == "MuonHVX") "HVX" else muonBackendName) {
+                "CPU" -> 1
+                "HVX" -> 2
+                else -> throw IllegalArgumentException("muonBackend must be CPU or HVX")
+            }
+            else -> throw IllegalArgumentException("optimizer must be Adam, Muon, or MuonHVX")
         }
         val muonLearningRate = floatArgument(arguments, "muonLearningRate", 0.01f, 0.000001f..1f)
         val muonMomentum = floatArgument(arguments, "muonMomentum", 0.95f, 0f..0.999999f)
@@ -361,7 +369,7 @@ class HeadlessDeviceTestRunner {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
             require(steps in 1..12_000) { "nicopedia-long-training hard ceiling is step 12000" }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
-            if (optimizer == 1) {
+            if (optimizer == 1 || optimizer == 2) {
                 require(vocabulary == 1024 && tokens == 32 && dimension == 64 && feedForwardDimension == 128) {
                     "Muon pilot is restricted to V1024/T32/D64/FFN128"
                 }

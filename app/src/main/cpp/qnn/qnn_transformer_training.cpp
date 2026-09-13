@@ -7297,7 +7297,11 @@ std::string nicopediaMuonHybridTraining(
   double inputBindUs = 0.0, outputBindUs = 0.0;
   double gradientAccumulationUs = 0.0, optimizerUpdateWallUs = 0.0;
   double optimizerResultMoveUs = 0.0;
+  double hvxRpcUs = 0.0, hvxKernelUs = 0.0, hvxPackUs = 0.0, hvxUnpackUs = 0.0;
   std::uint64_t qnnExecuteCount = 0;
+  std::uint64_t hvxRpcFailureCount = 0, hvxFallbackCount = 0, hvxNonFiniteCount = 0;
+  const bool useHvxMuonBackend = trainingConfig.nicopediaOptimizer == 2;
+  const char* muonBackendName = useHvxMuonBackend ? "HVX_W8" : "CPU";
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
   std::vector<std::pair<uint32_t, float>> curve;
   bool allFinite = true, interrupted = false;
@@ -7352,14 +7356,40 @@ std::string nicopediaMuonHybridTraining(
     updateConfig.nsSteps = 5;
     updateConfig.optimizerStep = step;
     const auto optimizerUpdateStarted = std::chrono::steady_clock::now();
-#if PHONELM_ENABLE_HVX_MUON
-    auto hvxUpdate = nicopedia_hvx_muon::update(
-        current, gradient, momentum, adamM, adamV, updateConfig);
-    auto update = std::move(hvxUpdate.update);
-#else
-    auto update = nicopedia_muon::update(current, gradient, momentum, adamM,
-                                         adamV, updateConfig);
-#endif
+    nicopedia_muon::Result update;
+    if (useHvxMuonBackend) {
+      auto hvxUpdate = nicopedia_hvx_muon::update(
+          current, gradient, momentum, adamM, adamV, updateConfig);
+      // Independent transport, finite-output, and fallback gates. A failed
+      // HVX attempt must not publish any candidate state.
+      if (hvxUpdate.rpcStatus != 0) ++hvxRpcFailureCount;
+      if (hvxUpdate.fallback) ++hvxFallbackCount;
+      if (!hvxUpdate.outputFinite) ++hvxNonFiniteCount;
+      hvxRpcUs += hvxUpdate.timings.rpcUs;
+      hvxKernelUs += hvxUpdate.timings.kernelUs;
+      hvxPackUs += hvxUpdate.timings.packUs;
+      hvxUnpackUs += hvxUpdate.timings.unpackApplyUs;
+      // Prefer the explicit backend error (including NOT_BUILT / pack /
+      // nonfinite) before classifying a bare RPC status.
+      if (!hvxUpdate.update.error.empty()) {
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_OPTIMIZER_UPDATE\nerror=" +
+            hvxUpdate.update.error + "\n";
+      }
+      if (hvxUpdate.rpcStatus != 0) {
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_HVX_RPC\nerror=HVX_RPC_STATUS_" +
+            std::to_string(hvxUpdate.rpcStatus) + "\n";
+      }
+      if (hvxUpdate.fallback) {
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_HVX_FALLBACK\nerror=HVX_FALLBACK_FORBIDDEN\n";
+      }
+      if (!hvxUpdate.outputFinite) {
+        return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_HVX_NONFINITE\nerror=HVX_RPC_OUTPUT_NONFINITE\n";
+      }
+      update = std::move(hvxUpdate.update);
+    } else {
+      update = nicopedia_muon::update(current, gradient, momentum, adamM,
+                                      adamV, updateConfig);
+    }
     optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
     if (!update.error.empty())
@@ -7404,11 +7434,7 @@ std::string nicopediaMuonHybridTraining(
       status << "phase=training\nstep=" << step << "\nsteps=" << steps
              << "\nloss=" << meanLoss << "\noptimizer=muon_aux_adam"
              << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
-#if PHONELM_ENABLE_HVX_MUON
-             << "HVX_W8"
-#else
-             << "CPU"
-#endif
+             << muonBackendName
              << "\noptimizer_aux_adam_backend=CPU\nqnn_return_code_success=true"
              << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
              << "\ncpu_fallback=false";
@@ -7462,12 +7488,15 @@ std::string nicopediaMuonHybridTraining(
          << "\naux_adam_parameter_count=135936\nfirst_loss=" << firstLoss
          << "\nlast_loss=" << lastLoss
          << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
-#if PHONELM_ENABLE_HVX_MUON
-         << "HVX_W8"
-#else
-         << "CPU"
-#endif
+         << muonBackendName
          << "\noptimizer_aux_adam_backend=CPU\nfwd_backward_ms=" << fwdBwdUs / 1000.0
+         << "\nhvx_rpc_ms=" << hvxRpcUs / 1000.0
+         << "\nhvx_kernel_ms=" << hvxKernelUs / 1000.0
+         << "\nhvx_pack_ms=" << hvxPackUs / 1000.0
+         << "\nhvx_unpack_ms=" << hvxUnpackUs / 1000.0
+         << "\nhvx_rpc_failure_count=" << hvxRpcFailureCount
+         << "\nhvx_fallback_count=" << hvxFallbackCount
+         << "\nhvx_nonfinite_count=" << hvxNonFiniteCount
          << "\nmuon_ms=" << muonUs / 1000.0 << "\naux_adam_ms=" << auxUs / 1000.0
           << "\nparameter_transfer_ms="
           << (inputBindUs + outputBindUs) / 1000.0
@@ -7515,7 +7544,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const TrainingConfig &trainingConfig,
                                  const LogSink &progress,
                                  std::atomic_bool *stopRequested) {
-  if (trainingConfig.nicopediaOptimizer == 1)
+  if (trainingConfig.nicopediaOptimizer == 1 ||
+      trainingConfig.nicopediaOptimizer == 2)
     return nicopediaMuonHybridTraining(config, trainingConfig, progress,
                                        stopRequested);
   // Cache path: app-private file pushed by the host runner.  The parameter is

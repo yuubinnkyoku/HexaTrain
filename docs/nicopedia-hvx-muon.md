@@ -383,3 +383,88 @@ and fallback was false. The targeted host sentinel, QNN/HVX builds, pinned
 QAIRT APK audits, and Fast verification passed. Full verification, direct RPC
 packing, unpack changes, auxiliary-Adam changes, and kernel profiling were not
 run.
+
+## 2026-09-12 continuation: runtime backend selection and trajectory gate
+
+The production Nicopedia hybrid training path now selects the Muon backend at
+runtime instead of compile-time-only placement. `nicopediaOptimizer` is
+0=Adam, 1=Muon CPU, 2=Muon HVX. The training runner exposes
+`-Optimizer Muon -MuonBackend CPU|HVX`. HVX uses the existing production W8
+`nicopedia_hvx_muon::update` path with independent RPC-status, finite-output,
+and fallback gates; live state is published only after all checks pass.
+NPRTCKPTV4 identity is unchanged. A host V4 comparator
+(`nicopedia_muon_checkpoint_compare`) reports maxAbs / relativeL2 / cosine /
+finite for parameters, Muon momentum, and Aux Adam M/V.
+
+Device: one physical NX741J, pinned QAIRT `2.48.40.260702151143`, QNN+HVX APK
+audit PASS. Frozen recipe: V1024/T32/D64/FFN128/L19/H2, Muon LR `.005`, Aux
+Adam `.0022` linear decay 4000->8000 target `.0001`, Nesterov, NS5, seed 1.
+
+### Kernel correctness gate: PASS
+
+Single-update CPU vs HVX V4 comparison at step 1:
+
+| metric | value |
+| --- | ---: |
+| parameters maxAbs | `2.980232239e-8` |
+| parameters relativeL2 | `4.950337786e-8` |
+| parameters cosine | `1` |
+| Muon momentum / Aux Adam M/V maxAbs | `0` (bitwise equal) |
+| last loss (both) | `7.489538193` |
+| HVX RPC failure / fallback / non-finite | `0 / 0 / 0` |
+
+### CPU-double trajectory-equivalence gate: NOT SATISFIED
+
+Multi-step state comparison against the CPU double oracle:
+
+| step | params maxAbs | params relL2 | params cosine | momentum cosine | loss CPU | loss HVX |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | `2.98e-8` | `4.95e-8` | `1.000000` | `1.000` | `7.489538` | `7.489538` |
+| 8 | `1.36e-2` | `3.03e-2` | `0.999541` | `0.998` | `7.164470` | `7.164258` |
+| 32 | `3.37e-2` | `8.47e-2` | `0.996491` | `0.975` | `6.636642` | `6.638724` |
+
+Divergence is first visible at step 8 and grows through step 32. Loss remains
+close at step 32 (`dLoss=+0.00208`). This is multi-step FP32 accumulation
+feedback, not a single-kernel layout/RPC failure.
+
+### Evaluation policy change
+
+HVX FP32 Muon is treated as an **independent numerical implementation of
+Original Muon**, not as a long-horizon bitwise/near-bitwise twin of the CPU
+double oracle. Promotion is decided by:
+
+1. single-update kernel correctness (PASS as above),
+2. training quality and stability (loss descent, finite, no fallback/RPC
+   failure),
+3. HVX resume reproducibility (uninterrupted vs resumed on the same backend),
+4. practical wall time and checkpoint reliability.
+
+Do not claim that HVX Muon matches CPU Original Muon trajectory over long
+training. Parameter cosine against CPU is not a FAIL reason. Do not retune
+HVX toward the CPU double trajectory in this experiment.
+
+Evidence: `build/reports/hvx-promotion/` including
+`TRAJECTORY_PARITY_STOP.md` and `compare-step{1,8,32}.txt`.
+
+## 2026-09-12 continuation: 8000-step quality promotion (2 seeds)
+
+After the quality/stability gates at 100 and 1000 steps, HVX Original Muon
+was run for the frozen 8000-step S4000-schedule comparison. CPU-double
+trajectory equivalence was not used as a gate.
+
+| optimizer | seed | 2000 | 4000 | 6000 | 8000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Adam S4000 | 1 | 2.658895 | 2.981434 | 2.939890 | 2.413116 |
+| Adam S4000 | 2 | n/a | n/a | n/a | 2.405908 |
+| HVX Muon .005 | 1 | 2.613837 | 2.516320 | 2.395236 | 2.337821 |
+| HVX Muon .005 | 2 | 2.638811 | 2.515170 | 2.411795 | 2.350119 |
+
+Step-8000 paired deltas (HVX − Adam) Balanced: seed1 `-0.075295`, seed2
+`-0.055789`, mean `-0.065542`. Both seeds improve Val and Dev. Stability:
+0 RPC failures, 0 fallback, 0 non-finite on both seeds. HVX training wall
+~1.31 s/update versus historical CPU Muon ~7.56 s/update.
+
+**Verdict: PROMOTE.** Muon + Aux Adam is a first-class baseline alongside
+Adam for architecture research. Untouched final sample was not opened for
+this decision. Full table and artifacts:
+`build/reports/hvx-promotion/FINAL_8000_MATCHED_PROMOTE.md`.

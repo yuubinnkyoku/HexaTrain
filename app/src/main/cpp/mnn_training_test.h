@@ -72,8 +72,11 @@ struct TrainingConfig {
     float nicopediaTargetLearningRate = 0.0f;
     bool nicopediaExperimentFork = false;
     float nicopediaParentLearningRate = 0.0f;
-    // Research-only optimizer placement. 0 keeps the production HTP Adam
-    // path; 1 selects HTP forward/backward with CPU Muon + auxiliary Adam.
+    // Optimizer placement for Nicopedia hybrid training.
+    //   0 = production HTP Adam
+    //   1 = HTP forward/backward + CPU Original Muon + CPU auxiliary Adam
+    //   2 = HTP forward/backward + HVX W8 Original Muon + CPU auxiliary Adam
+    // Value 2 fails closed when the APK was not built with PHONELM_ENABLE_HVX_MUON.
     int nicopediaOptimizer = 0;
     float nicopediaMuonLearningRate = 0.0f;
     float nicopediaMuonMomentum = 0.95f;

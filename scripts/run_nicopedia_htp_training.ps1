@@ -31,6 +31,8 @@ param(
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
   [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
+  [ValidateSet('CPU','HVX')][string]$MuonBackend = 'CPU',
+  [string]$HexagonSdkRoot = '',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonMomentum = '0.95',
   [ValidateRange(1,99)][int]$MuonNsSteps = 5,
@@ -83,7 +85,7 @@ if ($SelfTest) {
   }
   if ($LearningRate -ne '0.003') { throw "SELFTEST_LEARNING_RATE_DEFAULT: expected=0.003 actual=$LearningRate" }
   if ($LearningRateSchedule -ne 'constant' -or $DecayStartStep -ne 0 -or $DecayEndStep -ne 0 -or $ScheduleTotalSteps -ne 0 -or $TargetLearningRate -ne '' -or $ExperimentFork -or $ParentLearningRate -ne '0') { throw 'SELFTEST_SCHEDULE_DEFAULT' }
-  if ($Optimizer -ne 'Adam' -or $MuonLearningRate -ne '0.010' -or $MuonMomentum -ne '0.95' -or $MuonNsSteps -ne 5) { throw 'SELFTEST_OPTIMIZER_DEFAULT' }
+  if ($Optimizer -ne 'Adam' -or $MuonBackend -ne 'CPU' -or $MuonLearningRate -ne '0.010' -or $MuonMomentum -ne '0.95' -or $MuonNsSteps -ne 5) { throw 'SELFTEST_OPTIMIZER_DEFAULT' }
   $sqrtCases = @(
     [pscustomobject]@{ Step = 6000; Expected = 0.0022 },
     [pscustomobject]@{ Step = 6001; Expected = 0.002153042572472504 },
@@ -242,8 +244,23 @@ if ($Vocabulary -eq 1024) {
   if (-not $tokenizerResolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'TokenizerModelPath must resolve below the repository build directory' }
 }
 
+if (-not $SkipBuild -and $Optimizer -eq 'Muon' -and $MuonBackend -eq 'HVX') {
+  if ([string]::IsNullOrWhiteSpace($HexagonSdkRoot) -or -not (Test-Path -LiteralPath $HexagonSdkRoot -PathType Container)) {
+    throw 'MUON_HVX_REQUIRES_HEXAGON_SDK_ROOT'
+  }
+}
 if (-not $SkipBuild) {
-  & (Join-Path $root 'gradlew.bat') :app:assembleDebug :app:assembleDebugAndroidTest '-Pphonelm.enableQnn=true' "-Pqairt.sdkRoot=$QairtSdkRoot" "-Pqairt.expectedBuildId=$ExpectedBuildId" --no-daemon
+  $gradleArgs = @(
+    ':app:assembleDebug', ':app:assembleDebugAndroidTest',
+    '-Pphonelm.enableQnn=true',
+    "-Pqairt.sdkRoot=$QairtSdkRoot",
+    "-Pqairt.expectedBuildId=$ExpectedBuildId",
+    '--no-daemon'
+  )
+  if ($Optimizer -eq 'Muon' -and $MuonBackend -eq 'HVX') {
+    $gradleArgs += @('-Pphonelm.enableHvxMuon=true', "-Phexagon.sdkRoot=$HexagonSdkRoot")
+  }
+  & (Join-Path $root 'gradlew.bat') $gradleArgs
   if ($LASTEXITCODE -ne 0) { throw 'APK build failed' }
 }
 $deviceInfo = Resolve-PhoneLmDevice -Adb $adb
@@ -332,7 +349,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -414,6 +431,7 @@ $reportMap = if ($OneUpdateProbe) {
       [int]$probeMap.api_trace_graph_execute_failure_count -ne 0) { throw 'PROBE_REPORT_EXECUTE_COUNT_MISMATCH' }
   $probeMap
 } elseif ($Optimizer -eq 'Muon') {
+  $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
   foreach ($key in @('optimizer','qnn_return_code_success','output_tensors_finite','final_finite','all_steps_finite','cpu_fallback','fallback','checkpoint_format','completed_steps','muon_matrix_count','muon_parameter_count','aux_adam_parameter_count','forward_backward_backend','optimizer_muon_backend','optimizer_aux_adam_backend','api_trace_graph_execute_failure_count','api_trace_fallback_attempted','api_trace_fallback_succeeded')) {
     if (-not $muonMap.Contains($key)) { throw "MUON_REPORT_FIELD_MISSING: $key" }
@@ -423,9 +441,18 @@ $reportMap = if ($OneUpdateProbe) {
       $muonMap.cpu_fallback -ne 'false' -or $muonMap.fallback -ne 'false' -or $muonMap.checkpoint_format -ne 'NPRTCKPTV4' -or
       [int]$muonMap.completed_steps -ne $Steps -or [int]$muonMap.muon_matrix_count -ne 114 -or
       [long]$muonMap.muon_parameter_count -ne 622592 -or [long]$muonMap.aux_adam_parameter_count -ne 135936 -or
-      $muonMap.forward_backward_backend -ne 'HTP' -or $muonMap.optimizer_muon_backend -ne 'CPU' -or
+      $muonMap.forward_backward_backend -ne 'HTP' -or $muonMap.optimizer_muon_backend -ne $expectedMuonBackend -or
       $muonMap.optimizer_aux_adam_backend -ne 'CPU' -or $muonMap.api_trace_graph_execute_failure_count -ne '0' -or
       $muonMap.api_trace_fallback_attempted -ne 'false' -or $muonMap.api_trace_fallback_succeeded -ne 'false') { throw 'MUON_REPORT_HEALTH_REJECTED' }
+
+  if ($MuonBackend -eq 'HVX') {
+    if (-not $muonMap.Contains('hvx_rpc_failure_count') -or
+        -not $muonMap.Contains('hvx_fallback_count') -or
+        -not $muonMap.Contains('hvx_nonfinite_count')) { throw 'MUON_HVX_REPORT_FIELDS_MISSING' }
+    if ([int]$muonMap.hvx_rpc_failure_count -ne 0 -or
+        [int]$muonMap.hvx_fallback_count -ne 0 -or
+        [int]$muonMap.hvx_nonfinite_count -ne 0) { throw 'MUON_HVX_HEALTH_REJECTED' }
+  }
   $muonMap
 } elseif ($AllowQualityFailure) {
   $smokeMap = Get-PhoneLmKeyValueMap -Text $result

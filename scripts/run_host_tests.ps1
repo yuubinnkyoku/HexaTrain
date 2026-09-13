@@ -397,6 +397,17 @@ if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon checkpoint host test compilatio
 if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon checkpoint host test failed" }
 Write-Host "nicopedia_muon_checkpoint_host_test=PASS"
 
+$NicopediaMuonCheckpointCompareExecutable = Join-Path $OutputDirectory "nicopedia_muon_checkpoint_compare.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_optimizer.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_checkpoint.cpp") `
+    (Join-Path $Root "host_tests\nicopedia_muon_checkpoint_compare.cpp") `
+    -o $NicopediaMuonCheckpointCompareExecutable
+if ($LASTEXITCODE -ne 0) { throw "Nicopedia Muon checkpoint compare compilation failed" }
+Write-Host "nicopedia_muon_checkpoint_compare_build=PASS"
+
 $NicopediaCpuGenerateExecutable = Join-Path $OutputDirectory "nicopedia_cpu_generate.exe"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `
