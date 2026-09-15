@@ -32,10 +32,15 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   if (!checkedMultiply(g.headwiseG1Gate ? 11 : 10, g.numLayers, &layerParameters) ||
       !checkedAdd(2, layerParameters, &expectedParameterCount) ||
       !checkedAdd(4, layerParameters, &expectedAppWriteCount) ||
-      (g.numHeads > 1 &&
+      (g.diagnosticOutputs && g.numHeads > 1 &&
        !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
-      !checkedAdd(5, expectedParameterCount, &expectedAppReadCount) ||
-      !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount) ||
+      // diagnosticOutputs=true keeps the established 5-terminal prefix
+      // (logits, output, probabilities, dLogits, dOutput) plus per-layer
+      // input gradients. Production FULL uses a 1-terminal prefix (logits).
+      !checkedAdd(g.diagnosticOutputs ? 5u : 1u, expectedParameterCount,
+                  &expectedAppReadCount) ||
+      (g.diagnosticOutputs &&
+       !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount)) ||
       !checkedAdd(expectedAppReadCount, headTapCount, &expectedAppReadCount) ||
       (g.headwiseG1Gate &&
        !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount)) ||
@@ -239,10 +244,18 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   outputs.taps.clear();
   outputs.next = {};
   outputs.logits = appReadBuffers[0];
-  outputs.output = appReadBuffers[1];
-  outputs.probabilities = appReadBuffers[2];
-  outputs.dLogits = appReadBuffers[3];
-  outputs.dOutput = appReadBuffers[4];
+  size_t gradient = 1;
+  if (g.diagnosticOutputs) {
+    outputs.output = appReadBuffers[gradient++];
+    outputs.probabilities = appReadBuffers[gradient++];
+    outputs.dLogits = appReadBuffers[gradient++];
+    outputs.dOutput = appReadBuffers[gradient++];
+  } else {
+    outputs.output.clear();
+    outputs.probabilities.clear();
+    outputs.dLogits.clear();
+    outputs.dOutput.clear();
+  }
   double appReadMaterializeUs = elapsedUs(phaseStarted);
   const auto gradientStructureStarted = Clock::now();
   if (outputs.gradients.layers.size() != current.layers.size())
@@ -250,8 +263,7 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   const double outputGradientStructureCopyUs =
       elapsedUs(gradientStructureStarted);
   phaseStarted = Clock::now();
-  outputs.gradients.tokenEmbedding = appReadBuffers[5];
-  size_t gradient = 6;
+  outputs.gradients.tokenEmbedding = appReadBuffers[gradient++];
   std::vector<TinyTransformerLayerParameters *> gradientLayers;
   gradientLayers.reserve(g.numLayers);
   gradientLayers.push_back(&outputs.gradients);
@@ -272,10 +284,12 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   }
   outputs.gradients.outputProjection = appReadBuffers[gradient++];
   outputs.layerInputGradients.clear();
-  outputs.layerInputGradients.reserve(g.numLayers);
-  for (uint32_t layer = 0; layer < g.numLayers; ++layer)
-    outputs.layerInputGradients.push_back(appReadBuffers[gradient++]);
-  if (g.numHeads > 1) {
+  if (g.diagnosticOutputs) {
+    outputs.layerInputGradients.reserve(g.numLayers);
+    for (uint32_t layer = 0; layer < g.numLayers; ++layer)
+      outputs.layerInputGradients.push_back(appReadBuffers[gradient++]);
+  }
+  if (g.diagnosticOutputs && g.numHeads > 1) {
     for (uint32_t layer = 0; layer < g.numLayers; ++layer) {
       for (uint32_t head = 0; head < g.numHeads; ++head) {
         const uint32_t id = g.layers[layer].heads[head].probabilities;
@@ -295,7 +309,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     error = "generalized tiny training APP_READ result mapping";
     return false;
   }
-  outputs.dEmbeddedInput = outputs.layerInputGradients.front();
+  outputs.dEmbeddedInput = g.diagnosticOutputs && !outputs.layerInputGradients.empty()
+      ? outputs.layerInputGradients.front()
+      : std::vector<float>{};
   outputs.embeddedInput.clear();  // Not an APP_READ terminal in the L2/H1 ABI.
   appReadMaterializeUs += elapsedUs(phaseStarted);
   size_t poisonResidual = 0, nonFiniteResidual = 0;

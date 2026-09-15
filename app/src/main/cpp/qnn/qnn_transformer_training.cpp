@@ -7328,10 +7328,13 @@ std::string nicopediaMuonHybridTraining(
   options.validateAppWriteImmutability = fullHostValidation;
   options.validateAppWriteParameterFiniteness = fullHostValidation;
   runtime.setOptions(options);
+  // Production training omits diagnostic APP_READ terminals (probabilities,
+  // dLogits, layer-input gradients, head-probability taps). The full
+  // validation path keeps the established diagnostic ABI.
   if (!runtime.initialize(QnnBackendKind::HTP, error) ||
       !runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
-          config.epsilon, true, error, config.vocabularySize,
+          config.epsilon, fullHostValidation, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
@@ -7706,6 +7709,7 @@ std::string nicopediaMuonHybridTraining(
           << "\noptimizer_result_move_ms_per_update="
           << (completed ? optimizerResultMoveUs / 1000.0 / completed : 0.0)
          << "\nhost_validation_mode=" << (fullHostValidation ? "full" : "production_fast")
+         << "\napp_read_abi=" << (fullHostValidation ? "diagnostic_full" : "production_minimal")
          << "\ncheckpoint_io_ms_total=" << checkpointIoUs / 1000.0
          << "\ncheckpoint_io_ms_per_update="
          << (completed ? checkpointIoUs / 1000.0 / completed : 0.0)

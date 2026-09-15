@@ -37,7 +37,6 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       numLayers == 0 || numHeads == 0 ||
       dimension % numHeads != 0 || vocabularySize == 0 ||
       (headwiseG1Gate && numHeads < 2) ||
-      !diagnosticOutputs ||
       (variant != TinyTransformerTrainingVariant::FULL &&
        variant != TinyTransformerTrainingVariant::FORWARD_ONLY) ||
       (tapSet != TinyTransformerTrainingTapSet::NONE &&
@@ -637,7 +636,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // H=1 deliberately keeps the established L2/H1 29-buffer ABI.  H=2 adds
   // head probabilities only after the canonical diagnostics, gradients and
   // layer-input gradients, in layer-major/head-major order for CPU/HTP taps.
-  if (numHeads > 1) {
+  // Production training (diagnosticOutputs=false) omits this APP_READ so
+  // Muon does not pay to materialize/scan unused attention probabilities.
+  if (diagnosticOutputs && numHeads > 1) {
     for (const auto &record : g.layers)
       for (const auto &head : record.heads)
         g.appReadRegistry.push_back(head.probabilities);
