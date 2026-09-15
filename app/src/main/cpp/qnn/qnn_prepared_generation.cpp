@@ -292,11 +292,17 @@ std::string runPreparedNicopediaGeneration(
         return htpNativeFailure(phase, detail);
     };
 
-    const auto windowInput = [&](const std::vector<std::uint16_t>& window) {
-        std::vector<uint32_t> tokens;
-        tokens.reserve(window.size());
-        for (std::uint16_t token : window) tokens.push_back(token);
-        return tiny_lm::oneHot(tokens, config.vocabularySize);
+    // Reusable one-hot buffer: sized once, refilled in place each step.
+    std::vector<float> oneHotBuffer(size_t(config.tokens) * config.vocabularySize);
+    const auto windowInput = [&](const std::vector<std::uint16_t>& window)
+        -> const std::vector<float>& {
+        std::fill(oneHotBuffer.begin(), oneHotBuffer.end(), 0.0f);
+        for (size_t i = 0; i < window.size() && i < config.tokens; ++i) {
+            const uint32_t token = window[i];
+            if (token < config.vocabularySize)
+                oneHotBuffer[i * config.vocabularySize + token] = 1.0f;
+        }
+        return oneHotBuffer;
     };
 
     // Fixed-prefix health gate on the shared deterministic prefixes.  On the
@@ -415,7 +421,7 @@ std::string runPreparedNicopediaGeneration(
     for (std::uint32_t step = 0; step < generateConfig.maxNewBytes; ++step) {
         TinyTransformerTrainingOutputs htpStep;
         const auto oneHotStarted = std::chrono::steady_clock::now();
-        const auto oneHotInput = windowInput(generateContext);
+        const auto& oneHotInput = windowInput(generateContext);
         oneHotBuildUs += std::chrono::duration<double, std::micro>(
                              std::chrono::steady_clock::now() - oneHotStarted)
                              .count();
