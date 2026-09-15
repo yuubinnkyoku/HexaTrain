@@ -588,6 +588,10 @@ struct Runtime::Impl {
         std::vector<std::uint32_t> parameterRegistry;
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
+        // Host APP_READ storage is shape-stable after prepare. Keep vector
+        // capacity with the prepared graph; every execute still poison-fills
+        // and validates the complete logical range.
+        std::vector<std::vector<float>> appReadBuffers;
         phonelm::transformer::ResourceEstimate resourceEstimate;
         std::vector<float> maskData, zeroFfData, positionData, selectorData,
                            gateSelectorData;

@@ -4,6 +4,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     const std::vector<float> &input, const std::vector<float> &target,
     const TinyTransformerParameters &current, float learningRate,
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
+  const auto wrapperStarted = Clock::now();
+  auto phaseStarted = wrapperStarted;
+  outputs.appReadValidated = false;
   using GG = Impl::GeneralizedTinyTransformerTrainingGraph;
   auto &g = impl_->generalizedTinyTransformerTraining;
   if (g.forwardOnly) {
@@ -62,7 +65,7 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
                        [](float value) { return std::isfinite(value); });
   };
   const auto validLayer = [&](const TinyTransformerLayerParameters &layer) {
-    return layer.wq.size() == dimensionSquared &&
+    const bool shapeValid = layer.wq.size() == dimensionSquared &&
            layer.wk.size() == dimensionSquared &&
            layer.wv.size() == dimensionSquared &&
            layer.wo.size() == dimensionSquared &&
@@ -71,17 +74,20 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
            layer.w1.size() == dimensionFf && layer.w2.size() == ffDimension &&
            (g.headwiseG1Gate
                 ? layer.attentionGateWeight.size() == size_t(g.dimension) * g.numHeads
-                : layer.attentionGateWeight.empty()) &&
-           finite(layer.wq) && finite(layer.wk) && finite(layer.wv) &&
+                : layer.attentionGateWeight.empty());
+    return shapeValid && (!options_.validateAppWriteParameterFiniteness ||
+           (finite(layer.wq) && finite(layer.wk) && finite(layer.wv) &&
            finite(layer.wo) && finite(layer.gamma1) && finite(layer.beta1) &&
            finite(layer.gamma2) && finite(layer.beta2) && finite(layer.w1) &&
-           finite(layer.w2);
+           finite(layer.w2)));
   };
   if (input.size() != tokenVocabulary || target.size() != tokenVocabulary ||
       current.layers.size() != g.numLayers - 1 || current.tokenEmbedding.size() != embedding ||
       current.outputProjection.size() != projection || !finite(input) ||
-      !finite(target) || !finite(current.tokenEmbedding) ||
-      !finite(current.outputProjection) || !validLayer(current) ||
+      !finite(target) ||
+      (options_.validateAppWriteParameterFiniteness &&
+       (!finite(current.tokenEmbedding) || !finite(current.outputProjection))) ||
+      !validLayer(current) ||
       !std::isfinite(learningRate) ||
       !std::all_of(current.layers.begin(), current.layers.end(), validLayer)) {
     error = "generalized tiny training buffer schema";
@@ -137,16 +143,32 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
       error = "generalized tiny training APP_WRITE registry schema";
       return false;
     }
-    appWriteSnapshots.push_back(*appWriteValues[index]);
+  }
+  const double appWriteSchemaValidationUs = elapsedUs(phaseStarted);
+  phaseStarted = Clock::now();
+  if (options_.validateAppWriteImmutability) {
+    for (size_t index = 0; index < g.appWriteRegistry.size(); ++index)
+      appWriteSnapshots.push_back(*appWriteValues[index]);
+  }
+  const double appWriteSnapshotCopyUs = elapsedUs(phaseStarted);
+  phaseStarted = Clock::now();
+  for (size_t index = 0; index < g.appWriteRegistry.size(); ++index) {
+    const uint32_t id = g.appWriteRegistry[index];
+    size_t count = 0;
+    (void)elements(id, count);
     in.push_back(g.tensors[id]);
     in.back().v1.clientBuf = {const_cast<float *>(appWriteValues[index]->data()),
                               uint32_t(count * sizeof(float))};
   }
+  const double appWriteBindUs = elapsedUs(phaseStarted);
   // Keep client output memory finite: some HTP drivers reject a NaN-filled
   // APP_READ buffer before the graph gets a chance to overwrite it.  We still
   // check this sentinel and non-finite values independently after success.
   constexpr float poison = 1.1415926f;
-  std::vector<std::vector<float>> appReadBuffers(g.appReadRegistry.size());
+  phaseStarted = Clock::now();
+  auto &appReadBuffers = g.appReadBuffers;
+  appReadBuffers.resize(g.appReadRegistry.size());
+  std::vector<size_t> appReadCounts(g.appReadRegistry.size());
   std::vector<Qnn_Tensor_t> out;
   out.reserve(g.appReadRegistry.size());
   for (size_t index = 0; index < g.appReadRegistry.size(); ++index) {
@@ -157,11 +179,24 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
       error = "generalized tiny training APP_READ registry schema";
       return false;
     }
-    appReadBuffers[index].assign(count, poison);
+    appReadCounts[index] = count;
+    appReadBuffers[index].resize(count);
+  }
+  const double appReadBufferAllocateUs = elapsedUs(phaseStarted);
+  phaseStarted = Clock::now();
+  for (size_t index = 0; index < appReadBuffers.size(); ++index)
+    std::fill(appReadBuffers[index].begin(), appReadBuffers[index].end(), poison);
+  const double appReadPoisonFillUs = elapsedUs(phaseStarted);
+  phaseStarted = Clock::now();
+  for (size_t index = 0; index < g.appReadRegistry.size(); ++index) {
+    const uint32_t id = g.appReadRegistry[index];
     out.push_back(g.tensors[id]);
     out.back().v1.clientBuf = {appReadBuffers[index].data(),
-                               uint32_t(count * sizeof(float))};
+                               uint32_t(appReadCounts[index] * sizeof(float))};
   }
+  const double appReadBindUs = elapsedUs(phaseStarted);
+  metrics_.inputBindUs.push_back(appWriteBindUs);
+  metrics_.outputBindUs.push_back(appReadBindUs);
   g.lastInputTensorCount = uint32_t(in.size());
   g.lastOutputTensorCount = uint32_t(out.size());
   std::uint32_t learningRateBitsBefore = 0;
@@ -177,11 +212,14 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   std::uint32_t learningRateBitsAfter = 0;
   std::memcpy(&learningRateBitsAfter, &learningRate, sizeof(learningRateBitsAfter));
   g.lastLearningRateBytesUnchanged = learningRateBitsBefore == learningRateBitsAfter;
-  const bool inputsUnchanged = std::equal(
-      appWriteSnapshots.begin(), appWriteSnapshots.end(), appWriteValues.begin(),
-      [](const std::vector<float> &before, const std::vector<float> *after) {
-        return before == *after;
-      });
+  phaseStarted = Clock::now();
+  const bool inputsUnchanged = !options_.validateAppWriteImmutability ||
+      std::equal(
+          appWriteSnapshots.begin(), appWriteSnapshots.end(),
+          appWriteValues.begin(),
+          [](const std::vector<float> &before,
+             const std::vector<float> *after) { return before == *after; });
+  const double appWriteImmutabilityCheckUs = elapsedUs(phaseStarted);
   if (!inputsUnchanged) {
     diagnostics_ += "generalized_tiny_training_input_immutable=false\n";
     error = "generalized tiny training APP_WRITE mutation";
@@ -197,6 +235,7 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   // Materialize every application-visible result before finite validation.
   // Diagnostic replay must retain the values produced by a successful QNN
   // call even when one of those values is non-finite.
+  phaseStarted = Clock::now();
   outputs.taps.clear();
   outputs.next = {};
   outputs.logits = appReadBuffers[0];
@@ -204,7 +243,13 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   outputs.probabilities = appReadBuffers[2];
   outputs.dLogits = appReadBuffers[3];
   outputs.dOutput = appReadBuffers[4];
-  outputs.gradients = current;
+  double appReadMaterializeUs = elapsedUs(phaseStarted);
+  const auto gradientStructureStarted = Clock::now();
+  if (outputs.gradients.layers.size() != current.layers.size())
+    outputs.gradients.layers.resize(current.layers.size());
+  const double outputGradientStructureCopyUs =
+      elapsedUs(gradientStructureStarted);
+  phaseStarted = Clock::now();
   outputs.gradients.tokenEmbedding = appReadBuffers[5];
   size_t gradient = 6;
   std::vector<TinyTransformerLayerParameters *> gradientLayers;
@@ -252,30 +297,35 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   }
   outputs.dEmbeddedInput = outputs.layerInputGradients.front();
   outputs.embeddedInput.clear();  // Not an APP_READ terminal in the L2/H1 ABI.
+  appReadMaterializeUs += elapsedUs(phaseStarted);
   size_t poisonResidual = 0, nonFiniteResidual = 0;
   size_t firstBadRegistryIndex = appReadBuffers.size();
   size_t firstBadElement = 0;
   size_t firstBadNanCount = 0, firstBadInfCount = 0;
+  const double appReadPoisonValidationUs = 0.0;
+  phaseStarted = Clock::now();
   for (size_t registryIndex = 0; registryIndex < appReadBuffers.size();
        ++registryIndex) {
     const auto &values = appReadBuffers[registryIndex];
-    poisonResidual += std::count(values.begin(), values.end(), poison);
-    const auto firstBad = std::find_if(
-        values.begin(), values.end(),
-        [](float value) { return !std::isfinite(value); });
-    const size_t badCount =
-        std::count_if(values.begin(), values.end(),
-                      [](float value) { return !std::isfinite(value); });
+    size_t badCount = 0, nanCount = 0, firstBad = values.size();
+    for (size_t element = 0; element < values.size(); ++element) {
+      const float value = values[element];
+      if (value == poison) ++poisonResidual;
+      if (!std::isfinite(value)) {
+        if (firstBad == values.size()) firstBad = element;
+        ++badCount;
+        if (std::isnan(value)) ++nanCount;
+      }
+    }
     nonFiniteResidual += badCount;
     if (badCount && firstBadRegistryIndex == appReadBuffers.size()) {
       firstBadRegistryIndex = registryIndex;
-      firstBadElement = size_t(firstBad - values.begin());
-      firstBadNanCount =
-          std::count_if(values.begin(), values.end(),
-                        [](float value) { return std::isnan(value); });
+      firstBadElement = firstBad;
+      firstBadNanCount = nanCount;
       firstBadInfCount = badCount - firstBadNanCount;
     }
   }
+  const double appReadFiniteValidationUs = elapsedUs(phaseStarted);
   if (poisonResidual != 0 || nonFiniteResidual != 0) {
     diagnostics_ += std::string("generalized_tiny_training_qnn_return=0\n") +
                     "generalized_tiny_training_output_poison_count=" +
@@ -308,13 +358,22 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
                     std::to_string(in.size()) + '\n' +
                     "generalized_tiny_training_execute_app_read_count=" +
                     std::to_string(out.size()) + '\n' +
-                    "generalized_tiny_training_input_immutable=true\n"
+                    "generalized_tiny_training_input_immutable=" +
+                    (options_.validateAppWriteImmutability ? "true\n"
+                                                          : "not_checked\n") +
+                    "generalized_tiny_training_input_immutability_validation=" +
+                    (options_.validateAppWriteImmutability ? "full\n"
+                                                          : "disabled\n") +
+                    "generalized_tiny_training_parameter_finiteness_validation=" +
+                    (options_.validateAppWriteParameterFiniteness ? "full\n"
+                                                                 : "optimizer_gated\n") +
                     "generalized_tiny_training_qnn_return=0\n"
                     "generalized_tiny_training_output_poison_count=0\n"
                     "generalized_tiny_training_output_nonfinite_count=0\n"
                     "generalized_tiny_training_outputs_all_written=true\n";
     g.executeDiagnosticsEmitted = true;
   }
+  outputs.appReadValidated = true;
   double loss = 0.0;
   for (uint32_t row = 0; row < g.tokens; ++row) {
     const float *logits = outputs.logits.data() + size_t(row) * g.vocabularySize;
@@ -328,6 +387,19 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     loss += double(maximum) + std::log(sum) - logits[targetIndex];
   }
   outputs.loss = float(loss / g.tokens);
+  metrics_.appWriteSchemaValidationUs.push_back(appWriteSchemaValidationUs);
+  metrics_.appWriteSnapshotCopyUs.push_back(appWriteSnapshotCopyUs);
+  metrics_.appWriteBindUs.push_back(appWriteBindUs);
+  metrics_.appReadBufferAllocateUs.push_back(appReadBufferAllocateUs);
+  metrics_.appReadPoisonFillUs.push_back(appReadPoisonFillUs);
+  metrics_.appReadBindUs.push_back(appReadBindUs);
+  metrics_.appWriteImmutabilityCheckUs.push_back(appWriteImmutabilityCheckUs);
+  metrics_.appReadMaterializeUs.push_back(appReadMaterializeUs);
+  metrics_.appReadPoisonValidationUs.push_back(appReadPoisonValidationUs);
+  metrics_.appReadFiniteValidationUs.push_back(appReadFiniteValidationUs);
+  metrics_.outputGradientStructureCopyUs.push_back(
+      outputGradientStructureCopyUs);
+  metrics_.trainingWrapperUs.push_back(elapsedUs(wrapperStarted));
   return true;
 }
 

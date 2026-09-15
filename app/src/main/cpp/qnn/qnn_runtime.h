@@ -70,6 +70,20 @@ struct RuntimeMetrics {
     std::vector<double> weightBufferCopyUs;
     std::vector<double> inputBindUs;
     std::vector<double> outputBindUs;
+    // Generalized Transformer training wrapper phases. Each successful
+    // execute contributes exactly one sample to every vector below.
+    std::vector<double> trainingWrapperUs;
+    std::vector<double> appWriteSchemaValidationUs;
+    std::vector<double> appWriteSnapshotCopyUs;
+    std::vector<double> appWriteBindUs;
+    std::vector<double> appReadBufferAllocateUs;
+    std::vector<double> appReadPoisonFillUs;
+    std::vector<double> appReadBindUs;
+    std::vector<double> appWriteImmutabilityCheckUs;
+    std::vector<double> appReadMaterializeUs;
+    std::vector<double> appReadPoisonValidationUs;
+    std::vector<double> appReadFiniteValidationUs;
+    std::vector<double> outputGradientStructureCopyUs;
     std::uint64_t dWeightGraphCreateCount = 0;
     std::uint64_t dWeightGraphFinalizeCount = 0;
     std::uint64_t dWeightGraphExecuteCount = 0;
@@ -168,6 +182,16 @@ struct RuntimeOptions {
     // executes FP32-declared graphs in FP16.  Default false = established
     // behavior.  Private diagnostics only; no gate/math/checkpoint change.
     bool htpNativeTensorFp16 = false;
+    // Correctness/debug executions retain full APP_WRITE snapshots and the
+    // post-execute byte-for-byte immutability check. Production research
+    // training may disable this redundant host copy after graph/schema tests
+    // have established the APP_WRITE contract.
+    bool validateAppWriteImmutability = true;
+    // Parameter values are finite-checked by default. Production training may
+    // rely on validated initialization/resume plus the preceding optimizer's
+    // post-update health gate, while still checking input/target values and
+    // every APP_WRITE shape on each execute.
+    bool validateAppWriteParameterFiniteness = true;
 };
 
 struct LayerNormBackwardOutputs {
@@ -208,6 +232,9 @@ struct TinyTransformerTrainingTapOutput {
 
 struct TinyTransformerTrainingOutputs {
     float loss = 0.0f;
+    // Set only after every APP_READ element has passed the wrapper's combined
+    // poison/non-finite validation following a successful QNN return.
+    bool appReadValidated = false;
     std::vector<float> output;
     std::vector<float> dOutput;
     std::vector<float> embeddedInput, logits, probabilities, dLogits;

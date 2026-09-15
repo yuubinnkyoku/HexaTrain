@@ -5022,8 +5022,16 @@ struct NprtBatch {
   std::uint64_t articleHash = 0;
 };
 
+struct NprtBatchTimings {
+  double totalUs = 0.0;
+  double oneHotInputUs = 0.0;
+  double oneHotTargetUs = 0.0;
+};
+
 NprtBatch nprtBatch(const tiny_lm::Config &config, const NprtCache &cache,
-                    std::size_t recordIndex) {
+                    std::size_t recordIndex,
+                    NprtBatchTimings *timings = nullptr) {
+  const auto totalStarted = std::chrono::steady_clock::now();
   const auto &record = cache.records.at(recordIndex);
   std::vector<uint32_t> input(config.tokens), target(config.tokens);
   for (uint32_t i = 0; i < config.tokens; ++i) {
@@ -5031,9 +5039,20 @@ NprtBatch nprtBatch(const tiny_lm::Config &config, const NprtCache &cache,
     target[i] = record.window[i + 1];
   }
   NprtBatch batch;
+  auto phaseStarted = std::chrono::steady_clock::now();
   batch.input = tiny_lm::oneHot(input, config.vocabularySize);
+  if (timings)
+    timings->oneHotInputUs += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - phaseStarted).count();
+  phaseStarted = std::chrono::steady_clock::now();
   batch.target = tiny_lm::oneHot(target, config.vocabularySize);
+  if (timings)
+    timings->oneHotTargetUs += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - phaseStarted).count();
   batch.articleHash = record.articleHash;
+  if (timings)
+    timings->totalUs += std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - totalStarted).count();
   return batch;
 }
 
@@ -7292,6 +7311,22 @@ std::string nicopediaMuonHybridTraining(
   RuntimeOptions options;
   options.captureQnnCallback = false;
   options.qnnLogLevel = 2;
+  // Production research training uses the fast host path by default. A
+  // diagnostic marker file restores the full APP_WRITE snapshot /
+  // immutability / parameter-finiteness scans for matched host-overhead
+  // benchmarks on the same APK. Checked in the run directory first, then
+  // its parent (files/headless-input/) so the runner's empty-run-dir
+  // freshness assertion still passes.
+  bool fullHostValidation =
+      std::ifstream(cachePath + "/host_validation_full").good();
+  if (!fullHostValidation) {
+    const auto slash = cachePath.find_last_of("/\\");
+    if (slash != std::string::npos)
+      fullHostValidation = std::ifstream(
+          cachePath.substr(0, slash) + "/host_validation_full").good();
+  }
+  options.validateAppWriteImmutability = fullHostValidation;
+  options.validateAppWriteParameterFiniteness = fullHostValidation;
   runtime.setOptions(options);
   if (!runtime.initialize(QnnBackendKind::HTP, error) ||
       !runtime.prepareTinyTransformerTraining(
@@ -7309,9 +7344,13 @@ std::string nicopediaMuonHybridTraining(
   double inputBindUs = 0.0, outputBindUs = 0.0;
   double gradientAccumulationUs = 0.0, optimizerUpdateWallUs = 0.0;
   double optimizerResultMoveUs = 0.0;
+  double batchDataPrepareUs = 0.0, oneHotInputUs = 0.0,
+         oneHotTargetUs = 0.0, outerFiniteTrainingOutputsUs = 0.0,
+         gradientRegistryValidationUs = 0.0, checkpointIoUs = 0.0;
   double hvxRpcUs = 0.0, hvxKernelUs = 0.0, hvxPackUs = 0.0, hvxUnpackUs = 0.0;
   std::uint64_t qnnExecuteCount = 0;
   std::uint64_t hvxRpcFailureCount = 0, hvxFallbackCount = 0, hvxNonFiniteCount = 0;
+  std::vector<double> stepWallSamplesUs;
   const bool useHvxMuonBackend = trainingConfig.nicopediaOptimizer == 2;
   const char* muonBackendName = useHvxMuonBackend ? "HVX_W8" : "CPU";
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
@@ -7329,14 +7368,20 @@ std::string nicopediaMuonHybridTraining(
       gated ? size_t(config.numLayers) * config.numHeads : 0);
   float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
   const auto trainingStarted = std::chrono::steady_clock::now();
+  TinyTransformerTrainingOutputs output;
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
     if (stopRequested && stopRequested->load()) { interrupted = true; break; }
     const auto stepStarted = std::chrono::steady_clock::now();
     Params gradient = zeroLanguageParameters(current);
     double loss = 0.0;
     for (uint32_t batch = 0; batch < 8; ++batch) {
-      const auto data = nprtBatch(config, cache, order[std::size_t(step - 1) * 8 + batch]);
-      TinyTransformerTrainingOutputs output;
+      NprtBatchTimings batchTimings;
+      const auto data = nprtBatch(
+          config, cache, order[std::size_t(step - 1) * 8 + batch],
+          &batchTimings);
+      batchDataPrepareUs += batchTimings.totalUs;
+      oneHotInputUs += batchTimings.oneHotInputUs;
+      oneHotTargetUs += batchTimings.oneHotTargetUs;
       const size_t executeBefore = runtime.metrics().executeUs.size();
       const size_t inputBefore = runtime.metrics().inputBindUs.size();
       const size_t outputBefore = runtime.metrics().outputBindUs.size();
@@ -7351,7 +7396,12 @@ std::string nicopediaMuonHybridTraining(
         outputBindUs += runtime.metrics().outputBindUs[i];
       ++qnnExecuteCount;
       loss += output.loss;
-      allFinite = allFinite && finiteTrainingOutputs(output);
+      const auto outerFiniteStarted = std::chrono::steady_clock::now();
+      allFinite = allFinite && output.appReadValidated &&
+          std::isfinite(output.loss);
+      outerFiniteTrainingOutputsUs +=
+          std::chrono::duration<double, std::micro>(
+              std::chrono::steady_clock::now() - outerFiniteStarted).count();
       if (gated) {
         if (output.attentionGates.size() != config.numLayers)
           return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=GATE_DIAGNOSTIC\nerror=gate_layer_count_mismatch\n";
@@ -7375,12 +7425,16 @@ std::string nicopediaMuonHybridTraining(
           }
         }
       }
+      const auto registryStarted = std::chrono::steady_clock::now();
       const auto accum = tiny_lm::parameterRegistry(gradient);
       const auto source = tiny_lm::parameterRegistry(output.gradients);
       std::string registryError;
       if (!nprtValidateRegistryIdentity(gradient, output.gradients,
                                         "htp_gradient", &registryError))
         return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=APP_PARAMETER_SCHEMA\nerror=gradient_registry_mismatch:" + registryError + "\n";
+      gradientRegistryValidationUs +=
+          std::chrono::duration<double, std::micro>(
+              std::chrono::steady_clock::now() - registryStarted).count();
       const auto accumulationStarted = std::chrono::steady_clock::now();
       for (size_t i = 0; i < accum.size(); ++i) {
         auto& destination = *const_cast<std::vector<float>*>(accum[i].values);
@@ -7466,10 +7520,13 @@ std::string nicopediaMuonHybridTraining(
       const std::string path = cachePath + "/" + nprtCheckpointName(
           seed, config.numLayers, config.tokens, config.dimension,
           config.feedForwardDimension, step);
+      const auto checkpointStarted = std::chrono::steady_clock::now();
       if (!nprtWriteMuonCheckpoint(path, config, seed, step, current, momentum,
                                    adamM, adamV, cache, checkpointHparams, 8,
                                    &error))
         return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=CHECKPOINT_WRITE\nerror=" + error + "\n";
+      checkpointIoUs += std::chrono::duration<double, std::micro>(
+          std::chrono::steady_clock::now() - checkpointStarted).count();
       ++checkpointCount;
       checkpointWritten = true;
     }
@@ -7485,7 +7542,8 @@ std::string nicopediaMuonHybridTraining(
              << "\ncpu_fallback=false";
       progress(status.str());
     }
-    (void)stepStarted;
+    stepWallSamplesUs.push_back(std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - stepStarted).count());
   }
   const double seconds = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - trainingStarted).count();
@@ -7501,6 +7559,46 @@ std::string nicopediaMuonHybridTraining(
       trace.graphExecuteSuccessCount == runtime.metrics().graphExecuteCount &&
       trace.graphExecuteLastResult == 0 && trace.lastQnnResult == 0;
   const bool ok = !interrupted && allFinite && qnnOk && lastStep == steps;
+  const auto sumMetric = [](const std::vector<double>& values) {
+    return std::accumulate(values.begin(), values.end(), 0.0);
+  };
+  const auto percentile = [](std::vector<double> values, double fraction) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const size_t index = static_cast<size_t>(std::ceil(
+        fraction * static_cast<double>(values.size()))) - 1;
+    return values[std::min(index, values.size() - 1)];
+  };
+  const double appWriteSchemaValidationUs =
+      sumMetric(runtime.metrics().appWriteSchemaValidationUs);
+  const double appWriteSnapshotCopyUs =
+      sumMetric(runtime.metrics().appWriteSnapshotCopyUs);
+  const double appWriteBindDetailedUs = sumMetric(runtime.metrics().appWriteBindUs);
+  const double appReadBufferAllocateUs =
+      sumMetric(runtime.metrics().appReadBufferAllocateUs);
+  const double appReadPoisonFillUs = sumMetric(runtime.metrics().appReadPoisonFillUs);
+  const double appReadBindDetailedUs = sumMetric(runtime.metrics().appReadBindUs);
+  const double appWriteImmutabilityCheckUs =
+      sumMetric(runtime.metrics().appWriteImmutabilityCheckUs);
+  const double appReadMaterializeUs =
+      sumMetric(runtime.metrics().appReadMaterializeUs);
+  const double appReadPoisonValidationUs =
+      sumMetric(runtime.metrics().appReadPoisonValidationUs);
+  const double appReadFiniteValidationUs =
+      sumMetric(runtime.metrics().appReadFiniteValidationUs);
+  const double outputGradientStructureCopyUs =
+      sumMetric(runtime.metrics().outputGradientStructureCopyUs);
+  const double explicitlyMeasuredExclusiveUs = batchDataPrepareUs +
+      appWriteSchemaValidationUs + appWriteSnapshotCopyUs +
+      appWriteBindDetailedUs + appReadBufferAllocateUs + appReadPoisonFillUs +
+      appReadBindDetailedUs + fwdBwdUs + appWriteImmutabilityCheckUs +
+      appReadMaterializeUs + appReadPoisonValidationUs +
+      appReadFiniteValidationUs + outputGradientStructureCopyUs +
+      outerFiniteTrainingOutputsUs + gradientRegistryValidationUs +
+      gradientAccumulationUs + optimizerUpdateWallUs + optimizerResultMoveUs +
+      checkpointIoUs;
+  const double unclassifiedHostUs = std::max(
+      0.0, seconds * 1000000.0 - explicitlyMeasuredExclusiveUs);
   std::ostringstream report;
   report << std::setprecision(10) << "NICOPEDIA_HTP\ntest=nicopedia_muon_hybrid_training\nstatus="
          << (interrupted ? "CANCELLED" : (ok ? "SUCCESS" : "FAILED"))
@@ -7538,10 +7636,45 @@ std::string nicopediaMuonHybridTraining(
          << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
          << muonBackendName
          << "\noptimizer_aux_adam_backend=CPU\nfwd_backward_ms=" << fwdBwdUs / 1000.0
+         << "\nbatch_data_prepare_us=" << batchDataPrepareUs
+         << "\none_hot_input_us=" << oneHotInputUs
+         << "\none_hot_target_us=" << oneHotTargetUs
+         << "\napp_write_schema_validation_us=" << appWriteSchemaValidationUs
+         << "\napp_write_snapshot_copy_us=" << appWriteSnapshotCopyUs
+         << "\napp_write_bind_us=" << appWriteBindDetailedUs
+         << "\napp_read_buffer_allocate_us=" << appReadBufferAllocateUs
+         << "\napp_read_poison_fill_us=" << appReadPoisonFillUs
+         << "\napp_read_bind_us=" << appReadBindDetailedUs
+         << "\nqnn_graph_execute_us=" << fwdBwdUs
+         << "\napp_write_immutability_check_us=" << appWriteImmutabilityCheckUs
+         << "\napp_read_materialize_us=" << appReadMaterializeUs
+         << "\napp_read_poison_validation_us=" << appReadPoisonValidationUs
+         << "\napp_read_finite_validation_us=" << appReadFiniteValidationUs
+         << "\napp_read_validation_combined=true"
+         << "\noutput_gradient_structure_copy_us=" << outputGradientStructureCopyUs
+         << "\nouter_finite_training_outputs_us=" << outerFiniteTrainingOutputsUs
+         << "\ngradient_registry_validation_us=" << gradientRegistryValidationUs
+         << "\ngradient_accumulation_us=" << gradientAccumulationUs
          << "\nhvx_rpc_ms=" << hvxRpcUs / 1000.0
          << "\nhvx_kernel_ms=" << hvxKernelUs / 1000.0
          << "\nhvx_pack_ms=" << hvxPackUs / 1000.0
          << "\nhvx_unpack_ms=" << hvxUnpackUs / 1000.0
+         << "\nmuon_pack_us=" << hvxPackUs
+         << "\nmuon_rpc_us=" << hvxRpcUs
+         << "\nmuon_kernel_us=" << hvxKernelUs
+         << "\nmuon_unpack_us=" << hvxUnpackUs
+         << "\naux_adam_us=" << auxUs
+         << "\noptimizer_result_move_us=" << optimizerResultMoveUs
+         << "\ncheckpoint_io_us=" << checkpointIoUs
+         << "\nunclassified_host_us=" << unclassifiedHostUs
+         << "\ntotal_step_wall_us=" << seconds * 1000000.0
+         << "\nstep_wall_mean_us="
+         << (stepWallSamplesUs.empty() ? 0.0
+                                       : sumMetric(stepWallSamplesUs) /
+                                             stepWallSamplesUs.size())
+         << "\nstep_wall_p50_us=" << percentile(stepWallSamplesUs, 0.50)
+         << "\nstep_wall_p95_us=" << percentile(stepWallSamplesUs, 0.95)
+         << "\ntiming_overlap_note=batch_data_prepare_includes_one_hot;optimizer_update_wall_includes_muon_pack_rpc_unpack_and_aux;muon_rpc_includes_muon_kernel;metric_units=training_step_ms_is_per_update;fwd_backward_ms_muon_ms_and_detailed_us_fields_are_run_totals;use_per_update_fields_for_comparisons"
          << "\nhvx_rpc_failure_count=" << hvxRpcFailureCount
          << "\nhvx_fallback_count=" << hvxFallbackCount
          << "\nhvx_nonfinite_count=" << hvxNonFiniteCount
@@ -7572,6 +7705,11 @@ std::string nicopediaMuonHybridTraining(
           << (completed ? optimizerUpdateWallUs / 1000.0 / completed : 0.0)
           << "\noptimizer_result_move_ms_per_update="
           << (completed ? optimizerResultMoveUs / 1000.0 / completed : 0.0)
+         << "\nhost_validation_mode=" << (fullHostValidation ? "full" : "production_fast")
+         << "\ncheckpoint_io_ms_total=" << checkpointIoUs / 1000.0
+         << "\ncheckpoint_io_ms_per_update="
+         << (completed ? checkpointIoUs / 1000.0 / completed : 0.0)
+         << "\ncheckpoint_count_for_io=" << checkpointCount
          << "\nqnn_execute_count=" << qnnExecuteCount
          << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
          << "\nqnn_failures=" << trace.graphExecuteFailureCount
