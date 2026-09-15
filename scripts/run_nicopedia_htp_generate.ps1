@@ -23,6 +23,8 @@ param(
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
     [string]$TokenizerModelPath = '',
     [int]$MaxNewBytes = 64,              # 1..1024
+    [ValidateSet('none', 'headwise_g1_sigmoid')][string]$AttentionGate = 'none',
+    [string]$CheckpointPath = '',
     [string]$Mode = 'Greedy',            # Greedy | Sample
     [double]$Temperature = 1.0,
     [int]$TopK = 256,
@@ -124,10 +126,18 @@ function Assert-PhoneLmHtpSmokeCheckpointHeader {
         [int]$Vocabulary = 256,
         [Parameter(Mandatory = $true)][int]$Dimension,
         [Parameter(Mandatory = $true)][int]$FeedForwardDimension,
-        [Parameter(Mandatory = $true)][int]$Step
+        [Parameter(Mandatory = $true)][int]$Step,
+        [ValidateSet('none', 'headwise_g1_sigmoid')][string]$AttentionGate = 'none'
     )
+    $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') {
+        'NPRTCKPTV5'
+    } elseif ($Vocabulary -eq 1024) {
+        'NPRTCKPTV4'
+    } else {
+        'NPRTCKPTV2'
+    }
     $expected = [ordered]@{
-        Magic = $(if ($Vocabulary -eq 1024) { 'NPRTCKPTV3' } else { 'NPRTCKPTV2' }); Vocabulary = $Vocabulary; Tokens = $Tokens
+        Magic = $expectedMagic; Vocabulary = $Vocabulary; Tokens = $Tokens
         Dimension = $Dimension; FeedForward = $FeedForwardDimension
         Layers = $Layers; Heads = 2; Seed = $Seed; Step = $Step
     }
@@ -441,11 +451,12 @@ if ($promptBytes.Length -gt $Tokens) {
 # the full header identity and expected checkpoint_step intent, so a stale or
 # mismatched file cannot pass.
 $checkpointName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
-$checkpoint = Join-Path $trainingRoot $checkpointName
+$checkpoint = if ($CheckpointPath) { [IO.Path]::GetFullPath($CheckpointPath) } else { Join-Path $trainingRoot $checkpointName }
+if ($CheckpointPath) { $checkpointName = [IO.Path]::GetFileName($checkpoint) }
 $canonicalTrainingReport = Join-Path $trainingRoot "seed$Seed-l$layers$modelTag-steps$CheckpointStep-result.txt"
 if ($GatePolicy -eq 'htp-smoke') {
     if (-not $TrainingReportPath) { $TrainingReportPath = $canonicalTrainingReport }
-    if ([IO.Path]::GetFullPath($TrainingReportPath) -ne [IO.Path]::GetFullPath($canonicalTrainingReport)) {
+    if (-not $CheckpointPath -and [IO.Path]::GetFullPath($TrainingReportPath) -ne [IO.Path]::GetFullPath($canonicalTrainingReport)) {
         throw "HTP_SMOKE_TRAINING_REPORT_NOT_CANONICAL: expected=$canonicalTrainingReport"
     }
 }
@@ -461,7 +472,7 @@ if ($GatePolicy -eq 'htp-smoke') {
     }
     $anchorHash = [string]$trainingMap.final_parameter_hash
     $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $checkpoint
-    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $checkpointHeader -Seed $Seed -Layers $layers -Tokens $Tokens -Vocabulary $Vocabulary -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep
+    Assert-PhoneLmHtpSmokeCheckpointHeader -Header $checkpointHeader -Seed $Seed -Layers $layers -Tokens $Tokens -Vocabulary $Vocabulary -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $CheckpointStep -AttentionGate $AttentionGate
     Write-Host "htp-smoke prerequisites accepted: canonical training report and checkpoint header verified anchor=$anchorHash"
 } elseif ($GatePolicy -ne 'htp-native') {
     if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) { throw "ANCHOR_MISSING: $anchorFile" }
@@ -597,7 +608,7 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
     -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-generate' -RunId $RunId `
-    -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $layers; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy } `
+    -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $layers; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; generateMode = $Mode.ToLowerInvariant(); maxNewBytes = $MaxNewBytes; temperature = $Temperature.ToString([System.Globalization.CultureInfo]::InvariantCulture); topK = $TopK; samplingSeed = $SamplingSeed; gatePolicy = $GatePolicy; attentionGate = $AttentionGate } `
     -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
     -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "generation-step-$CheckpointStep" `
@@ -717,12 +728,19 @@ if ($GatePolicy -eq 'htp-native' -or $GatePolicy -eq 'htp-smoke') {
     if ($GatePolicy -eq 'htp-smoke') {
         $smokeOnlyReported = [regex]::Match($result, '(?m)^smoke_only=(true|false)$').Groups[1].Value
         if ($smokeOnlyReported -ne 'true') { throw 'HTP_SMOKE_REPORT_NOT_MARKED_SMOKE_ONLY' }
+        $expectedSmokeMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') {
+            'NPRTCKPTV5'
+        } elseif ($Vocabulary -eq 1024) {
+            'NPRTCKPTV4'
+        } else {
+            'NPRTCKPTV2'
+        }
         $smokeHeaders = [ordered]@{
-            checkpoint_header_vocabulary = '256'; checkpoint_header_tokens = [string]$Tokens
+            checkpoint_header_vocabulary = [string]$Vocabulary; checkpoint_header_tokens = [string]$Tokens
             checkpoint_header_dimension = [string]$Dimension; checkpoint_header_feedforward = [string]$FeedForwardDimension
             checkpoint_header_layers = [string]$layers; checkpoint_header_heads = '2'
             checkpoint_header_seed = [string]$Seed; checkpoint_header_step = [string]$CheckpointStep
-            checkpoint_format = 'NPRTCKPTV2'
+            checkpoint_format = $expectedSmokeMagic
             checkpoint_finite = 'true'; htp_native_prefix_logits_finite = 'true'
             htp_native_prefix_probabilities_finite = 'true'; htp_native_ar_logits_finite = 'true'
             htp_native_ar_probabilities_finite = 'true'; htp_native_generation_logits_finite = 'true'

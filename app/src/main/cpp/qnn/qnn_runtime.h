@@ -190,7 +190,7 @@ struct AttentionBackwardOutputs {
 // The first layer remains flattened in TinyTransformerParameters for source and
 // ABI compatibility with the established single-layer QNN graph.
 struct TinyTransformerLayerParameters {
-    std::vector<float> gamma1, beta1, wq, wk, wv, wo;
+    std::vector<float> gamma1, beta1, wq, wk, wv, wo, attentionGateWeight;
     std::vector<float> gamma2, beta2, w1, w2;
 };
 
@@ -215,6 +215,7 @@ struct TinyTransformerTrainingOutputs {
     // Ordered layer inputs: element 0 is the gradient after positional input
     // construction and is also exposed through dEmbeddedInput for compatibility.
     std::vector<std::vector<float>> layerInputGradients;
+    std::vector<std::vector<float>> attentionGates;
     TinyTransformerParameters gradients;
     TinyTransformerParameters next;
     float tapPoison = 0.0f;
@@ -453,7 +454,8 @@ public:
                                         TinyTransformerTrainingTapSet tapSet =
                                             TinyTransformerTrainingTapSet::NONE,
                                         uint32_t numLayers = 1,
-                                        uint32_t numHeads = 1);
+                                        uint32_t numHeads = 1,
+                                        bool headwiseG1Gate = false);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,
@@ -484,7 +486,7 @@ private:
         float epsilon, bool diagnosticOutputs, std::string& error,
         uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
         TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-        uint32_t numHeads);
+        uint32_t numHeads, bool headwiseG1Gate);
     bool executeTinyTransformerTrainingGeneralized(
         const std::vector<float>& input, const std::vector<float>& target,
         const TinyTransformerParameters& current, float learningRate,

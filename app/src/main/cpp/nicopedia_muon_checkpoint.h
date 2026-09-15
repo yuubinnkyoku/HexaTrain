@@ -19,9 +19,12 @@
 namespace phonelm::nicopedia_muon_checkpoint {
 
 inline constexpr char kMagic[] = "NPRTCKPTV4\n";
+inline constexpr char kGatedMagic[] = "NPRTCKPTV5\n";
 inline constexpr std::uint32_t kSchemaVersion = 4;
+inline constexpr std::uint32_t kGatedSchemaVersion = 5;
 inline constexpr char kOptimizerIdentity[] = "muon_aux_adam";
 inline constexpr std::uint32_t kParameterRegistryVersion = 1;
+inline constexpr std::uint32_t kGatedParameterRegistryVersion = 2;
 
 enum class ParameterRole : std::uint32_t {
   MUON = 1,

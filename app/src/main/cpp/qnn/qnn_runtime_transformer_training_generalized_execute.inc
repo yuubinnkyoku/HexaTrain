@@ -26,7 +26,7 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   size_t layerParameters = 0, expectedParameterCount = 0;
   size_t expectedAppWriteCount = 0, expectedAppReadCount = 0;
   size_t headTapCount = 0;
-  if (!checkedMultiply(10, g.numLayers, &layerParameters) ||
+  if (!checkedMultiply(g.headwiseG1Gate ? 11 : 10, g.numLayers, &layerParameters) ||
       !checkedAdd(2, layerParameters, &expectedParameterCount) ||
       !checkedAdd(4, layerParameters, &expectedAppWriteCount) ||
       (g.numHeads > 1 &&
@@ -34,6 +34,8 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
       !checkedAdd(5, expectedParameterCount, &expectedAppReadCount) ||
       !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount) ||
       !checkedAdd(expectedAppReadCount, headTapCount, &expectedAppReadCount) ||
+      (g.headwiseG1Gate &&
+       !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount)) ||
       !checkedAdd(expectedAppReadCount, g.tapRegistry.size(),
                   &expectedAppReadCount)) {
     error = "APP_RESOURCE_ESTIMATOR: execution registry count overflow";
@@ -67,6 +69,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
            layer.gamma1.size() == g.dimension && layer.beta1.size() == g.dimension &&
            layer.gamma2.size() == g.dimension && layer.beta2.size() == g.dimension &&
            layer.w1.size() == dimensionFf && layer.w2.size() == ffDimension &&
+           (g.headwiseG1Gate
+                ? layer.attentionGateWeight.size() == size_t(g.dimension) * g.numHeads
+                : layer.attentionGateWeight.empty()) &&
            finite(layer.wq) && finite(layer.wk) && finite(layer.wv) &&
            finite(layer.wo) && finite(layer.gamma1) && finite(layer.beta1) &&
            finite(layer.gamma2) && finite(layer.beta2) && finite(layer.w1) &&
@@ -110,7 +115,9 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     appWriteValues.insert(appWriteValues.end(),
                           {&layer->gamma1, &layer->beta1,
                            &layer->wq, &layer->wk, &layer->wv, &layer->wo,
-                           &layer->gamma2,
+                           });
+    if (g.headwiseG1Gate) appWriteValues.push_back(&layer->attentionGateWeight);
+    appWriteValues.insert(appWriteValues.end(), {&layer->gamma2,
                            &layer->beta2, &layer->w1, &layer->w2});
   }
   appWriteValues.push_back(&current.outputProjection);
@@ -211,6 +218,8 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     layer->wk = appReadBuffers[gradient++];
     layer->wv = appReadBuffers[gradient++];
     layer->wo = appReadBuffers[gradient++];
+    if (g.headwiseG1Gate)
+      layer->attentionGateWeight = appReadBuffers[gradient++];
     layer->gamma2 = appReadBuffers[gradient++];
     layer->beta2 = appReadBuffers[gradient++];
     layer->w1 = appReadBuffers[gradient++];
@@ -228,6 +237,12 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
         outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
       }
     }
+  }
+  outputs.attentionGates.clear();
+  if (g.headwiseG1Gate) {
+    outputs.attentionGates.reserve(g.numLayers);
+    for (uint32_t layer = 0; layer < g.numLayers; ++layer)
+      outputs.attentionGates.push_back(appReadBuffers[gradient++]);
   }
   for (uint32_t id : g.tapRegistry)
     outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
@@ -343,7 +358,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
   };
   size_t layerParameters = 0, expectedParameterCount = 0;
   size_t expectedAppWriteCount = 0, expectedAppReadCount = 0, headTapCount = 0;
-  if (!checkedMultiply(10, g.numLayers, &layerParameters) ||
+  if (!checkedMultiply(g.headwiseG1Gate ? 11 : 10, g.numLayers, &layerParameters) ||
       !checkedAdd(2, layerParameters, &expectedParameterCount) ||
       // one-hot + embedding + parameters + output projection (no target).
       !checkedAdd(3, layerParameters, &expectedAppWriteCount) ||
@@ -352,6 +367,11 @@ bool Runtime::executeTinyTransformerForwardOnly(
       // logits + per-head probability taps + scoped taps.
       !checkedAdd(1, headTapCount, &expectedAppReadCount)) {
     error = "APP_RESOURCE_ESTIMATOR: forward-only registry count overflow";
+    return false;
+  }
+  if (g.headwiseG1Gate &&
+      !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount)) {
+    error = "APP_RESOURCE_ESTIMATOR: forward-only gate registry count overflow";
     return false;
   }
   if (!checkedAdd(expectedAppReadCount, g.tapRegistry.size(),
@@ -386,6 +406,9 @@ bool Runtime::executeTinyTransformerForwardOnly(
            layer.gamma1.size() == g.dimension && layer.beta1.size() == g.dimension &&
            layer.gamma2.size() == g.dimension && layer.beta2.size() == g.dimension &&
            layer.w1.size() == dimensionFf && layer.w2.size() == ffDimension &&
+           (g.headwiseG1Gate
+                ? layer.attentionGateWeight.size() == size_t(g.dimension) * g.numHeads
+                : layer.attentionGateWeight.empty()) &&
            finite(layer.wq) && finite(layer.wk) && finite(layer.wv) &&
            finite(layer.wo) && finite(layer.gamma1) && finite(layer.beta1) &&
            finite(layer.gamma2) && finite(layer.beta2) && finite(layer.w1) &&
@@ -422,8 +445,9 @@ bool Runtime::executeTinyTransformerForwardOnly(
   for (const TinyTransformerLayerParameters *layer : parameterLayers) {
     appWriteValues.insert(appWriteValues.end(),
                           {&layer->gamma1, &layer->beta1,
-                           &layer->wq, &layer->wk, &layer->wv, &layer->wo,
-                           &layer->gamma2,
+                           &layer->wq, &layer->wk, &layer->wv, &layer->wo});
+    if (g.headwiseG1Gate) appWriteValues.push_back(&layer->attentionGateWeight);
+    appWriteValues.insert(appWriteValues.end(), {&layer->gamma2,
                            &layer->beta2, &layer->w1, &layer->w2});
   }
   appWriteValues.push_back(&current.outputProjection);
@@ -570,6 +594,12 @@ bool Runtime::executeTinyTransformerForwardOnly(
         outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});
       }
     }
+  }
+  outputs.attentionGates.clear();
+  if (g.headwiseG1Gate) {
+    outputs.attentionGates.reserve(g.numLayers);
+    for (uint32_t layer = 0; layer < g.numLayers; ++layer)
+      outputs.attentionGates.push_back(appReadBuffers[gradient++]);
   }
   for (uint32_t id : g.tapRegistry)
     outputs.taps.push_back({g.names[id], appReadBuffers[gradient++]});

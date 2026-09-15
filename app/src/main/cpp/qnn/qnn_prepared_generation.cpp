@@ -99,6 +99,14 @@ PreparedGenerationHandle prepareNicopediaGeneration(
     config.feedForwardDimension = key.feedForward;
     config.numLayers = key.layers;
     config.numHeads = key.heads;
+    if (key.attentionGate == 0) {
+        config.attentionGate = tiny_lm::AttentionGate::NONE;
+    } else if (key.attentionGate == 1) {
+        config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else {
+        error = "ATTENTION_GATE_IDENTITY_INVALID";
+        return nullptr;
+    }
     if (!tiny_lm::validateConfig(config, &error)) return nullptr;
 
     const auto prepareStarted = std::chrono::steady_clock::now();
@@ -169,7 +177,8 @@ PreparedGenerationHandle prepareNicopediaGeneration(
             config.epsilon, true, error, config.vocabularySize,
             TinyTransformerTrainingVariant::FORWARD_ONLY,
             TinyTransformerTrainingTapSet::NONE, config.numLayers,
-            config.numHeads)) {
+            config.numHeads,
+            config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID)) {
         return nullptr;
     }
 

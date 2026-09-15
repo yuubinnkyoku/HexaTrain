@@ -130,6 +130,7 @@ object NativeBenchmarkEngine : BenchmarkEngine {
             nicopediaExperimentFork = false,
             nicopediaParentLearningRate = 0f,
             nicopediaOptimizer = 0,
+            attentionGate = 0,
             nicopediaMuonLearningRate = 0f,
             nicopediaMuonMomentum = 0.95f,
             nicopediaMuonNsSteps = 5,

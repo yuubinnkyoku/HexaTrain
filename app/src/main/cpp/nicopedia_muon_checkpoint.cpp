@@ -66,6 +66,9 @@ bool validConfig(const tiny_lm::Config& config) {
       !multiply(2, df, &twoDf) || !multiply(4, config.dimension, &fourD) ||
       !multiply(2, vd, &twoVd) || !multiply(4, dd, &layer) ||
       !add(layer, twoDf, &layer) || !add(layer, fourD, &layer) ||
+      (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID &&
+       (!multiply(config.dimension, config.numHeads, &total) ||
+        !add(layer, total, &layer))) ||
       !multiply(config.numLayers, layer, &allLayers) ||
       !add(twoVd, allLayers, &total) || total > kMaxParameterElements)
     return false;
@@ -105,7 +108,7 @@ bool sameConfig(const tiny_lm::Config& a, const tiny_lm::Config& b) {
          a.dimension == b.dimension &&
          a.feedForwardDimension == b.feedForwardDimension &&
          a.numLayers == b.numLayers && a.numHeads == b.numHeads &&
-         a.epsilon == b.epsilon;
+         a.epsilon == b.epsilon && a.attentionGate == b.attentionGate;
 }
 
 bool modelRegistryMatchesConfig(const tiny_lm::Config& config,
@@ -212,11 +215,15 @@ class Reader {
 
   bool atEnd() const { return offset_ == bytes_.size(); }
 
-  void requireMagic() {
-    if (remaining() < kMagicBytes ||
-        std::memcmp(bytes_.data() + offset_, kMagic, kMagicBytes) != 0)
+  bool requireMagic() {
+    if (remaining() < kMagicBytes)
+      throw std::runtime_error("NPRT_CKPT_V4_MAGIC");
+    const bool gated =
+        std::memcmp(bytes_.data() + offset_, kGatedMagic, kMagicBytes) == 0;
+    if (!gated && std::memcmp(bytes_.data() + offset_, kMagic, kMagicBytes) != 0)
       throw std::runtime_error("NPRT_CKPT_V4_MAGIC");
     offset_ += kMagicBytes;
+    return gated;
   }
 
  private:
@@ -308,6 +315,10 @@ std::vector<RegistryEntry> expectedRegistry(const tiny_lm::Config& config) {
                         {config.dimension, config.dimension}});
     registry.push_back({prefix + "wo", ParameterRole::MUON,
                         {config.dimension, config.dimension}});
+    if (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID)
+      registry.push_back({prefix + "attention_gate_weight",
+                          ParameterRole::AUX_ADAM,
+                          {config.dimension, config.numHeads}});
     registry.push_back({prefix + "norm2_gamma", ParameterRole::AUX_ADAM,
                         {1, config.dimension}});
     registry.push_back({prefix + "norm2_beta", ParameterRole::AUX_ADAM,
@@ -404,7 +415,10 @@ bool encodeCheckpoint(const Checkpoint& checkpoint,
   if (!validateCheckpoint(checkpoint, error)) return false;
 
   std::vector<std::uint8_t> encoded;
-  encoded.insert(encoded.end(), kMagic, kMagic + kMagicBytes);
+  const bool gated = checkpoint.identity.config.attentionGate ==
+      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+  const char* magic = gated ? kGatedMagic : kMagic;
+  encoded.insert(encoded.end(), magic, magic + kMagicBytes);
   const auto& identity = checkpoint.identity;
   const auto& config = identity.config;
   appendU32(encoded, config.vocabularySize);
@@ -414,6 +428,7 @@ bool encodeCheckpoint(const Checkpoint& checkpoint,
   appendU32(encoded, config.numLayers);
   appendU32(encoded, config.numHeads);
   appendFloat(encoded, config.epsilon);
+  if (gated) appendU32(encoded, static_cast<std::uint32_t>(config.attentionGate));
   appendU32(encoded, identity.seed);
   appendU64(encoded, identity.globalStep);
   appendString(encoded, identity.tokenizerKind);
@@ -442,8 +457,9 @@ bool encodeCheckpoint(const Checkpoint& checkpoint,
   appendU32(encoded, hp.decayStartStep);
   appendU32(encoded, hp.decayEndStep);
   appendU32(encoded, hp.scheduleTotalSteps);
-  appendU32(encoded, kSchemaVersion);
-  appendU32(encoded, kParameterRegistryVersion);
+  appendU32(encoded, gated ? kGatedSchemaVersion : kSchemaVersion);
+  appendU32(encoded, gated ? kGatedParameterRegistryVersion
+                           : kParameterRegistryVersion);
   appendU32(encoded, static_cast<std::uint32_t>(checkpoint.parameters.size()));
 
   for (const auto& parameter : checkpoint.parameters) {
@@ -473,7 +489,7 @@ bool decodeCheckpoint(const std::vector<std::uint8_t>& bytes,
     return fail(error, "NPRT_CKPT_V4_SIZE_INVALID");
   try {
     Reader reader(bytes);
-    reader.requireMagic();
+    const bool gated = reader.requireMagic();
     Checkpoint decoded;
     auto& config = decoded.identity.config;
     config.vocabularySize = reader.u32();
@@ -483,6 +499,13 @@ bool decodeCheckpoint(const std::vector<std::uint8_t>& bytes,
     config.numLayers = reader.u32();
     config.numHeads = reader.u32();
     config.epsilon = reader.floating();
+    if (gated) {
+      const auto gate = reader.u32();
+      if (gate != static_cast<std::uint32_t>(
+                      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+        throw std::runtime_error("NPRT_CKPT_V5_ATTENTION_GATE");
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    }
     // Do not derive a registry (or reserve parameter/state storage) until all
     // serialized dimensions have passed the same allocation policy as the
     // live model. This is intentionally before reading/allocating any state.
@@ -518,9 +541,10 @@ bool decodeCheckpoint(const std::vector<std::uint8_t>& bytes,
     hp.decayStartStep = reader.u32();
     hp.decayEndStep = reader.u32();
     hp.scheduleTotalSteps = reader.u32();
-    if (reader.u32() != kSchemaVersion)
+    if (reader.u32() != (gated ? kGatedSchemaVersion : kSchemaVersion))
       throw std::runtime_error("NPRT_CKPT_V4_SCHEMA_VERSION");
-    if (reader.u32() != kParameterRegistryVersion)
+    if (reader.u32() != (gated ? kGatedParameterRegistryVersion
+                               : kParameterRegistryVersion))
       throw std::runtime_error("NPRT_CKPT_V4_REGISTRY_VERSION");
     const std::uint32_t parameterCount = reader.u32();
     const auto registry = expectedRegistry(config);

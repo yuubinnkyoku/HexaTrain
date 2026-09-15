@@ -361,6 +361,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     jboolean nicopediaExperimentFork,
     jfloat nicopediaParentLearningRate,
     jint nicopediaOptimizer,
+    jint attentionGate,
     jfloat nicopediaMuonLearningRate,
     jfloat nicopediaMuonMomentum,
     jint nicopediaMuonNsSteps,
@@ -446,6 +447,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunExecutionMode(
     config.nicopediaExperimentFork = nicopediaExperimentFork == JNI_TRUE;
     config.nicopediaParentLearningRate = nicopediaParentLearningRate;
     config.nicopediaOptimizer = static_cast<int>(nicopediaOptimizer);
+    config.attentionGate = static_cast<int>(attentionGate);
     config.nicopediaMuonLearningRate = nicopediaMuonLearningRate;
     config.nicopediaMuonMomentum = nicopediaMuonMomentum;
     config.nicopediaMuonNsSteps = static_cast<int>(nicopediaMuonNsSteps);
@@ -558,6 +560,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     jint vocabulary,
     jint dimension,
     jint feedForwardDimension,
+    jint attentionGate,
     jint maxNewBytes,
     jstring generateMode,
     jfloat temperature,
@@ -646,6 +649,15 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
     config.feedForwardDimension = static_cast<uint32_t>(feedForwardDimension);
     config.numLayers = static_cast<uint32_t>(layers);
     config.numHeads = static_cast<uint32_t>(heads);
+    if (attentionGate == 0) {
+        config.attentionGate = phonelm::tiny_lm::AttentionGate::NONE;
+    } else if (attentionGate == 1) {
+        config.attentionGate = phonelm::tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else {
+        return toJavaString(env, "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
+                                 "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+                                 "error=attention_gate_identity_invalid\n");
+    }
     phonelm::TrainingConfig trainingConfig;
     trainingConfig.seed = static_cast<std::uint64_t>(seed);
     trainingConfig.epochs = static_cast<int>(config.numLayers);
@@ -783,6 +795,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativePrepareNicopediaGeneration(
     jstring tokenizerKind,
     jstring tokenizerHash,
     jstring parameterHash,
+    jint attentionGate,
     jint htpGraphPrecisionMode,
     jint htpGraphPrecisionCompensation,
     jint htpGraphWeightsPacking,
@@ -805,6 +818,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativePrepareNicopediaGeneration(
     key.tokenizerKind = jstringToStd(env, tokenizerKind);
     key.tokenizerHash = jstringToStd(env, tokenizerHash);
     key.parameterHash = jstringToStd(env, parameterHash);
+    key.attentionGate = static_cast<std::uint32_t>(attentionGate);
     key.htpGraphPrecisionMode = static_cast<std::uint32_t>(htpGraphPrecisionMode);
     key.htpGraphPrecisionCompensation =
         static_cast<std::uint32_t>(htpGraphPrecisionCompensation);
@@ -935,6 +949,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
     jint vocabulary,
     jint dimension,
     jint feedForwardDimension,
+    jint attentionGate,
     jint checkpointStep,
     jint validationChunks,
     jint developmentChunks) {
@@ -981,6 +996,12 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
                                  "error=vocabulary_must_be_256_or_1024\n");
     }
     config.outputDimension = vocabulary;
+    if (attentionGate != 0 && attentionGate != 1) {
+        return toJavaString(env, "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+                                 "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+                                 "error=attention_gate_identity_invalid\n");
+    }
+    config.attentionGate = attentionGate;
     config.diagnosticResumeStep = checkpointStep;
     config.steps = validationChunks > 0 ? validationChunks : 8192;
     config.batchSize = developmentChunks > 0 ? developmentChunks : 16384;

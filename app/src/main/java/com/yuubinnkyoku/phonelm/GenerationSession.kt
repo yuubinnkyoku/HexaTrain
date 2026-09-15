@@ -515,6 +515,7 @@ class NativeHtpGenerationBackend(
                 tokenizerKind = checkpoint.tokenizerKind,
                 tokenizerHash = checkpoint.tokenizerHash,
                 parameterHash = checkNotNull(checkpoint.parameterHash),
+                attentionGate = if (checkpoint.format == "NPRTCKPTV5") 1 else 0,
                 htpGraphPrecisionMode = 0,
                 htpGraphPrecisionCompensation = 0,
                 htpGraphWeightsPacking = 0,

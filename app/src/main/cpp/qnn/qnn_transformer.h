@@ -64,6 +64,7 @@ struct PreparedGenerationKey {
     std::int64_t checkpointModifiedMs = 0;
     std::uint32_t vocabulary = 0, tokens = 0, dimension = 0;
     std::uint32_t feedForward = 0, layers = 0, heads = 0, seed = 0, step = 0;
+    std::uint32_t attentionGate = 0;
     std::string tokenizerKind;
     std::string tokenizerHash;
     std::string parameterHash;

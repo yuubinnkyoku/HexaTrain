@@ -467,7 +467,7 @@ function Assert-PhoneLmHealthReport {
         if ($map.all_steps_finite -ne 'true' -or $map.final_finite -ne 'true' -or $map.checkpoint_written -ne 'true' -or $map.final_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_TRAINING_HEALTH_REJECTED' }
     } elseif ($Kind -eq 'eval') {
         foreach ($key in @('validation_nll', 'development_nll', 'validation_nonfinite_chunks', 'development_nonfinite_chunks', 'checkpoint_format', 'checkpoint_finite', 'checkpoint_parameter_hash')) { if (-not $map.Contains($key)) { throw "REPORT_FIELD_MISSING: eval $key" } }
-        if ($map.checkpoint_format -notin @('NPRTCKPTV1', 'NPRTCKPTV2', 'NPRTCKPTV3', 'NPRTCKPTV4') -or $map.checkpoint_finite -ne 'true' -or $map.validation_nonfinite_chunks -ne '0' -or $map.development_nonfinite_chunks -ne '0' -or $map.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_EVAL_HEALTH_REJECTED' }
+        if ($map.checkpoint_format -notin @('NPRTCKPTV1', 'NPRTCKPTV2', 'NPRTCKPTV3', 'NPRTCKPTV4', 'NPRTCKPTV5') -or $map.checkpoint_finite -ne 'true' -or $map.validation_nonfinite_chunks -ne '0' -or $map.development_nonfinite_chunks -ne '0' -or $map.checkpoint_parameter_hash -notmatch '^fnv1a64:[0-9a-f]{16}$') { throw 'REPORT_EVAL_HEALTH_REJECTED' }
     }
     return $map
 }
@@ -477,7 +477,7 @@ function Get-PhoneLmCheckpointHeaders {
     $bytes = [IO.File]::ReadAllBytes($Path)
     if ($bytes.Length -lt 43) { throw 'CHECKPOINT_TOO_SMALL' }
     $magic = [Text.Encoding]::ASCII.GetString($bytes, 0, 11)
-    if ($magic -notin @("NPRTCKPTV1`n", "NPRTCKPTV2`n", "NPRTCKPTV3`n", "NPRTCKPTV4`n")) { throw 'CHECKPOINT_MAGIC_MISMATCH' }
+    if ($magic -notin @("NPRTCKPTV1`n", "NPRTCKPTV2`n", "NPRTCKPTV3`n", "NPRTCKPTV4`n", "NPRTCKPTV5`n")) { throw 'CHECKPOINT_MAGIC_MISMATCH' }
     function U32([byte[]]$b, [int]$o) { return [uint32](([uint64]$b[$o] * 16777216) + ([uint64]$b[$o + 1] * 65536) + ([uint64]$b[$o + 2] * 256) + [uint64]$b[$o + 3]) }
     function U64([byte[]]$b, [int]$o) {
         $value = [uint64]0
@@ -502,9 +502,12 @@ function Get-PhoneLmCheckpointHeaders {
         $tokenizerHash = [Text.Encoding]::ASCII.GetString($bytes, $offset, $hashLength)
         if ($kind -ne 'byte_bpe' -or $tokenizerHash -notmatch '^sha256:[0-9a-f]{64}$') { throw 'CHECKPOINT_V3_TOKENIZER_IDENTITY_INVALID' }
     }
-    if ($magic -eq "NPRTCKPTV4`n") {
-        if ($bytes.Length -lt 51) { throw 'CHECKPOINT_V4_HEADER_TRUNCATED' }
-        $offset = 51
+    $mixed = $magic -eq "NPRTCKPTV4`n" -or $magic -eq "NPRTCKPTV5`n"
+    if ($mixed) {
+        $minimumHeader = if ($magic -eq "NPRTCKPTV5`n") { 55 } else { 51 }
+        if ($bytes.Length -lt $minimumHeader) { throw 'CHECKPOINT_MUON_HEADER_TRUNCATED' }
+        $attentionGate = if ($magic -eq "NPRTCKPTV5`n") { U32 $bytes 39 } else { 0 }
+        $offset = $minimumHeader
         function V4String([byte[]]$b, [ref]$cursor, [string]$label) {
             if ($cursor.Value -gt $b.Length - 4) { throw "CHECKPOINT_V4_${label}_LENGTH_TRUNCATED" }
             $length = [int](U32 $b $cursor.Value); $cursor.Value += 4
@@ -546,13 +549,13 @@ function Get-PhoneLmCheckpointHeaders {
         $registryVersion = U32 $bytes $offset; $offset += 4
         $registryCount = U32 $bytes $offset; $offset += 4
     }
-    $seed = if ($magic -eq "NPRTCKPTV4`n") { U32 $bytes 39 } else { U32 $bytes 35 }
-    $step = if ($magic -eq "NPRTCKPTV4`n") { U64 $bytes 43 } else { U32 $bytes 39 }
+    $seed = if ($magic -eq "NPRTCKPTV5`n") { U32 $bytes 43 } elseif ($magic -eq "NPRTCKPTV4`n") { U32 $bytes 39 } else { U32 $bytes 35 }
+    $step = if ($magic -eq "NPRTCKPTV5`n") { U64 $bytes 47 } elseif ($magic -eq "NPRTCKPTV4`n") { U64 $bytes 43 } else { U32 $bytes 39 }
     [pscustomobject][ordered]@{
-        Magic = $magic.Trim(); Vocabulary = U32 $bytes 11; Tokens = U32 $bytes 15; Dimension = U32 $bytes 19; FeedForward = U32 $bytes 23; Layers = U32 $bytes 27; Heads = U32 $bytes 31; Epsilon = if ($magic -eq "NPRTCKPTV4`n") { F32 $bytes 35 } else { $null }; Seed = $seed; Step = $step; TokenizerKind = $kind; TokenizerHash = $tokenizerHash; DatasetHash = $datasetHash;
-        RecordIndex = if ($magic -eq "NPRTCKPTV4`n") { $recordIndex } else { $null }; TokenOffset = if ($magic -eq "NPRTCKPTV4`n") { $tokenOffset } else { $null }; Epoch = if ($magic -eq "NPRTCKPTV4`n") { $epoch } else { $null }; ExposedTokens = if ($magic -eq "NPRTCKPTV4`n") { $exposedTokens } else { $null }; OrderSeed = if ($magic -eq "NPRTCKPTV4`n") { $orderSeed } else { $null };
-        OptimizerIdentity = if ($magic -eq "NPRTCKPTV4`n") { $optimizerIdentity } else { '' }; MuonLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $muonLearningRate } else { $null }; AuxAdamLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamLearningRate } else { $null }; MuonTargetLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $muonTargetLearningRate } else { $null }; AuxAdamTargetLearningRate = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamTargetLearningRate } else { $null }; MuonMomentum = if ($magic -eq "NPRTCKPTV4`n") { $muonMomentum } else { $null }; MuonNesterov = if ($magic -eq "NPRTCKPTV4`n") { $muonNesterov } else { $null }; MuonNsSteps = if ($magic -eq "NPRTCKPTV4`n") { $muonNsSteps } else { $null }; AuxAdamBeta1 = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamBeta1 } else { $null }; AuxAdamBeta2 = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamBeta2 } else { $null }; AuxAdamEpsilon = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamEpsilon } else { $null }; MuonWeightDecay = if ($magic -eq "NPRTCKPTV4`n") { $muonWeightDecay } else { $null }; AuxAdamWeightDecay = if ($magic -eq "NPRTCKPTV4`n") { $auxAdamWeightDecay } else { $null }; DecayStartStep = if ($magic -eq "NPRTCKPTV4`n") { $decayStartStep } else { $null }; DecayEndStep = if ($magic -eq "NPRTCKPTV4`n") { $decayEndStep } else { $null }; ScheduleTotalSteps = if ($magic -eq "NPRTCKPTV4`n") { $scheduleTotalSteps } else { $null }; SchemaVersion = if ($magic -eq "NPRTCKPTV4`n") { $schemaVersion } else { $null }; RegistryVersion = if ($magic -eq "NPRTCKPTV4`n") { $registryVersion } else { $null }; RegistryCount = if ($magic -eq "NPRTCKPTV4`n") { $registryCount } else { $null };
-        FileSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant(); V4HeaderDecoded = ($magic -eq "NPRTCKPTV4`n")
+        Magic = $magic.Trim(); Vocabulary = U32 $bytes 11; Tokens = U32 $bytes 15; Dimension = U32 $bytes 19; FeedForward = U32 $bytes 23; Layers = U32 $bytes 27; Heads = U32 $bytes 31; Epsilon = if ($mixed) { F32 $bytes 35 } else { $null }; AttentionGate = if ($mixed) { $attentionGate } else { 0 }; Seed = $seed; Step = $step; TokenizerKind = $kind; TokenizerHash = $tokenizerHash; DatasetHash = $datasetHash;
+        RecordIndex = if ($mixed) { $recordIndex } else { $null }; TokenOffset = if ($mixed) { $tokenOffset } else { $null }; Epoch = if ($mixed) { $epoch } else { $null }; ExposedTokens = if ($mixed) { $exposedTokens } else { $null }; OrderSeed = if ($mixed) { $orderSeed } else { $null };
+        OptimizerIdentity = if ($mixed) { $optimizerIdentity } else { '' }; MuonLearningRate = if ($mixed) { $muonLearningRate } else { $null }; AuxAdamLearningRate = if ($mixed) { $auxAdamLearningRate } else { $null }; MuonTargetLearningRate = if ($mixed) { $muonTargetLearningRate } else { $null }; AuxAdamTargetLearningRate = if ($mixed) { $auxAdamTargetLearningRate } else { $null }; MuonMomentum = if ($mixed) { $muonMomentum } else { $null }; MuonNesterov = if ($mixed) { $muonNesterov } else { $null }; MuonNsSteps = if ($mixed) { $muonNsSteps } else { $null }; AuxAdamBeta1 = if ($mixed) { $auxAdamBeta1 } else { $null }; AuxAdamBeta2 = if ($mixed) { $auxAdamBeta2 } else { $null }; AuxAdamEpsilon = if ($mixed) { $auxAdamEpsilon } else { $null }; MuonWeightDecay = if ($mixed) { $muonWeightDecay } else { $null }; AuxAdamWeightDecay = if ($mixed) { $auxAdamWeightDecay } else { $null }; DecayStartStep = if ($mixed) { $decayStartStep } else { $null }; DecayEndStep = if ($mixed) { $decayEndStep } else { $null }; ScheduleTotalSteps = if ($mixed) { $scheduleTotalSteps } else { $null }; SchemaVersion = if ($mixed) { $schemaVersion } else { $null }; RegistryVersion = if ($mixed) { $registryVersion } else { $null }; RegistryCount = if ($mixed) { $registryCount } else { $null };
+        FileSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant(); V4HeaderDecoded = $mixed
     }
 }
 
@@ -912,4 +915,68 @@ function Assert-PhoneLmHeadlessNoActivity {
         $match = [regex]::Match($Text, "(?m)^$([regex]::Escape($key))=(\d+)$")
         if (-not $match.Success -or [int]$match.Groups[1].Value -ne 0) { throw "HEADLESS_ACTIVITY_INVARIANT_FAILED: $key" }
     }
+}
+
+# Rebuild host evaluator binaries when any architecture/decoder source changes.
+# A single-cpp mtime check is insufficient because tiny_language_model_cpu.h,
+# checkpoint decoder headers, and architecture headers also affect the binary.
+function Get-PhoneLmHostEvaluatorSources([string]$Root) {
+    return @(
+        (Join-Path $Root 'host_tests\htp_checkpoint_eval.cpp'),
+        (Join-Path $Root 'app\src\main\cpp\tiny_language_model_cpu.cpp'),
+        (Join-Path $Root 'app\src\main\cpp\tiny_language_model_cpu.h'),
+        (Join-Path $Root 'app\src\main\cpp\nicopedia_muon_checkpoint.cpp'),
+        (Join-Path $Root 'app\src\main\cpp\nicopedia_muon_checkpoint.h'),
+        (Join-Path $Root 'app\src\main\cpp\nicopedia_byte_bpe.h'),
+        (Join-Path $Root 'app\src\main\cpp\transformer_resource_estimator.h'),
+        (Join-Path $Root 'app\src\main\cpp\qnn\qnn_transformer.h'),
+        (Join-Path $Root 'app\src\main\cpp\qnn\nicopedia_checkpoint_loader.h')
+    )
+}
+
+function Get-PhoneLmHostEvaluatorSourceHash([string]$Root) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($path in Get-PhoneLmHostEvaluatorSources -Root $Root) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                throw "HOST_EVALUATOR_SOURCE_MISSING: $path"
+            }
+            $nameBytes = [Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFileName($path))
+            [void]$sha.TransformBlock($nameBytes, 0, $nameBytes.Length, $null, 0)
+            $fileBytes = [IO.File]::ReadAllBytes($path)
+            [void]$sha.TransformBlock($fileBytes, 0, $fileBytes.Length, $null, 0)
+        }
+        [void]$sha.TransformFinalBlock([byte[]]::new(0), 0, 0)
+        return ([BitConverter]::ToString($sha.Hash) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Ensure-PhoneLmHostCheckpointEvaluator {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ExePath
+    )
+    $sourceHash = Get-PhoneLmHostEvaluatorSourceHash -Root $Root
+    $stampPath = "$ExePath.sourcehash"
+    $needsBuild = -not (Test-Path -LiteralPath $ExePath -PathType Leaf)
+    if (-not $needsBuild -and (Test-Path -LiteralPath $stampPath -PathType Leaf)) {
+        $needsBuild = ((Get-Content -LiteralPath $stampPath -Raw).Trim()) -ne $sourceHash
+    } elseif (-not $needsBuild) {
+        $needsBuild = $true
+    }
+    if ($needsBuild) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ExePath) | Out-Null
+        & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+            -I (Join-Path $Root 'app\src\main\cpp') `
+            (Join-Path $Root 'app\src\main\cpp\tiny_language_model_cpu.cpp') `
+            (Join-Path $Root 'app\src\main\cpp\nicopedia_muon_checkpoint.cpp') `
+            (Join-Path $Root 'host_tests\htp_checkpoint_eval.cpp') `
+            -o $ExePath
+        if ($LASTEXITCODE -ne 0) { throw 'htp_checkpoint_eval build failed' }
+        Set-Content -LiteralPath $stampPath -Value $sourceHash -Encoding ascii
+        Write-Host "host_evaluator_rebuilt source_hash=$sourceHash"
+    }
+    return $sourceHash
 }

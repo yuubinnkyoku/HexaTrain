@@ -6,7 +6,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads) {
+    uint32_t numHeads, bool headwiseG1Gate) {
   if (!impl_) {
     error = "generalized tiny training runtime unavailable";
     return false;
@@ -36,6 +36,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       !feedForwardDimension || !std::isfinite(epsilon) || epsilon <= 0.0f ||
       numLayers == 0 || numHeads == 0 ||
       dimension % numHeads != 0 || vocabularySize == 0 ||
+      (headwiseG1Gate && numHeads < 2) ||
       !diagnosticOutputs ||
       (variant != TinyTransformerTrainingVariant::FULL &&
        variant != TinyTransformerTrainingVariant::FORWARD_ONLY) ||
@@ -57,7 +58,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto resourceEstimate =
       phonelm::transformer::estimateTrainingResources(
           tokens, vocabularySize, dimension, feedForwardDimension, numLayers,
-          numHeads);
+          numHeads, headwiseG1Gate);
   if (!resourceEstimate.ok) {
     return fail(resourceEstimate.failureClassification + ": " +
                 resourceEstimate.detail);
@@ -89,6 +90,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.languageModel = true;
   g.diagnosticOutputs = diagnosticOutputs;
   g.forwardOnly = variant == TinyTransformerTrainingVariant::FORWARD_ONLY;
+  g.headwiseG1Gate = headwiseG1Gate;
   g.tapSet = tapSet;
   g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
@@ -171,6 +173,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto epsScaled = add("epsilon_scaled", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto dim = add("dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
+  const auto gateOne = headwiseG1Gate
+      ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
   const auto outputProjection = add("output_projection", QNN_TENSOR_TYPE_APP_WRITE,
                                     {dimension, vocabularySize});
   const auto logits = add("logits", QNN_TENSOR_TYPE_APP_READ,
@@ -310,6 +314,30 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     record.wk = add(prefix + "wk", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
     record.wv = add(prefix + "wv", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
     record.wo = add(prefix + "wo", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
+    if (headwiseG1Gate) {
+      record.attentionGateWeight = add(prefix + "attention_gate_weight",
+          QNN_TENSOR_TYPE_APP_WRITE, {dimension, numHeads});
+      record.gateLogits = add(prefix + "attention_gate_logits",
+          QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+      record.gates = add(prefix + "attention_gates", QNN_TENSOR_TYPE_APP_READ,
+          {tokens, numHeads});
+      if (!g.forwardOnly) {
+        record.dGates = add(prefix + "attention_gate_gradient",
+            QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        record.oneMinusGates = add(prefix + "attention_gate_one_minus",
+            QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        record.gateDerivative = add(prefix + "attention_gate_derivative",
+            QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        record.dGateSigmoid = add(prefix + "attention_gate_dlogits",
+            QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        record.dGateWeight = add(prefix + "dattention_gate_weight",
+            QNN_TENSOR_TYPE_APP_READ, {dimension, numHeads});
+        record.dLn1Gate = add(prefix + "dln1_gate", QNN_TENSOR_TYPE_NATIVE,
+            {tokens, dimension});
+        record.dLn1Qkv = add(prefix + "dln1_qkv", QNN_TENSOR_TYPE_NATIVE,
+            {tokens, dimension});
+      }
+    }
     record.gamma2 = add(prefix + "norm2_gamma", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
     record.beta2 = add(prefix + "norm2_beta", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
     record.w1 = add(prefix + "ffn_w1", QNN_TENSOR_TYPE_APP_WRITE, {dimension, feedForwardDimension});
@@ -455,10 +483,28 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             QNN_TENSOR_TYPE_APP_READ, {tokens, tokens});
         headRecord.context = add(headPrefix + "context", QNN_TENSOR_TYPE_NATIVE,
                                  {tokens, headDimension});
+        if (headwiseG1Gate) {
+          headRecord.gateSelector = add(headPrefix + "gate_selector",
+              QNN_TENSOR_TYPE_STATIC, {numHeads, 1});
+          headRecord.gate = add(headPrefix + "gate", QNN_TENSOR_TYPE_NATIVE,
+                                {tokens, 1});
+          headRecord.gatedContext = add(headPrefix + "gated_context",
+              QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
+        }
         headRecord.contextScatter = add(headPrefix + "context_scatter",
             QNN_TENSOR_TYPE_NATIVE, {tokens, dimension});
         headRecord.dContext = add(headPrefix + "dcontext", QNN_TENSOR_TYPE_NATIVE,
                                   {tokens, headDimension});
+        if (headwiseG1Gate && !g.forwardOnly) {
+          headRecord.dGatedContext = add(headPrefix + "dgated_context",
+              QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
+          headRecord.dGateProduct = add(headPrefix + "dgate_product",
+              QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
+          headRecord.dGate = add(headPrefix + "dgate", QNN_TENSOR_TYPE_NATIVE,
+                                 {tokens, 1});
+          headRecord.dGateScatter = add(headPrefix + "dgate_scatter",
+              QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        }
         headRecord.dProbabilities = add(headPrefix + "dprobabilities",
             QNN_TENSOR_TYPE_NATIVE, {tokens, tokens});
         headRecord.dValue = add(headPrefix + "dvalue", QNN_TENSOR_TYPE_NATIVE,
@@ -497,6 +543,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             "_dk", QNN_TENSOR_TYPE_NATIVE, {tokens, dimension}));
         record.headDvAccumulators.push_back(add(prefix + accumulatorSuffix +
             "_dv", QNN_TENSOR_TYPE_NATIVE, {tokens, dimension}));
+        if (headwiseG1Gate && !g.forwardOnly)
+          record.headDGateAccumulators.push_back(add(prefix + accumulatorSuffix +
+              "_dgate", QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads}));
       }
     }
   }
@@ -510,9 +559,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.parameterRegistry.push_back(embedding);
   for (const auto &record : g.layers) {
     for (uint32_t parameter : {record.gamma1, record.beta1,
-         record.wq, record.wk, record.wv, record.wo,
-         record.gamma2, record.beta2,
-         record.w1, record.w2}) {
+         record.wq, record.wk, record.wv, record.wo}) {
+      g.appWriteRegistry.push_back(parameter);
+      g.parameterRegistry.push_back(parameter);
+    }
+    if (headwiseG1Gate) {
+      g.appWriteRegistry.push_back(record.attentionGateWeight);
+      g.parameterRegistry.push_back(record.attentionGateWeight);
+    }
+    for (uint32_t parameter : {record.gamma2, record.beta2,
+                               record.w1, record.w2}) {
       g.appWriteRegistry.push_back(parameter);
       g.parameterRegistry.push_back(parameter);
     }
@@ -530,12 +586,13 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   if (!g.forwardOnly) {
     for (const auto &record : g.layers) {
-      for (uint32_t gradient :
-           {record.gradients[DG1], record.gradients[DB1],
-            record.gradients[DWQ], record.gradients[DWK],
-            record.gradients[DWV], record.gradients[DWO],
-            record.gradients[DG2], record.gradients[DB2],
-            record.gradients[DW1], record.gradients[DW2]})
+      for (uint32_t gradient : {record.gradients[DG1], record.gradients[DB1],
+                                record.gradients[DWQ], record.gradients[DWK],
+                                record.gradients[DWV], record.gradients[DWO]})
+        g.gradientRegistry.push_back(gradient);
+      if (headwiseG1Gate) g.gradientRegistry.push_back(record.dGateWeight);
+      for (uint32_t gradient : {record.gradients[DG2], record.gradients[DB2],
+                                record.gradients[DW1], record.gradients[DW2]})
         g.gradientRegistry.push_back(gradient);
     }
     g.gradientRegistry.push_back(dOutputProjection);
@@ -544,7 +601,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       (std::numeric_limits<size_t>::max() - 2) / size_t(10)) {
     return fail("APP_RESOURCE_ESTIMATOR: parameter registry count overflow");
   }
-  const size_t expectedParameterCount = 2 + size_t(10) * numLayers;
+  const size_t expectedParameterCount = 2 + size_t(headwiseG1Gate ? 11 : 10) * numLayers;
   if (g.parameterRegistry.size() != expectedParameterCount ||
       std::unordered_set<uint32_t>(g.parameterRegistry.begin(),
                                    g.parameterRegistry.end()).size() !=
@@ -585,6 +642,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       for (const auto &head : record.heads)
         g.appReadRegistry.push_back(head.probabilities);
   }
+  if (headwiseG1Gate)
+    for (const auto &record : g.layers) g.appReadRegistry.push_back(record.gates);
   // Scoped APP_READ taps are appended only after the established outputs,
   // gradients, layer inputs and H>1 probability taps.  This makes NONE
   // byte-for-byte identical and gives replay code a deterministic suffix.
@@ -650,12 +709,20 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     return fail("generalized tiny training selector bytes exceed client-buffer limit");
   }
   g.selectorData.assign(selectorElements, 0.0f);
+  g.gateSelectorData.assign(headwiseG1Gate ? size_t(numLayers) * numHeads * numHeads : 0,
+                            0.0f);
   size_t selectorOffset = 0;
+  size_t gateSelectorOffset = 0;
   if (numHeads > 1) {
     for (auto &record : g.layers) {
       for (uint32_t head = 0; head < numHeads; ++head) {
         auto &headRecord = record.heads[head];
         headRecord.selectorOffset = selectorOffset;
+        if (headwiseG1Gate) {
+          headRecord.gateSelectorOffset = gateSelectorOffset;
+          g.gateSelectorData[gateSelectorOffset + head] = 1.0f;
+          gateSelectorOffset += numHeads;
+        }
         for (uint32_t d = 0; d < headDimension; ++d)
           g.selectorData[selectorOffset + size_t(head * headDimension + d) *
                                              headDimension + d] = 1.0f;
@@ -666,6 +733,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   if (selectorOffset != g.selectorData.size()) {
     return fail("generalized tiny training selector registry size mismatch");
   }
+  if (gateSelectorOffset != g.gateSelectorData.size())
+    return fail("generalized tiny training gate selector registry size mismatch");
   for (uint32_t t = 0; t < tokens; ++t)
     for (uint32_t d = 0; d < dimension; ++d) {
       const float frequency =
@@ -683,6 +752,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[rowAxis].v1.clientBuf = {g.rowAxisData, sizeof(g.rowAxisData)};
   g.tensors[centerScale].v1.clientBuf = {&g.centeredScale, sizeof(float)};
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
+  if (headwiseG1Gate)
+    g.tensors[gateOne].v1.clientBuf = {&g.gateOne, sizeof(float)};
   if (!g.forwardOnly) {
     g.tensors[gradientScale].v1.clientBuf = {&g.gradientScale, sizeof(float)};
     g.tensors[zeroFf].v1.clientBuf = {
@@ -697,6 +768,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       }
       g.tensors[head.selector].v1.clientBuf = {
           g.selectorData.data() + head.selectorOffset, uint32_t(selectorBytes)};
+      if (headwiseG1Gate) {
+        const size_t gateSelectorBytes = size_t(numHeads) * sizeof(float);
+        if (head.gateSelectorOffset > g.gateSelectorData.size() ||
+            gateSelectorBytes >
+                (g.gateSelectorData.size() - head.gateSelectorOffset) * sizeof(float))
+          return fail("generalized tiny training gate selector client-buffer range");
+        g.tensors[head.gateSelector].v1.clientBuf = {
+            g.gateSelectorData.data() + head.gateSelectorOffset,
+            uint32_t(gateSelectorBytes)};
+      }
     }
   }
   g.tensors[dim].v1.clientBuf = {&g.dimensionValue, sizeof(g.dimensionValue)};
@@ -704,7 +785,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   shape::TransformerTopologyConfig topologyConfig{
       tokens, dimension, feedForwardDimension, numLayers, numHeads,
       vocabularySize, size_t(resourceEstimate.parameterElements),
-      size_t(resourceEstimate.adamMomentElements)};
+      size_t(resourceEstimate.adamMomentElements), headwiseG1Gate};
   auto topology = shape::makeExpectedTransformerTopology(topologyConfig);
   if (topology.size() != numLayers) {
     return fail("APP_SHAPE_VALIDATION: unable to construct expected topology");
@@ -732,6 +813,17 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     declared.wk = shapeOf(record.wk);
     declared.wv = shapeOf(record.wv);
     declared.wo = shapeOf(record.wo);
+    if (headwiseG1Gate) {
+      declared.attentionGateWeight = shapeOf(record.attentionGateWeight);
+      declared.gates = shapeOf(record.gates);
+      if (!g.forwardOnly) {
+        declared.dAttentionGateWeight = shapeOf(record.dGateWeight);
+        declared.dGateInput = shapeOf(record.dLn1Gate);
+      } else {
+        declared.dAttentionGateWeight = {dimension, numHeads};
+        declared.dGateInput = {tokens, dimension};
+      }
+    }
     declared.ffnW1 = shapeOf(record.w1);
     declared.ffnW2 = shapeOf(record.w2);
     if (!g.forwardOnly) {
@@ -764,6 +856,19 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             shapeOf(head.scores) != tokenToken ||
             shapeOf(head.probabilities) != tokenToken) {
           return fail("APP_SHAPE_VALIDATION: per-head tensor shape mismatch");
+        }
+        if (headwiseG1Gate) {
+          const std::vector<size_t> tokenScalar{tokens, 1};
+          if (shapeOf(head.gate) != tokenScalar ||
+              shapeOf(head.gatedContext) != tokenHead ||
+              (!g.forwardOnly &&
+               (shapeOf(head.dGatedContext) != tokenHead ||
+                shapeOf(head.dGateProduct) != tokenHead ||
+                shapeOf(head.dGate) != tokenScalar ||
+                shapeOf(head.dGateScatter) !=
+                    std::vector<size_t>{tokens, numHeads}))) {
+            return fail("APP_SHAPE_VALIDATION: gate broadcast/reduction shape mismatch");
+          }
         }
       }
     }
@@ -933,6 +1038,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         !matmul(prefix + "k", cache(LN1), record.wk, cache(K), "k") ||
         !matmul(prefix + "v", cache(LN1), record.wv, cache(V), "v"))
       return fail(error);
+    if (headwiseG1Gate &&
+        (!matmul(prefix + "gate_logits", cache(LN1), record.attentionGateWeight,
+                 record.gateLogits, "gate logits") ||
+         !unary(prefix + "gate_sigmoid", QNN_OP_SIGMOID, record.gateLogits,
+                record.gates, "gate sigmoid")))
+      return fail(error);
     if (numHeads == 1) {
       if (!matmul(prefix + "scores", cache(Q), cache(K), cache(ATTENTION_SCORES),
                    "scores", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
@@ -969,7 +1080,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                      headRecord.probabilities, "head attention softmax") ||
             !matmul(headPrefix + "context", headRecord.probabilities,
                      headRecord.value, headRecord.context, "head context") ||
-            !matmul(headPrefix + "context_scatter", headRecord.context,
+            (headwiseG1Gate &&
+             (!matmul(headPrefix + "gate_select", record.gates,
+                      headRecord.gateSelector, headRecord.gate, "head gate select") ||
+              !binary(headPrefix + "gate_multiply", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      headRecord.context, headRecord.gate,
+                      headRecord.gatedContext, "head gate multiply"))) ||
+            !matmul(headPrefix + "context_scatter",
+                     headwiseG1Gate ? headRecord.gatedContext : headRecord.context,
                      headRecord.selector, headRecord.contextScatter,
                      "head context scatter", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
           return fail(error);
@@ -1104,7 +1222,21 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         const std::string headPrefix =
             prefix + "head_" + zeroPadded(head) + '_';
         if (!matmul(headPrefix + "dcontext", backward(DCONTEXT),
-                     headRecord.selector, headRecord.dContext, "head dcontext") ||
+                     headRecord.selector,
+                     headwiseG1Gate ? headRecord.dGatedContext : headRecord.dContext,
+                     "head dcontext") ||
+            (headwiseG1Gate &&
+             (!binary(headPrefix + "dcontext_gate", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      headRecord.dGatedContext, headRecord.gate,
+                      headRecord.dContext, "head dcontext gate") ||
+              !binary(headPrefix + "dgate_product", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      headRecord.dGatedContext, headRecord.context,
+                      headRecord.dGateProduct, "head dgate product") ||
+              !reduceSumLast(headPrefix + "dgate_reduce", headRecord.dGateProduct,
+                             headRecord.dGate, "head dgate reduce") ||
+              !matmul(headPrefix + "dgate_scatter", headRecord.dGate,
+                      headRecord.gateSelector, headRecord.dGateScatter,
+                      "head dgate scatter", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))) ||
             !matmul(headPrefix + "dprobabilities", headRecord.dContext,
                      headRecord.value, headRecord.dProbabilities,
                      "head dprobabilities", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
@@ -1168,6 +1300,34 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           accumulated = out;
         }
       }
+      if (headwiseG1Gate) {
+        uint32_t accumulated = record.heads.front().dGateScatter;
+        for (uint32_t head = 1; head < numHeads; ++head) {
+          const uint32_t out = head + 1 == numHeads ? record.dGates
+              : record.headDGateAccumulators[head - 1];
+          if (!binary(prefix + "head_dgate_sum_" + zeroPadded(head),
+                      QNN_OP_ELEMENT_WISE_ADD, accumulated,
+                      record.heads[head].dGateScatter, out, "head dgate sum"))
+            return fail(error);
+          accumulated = out;
+        }
+        if (!binary(prefix + "gate_one_minus", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                    gateOne, record.gates, record.oneMinusGates,
+                    "gate one minus") ||
+            !binary(prefix + "gate_derivative", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                    record.gates, record.oneMinusGates,
+                    record.gateDerivative, "gate derivative") ||
+            !binary(prefix + "gate_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                    record.dGates, record.gateDerivative,
+                    record.dGateSigmoid, "gate dlogits") ||
+            !matmul(prefix + "gate_dweight", cache(LN1), record.dGateSigmoid,
+                    record.dGateWeight, "gate dweight",
+                    QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+            !matmul(prefix + "gate_dln1", record.dGateSigmoid,
+                    record.attentionGateWeight, record.dLn1Gate, "gate dln1",
+                    QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
+          return fail(error);
+      }
     }
     if (!matmul(prefix + "dwq", cache(LN1), backward(DQ), gradient(DWQ),
                  "dwq", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
@@ -1184,7 +1344,13 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         !binary(prefix + "dln1_qk", QNN_OP_ELEMENT_WISE_ADD, backward(DLN1_Q),
                 backward(DLN1_K), backward(DLN1_QK), "dln1 qk") ||
         !binary(prefix + "dln1", QNN_OP_ELEMENT_WISE_ADD, backward(DLN1_QK),
-                backward(DLN1_V), backward(DLN1), "dln1"))
+                backward(DLN1_V),
+                headwiseG1Gate ? record.dLn1Qkv : backward(DLN1), "dln1"))
+      return fail(error);
+    if (headwiseG1Gate &&
+        !binary(prefix + "dln1_gate_add", QNN_OP_ELEMENT_WISE_ADD,
+                record.dLn1Qkv, record.dLn1Gate, backward(DLN1),
+                "dln1 gate add"))
       return fail(error);
     if (!layerNorm.backward((prefix + "ln1").c_str(), int(backward(DLN1)),
                             int(record.gamma1), int(cache(LN1_XHAT)),

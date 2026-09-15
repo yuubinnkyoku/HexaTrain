@@ -130,7 +130,7 @@ Checkpoint loadCheckpoint(const std::string& path) {
   if (!input) throw std::runtime_error("CHECKPOINT_OPEN_FAILED");
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic == "NPRTCKPTV4\n") {
+  if (magic == "NPRTCKPTV4\n" || magic == "NPRTCKPTV5\n") {
     input.seekg(0, std::ios::end);
     const auto size = input.tellg();
     input.seekg(0);
@@ -261,126 +261,24 @@ struct Metrics {
   bool finite = true;
 };
 
-std::vector<float> multiply(const std::vector<float>& a, const std::vector<float>& b,
-                            std::uint32_t rows, std::uint32_t inner, std::uint32_t columns) {
-  std::vector<float> result(std::size_t(rows) * columns);
-  for (std::uint32_t row = 0; row < rows; ++row) {
-    for (std::uint32_t column = 0; column < columns; ++column) {
-      double sum = 0;
-      for (std::uint32_t index = 0; index < inner; ++index)
-        sum += double(a[std::size_t(row) * inner + index]) * b[std::size_t(index) * columns + column];
-      result[std::size_t(row) * columns + column] = float(sum);
-    }
-  }
-  return result;
-}
-
-std::vector<float> normalize(const phonelm::tiny_lm::Config& config, const std::vector<float>& input,
-                             const std::vector<float>& gamma, const std::vector<float>& beta) {
-  std::vector<float> result(input.size());
-  for (std::uint32_t row = 0; row < config.tokens; ++row) {
-    double mean = 0;
-    for (std::uint32_t d = 0; d < config.dimension; ++d) mean += input[std::size_t(row) * config.dimension + d];
-    mean /= config.dimension;
-    double variance = 0;
-    for (std::uint32_t d = 0; d < config.dimension; ++d) {
-      const double centered = input[std::size_t(row) * config.dimension + d] - mean;
-      variance += centered * centered;
-    }
-    variance /= config.dimension;
-    const double inverse = 1.0 / std::sqrt(variance + config.epsilon);
-    for (std::uint32_t d = 0; d < config.dimension; ++d) {
-      const std::size_t index = std::size_t(row) * config.dimension + d;
-      result[index] = float((input[index] - mean) * inverse) * gamma[d] + beta[d];
-    }
-  }
-  return result;
-}
-
-void addInPlace(std::vector<float>& target, const std::vector<float>& addition) {
-  if (target.size() != addition.size()) throw std::runtime_error("INFERENCE_SHAPE_MISMATCH");
-  for (std::size_t i = 0; i < target.size(); ++i) target[i] += addition[i];
-}
-
 struct Inference {
   std::vector<float> logits;
   std::vector<float> probabilities;
 };
 
-const phonelm::qnn::TinyTransformerLayerParameters& layer(const phonelm::qnn::TinyTransformerParameters& parameters, std::uint32_t index) {
-  if (index == 0) return static_cast<const phonelm::qnn::TinyTransformerLayerParameters&>(parameters);
-  return parameters.layers.at(index - 1);
-}
-
 Inference infer(const phonelm::tiny_lm::Config& config, const std::vector<std::uint32_t>& tokens,
                 const phonelm::qnn::TinyTransformerParameters& parameters) {
   if (tokens.size() != config.tokens) throw std::runtime_error("INFERENCE_TOKEN_COUNT");
-  std::vector<float> input(std::size_t(config.tokens) * config.dimension);
-  for (std::uint32_t row = 0; row < config.tokens; ++row) {
+  for (std::uint32_t row = 0; row < config.tokens; ++row)
     if (tokens[row] >= config.vocabularySize) throw std::runtime_error("INFERENCE_TOKEN_RANGE");
-    const std::size_t source = std::size_t(tokens[row]) * config.dimension;
-    const std::size_t destination = std::size_t(row) * config.dimension;
-    std::copy_n(parameters.tokenEmbedding.begin() + static_cast<std::ptrdiff_t>(source),
-                config.dimension, input.begin() + static_cast<std::ptrdiff_t>(destination));
-  }
-  addInPlace(input, phonelm::tiny_lm::fixedPosition(config));
-  const std::uint32_t headDimension = config.dimension / config.numHeads;
-  const float scale = 1.0f / std::sqrt(float(headDimension));
-  for (std::uint32_t layerIndex = 0; layerIndex < config.numLayers; ++layerIndex) {
-    const auto& weights = layer(parameters, layerIndex);
-    const auto norm1 = normalize(config, input, weights.gamma1, weights.beta1);
-    const auto q = multiply(norm1, weights.wq, config.tokens, config.dimension, config.dimension);
-    const auto k = multiply(norm1, weights.wk, config.tokens, config.dimension, config.dimension);
-    const auto v = multiply(norm1, weights.wv, config.tokens, config.dimension, config.dimension);
-    std::vector<float> context(std::size_t(config.tokens) * config.dimension);
-    for (std::uint32_t head = 0; head < config.numHeads; ++head) {
-      for (std::uint32_t row = 0; row < config.tokens; ++row) {
-        float maximum = -std::numeric_limits<float>::infinity();
-        std::vector<float> scores(config.tokens, -std::numeric_limits<float>::infinity());
-        for (std::uint32_t column = 0; column <= row; ++column) {
-          double score = 0;
-          for (std::uint32_t d = 0; d < headDimension; ++d)
-            score += double(q[std::size_t(row) * config.dimension + head * headDimension + d]) *
-                     k[std::size_t(column) * config.dimension + head * headDimension + d];
-          scores[column] = float(score) * scale;
-          maximum = std::max(maximum, scores[column]);
-        }
-        double sum = 0;
-        for (std::uint32_t column = 0; column <= row; ++column) {
-          scores[column] = std::exp(scores[column] - maximum);
-          sum += scores[column];
-        }
-        for (std::uint32_t column = 0; column <= row; ++column) {
-          const float probability = scores[column] / float(sum);
-          for (std::uint32_t d = 0; d < headDimension; ++d)
-            context[std::size_t(row) * config.dimension + head * headDimension + d] +=
-                probability * v[std::size_t(column) * config.dimension + head * headDimension + d];
-        }
-      }
-    }
-    auto residual = input;
-    addInPlace(residual, multiply(context, weights.wo, config.tokens, config.dimension, config.dimension));
-    const auto norm2 = normalize(config, residual, weights.gamma2, weights.beta2);
-    auto hidden = multiply(norm2, weights.w1, config.tokens, config.dimension, config.feedForwardDimension);
-    for (float& value : hidden) value = std::max(0.0f, value);
-    input = residual;
-    addInPlace(input, multiply(hidden, weights.w2, config.tokens, config.feedForwardDimension, config.dimension));
-  }
+  // Production CPU forward is the single evaluation semantics source: gated
+  // and ungated models both go through generalForward (LN1 → QKV → SDPA →
+  // optional G1 gate → Wo), matching QNN training and FORWARD_ONLY graphs.
+  const auto trace = phonelm::tiny_lm::forwardTraceGeneralized(
+      config, phonelm::tiny_lm::oneHot(tokens, config.vocabularySize), parameters);
   Inference result;
-  result.logits = multiply(input, parameters.outputProjection, config.tokens, config.dimension, config.vocabularySize);
-  result.probabilities.resize(result.logits.size());
-  for (std::uint32_t row = 0; row < config.tokens; ++row) {
-    const std::size_t base = std::size_t(row) * config.vocabularySize;
-    const float maximum = *std::max_element(result.logits.begin() + static_cast<std::ptrdiff_t>(base),
-                                             result.logits.begin() + static_cast<std::ptrdiff_t>(base + config.vocabularySize));
-    double sum = 0;
-    for (std::uint32_t token = 0; token < config.vocabularySize; ++token) {
-      result.probabilities[base + token] = std::exp(result.logits[base + token] - maximum);
-      sum += result.probabilities[base + token];
-    }
-    for (std::uint32_t token = 0; token < config.vocabularySize; ++token)
-      result.probabilities[base + token] /= float(sum);
-  }
+  result.logits = trace.logits;
+  result.probabilities = trace.probabilities;
   return result;
 }
 

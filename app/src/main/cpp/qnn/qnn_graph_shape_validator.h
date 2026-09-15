@@ -49,6 +49,7 @@ struct TransformerTopologyConfig {
   std::size_t vocabularySize = 0;
   std::size_t parameterElements = 0;
   std::size_t optimizerElements = 0;
+  bool headwiseG1Gate = false;
 };
 
 struct TransformerLayerTopology {
@@ -70,8 +71,10 @@ struct TransformerLayerTopology {
   std::vector<std::size_t> inputGradient;
   std::vector<std::size_t> norm1Gamma, norm1Beta, norm2Gamma, norm2Beta;
   std::vector<std::size_t> wq, wk, wv, wo, ffnW1, ffnW2;
+  std::vector<std::size_t> attentionGateWeight, gates;
   std::vector<std::size_t> dNorm1Gamma, dNorm1Beta, dNorm2Gamma, dNorm2Beta;
   std::vector<std::size_t> dWq, dWk, dWv, dWo, dFfnW1, dFfnW2;
+  std::vector<std::size_t> dAttentionGateWeight, dGateInput;
   std::vector<std::size_t> norm1Mean, norm1Variance, norm2Mean, norm2Variance;
   std::vector<std::size_t> residualAfterAttention, residualAfterFfn;
   std::size_t parameterElements = 0;

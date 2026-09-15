@@ -1177,6 +1177,7 @@ std::vector<float> flattenLanguageParameters(const Params &p) {
   auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
     append(layer.gamma1); append(layer.beta1);
     append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
+    append(layer.attentionGateWeight);
     append(layer.gamma2); append(layer.beta2);
     append(layer.w1); append(layer.w2);
   };
@@ -1217,6 +1218,7 @@ Params unflattenLanguageParameters(const std::vector<float> &flat,
   auto takeLayer = [&](TinyTransformerLayerParameters &layer) {
     take(layer.gamma1); take(layer.beta1);
     take(layer.wq); take(layer.wk); take(layer.wv); take(layer.wo);
+    take(layer.attentionGateWeight);
     take(layer.gamma2); take(layer.beta2);
     take(layer.w1); take(layer.w2);
   };
@@ -1239,6 +1241,7 @@ Params zeroLanguageParameters(const Params &shape) {
   zero(result.tokenEmbedding);
   auto zeroLayer = [&](TinyTransformerLayerParameters &layer) {
     zero(layer.wq); zero(layer.wk); zero(layer.wv); zero(layer.wo);
+    zero(layer.attentionGateWeight);
     zero(layer.gamma1); zero(layer.beta1); zero(layer.gamma2); zero(layer.beta2);
     zero(layer.w1); zero(layer.w2);
   };
@@ -5348,11 +5351,14 @@ bool finiteTrainingOutputs(const TinyTransformerTrainingOutputs &output) {
       [](const TinyTransformerTrainingTapOutput &tap) {
         return finite(tap.values);
       });
+  const bool finiteGates = std::all_of(
+      output.attentionGates.begin(), output.attentionGates.end(),
+      [](const std::vector<float>& values) { return finite(values); });
   return std::isfinite(output.loss) && finite(output.output) &&
          finite(output.dOutput) && finite(output.embeddedInput) &&
          finite(output.logits) && finite(output.probabilities) &&
          finite(output.dLogits) && finite(output.dEmbeddedInput) &&
-          finiteLayers && finiteTaps && finiteParams(output.gradients) &&
+          finiteLayers && finiteTaps && finiteGates && finiteParams(output.gradients) &&
          finiteParams(output.next);
 }
 
@@ -5389,6 +5395,7 @@ struct LoadedNprtCheckpoint {
   bool v2 = false;
   bool v3 = false;
   bool v4 = false;
+  bool v5 = false;
   std::string tokenizerKind;
   std::string tokenizerHash;
   Params parameters;
@@ -5411,7 +5418,7 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.fileBytes = static_cast<std::uint64_t>(size);
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-  if (magic == "NPRTCKPTV4\n") {
+  if (magic == "NPRTCKPTV4\n" || magic == "NPRTCKPTV5\n") {
     input.seekg(0, std::ios::beg);
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
     input.read(reinterpret_cast<char*>(bytes.data()), size);
@@ -5422,7 +5429,7 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
       throw std::runtime_error(decodeError);
     if (checkpoint.identity.seed != expectedSeed ||
         checkpoint.identity.tokenizerHash != expectedTokenizerHash)
-      throw std::runtime_error("NPRT_CKPT_V4_IDENTITY_MISMATCH");
+      throw std::runtime_error("NPRT_CKPT_MUON_IDENTITY_MISMATCH");
     if (!nicopedia_muon_checkpoint::extractParameters(
             checkpoint, expected, expectedSeed, &result.parameters,
             &decodeError))
@@ -5440,7 +5447,8 @@ LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
     result.tokenizerKind = checkpoint.identity.tokenizerKind;
     result.tokenizerHash = checkpoint.identity.tokenizerHash;
     result.parameterHash = nprtParameterHash(result.parameters);
-    result.v4 = true;
+    result.v4 = magic == "NPRTCKPTV4\n";
+    result.v5 = magic == "NPRTCKPTV5\n";
     result.finite = finiteParams(result.parameters);
     return result;
   }
@@ -5862,10 +5870,10 @@ std::string nicopediaHtpGeneration(
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_IDENTITY\n"
            "error=checkpoint step does not match filename\n";
-  if (htpSmokePolicy && !loaded.v2 && !loaded.v3)
+  if (htpSmokePolicy && !loaded.v2 && !loaded.v3 && !loaded.v4 && !loaded.v5)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_FORMAT\n"
-           "error=htp-smoke requires NPRTCKPTV2 or NPRTCKPTV3\n";
+           "error=htp-smoke requires NPRTCKPTV2/V3/V4/V5\n";
   if (!loaded.finite)
     return "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
            "failure_classification=CHECKPOINT_NONFINITE\n"
@@ -5922,7 +5930,8 @@ std::string nicopediaHtpGeneration(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
-          TinyTransformerTrainingTapSet::NONE, layers, heads))
+          TinyTransformerTrainingTapSet::NONE, layers, heads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return failure("nicopedia_generate_prepare", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -6464,9 +6473,10 @@ std::string nicopediaHtpGeneration(
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
          << "\nseed=" << seed << "\ncheckpoint_step=" << loaded.step
          << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
-         << "\ncheckpoint_format=" << (loaded.v4 ? "NPRTCKPTV4" :
+         << "\ncheckpoint_format=" << (loaded.v5 ? "NPRTCKPTV5" :
+             (loaded.v4 ? "NPRTCKPTV4" :
              (loaded.v3 ? "NPRTCKPTV3" :
-              (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1")))
+              (loaded.v2 ? "NPRTCKPTV2" : "NPRTCKPTV1"))))
          << "\ntokenizer_kind=" << (bpeModel ? "byte_bpe" : "byte")
          << "\ntokenizer_hash=" << (bpeModel ? bpeModel->identity() : "legacy-byte-v1")
          << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
@@ -6782,7 +6792,8 @@ std::string nicopediaHtpDivergenceLocalization(
       !runtime.prepareTinyTransformerTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
-          TinyTransformerTrainingVariant::FULL, tapSet, layers, heads))
+          TinyTransformerTrainingVariant::FULL, tapSet, layers, heads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
            "failure_classification=QNN_PREPARE\n" +
            failure("localization_prepare", error, runtime);
@@ -7288,7 +7299,8 @@ std::string nicopediaMuonHybridTraining(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
-          config.numHeads))
+          config.numHeads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return failure("nicopedia_muon_prepare", error, runtime);
   std::ofstream telemetry(cachePath + "/learning-rate-telemetry.csv",
                           std::ios::trunc);
@@ -7305,6 +7317,16 @@ std::string nicopediaMuonHybridTraining(
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
   std::vector<std::pair<uint32_t, float>> curve;
   bool allFinite = true, interrupted = false;
+  struct GateAggregate {
+    std::uint64_t count = 0, belowPointOne = 0, abovePointNine = 0;
+    double sum = 0.0, sumSquares = 0.0;
+    float minimum = std::numeric_limits<float>::infinity();
+    float maximum = -std::numeric_limits<float>::infinity();
+  };
+  const bool gated = config.attentionGate ==
+      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+  std::vector<GateAggregate> gateAggregates(
+      gated ? size_t(config.numLayers) * config.numHeads : 0);
   float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
   const auto trainingStarted = std::chrono::steady_clock::now();
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
@@ -7330,6 +7352,29 @@ std::string nicopediaMuonHybridTraining(
       ++qnnExecuteCount;
       loss += output.loss;
       allFinite = allFinite && finiteTrainingOutputs(output);
+      if (gated) {
+        if (output.attentionGates.size() != config.numLayers)
+          return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=GATE_DIAGNOSTIC\nerror=gate_layer_count_mismatch\n";
+        for (uint32_t layerIndex = 0; layerIndex < config.numLayers;
+             ++layerIndex) {
+          const auto& values = output.attentionGates[layerIndex];
+          if (values.size() != size_t(config.tokens) * config.numHeads)
+            return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=GATE_DIAGNOSTIC\nerror=gate_shape_mismatch\n";
+          for (uint32_t token = 0; token < config.tokens; ++token) {
+            for (uint32_t head = 0; head < config.numHeads; ++head) {
+              const float value = values[size_t(token) * config.numHeads + head];
+              auto& aggregate = gateAggregates[size_t(layerIndex) * config.numHeads + head];
+              ++aggregate.count;
+              aggregate.sum += value;
+              aggregate.sumSquares += double(value) * value;
+              aggregate.minimum = std::min(aggregate.minimum, value);
+              aggregate.maximum = std::max(aggregate.maximum, value);
+              if (value < 0.1f) ++aggregate.belowPointOne;
+              if (value > 0.9f) ++aggregate.abovePointNine;
+            }
+          }
+        }
+      }
       const auto accum = tiny_lm::parameterRegistry(gradient);
       const auto source = tiny_lm::parameterRegistry(output.gradients);
       std::string registryError;
@@ -7484,8 +7529,11 @@ std::string nicopediaMuonHybridTraining(
          << "\nexperiment_fork=" << (auxSchedule.experimentFork ? "true" : "false")
          << "\nparent_learning_rate=" << trainingConfig.nicopediaParentLearningRate
          << "\nmuon_momentum=0.95\nmuon_nesterov=true\nmuon_ns_steps=5"
+         << "\nattention_gate=" << tiny_lm::attentionGateName(config.attentionGate)
+         << "\nparameter_count=" << tiny_lm::parameterElementCount(current)
          << "\nmuon_matrix_count=114\nmuon_parameter_count=622592"
-         << "\naux_adam_parameter_count=135936\nfirst_loss=" << firstLoss
+         << "\naux_adam_parameter_count=" << (gated ? 138368 : 135936)
+         << "\nfirst_loss=" << firstLoss
          << "\nlast_loss=" << lastLoss
          << "\nforward_backward_backend=HTP\noptimizer_muon_backend="
          << muonBackendName
@@ -7532,11 +7580,40 @@ std::string nicopediaMuonHybridTraining(
          << "\nfinal_finite=" << (allFinite ? "true" : "false")
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\ncheckpoint_written=" << (checkpointCount > 0 ? "true" : "false")
-         << "\ncheckpoint_count=" << checkpointCount << "\ncheckpoint_format=NPRTCKPTV4"
+         << "\ncheckpoint_count=" << checkpointCount << "\ncheckpoint_format="
+         << (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID
+                 ? "NPRTCKPTV5" : "NPRTCKPTV4")
          << "\nfinal_parameter_hash=" << nprtParameterHash(current)
          << "\ncpu_fallback=false\nfallback=false\nnan_detected=" << (allFinite ? "false" : "true")
          << "\ninf_detected=" << (allFinite ? "false" : "true") << '\n'
          << runtime.apiTraceSummary();
+  if (gated) {
+    // Trajectory aggregate: gates from every training batch of a model that
+    // changes every update. This is NOT a checkpoint-static distribution.
+    report << "\ngate_diagnostics_kind=training_trajectory_aggregate"
+           << "\ngate_training_trajectory_aggregate=true";
+    for (uint32_t layerIndex = 0; layerIndex < config.numLayers; ++layerIndex) {
+      for (uint32_t head = 0; head < config.numHeads; ++head) {
+        const auto& aggregate =
+            gateAggregates[size_t(layerIndex) * config.numHeads + head];
+        const double mean = aggregate.count ? aggregate.sum / aggregate.count : 0.0;
+        const double variance = aggregate.count
+            ? std::max(0.0, aggregate.sumSquares / aggregate.count - mean * mean)
+            : 0.0;
+        const std::string prefix = "gate_training_trajectory_l" +
+                                   std::to_string(layerIndex) +
+                                   "_h" + std::to_string(head);
+        report << '\n' << prefix << "_mean=" << mean
+               << '\n' << prefix << "_stddev=" << std::sqrt(variance)
+               << '\n' << prefix << "_min=" << aggregate.minimum
+               << '\n' << prefix << "_max=" << aggregate.maximum
+               << '\n' << prefix << "_below_0_1_fraction="
+               << (aggregate.count ? double(aggregate.belowPointOne) / aggregate.count : 0.0)
+               << '\n' << prefix << "_above_0_9_fraction="
+               << (aggregate.count ? double(aggregate.abovePointNine) / aggregate.count : 0.0);
+      }
+    }
+  }
   return report.str();
 }
 
@@ -7731,7 +7808,8 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
-          config.numHeads))
+          config.numHeads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return failure("nicopedia_prepare_training", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -8609,7 +8687,8 @@ std::string runNicopediaHtpOneUpdateProbe(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
-          config.numHeads))
+          config.numHeads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return emit("FAILED", "prepare_begin", error, 0.0,
                 runtime.metrics().graphExecuteCount);
   trainingPrepared = true;
@@ -8835,7 +8914,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
-          config.numHeads))
+          config.numHeads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
     return failure("nicopedia_eval_prepare", error, runtime);
 
   struct SplitResult {
@@ -8973,9 +9053,10 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
          << "\nfeed_forward_dimension=" << config.feedForwardDimension
           << "\ncheckpoint_step=" << checkpointStep
           << "\ncheckpoint_format="
-          << (loaded.v4 ? "NPRTCKPTV4" :
+          << (loaded.v5 ? "NPRTCKPTV5" :
+              (loaded.v4 ? "NPRTCKPTV4" :
               (loaded.v3 ? "NPRTCKPTV3" :
-               (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1")))
+               (loaded.hasAdam ? "NPRTCKPTV2" : "NPRTCKPTV1"))))
           << "\ncheckpoint_finite=" << (loaded.finite ? "true" : "false")
           << "\ncheckpoint_parameter_elements=" << loaded.parameterElements
           << "\ncheckpoint_parameter_hash=" << loaded.parameterHash
@@ -9653,6 +9734,15 @@ std::string runTinyTransformerTrainingExperiment(
         static_cast<uint32_t>(trainingConfig.measuredSteps > 0
                                   ? trainingConfig.measuredSteps
                                   : 2);
+    if (trainingConfig.attentionGate == 0) {
+      config.attentionGate = tiny_lm::AttentionGate::NONE;
+    } else if (trainingConfig.attentionGate == 1) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else {
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=attention_gate_invalid\n";
+    }
     if (config.tokens < 8 || config.tokens > 256)
       return "NICOPEDIA_HTP\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -9733,6 +9823,15 @@ std::string runTinyTransformerTrainingExperiment(
       return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
              "error=tokens_must_be_8_256\n";
+    if (trainingConfig.attentionGate == 0) {
+      config.attentionGate = tiny_lm::AttentionGate::NONE;
+    } else if (trainingConfig.attentionGate == 1) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else {
+      return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
+             "failure_classification=APP_CONFIGURATION_VALIDATION\n"
+             "error=attention_gate_identity_invalid\n";
+    }
     std::string error;
     if (!tiny_lm::validateConfig(config, &error))
       return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
@@ -10114,7 +10213,8 @@ std::string replayFirstNonfiniteCheckpoint(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL, tapSet, config.numLayers,
-          config.numHeads) ||
+          config.numHeads,
+          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID) ||
       elementCount > std::numeric_limits<uint32_t>::max() ||
       !runtime.prepareAdamOptimizer(static_cast<uint32_t>(elementCount), error)) {
     report << "htp_prepare_success=false\nhtp_prepare_error=" << error << '\n'

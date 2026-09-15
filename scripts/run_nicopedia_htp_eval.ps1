@@ -4,7 +4,7 @@
 #
 # Pushes the private validation/development caches and a private checkpoint
 # (legacy NPRTCKPTV1/V2, tokenizer-bound NPRTCKPTV3, or mixed-optimizer
-# NPRTCKPTV4) into the app files directory, drives
+# NPRTCKPTV4/V5) into the app files directory, drives
 # QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL (teacher-forced forward runs on
 # the HTP graph), and pulls the aggregate NLL/perplexity/top-1/top-5/metrics
 # report.  The host CPU evaluator runs on the same checkpoint/caches for the
@@ -25,6 +25,7 @@ param(
   [ValidateSet(256, 1024)][int]$Vocabulary = 256,
   [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
+  [ValidateSet('none','headwise_g1_sigmoid')][string]$AttentionGate = 'none',
   [int]$CheckpointStep = 1000,
   [int]$ValidationChunks = 8192,
   [int]$DevelopmentChunks = 16384,
@@ -89,7 +90,7 @@ if (-not $CheckpointPath) {
 }
 if (-not (Test-Path -LiteralPath $CheckpointPath -PathType Leaf)) { throw "CHECKPOINT_MISSING: $CheckpointPath" }
 $checkpointHeader = Get-PhoneLmCheckpointHeaders -Path $CheckpointPath
-$expectedCheckpointFormats = if ($Vocabulary -eq 1024) { @('NPRTCKPTV3','NPRTCKPTV4') } else { @('NPRTCKPTV2') }
+$expectedCheckpointFormats = if ($Vocabulary -eq 1024) { @('NPRTCKPTV3','NPRTCKPTV4','NPRTCKPTV5') } else { @('NPRTCKPTV2') }
 if ($checkpointHeader.Magic -notin $expectedCheckpointFormats -or $checkpointHeader.Seed -ne $Seed -or
     $checkpointHeader.Layers -ne $Layers -or $checkpointHeader.Heads -ne $Heads -or
     $checkpointHeader.Vocabulary -ne $Vocabulary -or $checkpointHeader.Tokens -ne $Tokens -or
@@ -175,7 +176,7 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-eval' -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = $Heads; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = $Heads; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "eval-step-$CheckpointStep" `
@@ -239,15 +240,7 @@ $annotated = $result.TrimEnd() + "`n" +
 $annotated | Set-Content -LiteralPath (Join-Path $reportRoot "$reportStem-htp.txt") -Encoding utf8
 # Host-side CPU evaluation of the same checkpoint + caches for comparison.
 $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
-if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf)) {
-  & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
-    -I (Join-Path $root 'app\src\main\cpp') `
-    (Join-Path $root 'app\src\main\cpp\tiny_language_model_cpu.cpp') `
-    (Join-Path $root 'app\src\main\cpp\nicopedia_muon_checkpoint.cpp') `
-    (Join-Path $root 'host_tests\htp_checkpoint_eval.cpp') `
-    -o $hostEvalExe
-  if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval build failed" }
-}
+Ensure-PhoneLmHostCheckpointEvaluator -Root $root -ExePath $hostEvalExe | Out-Null
 $hostEval = & $hostEvalExe $CheckpointPath $validationCache $developmentCache $ValidationChunks $DevelopmentChunks
 if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval failed: $hostEval" }
 $hostEval | Set-Content -LiteralPath (Join-Path $reportRoot "$reportStem-cpu.txt") -Encoding utf8

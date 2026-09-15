@@ -160,6 +160,15 @@ Result validateTransformerTopology(const TransformerTopologyConfig& config,
       !addChecked(allLayerElements, globals, &expectedTotalParameters)) {
     return topologyFail("global parameter element count overflows size_t");
   }
+  if (config.headwiseG1Gate) {
+    std::size_t gateElements = 0;
+    if (!multiplyChecked(config.embeddingDim, config.numHeads, &gateElements) ||
+        !addChecked(layerElements, gateElements, &layerElements) ||
+        !multiplyChecked(layerElements, 2, &optimizerElements) ||
+        !multiplyChecked(layerElements, config.numLayers, &allLayerElements) ||
+        !addChecked(allLayerElements, globals, &expectedTotalParameters))
+      return topologyFail("gate parameter element count overflows size_t");
+  }
   std::size_t expectedTotalOptimizer = 0;
   if (!multiplyChecked(expectedTotalParameters, 2, &expectedTotalOptimizer)) {
     return topologyFail("global optimizer element count overflows size_t");
@@ -180,6 +189,8 @@ Result validateTransformerTopology(const TransformerTopologyConfig& config,
   const std::vector<std::size_t> w2{config.feedForwardDim, config.embeddingDim};
   const std::vector<std::size_t> headTensor{config.numHeads, config.tokens, headDim};
   const std::vector<std::size_t> attention{config.numHeads, config.tokens, config.tokens};
+  const std::vector<std::size_t> gateWeight{config.embeddingDim, config.numHeads};
+  const std::vector<std::size_t> gates{config.tokens, config.numHeads};
   for (std::size_t i = 0; i < layers.size(); ++i) {
     const auto& layer = layers[i];
     const auto failLayer = [&](const std::string& detail) {
@@ -202,6 +213,10 @@ Result validateTransformerTopology(const TransformerTopologyConfig& config,
     if (layer.norm1Gamma != dim || layer.norm1Beta != dim || layer.norm2Gamma != dim || layer.norm2Beta != dim ||
         layer.wq != square || layer.wk != square || layer.wv != square || layer.wo != square ||
         layer.ffnW1 != w1 || layer.ffnW2 != w2) return failLayer("parameter shapes do not match Transformer layer schema");
+    if (config.headwiseG1Gate &&
+        (layer.attentionGateWeight != gateWeight || layer.gates != gates ||
+         layer.dAttentionGateWeight != gateWeight || layer.dGateInput != tokenDim))
+      return failLayer("headwise G1 gate shapes do not match [D,H]/[T,H]/[T,D]");
     if (layer.dNorm1Gamma != dim || layer.dNorm1Beta != dim || layer.dNorm2Gamma != dim || layer.dNorm2Beta != dim ||
         layer.dWq != square || layer.dWk != square || layer.dWv != square || layer.dWo != square ||
         layer.dFfnW1 != w1 || layer.dFfnW2 != w2) return failLayer("backward parameter gradient shapes do not match parameter schema");
@@ -232,6 +247,8 @@ std::vector<TransformerLayerTopology> makeExpectedTransformerTopology(
   const std::vector<std::size_t> heads{config.numHeads, config.tokens, headDim};
   const std::vector<std::size_t> attention{config.numHeads, config.tokens,
                                            config.tokens};
+  const std::vector<std::size_t> gateWeight{config.embeddingDim, config.numHeads};
+  const std::vector<std::size_t> gates{config.tokens, config.numHeads};
   std::size_t d2 = 0, dff = 0, layerElements = 0, term = 0;
   if (!multiplyChecked(config.embeddingDim, config.embeddingDim, &d2) ||
       !multiplyChecked(config.embeddingDim, config.feedForwardDim, &dff) ||
@@ -240,6 +257,10 @@ std::vector<TransformerLayerTopology> makeExpectedTransformerTopology(
       !addChecked(layerElements, term, &layerElements) ||
       !multiplyChecked(2, dff, &term) ||
       !addChecked(layerElements, term, &layerElements))
+    return {};
+  if (config.headwiseG1Gate &&
+      (!multiplyChecked(config.embeddingDim, config.numHeads, &term) ||
+       !addChecked(layerElements, term, &layerElements)))
     return {};
   std::size_t optimizerElements = 0;
   if (!multiplyChecked(2, layerElements, &optimizerElements)) return {};
@@ -258,6 +279,11 @@ std::vector<TransformerLayerTopology> makeExpectedTransformerTopology(
     layer.wq = layer.wk = layer.wv = layer.wo = square;
     layer.ffnW1 = w1;
     layer.ffnW2 = w2;
+    if (config.headwiseG1Gate) {
+      layer.attentionGateWeight = layer.dAttentionGateWeight = gateWeight;
+      layer.gates = gates;
+      layer.dGateInput = tokenDim;
+    }
     layer.dNorm1Gamma = layer.dNorm1Beta = layer.dNorm2Gamma =
         layer.dNorm2Beta = dim;
     layer.dWq = layer.dWk = layer.dWv = layer.dWo = square;

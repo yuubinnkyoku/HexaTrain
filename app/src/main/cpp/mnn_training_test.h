@@ -78,6 +78,8 @@ struct TrainingConfig {
     //   2 = HTP forward/backward + HVX W8 Original Muon + CPU auxiliary Adam
     // Value 2 fails closed when the APK was not built with PHONELM_ENABLE_HVX_MUON.
     int nicopediaOptimizer = 0;
+    // 0=none, 1=headwise G1 sigmoid (LN1 input, pre-Wo), research-only.
+    int attentionGate = 0;
     float nicopediaMuonLearningRate = 0.0f;
     float nicopediaMuonMomentum = 0.95f;
     int nicopediaMuonNsSteps = 5;

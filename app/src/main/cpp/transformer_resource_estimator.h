@@ -64,7 +64,8 @@ struct ResourceEstimate {
 inline ResourceEstimate estimateTrainingResources(
     std::uint64_t sequenceLength, std::uint64_t vocabularySize,
     std::uint64_t embeddingDimension, std::uint64_t feedForwardDimension,
-    std::uint64_t numLayers, std::uint64_t numHeads) {
+    std::uint64_t numLayers, std::uint64_t numHeads,
+    bool headwiseG1Gate = false) {
   ResourceEstimate result;
   const auto fail = [&](const char* classification, const char* detail) {
     result.failureClassification = classification;
@@ -130,6 +131,12 @@ inline ResourceEstimate estimateTrainingResources(
       !multiply(v, d, &vd) || !multiply(2, vd, &globalParameterElements)) {
     return fail("APP_RESOURCE_ESTIMATOR", "parameter element overflow");
   }
+  if (headwiseG1Gate) {
+    std::uint64_t gateParameters = 0;
+    if (!multiply(d, h, &gateParameters) ||
+        !add(layerParameterElements, gateParameters, &layerParameterElements))
+      return fail("APP_RESOURCE_ESTIMATOR", "gate parameter element overflow");
+  }
   std::uint64_t allLayerParameters = 0;
   if (!multiply(l, layerParameterElements, &allLayerParameters) ||
       !add(globalParameterElements, allLayerParameters,
@@ -188,6 +195,15 @@ inline ResourceEstimate estimateTrainingResources(
                   "multi-head forward activation overflow");
     }
   }
+  if (headwiseG1Gate) {
+    std::uint64_t th = 0, hSquared = 0, gateForward = 0;
+    if (!multiply(t, h, &th) || !multiply(h, h, &hSquared) ||
+        !multiply(3, th, &gateForward) ||
+        !add(gateForward, td, &gateForward) ||
+        !add(gateForward, hSquared, &gateForward) ||
+        !add(perLayerForward, gateForward, &perLayerForward))
+      return fail("APP_RESOURCE_ESTIMATOR", "gate forward activation overflow");
+  }
   if (!multiply(l, perLayerForward, &result.forwardActivationElements) ||
       !bytes(result.forwardActivationElements,
              &result.forwardActivationBytes)) {
@@ -218,6 +234,17 @@ inline ResourceEstimate estimateTrainingResources(
                   "multi-head backward activation overflow");
     }
   }
+  if (headwiseG1Gate) {
+    std::uint64_t th = 0, scalarGateBackward = 0, gateBackward = 0,
+                  fourTd = 0, twoHPlusFour = 0;
+    if (!multiply(t, h, &th) || !multiply(4, td, &fourTd) ||
+        !multiply(2, h, &twoHPlusFour) ||
+        !add(twoHPlusFour, 4, &twoHPlusFour) ||
+        !multiply(twoHPlusFour, th, &scalarGateBackward) ||
+        !add(fourTd, scalarGateBackward, &gateBackward) ||
+        !add(perLayerBackward, gateBackward, &perLayerBackward))
+      return fail("APP_RESOURCE_ESTIMATOR", "gate backward activation overflow");
+  }
   if (!multiply(l, perLayerBackward, &result.backwardActivationElements) ||
       !bytes(result.backwardActivationElements,
              &result.backwardActivationBytes)) {
@@ -234,14 +261,17 @@ inline ResourceEstimate estimateTrainingResources(
   // Inputs + parameters + all APP_READ buffers emitted by the training graph.
   std::uint64_t inputBytes = 0, outputElements = 0, outputBytes = 0;
   std::uint64_t layerInputElements = 0, headProbabilityElements = 0;
-  std::uint64_t fourTv = 0, twoTd = 0;
+  std::uint64_t fourTv = 0, twoTd = 0, gateOutputElements = 0;
   if (!multiply(2, tv, &inputBytes) || !bytes(inputBytes, &inputBytes) ||
       !multiply(l, td, &layerInputElements) ||
       !multiply(l, h, &headProbabilityElements) ||
       !multiply(headProbabilityElements, tt, &headProbabilityElements) ||
+      (headwiseG1Gate &&
+       (!multiply(l, t, &gateOutputElements) ||
+        !multiply(gateOutputElements, h, &gateOutputElements))) ||
       !multiply(4, tv, &fourTv) || !multiply(2, td, &twoTd) ||
       !sum({fourTv, twoTd, result.gradientElements, layerInputElements,
-            h > 1 ? headProbabilityElements : 0},
+            h > 1 ? headProbabilityElements : 0, gateOutputElements},
            &outputElements) ||
       !bytes(outputElements, &outputBytes) ||
       !sum({inputBytes, result.parameterBytes, outputBytes},
@@ -267,8 +297,17 @@ inline ResourceEstimate estimateTrainingResources(
       return fail("APP_RESOURCE_ESTIMATOR", "tensor count overflow");
     }
   }
+  if (headwiseG1Gate) {
+    // Wg, Z/G, dWg and seven shared backward tensors; per-head selector,
+    // forward gate/gated context and four backward tensors.
+    std::uint64_t perHeadGateSlots = 0;
+    if (!multiply(8, h, &perHeadGateSlots) ||
+        !add(layerSlots, 9, &layerSlots) ||
+        !add(layerSlots, perHeadGateSlots, &layerSlots))
+      return fail("APP_RESOURCE_ESTIMATOR", "gate tensor count overflow");
+  }
   if (!multiply(l, layerSlots, &result.tensorCount) ||
-      !add(24, result.tensorCount, &result.tensorCount) ||
+      !add(headwiseG1Gate ? 25 : 24, result.tensorCount, &result.tensorCount) ||
       !add(35, result.tensorCount, &result.tensorCount)) {
     return fail("APP_RESOURCE_ESTIMATOR", "tensor count overflow");
   }
@@ -281,6 +320,14 @@ inline ResourceEstimate estimateTrainingResources(
        !multiply(17, h, &backwardNodes) ||
        !add(41, backwardNodes, &backwardNodes))) {
     return fail("APP_RESOURCE_ESTIMATOR", "node count overflow");
+  }
+  if (headwiseG1Gate) {
+    // Wg matmul + sigmoid + per-head select/multiply in forward.
+    if (!add(forwardNodes, 2 + 2 * h, &forwardNodes) ||
+        // Per head: select dY, dA, product, reduce, scatter dG; then four
+        // shared sigmoid/matrix-gradient/input-gradient/add nodes.
+        !add(backwardNodes, 5 * h + 5, &backwardNodes))
+      return fail("APP_RESOURCE_ESTIMATOR", "gate node count overflow");
   }
   result.perLayerForwardNodes = forwardNodes;
   if (!add(forwardNodes, backwardNodes, &perLayerNodes) ||

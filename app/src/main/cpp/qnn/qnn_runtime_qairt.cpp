@@ -538,7 +538,10 @@ struct Runtime::Impl {
             std::uint32_t scores = 0, scaled = 0, masked = 0,
                           probabilities = 0;
             std::uint32_t context = 0, contextScatter = 0;
+            std::uint32_t gateSelector = 0, gate = 0, gatedContext = 0;
             std::uint32_t dContext = 0, dProbabilities = 0, dValue = 0;
+            std::uint32_t dGatedContext = 0, dGateProduct = 0, dGate = 0,
+                          dGateScatter = 0;
             std::uint32_t softmaxProduct = 0, softmaxDot = 0,
                           softmaxCentered = 0, dScores = 0;
             std::uint32_t dQueryRaw = 0, dKeyRaw = 0, dQuery = 0,
@@ -546,11 +549,17 @@ struct Runtime::Impl {
             std::uint32_t dQueryScatter = 0, dKeyScatter = 0,
                           dValueScatter = 0;
             std::size_t selectorOffset = 0;
+            std::size_t gateSelectorOffset = 0;
         };
         struct LayerRegistry {
             std::uint32_t input = 0, output = 0;
             std::uint32_t gamma1 = 0, beta1 = 0, wq = 0, wk = 0, wv = 0,
-                          wo = 0, gamma2 = 0, beta2 = 0, w1 = 0, w2 = 0;
+                          wo = 0, attentionGateWeight = 0, gamma2 = 0,
+                          beta2 = 0, w1 = 0, w2 = 0;
+            std::uint32_t gateLogits = 0, gates = 0, dGates = 0,
+                          oneMinusGates = 0, gateDerivative = 0,
+                          dGateSigmoid = 0, dGateWeight = 0,
+                          dLn1Gate = 0, dLn1Qkv = 0;
             std::vector<std::uint32_t> activations;
             std::vector<std::uint32_t> backward;
             std::vector<std::uint32_t> gradients;
@@ -561,6 +570,7 @@ struct Runtime::Impl {
             std::vector<std::uint32_t> headDqAccumulators;
             std::vector<std::uint32_t> headDkAccumulators;
             std::vector<std::uint32_t> headDvAccumulators;
+            std::vector<std::uint32_t> headDGateAccumulators;
             std::vector<std::uint32_t> scaledGradients;
             std::vector<std::uint32_t> nextParameters;
         };
@@ -579,10 +589,12 @@ struct Runtime::Impl {
         std::vector<std::uint32_t> gradientRegistry;
         std::vector<std::uint32_t> nextParameterRegistry;
         phonelm::transformer::ResourceEstimate resourceEstimate;
-        std::vector<float> maskData, zeroFfData, positionData, selectorData;
+        std::vector<float> maskData, zeroFfData, positionData, selectorData,
+                           gateSelectorData;
         float attentionScale = 1.0f, centeredScale = 8.0f,
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
-              dimensionValue = 1.0f, inverseDimensionValue = 1.0f;
+              dimensionValue = 1.0f, inverseDimensionValue = 1.0f,
+              gateOne = 1.0f;
         std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
         std::uint32_t vocabularySize = 0, numLayers = 0, numHeads = 0;
@@ -592,7 +604,7 @@ struct Runtime::Impl {
         bool bindManifestEmitted = false;
         State state = State::INACTIVE;
         bool active = false, languageModel = false, diagnosticOutputs = false;
-        bool forwardOnly = false;
+        bool forwardOnly = false, headwiseG1Gate = false;
         TinyTransformerTrainingTapSet tapSet =
             TinyTransformerTrainingTapSet::NONE;
         std::uint32_t diagnosticLayerIndex = std::numeric_limits<std::uint32_t>::max();

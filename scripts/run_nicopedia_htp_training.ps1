@@ -31,6 +31,7 @@ param(
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
   [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
+  [ValidateSet('none','headwise_g1_sigmoid')][string]$AttentionGate = 'none',
   [ValidateSet('CPU','HVX')][string]$MuonBackend = 'CPU',
   [string]$HexagonSdkRoot = '',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',
@@ -349,7 +350,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -431,6 +432,8 @@ $reportMap = if ($OneUpdateProbe) {
       [int]$probeMap.api_trace_graph_execute_failure_count -ne 0) { throw 'PROBE_REPORT_EXECUTE_COUNT_MISMATCH' }
   $probeMap
 } elseif ($Optimizer -eq 'Muon') {
+  $expectedCheckpointFormat = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
+  $expectedAuxAdamParameters = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 138368 } else { 135936 }
   $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
   foreach ($key in @('optimizer','qnn_return_code_success','output_tensors_finite','final_finite','all_steps_finite','cpu_fallback','fallback','checkpoint_format','completed_steps','muon_matrix_count','muon_parameter_count','aux_adam_parameter_count','forward_backward_backend','optimizer_muon_backend','optimizer_aux_adam_backend','api_trace_graph_execute_failure_count','api_trace_fallback_attempted','api_trace_fallback_succeeded')) {
@@ -438,9 +441,9 @@ $reportMap = if ($OneUpdateProbe) {
   }
   if ($muonMap.optimizer -ne 'muon_aux_adam' -or $muonMap.qnn_return_code_success -ne 'true' -or
       $muonMap.output_tensors_finite -ne 'true' -or $muonMap.final_finite -ne 'true' -or $muonMap.all_steps_finite -ne 'true' -or
-      $muonMap.cpu_fallback -ne 'false' -or $muonMap.fallback -ne 'false' -or $muonMap.checkpoint_format -ne 'NPRTCKPTV4' -or
+      $muonMap.cpu_fallback -ne 'false' -or $muonMap.fallback -ne 'false' -or $muonMap.checkpoint_format -ne $expectedCheckpointFormat -or
       [int]$muonMap.completed_steps -ne $Steps -or [int]$muonMap.muon_matrix_count -ne 114 -or
-      [long]$muonMap.muon_parameter_count -ne 622592 -or [long]$muonMap.aux_adam_parameter_count -ne 135936 -or
+      [long]$muonMap.muon_parameter_count -ne 622592 -or [long]$muonMap.aux_adam_parameter_count -ne $expectedAuxAdamParameters -or
       $muonMap.forward_backward_backend -ne 'HTP' -or $muonMap.optimizer_muon_backend -ne $expectedMuonBackend -or
       $muonMap.optimizer_aux_adam_backend -ne 'CPU' -or $muonMap.api_trace_graph_execute_failure_count -ne '0' -or
       $muonMap.api_trace_fallback_attempted -ne 'false' -or $muonMap.api_trace_fallback_succeeded -ne 'false') { throw 'MUON_REPORT_HEALTH_REJECTED' }
@@ -537,7 +540,8 @@ foreach ($name in $checkpointNames) {
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   if ($Optimizer -eq 'Muon') {
     $magic = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($local), 0, 11)
-    if ($magic -ne "NPRTCKPTV4`n") { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
+    $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
+    if ($magic -ne $expectedMagic) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
   } else {
     $header = Get-PhoneLmCheckpointHeaders -Path $local
     if ($header.Step -ne $stepName -or $header.Seed -ne $Seed -or $header.Layers -ne $Layers -or $header.Heads -ne 2 -or $header.Vocabulary -ne $Vocabulary -or $header.Tokens -ne $Tokens -or $header.Dimension -ne $Dimension -or $header.FeedForward -ne $FeedForwardDimension) { throw "CHECKPOINT_IDENTITY_MISMATCH: $name" }
@@ -555,6 +559,7 @@ foreach ($name in $checkpointNames) {
   $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
   $validationHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\validation.bin')
   $developmentHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\development.bin')
+  Ensure-PhoneLmHostCheckpointEvaluator -Root $root -ExePath $hostEvalExe | Out-Null
   if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf) -or -not (Test-Path -LiteralPath $validationHost -PathType Leaf) -or -not (Test-Path -LiteralPath $developmentHost -PathType Leaf)) {
     throw 'HOST_CHECKPOINT_EVALUATOR_UNAVAILABLE'
   }

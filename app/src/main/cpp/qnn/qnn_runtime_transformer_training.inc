@@ -150,7 +150,7 @@ bool Runtime::prepareTinyTransformerTraining(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads) {
+    uint32_t numHeads, bool headwiseG1Gate) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !numLayers || !numHeads ||
       dimension % numHeads != 0 || !std::isfinite(epsilon) || epsilon <= 0) {
@@ -168,10 +168,11 @@ bool Runtime::prepareTinyTransformerTraining(
   // Hand all non-baseline requests to the stateful builder before touching
   // fixed-L1 state. A generalized prepare failure must therefore leave a
   // FAILED state that executeTinyTransformerTraining cannot reinterpret as L1.
-  if (numLayers != 1 || numHeads != 1) {
+  if (numLayers != 1 || numHeads != 1 || headwiseG1Gate) {
     return prepareTinyTransformerTrainingGeneralized(
         tokens, dimension, feedForwardDimension, epsilon, diagnosticOutputs,
-        error, vocabularySize, variant, tapSet, numLayers, numHeads);
+        error, vocabularySize, variant, tapSet, numLayers, numHeads,
+        headwiseG1Gate);
   }
   if (!std::isfinite(options_.tinyTransformerCenteredScale) ||
       options_.tinyTransformerCenteredScale <= 0) {

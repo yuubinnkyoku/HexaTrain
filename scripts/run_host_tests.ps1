@@ -21,6 +21,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "CPU host tests failed"
 }
 
+$HeadwiseGateExecutable = Join-Path $OutputDirectory "headwise_g1_gate_test.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "app\src\main\cpp\tiny_language_model_cpu.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_checkpoint.cpp") `
+    (Join-Path $Root "host_tests\headwise_g1_gate_test.cpp") `
+    -o $HeadwiseGateExecutable
+if ($LASTEXITCODE -ne 0) { throw "Headwise G1 gate host test compilation failed" }
+& $HeadwiseGateExecutable
+if ($LASTEXITCODE -ne 0) { throw "Headwise G1 gate host test failed" }
+
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `
     (Join-Path $Root "app\src\main\cpp\cpu_reference_training.cpp") `
@@ -32,6 +43,7 @@ if ($LASTEXITCODE -ne 0) {
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_first_nonfinite_diagnostics.cpp") `
     (Join-Path $Root "app\src\main\cpp\validation_checkpoint.cpp") `
     (Join-Path $Root "app\src\main\cpp\qnn\qnn_runtime_stub.cpp") `
+    (Join-Path $Root "app\src\main\cpp\nicopedia_muon_checkpoint.cpp") `
     (Join-Path $Root "host_tests\qnn_sdk_independent_test.cpp") `
     -o $QnnSdkIndependentExecutable
 if ($LASTEXITCODE -ne 0) {

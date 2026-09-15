@@ -7,10 +7,18 @@
 #include <string>
 #include <vector>
 namespace phonelm::tiny_lm {
+enum class AttentionGate : std::uint32_t {
+  NONE = 0,
+  HEADWISE_G1_SIGMOID = 1,
+};
+
+const char* attentionGateName(AttentionGate gate);
+
 struct Config {
   uint32_t vocabularySize=32,tokens=8,dimension=16,feedForwardDimension=32;
   float epsilon=1e-5f;
   uint32_t numLayers=1,numHeads=1;
+  AttentionGate attentionGate=AttentionGate::NONE;
 };
 // Semantic ownership of a trainable tensor.  Keep this metadata alongside
 // the established name/pointer pair so optimizer pilots cannot infer role
@@ -75,9 +83,21 @@ struct StepResult {
   // [layer * numHeads + head], each with [T,T] elements.
   std::vector<std::vector<float>> layerInputGradients;
   std::vector<std::vector<float>> attentionHeadProbabilities;
+  // Layer-major [T,H] gate values and the gate-only contribution to dLN1.
+  std::vector<std::vector<float>> attentionGates;
+  std::vector<std::vector<float>> gateInputGradients;
   qnn::TinyTransformerParameters gradients,next;
 };
-struct GradientCheckResult { bool passed=false; float maximumAbsoluteError=0,maximumRelativeError=0; std::string report; };
+struct GradientCheckResult {
+  bool passed=false;
+  float maximumAbsoluteError=0,maximumRelativeError=0;
+  // Worst relative-error sample, used to explain near-zero-gradient inflation.
+  const char* worstRelativeParameter="";
+  int worstRelativeIndex=-1;
+  float worstRelativeAnalytic=0,worstRelativeNumeric=0;
+  float worstRelativeAbsoluteError=0,worstRelativeRelativeError=0;
+  std::string report;
+};
 struct MomentumResult { qnn::TinyTransformerParameters velocity,next; };
 struct AdamResult {
   qnn::TinyTransformerParameters firstMoment, secondMoment;
@@ -98,6 +118,7 @@ struct GeneralizedCpuTrace {
     std::vector<float> ln1;
     std::vector<float> ln1Centered, ln1Square, ln1VarianceEps, ln1Inv;
     std::vector<float> q, k, v;
+    std::vector<float> gates;
     std::vector<float> probabilities;
     std::vector<float> context;
     std::vector<float> residual1;
@@ -115,4 +136,6 @@ AdamResult adamUpdate(const qnn::TinyTransformerParameters&,const qnn::TinyTrans
                       const qnn::TinyTransformerParameters&,const qnn::TinyTransformerParameters&,
                       float,float,float,float,float,float);
 GradientCheckResult gradientCheck(uint32_t seed=20260725,float epsilon=1e-3f);
+GradientCheckResult headwiseG1GateGradientCheck(uint32_t seed=20260913,
+                                                float epsilon=1e-3f);
 }

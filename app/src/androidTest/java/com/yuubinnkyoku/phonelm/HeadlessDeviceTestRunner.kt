@@ -200,6 +200,7 @@ class HeadlessDeviceTestRunner {
                                 nicopediaExperimentFork = false,
                                 nicopediaParentLearningRate = 0f,
                                 nicopediaOptimizer = 0,
+                                attentionGate = 0,
                                 nicopediaMuonLearningRate = 0f,
                                 nicopediaMuonMomentum = 0.95f,
                                 nicopediaMuonNsSteps = 5,
@@ -274,6 +275,7 @@ class HeadlessDeviceTestRunner {
         val experimentFork: Boolean,
         val parentLearningRate: Float,
         val optimizer: Int,
+        val attentionGate: Int,
         val muonLearningRate: Float,
         val muonMomentum: Float,
         val muonNsSteps: Int,
@@ -338,6 +340,14 @@ class HeadlessDeviceTestRunner {
                 else -> throw IllegalArgumentException("muonBackend must be CPU or HVX")
             }
             else -> throw IllegalArgumentException("optimizer must be Adam, Muon, or MuonHVX")
+        }
+        val attentionGateName = stringArgument(arguments, "attentionGate", "none")
+        val attentionGate = when (attentionGateName) {
+            "none" -> 0
+            "headwise_g1_sigmoid" -> 1
+            else -> throw IllegalArgumentException(
+                "attentionGate must be none or headwise_g1_sigmoid",
+            )
         }
         val muonLearningRate = floatArgument(arguments, "muonLearningRate", 0.01f, 0.000001f..1f)
         val muonMomentum = floatArgument(arguments, "muonMomentum", 0.95f, 0f..0.999999f)
@@ -428,6 +438,7 @@ class HeadlessDeviceTestRunner {
             experimentFork = experimentFork,
             parentLearningRate = parentLearningRate,
             optimizer = optimizer,
+            attentionGate = attentionGate,
             muonLearningRate = muonLearningRate,
             muonMomentum = muonMomentum,
             muonNsSteps = muonNsSteps,
@@ -571,6 +582,7 @@ class HeadlessDeviceTestRunner {
             nicopediaExperimentFork = config.experimentFork,
             nicopediaParentLearningRate = config.parentLearningRate,
             nicopediaOptimizer = config.optimizer,
+            attentionGate = config.attentionGate,
             nicopediaMuonLearningRate = config.muonLearningRate,
             nicopediaMuonMomentum = config.muonMomentum,
             nicopediaMuonNsSteps = config.muonNsSteps,
@@ -600,6 +612,7 @@ class HeadlessDeviceTestRunner {
             vocabulary = config.vocabulary,
             dimension = config.dimension,
             feedForwardDimension = config.feedForwardDimension,
+            attentionGate = config.attentionGate,
             checkpointStep = config.checkpointStep,
             validationChunks = config.validationChunks,
             developmentChunks = config.developmentChunks,
@@ -650,6 +663,7 @@ class HeadlessDeviceTestRunner {
             vocabulary = config.vocabulary,
             dimension = config.dimension,
             feedForwardDimension = config.feedForwardDimension,
+            attentionGate = config.attentionGate,
             maxNewBytes = config.maxNewBytes,
             generateMode = config.generateMode,
             temperature = config.temperature,
@@ -710,6 +724,7 @@ class HeadlessDeviceTestRunner {
                     tokenizerKind = if (config.vocabulary == 1024) "byte_bpe" else "byte",
                     tokenizerHash = null,
                     parameterHash = "",
+                    attentionGate = config.attentionGate,
                     htpGraphPrecisionMode = 0,
                     htpGraphPrecisionCompensation = 0,
                     htpGraphWeightsPacking = 0,
@@ -851,6 +866,7 @@ class HeadlessDeviceTestRunner {
             vocabulary = 256,
             dimension = 16,
             feedForwardDimension = 32,
+            attentionGate = 0,
             // If the unchanged legacy gate unexpectedly passes, this is the
             // preregistered fixed Greedy generation (64 bytes). On the known
             // reject path no generation executes and the count remains zero.

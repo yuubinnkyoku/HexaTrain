@@ -12,6 +12,7 @@
 
 #include "../tiny_language_model_cpu.h"
 #include "../nicopedia_checkpoint_policy.h"
+#include "../nicopedia_muon_checkpoint.h"
 
 #include <array>
 #include <cstdint>
@@ -99,7 +100,6 @@ inline std::vector<std::uint8_t> nprtReadFileBytes(const std::string &path,
 inline void nprtAssignRegistryMember(TinyTransformerParameters &target,
                                      uint32_t layers, const std::string &name,
                                      std::vector<float> &&values) {
-  using Params = TinyTransformerParameters;
   using Layer = TinyTransformerLayerParameters;
   if (name == "token_embedding") {
     target.tokenEmbedding = std::move(values);
@@ -131,6 +131,8 @@ inline void nprtAssignRegistryMember(TinyTransformerParameters &target,
   else if (suffix == "wk") layer->wk = std::move(values);
   else if (suffix == "wv") layer->wv = std::move(values);
   else if (suffix == "wo") layer->wo = std::move(values);
+  else if (suffix == "attention_gate_weight")
+    layer->attentionGateWeight = std::move(values);
   else if (suffix == "norm2_gamma") layer->gamma2 = std::move(values);
   else if (suffix == "norm2_beta") layer->beta2 = std::move(values);
   else if (suffix == "ffn_w1") layer->w1 = std::move(values);
@@ -148,6 +150,8 @@ struct LoadedNprtCheckpoint {
   bool hasAdam = false;
   bool v2 = false;
   bool v3 = false;
+  bool v4 = false;
+  bool v5 = false;
   std::string tokenizerKind;
   std::string tokenizerHash;
   TinyTransformerParameters parameters;
@@ -186,6 +190,42 @@ inline LoadedNprtCheckpoint nprtLoadCheckpointForGeneration(
   result.fileBytes = static_cast<std::uint64_t>(size);
   std::string magic(11, '\0');
   input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+  if (magic == "NPRTCKPTV4\n" || magic == "NPRTCKPTV5\n") {
+    input.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    input.read(reinterpret_cast<char*>(bytes.data()), size);
+    nicopedia_muon_checkpoint::Checkpoint checkpoint;
+    std::string decodeError;
+    if (!nicopedia_muon_checkpoint::decodeCheckpoint(bytes, &checkpoint,
+                                                      &decodeError))
+      throw std::runtime_error(decodeError);
+    if (checkpoint.identity.seed != expectedSeed ||
+        checkpoint.identity.tokenizerHash != expectedTokenizerHash)
+      throw std::runtime_error("NPRT_CKPT_MUON_IDENTITY_MISMATCH");
+    if (!nicopedia_muon_checkpoint::extractParameters(
+            checkpoint, expected, expectedSeed, &result.parameters,
+            &decodeError))
+      throw std::runtime_error(decodeError);
+    result.vocabulary = expected.vocabularySize;
+    result.tokens = expected.tokens;
+    result.dimension = expected.dimension;
+    result.feedForward = expected.feedForwardDimension;
+    result.layers = expected.numLayers;
+    result.heads = expected.numHeads;
+    result.seed = expectedSeed;
+    result.step = static_cast<uint32_t>(checkpoint.identity.globalStep);
+    result.registryCount = static_cast<uint32_t>(checkpoint.parameters.size());
+    result.parameterElements = tiny_lm::parameterElementCount(result.parameters);
+    result.tokenizerKind = checkpoint.identity.tokenizerKind;
+    result.tokenizerHash = checkpoint.identity.tokenizerHash;
+    result.parameterHash = nprtParameterHash(result.parameters);
+    result.v4 = magic == "NPRTCKPTV4\n";
+    result.v5 = magic == "NPRTCKPTV5\n";
+    for (const auto& entry : tiny_lm::parameterRegistry(result.parameters))
+      for (float value : *entry.values)
+        if (!std::isfinite(value)) result.finite = false;
+    return result;
+  }
   if (magic != "NPRTCKPTV1\n" && magic != "NPRTCKPTV2\n" &&
       magic != "NPRTCKPTV3\n")
     throw std::runtime_error("NPRT_CKPT_MAGIC");
