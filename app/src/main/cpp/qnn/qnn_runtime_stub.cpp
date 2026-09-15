@@ -18,6 +18,10 @@ const BackendInfo& Runtime::info() const {
 }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
+const ForwardOnlyPhaseTimings& Runtime::lastForwardOnlyPhaseTimings() const {
+    static const ForwardOnlyPhaseTimings empty;
+    return empty;
+}
 const ApiTrace& Runtime::apiTrace() const { return apiTrace_; }
 std::uint32_t Runtime::tinyTransformerTrainingSourceTensorCreateSuccessCount() const { return 0; }
 std::uint32_t Runtime::tinyTransformerTrainingSourceGraphAddNodeSuccessCount() const { return 0; }

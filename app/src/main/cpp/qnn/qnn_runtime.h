@@ -55,6 +55,30 @@ enum class TinyTransformerTrainingTapSet {
 
 const char* backendKindName(QnnBackendKind kind);
 
+// Per-execute host-side phase timings for FORWARD_ONLY generation.
+// All values are microseconds.  Zero means the phase was not measured.
+// This struct is additive diagnostics only; it never changes generation
+// semantics or tensor contents.
+struct ForwardOnlyPhaseTimings {
+    double schemaValidationUs = 0.0;
+    double appWriteBindUs = 0.0;
+    double appWriteSnapshotUs = 0.0;
+    double appReadAllocateUs = 0.0;
+    double appReadPoisonFillUs = 0.0;
+    double appReadBindUs = 0.0;
+    double graphExecuteUs = 0.0;
+    double immutabilityCheckUs = 0.0;
+    double outputMaterializeUs = 0.0;
+    double poisonScanUs = 0.0;
+    double finiteScanUs = 0.0;
+    double totalUs = 0.0;
+    // Byte counters for the last execute (diagnostic evidence).
+    std::uint64_t appWriteBytes = 0;
+    std::uint64_t appReadBytes = 0;
+    std::uint32_t appWriteTensorCount = 0;
+    std::uint32_t appReadTensorCount = 0;
+};
+
 struct RuntimeMetrics {
     std::uint64_t graphCreateCount = 0;
     std::uint64_t graphFinalizeCount = 0;
@@ -496,6 +520,9 @@ public:
         const std::vector<float>& input,
         const TinyTransformerParameters& current,
         TinyTransformerTrainingOutputs& outputs, std::string& error);
+    // Last FORWARD_ONLY execute phase timings.  Valid only after a successful
+    // executeTinyTransformerForwardOnly call on this Runtime instance.
+    const ForwardOnlyPhaseTimings& lastForwardOnlyPhaseTimings() const;
     bool prepareMlpFullStep(uint32_t batchSize, uint32_t inputDimension,
                             uint32_t hiddenDimension, uint32_t outputDimension,
                             bool diagnosticOutputs, std::string& error);

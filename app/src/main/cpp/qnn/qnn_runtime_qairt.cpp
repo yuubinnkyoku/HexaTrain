@@ -613,6 +613,7 @@ struct Runtime::Impl {
             TinyTransformerTrainingTapSet::NONE;
         std::uint32_t diagnosticLayerIndex = std::numeric_limits<std::uint32_t>::max();
         bool executeDiagnosticsEmitted = false;
+        ForwardOnlyPhaseTimings lastPhaseTimings;
     } generalizedTinyTransformerTraining;
 
     struct TinyTransformerGraph {
@@ -656,6 +657,11 @@ Runtime::~Runtime() {
 const BackendInfo& Runtime::info() const { return info_; }
 const std::string& Runtime::diagnostics() const { return diagnostics_; }
 const RuntimeMetrics& Runtime::metrics() const { return metrics_; }
+const ForwardOnlyPhaseTimings& Runtime::lastForwardOnlyPhaseTimings() const {
+    static const ForwardOnlyPhaseTimings empty;
+    if (!impl_) return empty;
+    return impl_->generalizedTinyTransformerTraining.lastPhaseTimings;
+}
 const ApiTrace& Runtime::apiTrace() const { return apiTrace_; }
 std::uint32_t Runtime::tinyTransformerTrainingSourceTensorCreateSuccessCount() const {
     return impl_ ? impl_->tinyTransformerTraining.sourceTensorCreateSuccessCount : 0;

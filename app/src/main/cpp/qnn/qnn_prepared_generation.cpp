@@ -405,10 +405,22 @@ std::string runPreparedNicopediaGeneration(
     }
     const auto generateStarted = std::chrono::steady_clock::now();
     auto generateContext = context;
+    // Phase timing accumulators (microseconds, summed over generation steps).
+    double oneHotBuildUs = 0.0;
+    double lastTokenExtractUs = 0.0;
+    double argmaxOrSamplingUs = 0.0;
+    double contextShiftUs = 0.0;
+    ForwardOnlyPhaseTimings executePhaseSum{};
+    std::uint32_t measuredSteps = 0;
     for (std::uint32_t step = 0; step < generateConfig.maxNewBytes; ++step) {
         TinyTransformerTrainingOutputs htpStep;
+        const auto oneHotStarted = std::chrono::steady_clock::now();
+        const auto oneHotInput = windowInput(generateContext);
+        oneHotBuildUs += std::chrono::duration<double, std::micro>(
+                             std::chrono::steady_clock::now() - oneHotStarted)
+                             .count();
         if (!runtime.executeTinyTransformerForwardOnly(
-                windowInput(generateContext), engine.loaded.parameters, htpStep,
+                oneHotInput, engine.loaded.parameters, htpStep,
                 error)) {
             htpNativeApplicationTensorsFinite = false;
             htpNativeGenerationLogitsFinite =
@@ -416,13 +428,41 @@ std::string runPreparedNicopediaGeneration(
                 allFinite(htpStep.logits);
             return generationExecuteFailure("nicopedia_generate_step", error);
         }
+        {
+            const auto& phases = runtime.lastForwardOnlyPhaseTimings();
+            executePhaseSum.schemaValidationUs += phases.schemaValidationUs;
+            executePhaseSum.appWriteBindUs += phases.appWriteBindUs;
+            executePhaseSum.appWriteSnapshotUs += phases.appWriteSnapshotUs;
+            executePhaseSum.appReadAllocateUs += phases.appReadAllocateUs;
+            executePhaseSum.appReadPoisonFillUs += phases.appReadPoisonFillUs;
+            executePhaseSum.appReadBindUs += phases.appReadBindUs;
+            executePhaseSum.graphExecuteUs += phases.graphExecuteUs;
+            executePhaseSum.immutabilityCheckUs += phases.immutabilityCheckUs;
+            executePhaseSum.outputMaterializeUs += phases.outputMaterializeUs;
+            executePhaseSum.poisonScanUs += phases.poisonScanUs;
+            executePhaseSum.finiteScanUs += phases.finiteScanUs;
+            executePhaseSum.totalUs += phases.totalUs;
+            executePhaseSum.appWriteBytes = phases.appWriteBytes;
+            executePhaseSum.appReadBytes = phases.appReadBytes;
+            executePhaseSum.appWriteTensorCount = phases.appWriteTensorCount;
+            executePhaseSum.appReadTensorCount = phases.appReadTensorCount;
+            ++measuredSteps;
+        }
+        const auto extractStarted = std::chrono::steady_clock::now();
         const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
         const bool rowAvailable =
             htpStep.logits.size() >= lastBase + config.vocabularySize;
         const float* row = rowAvailable ? htpStep.logits.data() + lastBase : nullptr;
+        lastTokenExtractUs += std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - extractStarted)
+                                  .count();
+        const auto finiteStarted = std::chrono::steady_clock::now();
         bool rowFinite = rowAvailable;
         for (uint32_t j = 0; rowAvailable && j < config.vocabularySize; ++j)
             rowFinite = rowFinite && std::isfinite(row[j]);
+        lastTokenExtractUs += std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - finiteStarted)
+                                  .count();
         htpNativeGenerationLogitsFinite =
             htpNativeGenerationLogitsFinite && rowFinite;
         htpNativeApplicationTensorsFinite =
@@ -432,6 +472,7 @@ std::string runPreparedNicopediaGeneration(
                 "generation_loop",
                 "generation step produced non-finite logits on prepared graph");
         }
+        const auto sampleStarted = std::chrono::steady_clock::now();
         std::uint32_t nextToken = 0;
         if (generateConfig.greedy) {
             nextToken = nicopedia_gen::greedyArgmax(row, config.vocabularySize);
@@ -450,6 +491,9 @@ std::string runPreparedNicopediaGeneration(
             }
             nextToken = sampling.value;
         }
+        argmaxOrSamplingUs += std::chrono::duration<double, std::micro>(
+                                  std::chrono::steady_clock::now() - sampleStarted)
+                                  .count();
         if (nextToken >= config.vocabularySize) {
             return failureReport("TOKEN_RANGE",
                                  "generated token out of vocabulary", &runtime);
@@ -458,8 +502,12 @@ std::string runPreparedNicopediaGeneration(
                 engine.bpeModel.get(), nextToken, generateConfig.maxNewBytes,
                 &generated, &generatedTokens))
             break;
+        const auto shiftStarted = std::chrono::steady_clock::now();
         generateContext.erase(generateContext.begin());
         generateContext.push_back(static_cast<std::uint16_t>(nextToken));
+        contextShiftUs += std::chrono::duration<double, std::micro>(
+                              std::chrono::steady_clock::now() - shiftStarted)
+                              .count();
         if (progress &&
             (step == 0 || (step + 1) % 16 == 0 ||
              step + 1 == generateConfig.maxNewBytes)) {
@@ -608,6 +656,32 @@ std::string runPreparedNicopediaGeneration(
            << (generated.empty()
                    ? 0.0
                    : generateSeconds / generated.size() * 1000.0)
+           << "\ngeneration_measured_steps=" << measuredSteps
+           << "\nphase_one_hot_build_us=" << oneHotBuildUs
+           << "\nphase_schema_validation_us=" << executePhaseSum.schemaValidationUs
+           << "\nphase_app_write_bind_us=" << executePhaseSum.appWriteBindUs
+           << "\nphase_app_write_snapshot_us=" << executePhaseSum.appWriteSnapshotUs
+           << "\nphase_app_read_allocate_us=" << executePhaseSum.appReadAllocateUs
+           << "\nphase_app_read_poison_fill_us=" << executePhaseSum.appReadPoisonFillUs
+           << "\nphase_app_read_bind_us=" << executePhaseSum.appReadBindUs
+           << "\nphase_qnn_graph_execute_us=" << executePhaseSum.graphExecuteUs
+           << "\nphase_immutability_check_us=" << executePhaseSum.immutabilityCheckUs
+           << "\nphase_output_materialize_us=" << executePhaseSum.outputMaterializeUs
+           << "\nphase_poison_scan_us=" << executePhaseSum.poisonScanUs
+           << "\nphase_finite_scan_us=" << executePhaseSum.finiteScanUs
+           << "\nphase_last_token_extract_us=" << lastTokenExtractUs
+           << "\nphase_argmax_or_sampling_us=" << argmaxOrSamplingUs
+           << "\nphase_context_shift_us=" << contextShiftUs
+           << "\nphase_execute_total_us=" << executePhaseSum.totalUs
+           << "\nphase_host_unclassified_us="
+           << (generateSeconds * 1e6 - executePhaseSum.totalUs - oneHotBuildUs -
+               lastTokenExtractUs - argmaxOrSamplingUs - contextShiftUs)
+           << "\nphase_app_write_bytes_per_token=" << executePhaseSum.appWriteBytes
+           << "\nphase_app_read_bytes_per_token=" << executePhaseSum.appReadBytes
+           << "\nphase_app_write_tensor_count="
+           << executePhaseSum.appWriteTensorCount
+           << "\nphase_app_read_tensor_count="
+           << executePhaseSum.appReadTensorCount
            << "\ngraph_execute_count=" << runtime.metrics().graphExecuteCount
            << "\ncpu_fallback=false"
            << "\nnan_detected=false"

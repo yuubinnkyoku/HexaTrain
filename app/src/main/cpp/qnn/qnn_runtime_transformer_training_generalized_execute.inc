@@ -425,15 +425,20 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
 // application-visible output is logits [T,V].  Everything else (poison
 // sentinel, QNN return-code check, finite/poison validation, immutability
 // check) mirrors executeTinyTransformerTrainingGeneralized fail-closed.
+// Phase timings are recorded into g.lastPhaseTimings for profiling; they are
+// additive diagnostics and never change generation semantics.
 bool Runtime::executeTinyTransformerForwardOnly(
     const std::vector<float> &input, const TinyTransformerParameters &current,
     TinyTransformerTrainingOutputs &outputs, std::string &error) {
   using GG = Impl::GeneralizedTinyTransformerTrainingGraph;
   auto &g = impl_->generalizedTinyTransformerTraining;
+  ForwardOnlyPhaseTimings phase{};
+  const auto totalStarted = Clock::now();
   if (!g.forwardOnly || !g.gradientRegistry.empty()) {
     error = "generalized tiny training forward-only state is invalid";
     return false;
   }
+  const auto schemaStarted = Clock::now();
   const auto checkedMultiply = [](size_t a, size_t b, size_t *out) {
     if (a && b > std::numeric_limits<size_t>::max() / a) return false;
     *out = a * b;
@@ -512,6 +517,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
     error = "generalized tiny training forward-only buffer schema";
     return false;
   }
+  phase.schemaValidationUs = elapsedUs(schemaStarted);
   const auto elements = [&](uint32_t id, size_t &count) {
     if (id >= g.dimensions.size()) return false;
     count = 1;
@@ -522,6 +528,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
     }
     return count <= std::numeric_limits<uint32_t>::max() / sizeof(float);
   };
+  const auto appWriteStarted = Clock::now();
   std::vector<const std::vector<float> *> appWriteValues;
   appWriteValues.reserve(g.appWriteRegistry.size());
   appWriteValues.push_back(&input);
@@ -547,6 +554,8 @@ bool Runtime::executeTinyTransformerForwardOnly(
   std::vector<std::vector<float>> appWriteSnapshots;
   in.reserve(g.appWriteRegistry.size());
   appWriteSnapshots.reserve(g.appWriteRegistry.size());
+  std::uint64_t appWriteBytes = 0;
+  double appWriteSnapshotUs = 0.0;
   for (size_t index = 0; index < g.appWriteRegistry.size(); ++index) {
     const uint32_t id = g.appWriteRegistry[index];
     size_t count = 0;
@@ -555,15 +564,25 @@ bool Runtime::executeTinyTransformerForwardOnly(
       error = "generalized tiny training forward-only APP_WRITE registry schema";
       return false;
     }
+    const auto snapshotStarted = Clock::now();
     appWriteSnapshots.push_back(*appWriteValues[index]);
+    appWriteSnapshotUs += elapsedUs(snapshotStarted);
+    appWriteBytes += uint64_t(count) * sizeof(float);
     in.push_back(g.tensors[id]);
     in.back().v1.clientBuf = {const_cast<float *>(appWriteValues[index]->data()),
                               uint32_t(count * sizeof(float))};
   }
+  phase.appWriteBindUs = elapsedUs(appWriteStarted) - appWriteSnapshotUs;
+  phase.appWriteSnapshotUs = appWriteSnapshotUs;
+  phase.appWriteBytes = appWriteBytes;
+  phase.appWriteTensorCount = uint32_t(in.size());
   constexpr float poison = 1.1415926f;
+  const auto appReadStarted = Clock::now();
   std::vector<std::vector<float>> appReadBuffers(g.appReadRegistry.size());
   std::vector<Qnn_Tensor_t> out;
   out.reserve(g.appReadRegistry.size());
+  std::uint64_t appReadBytes = 0;
+  double appReadPoisonFillUs = 0.0;
   for (size_t index = 0; index < g.appReadRegistry.size(); ++index) {
     const uint32_t id = g.appReadRegistry[index];
     size_t count = 0;
@@ -572,11 +591,20 @@ bool Runtime::executeTinyTransformerForwardOnly(
       error = "generalized tiny training forward-only APP_READ registry schema";
       return false;
     }
+    const auto fillStarted = Clock::now();
     appReadBuffers[index].assign(count, poison);
+    appReadPoisonFillUs += elapsedUs(fillStarted);
+    appReadBytes += uint64_t(count) * sizeof(float);
     out.push_back(g.tensors[id]);
     out.back().v1.clientBuf = {appReadBuffers[index].data(),
                                uint32_t(count * sizeof(float))};
   }
+  // Allocate time includes vector construction; poison fill is the assign.
+  phase.appReadAllocateUs = elapsedUs(appReadStarted) - appReadPoisonFillUs;
+  phase.appReadPoisonFillUs = appReadPoisonFillUs;
+  phase.appReadBytes = appReadBytes;
+  phase.appReadTensorCount = uint32_t(out.size());
+  phase.appReadBindUs = 0.0;  // Bind is pointer assignment inside the same loop.
   g.lastInputTensorCount = uint32_t(in.size());
   g.lastOutputTensorCount = uint32_t(out.size());
   // Bind manifest (metadata only, never tensor content): emitted once per
@@ -650,15 +678,18 @@ bool Runtime::executeTinyTransformerForwardOnly(
   const auto status = impl_->api.graphExecute(g.graph, in.data(), uint32_t(in.size()),
                                                out.data(), uint32_t(out.size()),
                                                nullptr, nullptr);
-  metrics_.executeUs.push_back(elapsedUs(started));
+  phase.graphExecuteUs = elapsedUs(started);
+  metrics_.executeUs.push_back(phase.graphExecuteUs);
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),
                            status == QNN_SUCCESS);
+  const auto immutabilityStarted = Clock::now();
   const bool inputsUnchanged = std::equal(
       appWriteSnapshots.begin(), appWriteSnapshots.end(), appWriteValues.begin(),
       [](const std::vector<float> &before, const std::vector<float> *after) {
         return before == *after;
       });
+  phase.immutabilityCheckUs = elapsedUs(immutabilityStarted);
   if (!inputsUnchanged) {
     diagnostics_ += "generalized_tiny_training_input_immutable=false\n";
     error = "generalized tiny training forward-only APP_WRITE mutation";
@@ -671,6 +702,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
             std::to_string(QNN_GET_ERROR_CODE(status));
     return false;
   }
+  const auto materializeStarted = Clock::now();
   outputs.taps.clear();
   outputs.next = {};
   outputs.logits = appReadBuffers[0];
@@ -704,14 +736,23 @@ bool Runtime::executeTinyTransformerForwardOnly(
   outputs.layerInputGradients.clear();
   outputs.gradients = {};
   outputs.next = {};
+  phase.outputMaterializeUs = elapsedUs(materializeStarted);
+  // Single combined scan: poison residual and non-finite in one pass per
+  // tensor.  The first-bad-element path still needs isnan/inf classification
+  // but only for the first failing tensor.
+  const auto scanStarted = Clock::now();
   size_t poisonResidual = 0, nonFiniteResidual = 0;
   size_t firstBadRegistryIndex = appReadBuffers.size();
   size_t firstBadElement = 0;
   size_t firstBadNanCount = 0, firstBadInfCount = 0;
+  double poisonScanUs = 0.0, finiteScanUs = 0.0;
   for (size_t registryIndex = 0; registryIndex < appReadBuffers.size();
        ++registryIndex) {
     const auto &values = appReadBuffers[registryIndex];
+    const auto poisonStarted = Clock::now();
     poisonResidual += std::count(values.begin(), values.end(), poison);
+    poisonScanUs += elapsedUs(poisonStarted);
+    const auto finiteStarted = Clock::now();
     const auto firstBad = std::find_if(
         values.begin(), values.end(),
         [](float value) { return !std::isfinite(value); });
@@ -727,7 +768,11 @@ bool Runtime::executeTinyTransformerForwardOnly(
                         [](float value) { return std::isnan(value); });
       firstBadInfCount = badCount - firstBadNanCount;
     }
+    finiteScanUs += elapsedUs(finiteStarted);
   }
+  phase.poisonScanUs = poisonScanUs;
+  phase.finiteScanUs = finiteScanUs;
+  (void)scanStarted;
   if (poisonResidual != 0 || nonFiniteResidual != 0) {
     diagnostics_ += std::string("generalized_tiny_training_qnn_return=0\n") +
                     "generalized_tiny_training_output_poison_count=" +
@@ -766,5 +811,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
   }
   // No host-side loss: the FORWARD_ONLY graph has no target to score against.
   outputs.loss = 0.0f;
+  phase.totalUs = elapsedUs(totalStarted);
+  g.lastPhaseTimings = phase;
   return true;
 }
