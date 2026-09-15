@@ -2,6 +2,10 @@
 
 **Android / Snapdragon Hexagon HTP 上で小規模Transformerを実際に学習させる研究プロジェクト**
 
+> **プロジェクトの目標**
+>
+> このプロジェクトの目標は、スマホ単体で、現実的な時間内に学習が完結する最高水準のLLMを開発することです。
+
 HexaTrain は、モデルの Forward / Backward / オプティマイザのすべてを単一のバックエンドへ無理に押し込むのではなく、**数値精度・実行時間・データ転送コストに応じて QNN HTP / Hexagon HVX / CPU を最適に使い分けるオンデバイス学習（on-device training）基盤**です。
 
 現在の公式品質ベースライン（Quality Baseline）では、
