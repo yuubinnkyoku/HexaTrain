@@ -178,7 +178,8 @@ PreparedGenerationHandle prepareNicopediaGeneration(
             TinyTransformerTrainingVariant::FORWARD_ONLY,
             TinyTransformerTrainingTapSet::NONE, config.numLayers,
             config.numHeads,
-            config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID)) {
+            config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID,
+            /*minimalGenerationOutputs=*/true)) {
         return nullptr;
     }
 

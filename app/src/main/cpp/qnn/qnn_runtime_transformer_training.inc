@@ -150,7 +150,7 @@ bool Runtime::prepareTinyTransformerTraining(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads, bool headwiseG1Gate) {
+    uint32_t numHeads, bool headwiseG1Gate, bool minimalGenerationOutputs) {
   if (!impl_ || !impl_->context || !tokens || !dimension ||
       !feedForwardDimension || !numLayers || !numHeads ||
       dimension % numHeads != 0 || !std::isfinite(epsilon) || epsilon <= 0) {
@@ -172,7 +172,7 @@ bool Runtime::prepareTinyTransformerTraining(
     return prepareTinyTransformerTrainingGeneralized(
         tokens, dimension, feedForwardDimension, epsilon, diagnosticOutputs,
         error, vocabularySize, variant, tapSet, numLayers, numHeads,
-        headwiseG1Gate);
+        headwiseG1Gate, minimalGenerationOutputs);
   }
   if (!std::isfinite(options_.tinyTransformerCenteredScale) ||
       options_.tinyTransformerCenteredScale <= 0) {

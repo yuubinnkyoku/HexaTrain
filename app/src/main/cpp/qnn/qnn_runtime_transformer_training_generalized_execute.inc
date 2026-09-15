@@ -455,14 +455,14 @@ bool Runtime::executeTinyTransformerForwardOnly(
       !checkedAdd(2, layerParameters, &expectedParameterCount) ||
       // one-hot + embedding + parameters + output projection (no target).
       !checkedAdd(3, layerParameters, &expectedAppWriteCount) ||
-      (g.numHeads > 1 &&
+      // logits only when minimalOutputs; otherwise + head prob taps.
+      (g.numHeads > 1 && !g.minimalOutputs &&
        !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
-      // logits + per-head probability taps + scoped taps.
       !checkedAdd(1, headTapCount, &expectedAppReadCount)) {
     error = "APP_RESOURCE_ESTIMATOR: forward-only registry count overflow";
     return false;
   }
-  if (g.headwiseG1Gate &&
+  if (g.headwiseG1Gate && !g.minimalOutputs &&
       !checkedAdd(expectedAppReadCount, g.numLayers, &expectedAppReadCount)) {
     error = "APP_RESOURCE_ESTIMATOR: forward-only gate registry count overflow";
     return false;
@@ -721,7 +721,8 @@ bool Runtime::executeTinyTransformerForwardOnly(
   outputs.next = {};
   outputs.logits = appReadBuffers[0];
   size_t gradient = 1;
-  if (g.numHeads > 1) {
+  // minimalOutputs: head probabilities and gates are NATIVE, not APP_READ.
+  if (g.numHeads > 1 && !g.minimalOutputs) {
     for (uint32_t layer = 0; layer < g.numLayers; ++layer) {
       for (uint32_t head = 0; head < g.numHeads; ++head) {
         const uint32_t id = g.layers[layer].heads[head].probabilities;
@@ -730,7 +731,7 @@ bool Runtime::executeTinyTransformerForwardOnly(
     }
   }
   outputs.attentionGates.clear();
-  if (g.headwiseG1Gate) {
+  if (g.headwiseG1Gate && !g.minimalOutputs) {
     outputs.attentionGates.reserve(g.numLayers);
     for (uint32_t layer = 0; layer < g.numLayers; ++layer)
       outputs.attentionGates.push_back(appReadBuffers[gradient++]);

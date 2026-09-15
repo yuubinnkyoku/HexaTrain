@@ -6,7 +6,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads, bool headwiseG1Gate) {
+    uint32_t numHeads, bool headwiseG1Gate, bool minimalGenerationOutputs) {
   if (!impl_) {
     error = "generalized tiny training runtime unavailable";
     return false;
@@ -89,6 +89,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.languageModel = true;
   g.diagnosticOutputs = diagnosticOutputs;
   g.forwardOnly = variant == TinyTransformerTrainingVariant::FORWARD_ONLY;
+  // Minimal outputs is only meaningful for FORWARD_ONLY production generation.
+  g.minimalOutputs = g.forwardOnly && minimalGenerationOutputs;
   g.headwiseG1Gate = headwiseG1Gate;
   g.tapSet = tapSet;
   g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
@@ -318,7 +320,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           QNN_TENSOR_TYPE_APP_WRITE, {dimension, numHeads});
       record.gateLogits = add(prefix + "attention_gate_logits",
           QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
-      record.gates = add(prefix + "attention_gates", QNN_TENSOR_TYPE_APP_READ,
+      record.gates = add(prefix + "attention_gates",
+          g.minimalOutputs ? QNN_TENSOR_TYPE_NATIVE : QNN_TENSOR_TYPE_APP_READ,
           {tokens, numHeads});
       if (!g.forwardOnly) {
         record.dGates = add(prefix + "attention_gate_gradient",
@@ -479,7 +482,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         headRecord.masked = add(headPrefix + "masked", QNN_TENSOR_TYPE_NATIVE,
                                 {tokens, tokens});
         headRecord.probabilities = add(headPrefix + "probabilities",
-            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+            diagnosticOutputs && !g.minimalOutputs
+                ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
             {tokens, tokens});
         headRecord.context = add(headPrefix + "context", QNN_TENSOR_TYPE_NATIVE,
                                  {tokens, headDimension});
@@ -639,12 +643,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // layer-input gradients, in layer-major/head-major order for CPU/HTP taps.
   // Production training (diagnosticOutputs=false) omits this APP_READ so
   // Muon does not pay to materialize/scan unused attention probabilities.
-  if (diagnosticOutputs && numHeads > 1) {
+  // minimalOutputs (FORWARD_ONLY production generation) also keeps them
+  // NATIVE: only logits is application-visible.
+  if (diagnosticOutputs && !g.minimalOutputs && numHeads > 1) {
     for (const auto &record : g.layers)
       for (const auto &head : record.heads)
         g.appReadRegistry.push_back(head.probabilities);
   }
-  if (headwiseG1Gate)
+  if (headwiseG1Gate && !g.minimalOutputs)
     for (const auto &record : g.layers) g.appReadRegistry.push_back(record.gates);
   // Scoped APP_READ taps are appended only after the established outputs,
   // gradients, layer inputs and H>1 probability taps.  This makes NONE
