@@ -1,22 +1,19 @@
 # HexaTrain
 
-**Android / Snapdragon Hexagon HTP 上で小規模Transformerを実際に学習させる研究プロジェクト**
+**Android / Snapdragon Hexagon HTP 上で小規模Transformerのオンデバイス学習を実現する研究プロジェクト**
 
 > **プロジェクトの目標**
->
-> このプロジェクトの目標は、スマホ単体で、現実的な時間内に学習が完結する最高水準のLLMを開発することです。
+> スマートフォン単体かつ現実的な時間内で学習が完結する、最高水準のLLMを開発すること。
 
-HexaTrain は、モデルの Forward / Backward / オプティマイザのすべてを単一のバックエンドへ無理に押し込むのではなく、**数値精度・実行時間・データ転送コストに応じて QNN HTP / Hexagon HVX / CPU を最適に使い分けるオンデバイス学習（on-device training）基盤**です。
+HexaTrain は、順伝播・逆伝播・オプティマイザの全処理を単一のバックエンドに集約するのではなく、**数値精度・実行時間・データ転送コストに応じて QNN HTP / Hexagon HVX / CPU を最適に使い分けるオンデバイス学習（on-device training）基盤**です。
 
-現在の公式品質ベースライン（Quality Baseline）では、
+現在の品質ベースライン（Quality Baseline）では、以下のヘテロジニアス（異種協調）構成を採用し、Snapdragon 8 Elite Gen 5 搭載端末上で 8,000 ステップの学習を完走しています。
 
-* Transformer の **Forward / Backward**: QNN HTP
+* **Forward / Backward**（Transformer本体）: QNN HTP
 * **Original Muon**: Hexagon HVX FP32（8ワーカー並列）
-* Muon対象外パラメータの **Auxiliary Adam**: CPU
+* **Auxiliary Adam**（Muon対象外パラメータ）: CPU
 
-というヘテロジニアス（異種協調）構成を採用し、Snapdragon 8 Elite Gen 5 搭載端末上で8,000ステップの学習を完走しています。
-
-なお、QNNの自動微分（AutoDiff）機能は使用していません。Forward / Loss / Backward を構成する各演算を、QNNオペレータとして計算グラフ上に明示的に構築しています。
+なお、QNNの自動微分（AutoDiff）機能は使用せず、Forward / Loss / Backward を構成する各演算を QNN オペレータとして計算グラフ上に明示的に構築しています。
 
 ---
 
