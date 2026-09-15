@@ -614,6 +614,13 @@ struct Runtime::Impl {
         std::uint32_t diagnosticLayerIndex = std::numeric_limits<std::uint32_t>::max();
         bool executeDiagnosticsEmitted = false;
         ForwardOnlyPhaseTimings lastPhaseTimings;
+        // Persistent APP_READ host buffers for FORWARD_ONLY generation reuse.
+        // Allocated once on first execute; subsequent executes refill in place
+        // to avoid per-token heap allocation.  Only used when forwardOnly.
+        std::vector<std::vector<float>> persistentAppReadBuffers;
+        std::vector<Qnn_Tensor_t> persistentAppReadTensors;
+        std::vector<Qnn_Tensor_t> persistentAppWriteTensors;
+        bool persistentBuffersReady = false;
     } generalizedTinyTransformerTraining;
 
     struct TinyTransformerGraph {
