@@ -513,7 +513,9 @@ public:
         const TinyTransformerParameters& current, float learningRate,
         TinyTransformerTrainingOutputs& outputs, std::string& error);
     // Forward-only generation execute: binds the token one-hot and every
-    // parameter APP_WRITE tensor, reads back logits only.  The target input
+    // parameter APP_WRITE tensor, reads back logits only.  Production minimal
+    // output is [V] for position T-1; diagnostic/debug output remains [T,V].
+    // The target input
     // and every backward/gradient output of the FULL graph do not exist in
     // this graph; learningRate is rejected (must be 0) exactly like the
     // training execute.

@@ -50,6 +50,13 @@ $hasGeneralizedBuilder = $generalizedText.Contains('prepareTinyTransformerTraini
     $generalizedText.Contains('g.layers.back().output, outputProjection') -and
     $generalizedText.Contains('topologyName + "_lm_logits"') -and
     $generalizedText.Contains('shape::validateTransformerTopology(topologyConfig, topology)')
+$hasProductionLastLogits = $hasGeneralizedBuilder -and
+    ($generalizedText -match 'add\("last_logits",\s*QNN_TENSOR_TYPE_APP_READ,\s*\{vocabularySize\}\)') -and
+    $generalizedText.Contains('QNN_OP_STRIDED_SLICE') -and
+    $generalizedText.Contains('QNN_OP_STRIDED_SLICE_PARAM_RANGES') -and
+    $generalizedText.Contains('QNN_OP_STRIDED_SLICE_PARAM_SHRINK_AXES') -and
+    $generalizedText.Contains('uint32Value = 1u;  // shrink token axis 0') -and
+    $generalizedText.Contains('g.appReadRegistry.push_back(g.minimalOutputs ? lastLogits : logits)')
 $hasL2H1Backward = $hasGeneralizedBuilder -and
     $generalizedText.Contains('for (int layer = int(numLayers) - 1; layer >= 0; --layer)') -and
     $generalizedText.Contains(': g.layers[size_t(layer + 1)].backward[DINPUT]') -and
@@ -63,7 +70,7 @@ $hasL2H1Backward = $hasGeneralizedBuilder -and
     $generalizedText.Contains('backward(DQ_RAW),') -and
     $generalizedText.Contains('backward(DK_RAW),') -and
     $generalizedText.Contains('g.layers.front().backward[DINPUT], dEmbedding') -and
-    $generalizedText.Contains('const size_t expectedParameterCount = 2 + size_t(10) * numLayers') -and
+    $generalizedText.Contains('const size_t expectedParameterCount = 2 + size_t(headwiseG1Gate ? 11 : 10) * numLayers') -and
     $generalizedText.Contains('g.gradientRegistry.size() != g.parameterRegistry.size()') -and
     $generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')
 $hasL2H1AttentionLayout = $hasL2H1Backward -and
@@ -446,6 +453,8 @@ Write-Output "tensor_map_rows=$($tensorRows.Count)"
 Write-Output "topology_map_rows=$($topologyRows.Count)"
 Write-Output "shape=B1_T$Tokens`_V32_D$EmbeddingDim`_FFN$FeedForwardDim; layers=$NumLayers; heads=$NumHeads; head_dim=$HeadDim; diagnostic_outputs=true; creation_index=zero_based_source_order"
 if ($SelfTest) {
+    Assert-True $hasProductionLastLogits 'production last-position [V] logits slice source contract self-test failed'
+    Assert-True (-not $generalizedText.Contains('g.appReadRegistry.push_back(logits);')) 'production minimal path must not unconditionally expose full [T,V] logits'
     Assert-True $hasL2H1AttentionLayout 'L2/H1 generalized forward/backward attention layout source contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.push_back(record.backward[DINPUT])')) 'layer DINPUT APP_READ contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')) 'gradient APP_READ contract self-test failed'

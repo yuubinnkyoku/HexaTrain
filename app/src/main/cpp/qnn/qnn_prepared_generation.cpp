@@ -21,6 +21,7 @@
 
 #include "qnn_transformer.h"
 #include "nicopedia_checkpoint_loader.h"
+#include "qnn_reproducibility.h"
 #include "../nicopedia_byte_bpe.h"
 
 #include <chrono>
@@ -358,10 +359,8 @@ std::string runPreparedNicopediaGeneration(
                                            allFinite(htpStep.logits);
                 return generationExecuteFailure("nicopedia_generate_ar", error);
             }
-            const size_t lastBase =
-                size_t(config.tokens - 1) * config.vocabularySize;
-            const float* row = htpStep.logits.data() + lastBase;
-            bool rowFinite = htpStep.logits.size() >= lastBase + config.vocabularySize;
+            const float* row = htpStep.logits.data();
+            bool rowFinite = htpStep.logits.size() == config.vocabularySize;
             for (uint32_t j = 0; rowFinite && j < config.vocabularySize; ++j)
                 rowFinite = rowFinite && std::isfinite(row[j]);
             htpNativeArLogitsFinite = htpNativeArLogitsFinite && rowFinite;
@@ -399,6 +398,10 @@ std::string runPreparedNicopediaGeneration(
 
     std::vector<std::uint8_t> generated;
     std::vector<std::uint16_t> generatedTokens;
+    std::vector<float> generationLastLogits;
+    generationLastLogits.reserve(
+        static_cast<std::size_t>(generateConfig.maxNewBytes) *
+        config.vocabularySize);
     double generateSeconds = 0;
     if (progress) {
         std::ostringstream update;
@@ -456,10 +459,8 @@ std::string runPreparedNicopediaGeneration(
             ++measuredSteps;
         }
         const auto extractStarted = std::chrono::steady_clock::now();
-        const size_t lastBase = size_t(config.tokens - 1) * config.vocabularySize;
-        const bool rowAvailable =
-            htpStep.logits.size() >= lastBase + config.vocabularySize;
-        const float* row = rowAvailable ? htpStep.logits.data() + lastBase : nullptr;
+        const bool rowAvailable = htpStep.logits.size() == config.vocabularySize;
+        const float* row = rowAvailable ? htpStep.logits.data() : nullptr;
         lastTokenExtractUs += std::chrono::duration<double, std::micro>(
                                   std::chrono::steady_clock::now() - extractStarted)
                                   .count();
@@ -479,6 +480,8 @@ std::string runPreparedNicopediaGeneration(
                 "generation_loop",
                 "generation step produced non-finite logits on prepared graph");
         }
+        generationLastLogits.insert(generationLastLogits.end(), row,
+                                    row + config.vocabularySize);
         const auto sampleStarted = std::chrono::steady_clock::now();
         std::uint32_t nextToken = 0;
         if (generateConfig.greedy) {
@@ -605,6 +608,8 @@ std::string runPreparedNicopediaGeneration(
            << "\nmax_scalar_repeat_run=" << ag.maxScalarRepeatRun
            << "\nshort_period_loop_fraction=" << ag.shortPeriodLoopFraction
            << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
+           << "\ngeneration_last_logits_canonical_sha256="
+           << canonicalFloatSha256(generationLastLogits)
            << "\nparity_prefix_count=" << prefixes.size()
            << "\nar_steps=" << kArSteps
            << "\ngate_policy=htp-native"
@@ -664,6 +669,13 @@ std::string runPreparedNicopediaGeneration(
                    ? 0.0
                    : generateSeconds / generated.size() * 1000.0)
            << "\ngeneration_measured_steps=" << measuredSteps
+           << "\ngeneration_ms_per_token="
+           << (measuredSteps == 0
+                   ? 0.0
+                   : generateSeconds * 1000.0 / measuredSteps)
+           << "\ngeneration_tokens_per_second="
+           << (generateSeconds == 0.0 ? 0.0
+                                      : measuredSteps / generateSeconds)
            << "\nphase_one_hot_build_us=" << oneHotBuildUs
            << "\nphase_schema_validation_us=" << executePhaseSum.schemaValidationUs
            << "\nphase_app_write_bind_us=" << executePhaseSum.appWriteBindUs

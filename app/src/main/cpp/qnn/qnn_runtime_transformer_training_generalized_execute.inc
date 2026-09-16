@@ -455,7 +455,8 @@ bool Runtime::executeTinyTransformerForwardOnly(
       !checkedAdd(2, layerParameters, &expectedParameterCount) ||
       // one-hot + embedding + parameters + output projection (no target).
       !checkedAdd(3, layerParameters, &expectedAppWriteCount) ||
-      // logits only when minimalOutputs; otherwise + head prob taps.
+      // last-position logits only when minimalOutputs; otherwise full logits
+      // + head probability taps.
       (g.numHeads > 1 && !g.minimalOutputs &&
        !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
       !checkedAdd(1, headTapCount, &expectedAppReadCount)) {
@@ -719,6 +720,8 @@ bool Runtime::executeTinyTransformerForwardOnly(
   const auto materializeStarted = Clock::now();
   outputs.taps.clear();
   outputs.next = {};
+  // minimalOutputs maps registry slot 0 directly to [V] last-position
+  // logits; diagnostic/debug execution maps it to full [T,V] logits.
   outputs.logits = appReadBuffers[0];
   size_t gradient = 1;
   // minimalOutputs: head probabilities and gates are NATIVE, not APP_READ.

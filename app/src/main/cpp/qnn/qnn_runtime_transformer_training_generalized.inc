@@ -130,7 +130,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   };
   auto add = [&](const std::string &name, Qnn_TensorType_t type,
                  std::initializer_list<uint32_t> dimensions,
-                 Qnn_DataType_t dataType = QNN_DATATYPE_FLOAT_32) {
+                 Qnn_DataType_t dataType = QNN_DATATYPE_FLOAT_32,
+                 bool preserveFp32 = false) {
     if (!shapeValid(dimensions)) {
       registryShapeValid = false;
       return std::numeric_limits<uint32_t>::max();
@@ -139,7 +140,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     // FP16 to probe whether the HTP backend executes FP32-declared graphs in
     // FP16 anyway.  APP_* and STATIC tensors keep FP32 because their host
     // buffers are FP32.
-    if (options_.htpNativeTensorFp16 && type == QNN_TENSOR_TYPE_NATIVE &&
+    if (!preserveFp32 && options_.htpNativeTensorFp16 &&
+        type == QNN_TENSOR_TYPE_NATIVE &&
         dataType == QNN_DATATYPE_FLOAT_32) {
       dataType = QNN_DATATYPE_FLOAT_16;
     }
@@ -178,8 +180,21 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
   const auto outputProjection = add("output_projection", QNN_TENSOR_TYPE_APP_WRITE,
                                     {dimension, vocabularySize});
-  const auto logits = add("logits", QNN_TENSOR_TYPE_APP_READ,
-                          {tokens, vocabularySize});
+  const auto logits = add("logits",
+                          g.minimalOutputs ? QNN_TENSOR_TYPE_NATIVE
+                                           : QNN_TENSOR_TYPE_APP_READ,
+                          {tokens, vocabularySize}, QNN_DATATYPE_FLOAT_32,
+                          /*preserveFp32=*/g.minimalOutputs);
+  // Production generation consumes exactly the same T-1 row that the host
+  // historically extracted from full [T,V] logits.  Keep the full projection
+  // internal and expose only [V]; diagnostic/debug graphs retain full logits.
+  const auto lastLogitsRanges = g.minimalOutputs
+      ? add("last_logits_ranges", QNN_TENSOR_TYPE_STATIC, {2, 3},
+            QNN_DATATYPE_INT_32)
+      : 0u;
+  const auto lastLogits = g.minimalOutputs
+      ? add("last_logits", QNN_TENSOR_TYPE_APP_READ, {vocabularySize})
+      : 0u;
   const auto probabilities = g.forwardOnly
       ? 0u
       : add("lm_probabilities",
@@ -582,7 +597,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   if (!g.forwardOnly) {
     g.gradientRegistry.push_back(dEmbedding);
   }
-  g.appReadRegistry.push_back(logits);
+  g.appReadRegistry.push_back(g.minimalOutputs ? lastLogits : logits);
   if (diagnosticOutputs && !g.forwardOnly) {
     g.appReadRegistry.insert(g.appReadRegistry.end(),
                              {g.layers.back().output, probabilities, dLogits,
@@ -758,6 +773,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[scale].v1.clientBuf = {&g.attentionScale, sizeof(float)};
   g.tensors[lastAxis].v1.clientBuf = {g.lastAxisData, sizeof(g.lastAxisData)};
   g.tensors[rowAxis].v1.clientBuf = {g.rowAxisData, sizeof(g.rowAxisData)};
+  if (g.minimalOutputs) {
+    g.lastLogitsRanges[0] = static_cast<std::int32_t>(tokens - 1);
+    g.lastLogitsRanges[1] = static_cast<std::int32_t>(tokens);
+    g.lastLogitsRanges[2] = 1;
+    g.lastLogitsRanges[3] = 0;
+    g.lastLogitsRanges[4] = static_cast<std::int32_t>(vocabularySize);
+    g.lastLogitsRanges[5] = 1;
+    g.tensors[lastLogitsRanges].v1.clientBuf = {
+        g.lastLogitsRanges, sizeof(g.lastLogitsRanges)};
+  }
   g.tensors[centerScale].v1.clientBuf = {&g.centeredScale, sizeof(float)};
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
   if (headwiseG1Gate)
@@ -1018,6 +1043,30 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     operation.v1.outputTensors = &g.tensors[out];
     return ok(impl_->api.graphAddNode(g.graph, operation), label);
   };
+  auto stridedSliceLastRow = [&](const std::string &name, uint32_t source,
+                                 uint32_t ranges, uint32_t out,
+                                 const char *label) {
+    if (!uniqueNode(name)) return false;
+    Qnn_Param_t parameters[2] = {QNN_PARAM_INIT, QNN_PARAM_INIT};
+    parameters[0].paramType = QNN_PARAMTYPE_TENSOR;
+    parameters[0].name = QNN_OP_STRIDED_SLICE_PARAM_RANGES;
+    parameters[0].tensorParam = g.tensors[ranges];
+    parameters[1].paramType = QNN_PARAMTYPE_SCALAR;
+    parameters[1].name = QNN_OP_STRIDED_SLICE_PARAM_SHRINK_AXES;
+    parameters[1].scalarParam.dataType = QNN_DATATYPE_UINT_32;
+    parameters[1].scalarParam.uint32Value = 1u;  // shrink token axis 0
+    Qnn_OpConfig_t operation = QNN_OPCONFIG_INIT;
+    operation.v1.name = name.c_str();
+    operation.v1.packageName = QNN_OP_PACKAGE_NAME_QTI_AISW;
+    operation.v1.typeName = QNN_OP_STRIDED_SLICE;
+    operation.v1.numOfParams = 2;
+    operation.v1.params = parameters;
+    operation.v1.numOfInputs = 1;
+    operation.v1.inputTensors = &g.tensors[source];
+    operation.v1.numOfOutputs = 1;
+    operation.v1.outputTensors = &g.tensors[out];
+    return ok(impl_->api.graphAddNode(g.graph, operation), label);
+  };
   if (!matmul(topologyName + "_lm_embedding", oneHot, embedding, embedded, "embedding") ||
       !binary(topologyName + "_lm_position", QNN_OP_ELEMENT_WISE_ADD, embedded, position,
               input, "position"))
@@ -1134,6 +1183,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   if (!matmul(topologyName + "_lm_logits", g.layers.back().output, outputProjection,
               logits, "logits"))
+    return fail(error);
+  if (g.minimalOutputs &&
+      !stridedSliceLastRow(topologyName + "_lm_last_logits", logits,
+                           lastLogitsRanges, lastLogits, "last logits"))
     return fail(error);
   if (!g.forwardOnly) {
     if (!softmax(topologyName + "_lm_softmax", logits, probabilities, "lm softmax") ||
@@ -1391,7 +1444,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // derive from it without duplicating arithmetic.
   constexpr std::uint64_t kAdamNodeCount = 20;
   const std::uint64_t expectedNodes = g.forwardOnly
-      ? numLayers * resourceEstimate.perLayerForwardNodes + 3u
+      ? numLayers * resourceEstimate.perLayerForwardNodes + 3u +
+            (g.minimalOutputs ? 1u : 0u)
       : resourceEstimate.nodeCount - kAdamNodeCount;
   if (g.graphAddNodeSuccessCount != expectedNodes ||
       nodeNames.size() != g.graphAddNodeSuccessCount) {
@@ -1439,6 +1493,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                   std::to_string(g.tensorCreateSuccessCount) + '\n' +
                    "tiny_transformer_training_node_count=" +
                    std::to_string(g.graphAddNodeSuccessCount) + '\n' +
+                  "tiny_transformer_training_logits_output=" +
+                  std::string(g.minimalOutputs ? "LAST_POSITION_V\n"
+                                               : "FULL_T_V\n") +
                    "resource_estimator_parameter_elements=" +
                    std::to_string(resourceEstimate.parameterElements) + '\n' +
                    "resource_estimator_parameter_bytes=" +

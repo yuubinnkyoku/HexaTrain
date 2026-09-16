@@ -600,6 +600,7 @@ struct Runtime::Impl {
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f,
               gateOne = 1.0f;
         std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
+        std::int32_t lastLogitsRanges[6]{};
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;
         std::uint32_t vocabularySize = 0, numLayers = 0, numHeads = 0;
         std::uint32_t tensorCreateSuccessCount = 0, graphAddNodeSuccessCount = 0;
@@ -615,8 +616,9 @@ struct Runtime::Impl {
         bool executeDiagnosticsEmitted = false;
         ForwardOnlyPhaseTimings lastPhaseTimings;
         // When true (FORWARD_ONLY production generation), head probabilities
-        // and attention gates are NATIVE tensors, not APP_READ.  Only logits
-        // is application-visible.  Diagnostic/debug paths keep the full ABI.
+        // and attention gates are NATIVE tensors, not APP_READ.  Only the
+        // last-position logits row is application-visible.  Diagnostic/debug
+        // paths keep the full [T,V] logits ABI.
         bool minimalOutputs = false;
         // Persistent APP_READ host buffers for FORWARD_ONLY generation reuse.
         // Allocated once on first execute; subsequent executes refill in place

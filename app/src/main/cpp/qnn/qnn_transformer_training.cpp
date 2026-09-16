@@ -6322,6 +6322,10 @@ std::string nicopediaHtpGeneration(
   // User-prompt generation (only when both gates pass).
   std::vector<std::uint8_t> generated;
   std::vector<std::uint16_t> generatedTokens;
+  std::vector<float> generationLastLogits;
+  generationLastLogits.reserve(
+      static_cast<std::size_t>(generateConfig.maxNewBytes) *
+      config.vocabularySize);
   double generateSeconds = 0;
   if (generationGate) {
     if (progress) {
@@ -6382,6 +6386,8 @@ std::string nicopediaHtpGeneration(
                      "failure_classification=EXECUTION_NONFINITE\n"
                      "error=generation step produced non-finite logits\n" +
                          runtime.apiTraceSummary() + runtime.diagnostics();
+      generationLastLogits.insert(generationLastLogits.end(), row,
+                                  row + config.vocabularySize);
       if (!generationProbabilitiesFinite && htpHealthPolicy)
         return htpNativeFailure("generation_loop",
                                 "generation step produced non-finite probabilities");
@@ -6532,6 +6538,8 @@ std::string nicopediaHtpGeneration(
          << "\nmax_scalar_repeat_run=" << ag.maxScalarRepeatRun
          << "\nshort_period_loop_fraction=" << ag.shortPeriodLoopFraction
          << "\ngenerated_hex=" << nicopedia_gen::bytesToHex(generated)
+         << "\ngeneration_last_logits_canonical_sha256="
+         << canonicalFloatSha256(generationLastLogits)
          << "\nparity_prefix_count=" << parityRows.size()
          << "\nhtp_execution_fingerprint_sha256="
          << canonicalFloatSha256(htpExecutionFingerprintLogits)
