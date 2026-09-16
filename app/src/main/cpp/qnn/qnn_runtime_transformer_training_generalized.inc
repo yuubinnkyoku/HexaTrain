@@ -479,7 +479,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         headRecord.masked = add(headPrefix + "masked", QNN_TENSOR_TYPE_NATIVE,
                                 {tokens, tokens});
         headRecord.probabilities = add(headPrefix + "probabilities",
-            QNN_TENSOR_TYPE_APP_READ, {tokens, tokens});
+            diagnosticOutputs ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE,
+            {tokens, tokens});
         headRecord.context = add(headPrefix + "context", QNN_TENSOR_TYPE_NATIVE,
                                  {tokens, headDimension});
         if (headwiseG1Gate) {
