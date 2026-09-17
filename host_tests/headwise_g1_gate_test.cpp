@@ -90,6 +90,19 @@ int main() {
             "Muon identity");
     require(partition.auxiliaryAdam.size() == 97 && auxElements == 138368,
             "Aux Adam identity");
+    const auto gatedRegistry = tiny_lm::parameterRegistry(p1);
+    std::size_t gateEntries = 0;
+    for (const auto& entry : gatedRegistry) {
+      if (entry.suffix != "attention_gate_weight") continue;
+      ++gateEntries;
+      require(entry.placement == tiny_lm::ParameterPlacement::PER_LAYER &&
+                  entry.condition == tiny_lm::ParameterCondition::HEADWISE_G1 &&
+                  entry.role == tiny_lm::ParameterRole::AUX_ADAM &&
+                  entry.shape == std::vector<std::uint32_t>({64, 2}) &&
+                  entry.fanOut == 0 && entry.fanIn == 0,
+              "Headwise G1 metadata");
+    }
+    require(gateEntries == 19, "Headwise G1 metadata count");
     require(p1.attentionGateWeight == p1Again.attentionGateWeight,
             "deterministic Wg initialization");
 

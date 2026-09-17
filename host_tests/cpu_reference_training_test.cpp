@@ -245,15 +245,50 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
     Config c{}; c.tokens = 4; c.dimension = 8; c.feedForwardDimension = 16; c.numLayers = 2; c.numHeads = 2;
     const auto a = initialParameters(c, 77), b = initialParameters(c, 77);
     const auto ar = parameterRegistry(a), br = parameterRegistry(b);
+    const auto metadata = parameterMetadata(
+        {c.vocabularySize, c.dimension, c.feedForwardDimension, c.numLayers,
+         c.numHeads, false});
     assert(ar.size() == br.size()); std::set<std::string> names;
-    for (size_t i = 0; i < ar.size(); ++i) { assert(names.insert(ar[i].name).second); assert(ar[i].name == br[i].name); assert(*ar[i].values == *br[i].values); }
+    assert(ar.size() == metadata.size());
+    for (size_t i = 0; i < ar.size(); ++i) {
+        assert(names.insert(ar[i].name).second);
+        assert(ar[i].name == br[i].name && ar[i].name == metadata[i].name);
+        assert(ar[i].suffix == metadata[i].suffix);
+        assert(ar[i].placement == metadata[i].placement);
+        assert(ar[i].condition == metadata[i].condition);
+        assert(ar[i].role == metadata[i].role);
+        assert(ar[i].shape == metadata[i].shape);
+        assert(ar[i].fanOut == metadata[i].fanOut);
+        assert(ar[i].fanIn == metadata[i].fanIn);
+        assert(metadata[i].values == nullptr);
+        assert(*ar[i].values == *br[i].values);
+    }
     assert(ar.front().name == "token_embedding" && ar.back().name == "output_projection");
+    assert(ar.front().suffix == "token_embedding" &&
+           ar.front().placement == ParameterPlacement::GLOBAL_PREFIX);
+    assert(ar.back().suffix == "output_projection" &&
+           ar.back().placement == ParameterPlacement::GLOBAL_SUFFIX);
     assert(ar[1].name == "layer_000.norm1_gamma");
     assert(ar[3].name == "layer_000.wq");
+    assert(ar[3].suffix == "wq" &&
+           ar[3].placement == ParameterPlacement::PER_LAYER &&
+           ar[3].role == ParameterRole::MUON && ar[3].fanOut == 8 &&
+           ar[3].fanIn == 8);
+    assert(ar[9].name == "layer_000.ffn_w1" && ar[9].fanOut == 16 &&
+           ar[9].fanIn == 8);
+    assert(ar[10].name == "layer_000.ffn_w2" && ar[10].fanOut == 8 &&
+           ar[10].fanIn == 16);
     assert(ar[11].name == "layer_001.norm1_gamma");
     assert(ar[13].name == "layer_001.wq");
-    const std::vector<ParameterInfo> duplicateRanges{
-        {"first", ar[0].values}, {"duplicate", ar[0].values}};
+    assert(parameterDefinitions().size() == 13);
+    for (const auto& definition : parameterDefinitions())
+        assert(validParameterDefinition(definition));
+    ParameterInfo firstRange, duplicateRange;
+    firstRange.name = "first";
+    firstRange.values = ar[0].values;
+    duplicateRange.name = "duplicate";
+    duplicateRange.values = ar[0].values;
+    const std::vector<ParameterInfo> duplicateRanges{firstRange, duplicateRange};
     assert(!storageRangesHaveNoAliases(duplicateRanges));
     Config policy = base;
     policy.tokens = std::numeric_limits<uint32_t>::max();
