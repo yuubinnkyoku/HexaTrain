@@ -4059,22 +4059,18 @@ first_nonfinite::Config lateDiagnosticConfig(const tiny_lm::Config &config,
 
 std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
     const tiny_lm::Config &config, const Params &parameters) {
+  const tiny_lm::ParameterDimensions dimensions{
+      config.vocabularySize, config.dimension, config.feedForwardDimension,
+      config.numLayers, config.numHeads,
+      config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID};
   std::vector<first_nonfinite::RegistryEntry> registry;
   for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
+    const tiny_lm::ParameterDefinition *definition =
+        tiny_lm::parameterDefinition(entry.placement, entry.suffix);
     std::vector<uint32_t> shape;
-    if (entry.name == "token_embedding") {
-      shape = {config.vocabularySize, config.dimension};
-    } else if (entry.name == "output_projection") {
-      shape = {config.dimension, config.vocabularySize};
-    } else if (entry.name.find("norm") != std::string::npos) {
-      shape = {config.dimension};
-    } else if (entry.name.find("ffn_w1") != std::string::npos) {
-      shape = {config.dimension, config.feedForwardDimension};
-    } else if (entry.name.find("ffn_w2") != std::string::npos) {
-      shape = {config.feedForwardDimension, config.dimension};
-    } else {
-      shape = {config.dimension, config.dimension};
-    }
+    if (!definition ||
+        !tiny_lm::parameterDefinitionShape(*definition, dimensions, &shape))
+      return {};
     registry.push_back({entry.name, std::move(shape)});
   }
   return registry;
