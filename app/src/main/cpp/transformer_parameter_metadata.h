@@ -208,6 +208,51 @@ inline std::uint64_t parameterDimensionExtent(
   return 0;
 }
 
+// Direct metadata access for consumers that must not re-declare suffixes,
+// shapes, or the canonical ordering: the graph builder, the checkpoint
+// loader, and the execution binder all address parameters through these.
+inline const ParameterDefinition* parameterDefinition(
+    ParameterPlacement placement, std::string_view suffix) {
+  for (const auto& definition : parameterDefinitions())
+    if (definition.placement == placement && suffix == definition.suffix)
+      return &definition;
+  return nullptr;
+}
+
+inline bool parameterDefinitionShape(const ParameterDefinition& definition,
+                                     const ParameterDimensions& dimensions,
+                                     std::vector<std::uint32_t>* shape) {
+  if (!shape || definition.rank == 0 || definition.rank > definition.shape.size())
+    return false;
+  shape->clear();
+  shape->reserve(definition.rank);
+  for (std::uint8_t axis = 0; axis < definition.rank; ++axis) {
+    const std::uint64_t extent =
+        parameterDimensionExtent(definition.shape[axis], dimensions);
+    if (!extent || extent > std::numeric_limits<std::uint32_t>::max())
+      return false;
+    shape->push_back(static_cast<std::uint32_t>(extent));
+  }
+  return true;
+}
+
+inline bool parameterDefinitionElementCount(
+    const ParameterDefinition& definition,
+    const ParameterDimensions& dimensions, std::uint64_t* result) {
+  if (!result) return false;
+  std::uint64_t elements = 1;
+  for (std::uint8_t axis = 0; axis < definition.rank; ++axis) {
+    const std::uint64_t extent =
+        parameterDimensionExtent(definition.shape[axis], dimensions);
+    if (!extent ||
+        elements > std::numeric_limits<std::uint64_t>::max() / extent)
+      return false;
+    elements *= extent;
+  }
+  *result = elements;
+  return true;
+}
+
 inline bool checkedParameterElementCount(const ParameterDimensions& dimensions,
                                          std::uint64_t* result) {
   if (!result || !dimensions.vocabulary || !dimensions.model ||
@@ -218,13 +263,9 @@ inline bool checkedParameterElementCount(const ParameterDimensions& dimensions,
   for (const auto& definition : parameterDefinitions()) {
     if (!validParameterDefinition(definition)) return false;
     if (!parameterDefinitionEnabled(definition, dimensions)) continue;
-    std::uint64_t elements = 1;
-    for (std::uint8_t axis = 0; axis < definition.rank; ++axis) {
-      const std::uint64_t extent =
-          parameterDimensionExtent(definition.shape[axis], dimensions);
-      if (!extent || elements > kMax / extent) return false;
-      elements *= extent;
-    }
+    std::uint64_t elements = 0;
+    if (!parameterDefinitionElementCount(definition, dimensions, &elements))
+      return false;
     const std::uint64_t instances =
         definition.placement == ParameterPlacement::PER_LAYER
             ? dimensions.layers

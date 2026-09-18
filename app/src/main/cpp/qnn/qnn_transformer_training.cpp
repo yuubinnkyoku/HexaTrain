@@ -5310,19 +5310,28 @@ std::vector<std::uint8_t> nprtReadFileBytes(const std::string &path,
   return bytes;
 }
 
+// Registry name -> storage member assignment, resolved through the shared
+// parameter metadata.  The accepted name set is the canonical registry's own
+// suffix set, so this copy can no longer drift from
+// nicopedia_checkpoint_loader.h (the hand-written chain here was missing the
+// headwise gate weight that parameterRegistry already declares).
 void nprtAssignRegistryMember(Params &target, uint32_t layers,
                               const std::string &name,
                               std::vector<float> &&values) {
-  if (name == "token_embedding") {
-    target.tokenEmbedding = std::move(values);
+  using Layer = TinyTransformerLayerParameters;
+  const auto assignGlobal = [&](tiny_lm::ParameterPlacement placement) {
+    const tiny_lm::ParameterDefinition *definition =
+        tiny_lm::parameterDefinition(placement, name);
+    if (!definition || !definition->globalMember) return false;
+    target.*(definition->globalMember) = std::move(values);
+    return true;
+  };
+  if (name.rfind("layer_", 0) != 0) {
+    if (!assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_PREFIX) &&
+        !assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX))
+      throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
     return;
   }
-  if (name == "output_projection") {
-    target.outputProjection = std::move(values);
-    return;
-  }
-  if (name.rfind("layer_", 0) != 0)
-    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const size_t dot = name.find('.');
   if (dot == std::string::npos || dot < 7)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
@@ -5335,20 +5344,15 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
       static_cast<uint32_t>(index) >= layers)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const std::string suffix = name.substr(dot + 1);
-  TinyTransformerLayerParameters *layer =
-      index == 0 ? static_cast<TinyTransformerLayerParameters *>(&target)
+  const tiny_lm::ParameterDefinition *definition =
+      tiny_lm::parameterDefinition(tiny_lm::ParameterPlacement::PER_LAYER,
+                                   suffix);
+  if (!definition || !definition->layerMember)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  Layer *layer =
+      index == 0 ? static_cast<Layer *>(&target)
                  : &target.layers[static_cast<std::size_t>(index) - 1];
-  if (suffix == "norm1_gamma") layer->gamma1 = std::move(values);
-  else if (suffix == "norm1_beta") layer->beta1 = std::move(values);
-  else if (suffix == "wq") layer->wq = std::move(values);
-  else if (suffix == "wk") layer->wk = std::move(values);
-  else if (suffix == "wv") layer->wv = std::move(values);
-  else if (suffix == "wo") layer->wo = std::move(values);
-  else if (suffix == "norm2_gamma") layer->gamma2 = std::move(values);
-  else if (suffix == "norm2_beta") layer->beta2 = std::move(values);
-  else if (suffix == "ffn_w1") layer->w1 = std::move(values);
-  else if (suffix == "ffn_w2") layer->w2 = std::move(values);
-  else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  layer->*(definition->layerMember) = std::move(values);
 }
 
 // Checkpoint file naming: the production anchor T32/D32/FFN32 keeps the
