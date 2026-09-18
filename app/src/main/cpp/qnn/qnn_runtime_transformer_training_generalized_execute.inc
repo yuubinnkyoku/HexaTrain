@@ -31,18 +31,13 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   const tiny_lm::ParameterDimensions parameterDimensions{
       g.vocabularySize, g.dimension, g.feedForwardDimension, g.numLayers,
       g.numHeads, g.headwiseG1Gate};
-  size_t enabledLayerParameters = 0;
-  for (const auto &definition : tiny_lm::parameterDefinitions())
-    if (definition.placement == tiny_lm::ParameterPlacement::PER_LAYER &&
-        tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-      ++enabledLayerParameters;
-  size_t layerParameters = 0, expectedParameterCount = 0;
+  size_t expectedParameterCount = 0;
   size_t expectedAppWriteCount = 0, expectedAppReadCount = 0;
   size_t headTapCount = 0;
-  if (enabledLayerParameters == 0 ||
-      !checkedMultiply(enabledLayerParameters, g.numLayers, &layerParameters) ||
-      !checkedAdd(2, layerParameters, &expectedParameterCount) ||
-      !checkedAdd(4, layerParameters, &expectedAppWriteCount) ||
+  if (!tiny_lm::checkedParameterInstanceCount(parameterDimensions,
+                                              &expectedParameterCount) ||
+      // one-hot and target are the only non-parameter APP_WRITE tensors.
+      !checkedAdd(2, expectedParameterCount, &expectedAppWriteCount) ||
       (g.diagnosticOutputs && g.numHeads > 1 &&
        !checkedMultiply(g.numLayers, g.numHeads, &headTapCount)) ||
       // diagnosticOutputs=true keeps the established 5-terminal prefix
@@ -71,46 +66,17 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
     return false;
   }
   const size_t tokenVocabulary = size_t(g.tokens) * g.vocabularySize;
-  const size_t embedding = size_t(g.vocabularySize) * g.dimension;
-  const size_t projection = size_t(g.dimension) * g.vocabularySize;
   const auto finite = [](const std::vector<float> &values) {
     return std::all_of(values.begin(), values.end(),
                        [](float value) { return std::isfinite(value); });
   };
-  const auto layerShapeValid =
-      [&](const TinyTransformerLayerParameters &layer) {
-    for (const auto &definition : tiny_lm::parameterDefinitions()) {
-      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
-        continue;
-      const std::vector<float> &values = layer.*(definition.layerMember);
-      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-        return values.empty();
-      std::uint64_t elements = 0;
-      if (!tiny_lm::parameterDefinitionElementCount(definition,
-                                                     parameterDimensions,
-                                                     &elements) ||
-          values.size() != elements)
-        return false;
-    }
-    return true;
-  };
-  const auto validLayer = [&](const TinyTransformerLayerParameters &layer) {
-    return layerShapeValid(layer) &&
-           (!options_.validateAppWriteParameterFiniteness ||
-            (finite(layer.wq) && finite(layer.wk) && finite(layer.wv) &&
-             finite(layer.wo) && finite(layer.gamma1) && finite(layer.beta1) &&
-             finite(layer.gamma2) && finite(layer.beta2) && finite(layer.w1) &&
-             finite(layer.w2)));
-  };
   if (input.size() != tokenVocabulary || target.size() != tokenVocabulary ||
-      current.layers.size() != g.numLayers - 1 || current.tokenEmbedding.size() != embedding ||
-      current.outputProjection.size() != projection || !finite(input) ||
-      !finite(target) ||
+      !finite(input) || !finite(target) ||
+      !tiny_lm::parameterStorageMatchesDefinitions(current,
+                                                   parameterDimensions) ||
       (options_.validateAppWriteParameterFiniteness &&
-       (!finite(current.tokenEmbedding) || !finite(current.outputProjection))) ||
-      !validLayer(current) ||
-      !std::isfinite(learningRate) ||
-      !std::all_of(current.layers.begin(), current.layers.end(), validLayer)) {
+       !tiny_lm::parameterStorageIsFinite(current, parameterDimensions)) ||
+      !std::isfinite(learningRate)) {
     error = "generalized tiny training buffer schema";
     return false;
   }
@@ -133,21 +99,14 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   };
   std::vector<const std::vector<float> *> appWriteValues;
   appWriteValues.reserve(g.appWriteRegistry.size());
-  appWriteValues.insert(appWriteValues.end(), {&input, &target, &current.tokenEmbedding});
-  std::vector<const TinyTransformerLayerParameters *> parameterLayers;
-  parameterLayers.reserve(g.numLayers);
-  parameterLayers.push_back(&current);
-  for (const auto &layer : current.layers) parameterLayers.push_back(&layer);
-  for (const TinyTransformerLayerParameters *layer : parameterLayers) {
-    for (const auto &definition : tiny_lm::parameterDefinitions()) {
-      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
-        continue;
-      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-        continue;
-      appWriteValues.push_back(&(layer->*(definition.layerMember)));
-    }
-  }
-  appWriteValues.push_back(&current.outputProjection);
+  appWriteValues.insert(appWriteValues.end(), {&input, &target});
+  tiny_lm::forEachParameterStorage(
+      current, [&](const tiny_lm::ParameterDefinition &definition, size_t,
+                   const std::vector<float> &values) {
+        if (tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+          appWriteValues.push_back(&values);
+      });
   if (appWriteValues.size() != g.appWriteRegistry.size()) {
     error = "generalized tiny training APP_WRITE registry count";
     return false;
@@ -279,21 +238,14 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   const double outputGradientStructureCopyUs =
       elapsedUs(gradientStructureStarted);
   phaseStarted = Clock::now();
-  outputs.gradients.tokenEmbedding = appReadBuffers[gradient++];
-  std::vector<TinyTransformerLayerParameters *> gradientLayers;
-  gradientLayers.reserve(g.numLayers);
-  gradientLayers.push_back(&outputs.gradients);
-  for (auto &layer : outputs.gradients.layers) gradientLayers.push_back(&layer);
-  for (TinyTransformerLayerParameters *layer : gradientLayers) {
-    for (const auto &definition : tiny_lm::parameterDefinitions()) {
-      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
-        continue;
-      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-        continue;
-      layer->*(definition.layerMember) = appReadBuffers[gradient++];
-    }
-  }
-  outputs.gradients.outputProjection = appReadBuffers[gradient++];
+  tiny_lm::forEachParameterStorage(
+      outputs.gradients,
+      [&](const tiny_lm::ParameterDefinition &definition, size_t,
+          std::vector<float> &values) {
+        if (tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+          values = appReadBuffers[gradient++];
+      });
   outputs.layerInputGradients.clear();
   if (g.diagnosticOutputs) {
     outputs.layerInputGradients.reserve(g.numLayers);
@@ -463,18 +415,12 @@ bool Runtime::executeTinyTransformerForwardOnly(
   const tiny_lm::ParameterDimensions parameterDimensions{
       g.vocabularySize, g.dimension, g.feedForwardDimension, g.numLayers,
       g.numHeads, g.headwiseG1Gate};
-  size_t enabledLayerParameters = 0;
-  for (const auto &definition : tiny_lm::parameterDefinitions())
-    if (definition.placement == tiny_lm::ParameterPlacement::PER_LAYER &&
-        tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-      ++enabledLayerParameters;
-  size_t layerParameters = 0, expectedParameterCount = 0;
+  size_t expectedParameterCount = 0;
   size_t expectedAppWriteCount = 0, expectedAppReadCount = 0, headTapCount = 0;
-  if (enabledLayerParameters == 0 ||
-      !checkedMultiply(enabledLayerParameters, g.numLayers, &layerParameters) ||
-      !checkedAdd(2, layerParameters, &expectedParameterCount) ||
-      // one-hot + embedding + parameters + output projection (no target).
-      !checkedAdd(3, layerParameters, &expectedAppWriteCount) ||
+  if (!tiny_lm::checkedParameterInstanceCount(parameterDimensions,
+                                              &expectedParameterCount) ||
+      // one-hot is the only non-parameter APP_WRITE tensor.
+      !checkedAdd(1, expectedParameterCount, &expectedAppWriteCount) ||
       // last-position logits only when minimalOutputs; otherwise full logits
       // + head probability taps.
       (g.numHeads > 1 && !g.minimalOutputs &&
@@ -503,8 +449,6 @@ bool Runtime::executeTinyTransformerForwardOnly(
     return false;
   }
   const size_t tokenVocabulary = size_t(g.tokens) * g.vocabularySize;
-  const size_t embedding = size_t(g.vocabularySize) * g.dimension;
-  const size_t projection = size_t(g.dimension) * g.vocabularySize;
   // FORWARD_ONLY generation: parameters are loaded once from the checkpoint
   // and never change between autoregressive steps.  Skip per-token finite()
   // scans on parameter tensors (they are validated at checkpoint load) and
@@ -513,28 +457,9 @@ bool Runtime::executeTinyTransformerForwardOnly(
     return std::all_of(values.begin(), values.end(),
                        [](float value) { return std::isfinite(value); });
   };
-  const auto validLayerShapes = [&](const TinyTransformerLayerParameters &layer) {
-    for (const auto &definition : tiny_lm::parameterDefinitions()) {
-      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
-        continue;
-      const std::vector<float> &values = layer.*(definition.layerMember);
-      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-        return values.empty();
-      std::uint64_t elements = 0;
-      if (!tiny_lm::parameterDefinitionElementCount(definition,
-                                                     parameterDimensions,
-                                                     &elements) ||
-          values.size() != elements)
-        return false;
-    }
-    return true;
-  };
-  if (input.size() != tokenVocabulary ||
-      current.layers.size() != g.numLayers - 1 ||
-      current.tokenEmbedding.size() != embedding ||
-      current.outputProjection.size() != projection || !finite(input) ||
-      !validLayerShapes(current) ||
-      !std::all_of(current.layers.begin(), current.layers.end(), validLayerShapes)) {
+  if (input.size() != tokenVocabulary || !finite(input) ||
+      !tiny_lm::parameterStorageMatchesDefinitions(current,
+                                                   parameterDimensions)) {
     error = "generalized tiny training forward-only buffer schema";
     return false;
   }
@@ -553,21 +478,13 @@ bool Runtime::executeTinyTransformerForwardOnly(
   std::vector<const std::vector<float> *> appWriteValues;
   appWriteValues.reserve(g.appWriteRegistry.size());
   appWriteValues.push_back(&input);
-  appWriteValues.push_back(&current.tokenEmbedding);
-  std::vector<const TinyTransformerLayerParameters *> parameterLayers;
-  parameterLayers.reserve(g.numLayers);
-  parameterLayers.push_back(&current);
-  for (const auto &layer : current.layers) parameterLayers.push_back(&layer);
-  for (const TinyTransformerLayerParameters *layer : parameterLayers) {
-    for (const auto &definition : tiny_lm::parameterDefinitions()) {
-      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
-        continue;
-      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-        continue;
-      appWriteValues.push_back(&(layer->*(definition.layerMember)));
-    }
-  }
-  appWriteValues.push_back(&current.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      current, [&](const tiny_lm::ParameterDefinition &definition, size_t,
+                   const std::vector<float> &values) {
+        if (tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+          appWriteValues.push_back(&values);
+      });
   if (appWriteValues.size() != g.appWriteRegistry.size()) {
     error = "generalized tiny training forward-only APP_WRITE registry count";
     return false;

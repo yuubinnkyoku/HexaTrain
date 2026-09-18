@@ -162,28 +162,33 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const tiny_lm::ParameterDimensions parameterDimensions{
       vocabularySize, dimension, feedForwardDimension, numLayers, numHeads,
       headwiseG1Gate};
-  const auto globalParameter =
-      [](tiny_lm::ParameterPlacement placement)
-      -> const tiny_lm::ParameterDefinition * {
-    for (const auto &definition : tiny_lm::parameterDefinitions())
-      if (definition.placement == placement) return &definition;
-    return nullptr;
+  using Parameters = TinyTransformerParameters;
+  const auto createGlobalParameters =
+      [&](tiny_lm::ParameterPlacement placement,
+          tiny_lm::GlobalParameterMember topologyMember,
+          std::vector<uint32_t> *registry, uint32_t *topologyTensor) {
+    for (const auto &definition : tiny_lm::parameterDefinitions()) {
+      if (definition.placement != placement) continue;
+      if (!tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+        continue;
+      std::vector<uint32_t> shape;
+      if (!tiny_lm::parameterDefinitionShape(definition, parameterDimensions,
+                                             &shape))
+        return false;
+      const uint32_t id = add(definition.suffix, QNN_TENSOR_TYPE_APP_WRITE,
+                              shape);
+      registry->push_back(id);
+      if (definition.globalMember == topologyMember) *topologyTensor = id;
+    }
+    return *topologyTensor != std::numeric_limits<uint32_t>::max();
   };
-  const tiny_lm::ParameterDefinition *embeddingDefinition =
-      globalParameter(tiny_lm::ParameterPlacement::GLOBAL_PREFIX);
-  const tiny_lm::ParameterDefinition *projectionDefinition =
-      globalParameter(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX);
-  std::vector<uint32_t> embeddingShape, projectionShape;
-  if (!embeddingDefinition || !projectionDefinition ||
-      !tiny_lm::parameterDefinitionShape(*embeddingDefinition,
-                                         parameterDimensions,
-                                         &embeddingShape) ||
-      !tiny_lm::parameterDefinitionShape(*projectionDefinition,
-                                         parameterDimensions,
-                                         &projectionShape))
-    return fail("generalized tiny training global parameter metadata is missing");
-  const auto embedding = add(embeddingDefinition->suffix,
-                             QNN_TENSOR_TYPE_APP_WRITE, embeddingShape);
+  std::vector<uint32_t> globalPrefixParameters, globalSuffixParameters;
+  uint32_t embedding = std::numeric_limits<uint32_t>::max();
+  if (!createGlobalParameters(tiny_lm::ParameterPlacement::GLOBAL_PREFIX,
+                              &Parameters::tokenEmbedding,
+                              &globalPrefixParameters, &embedding))
+    return fail("generalized tiny training embedding metadata is missing");
   const auto position = add("position", QNN_TENSOR_TYPE_STATIC,
                             {tokens, dimension});
   const auto embedded = add("embedded_token", QNN_TENSOR_TYPE_NATIVE,
@@ -203,8 +208,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto gateOne = headwiseG1Gate
       ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
-  const auto outputProjection = add(projectionDefinition->suffix,
-                                    QNN_TENSOR_TYPE_APP_WRITE, projectionShape);
+  uint32_t outputProjection = std::numeric_limits<uint32_t>::max();
+  if (!createGlobalParameters(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX,
+                              &Parameters::outputProjection,
+                              &globalSuffixParameters, &outputProjection))
+    return fail("generalized tiny training output projection metadata is missing");
   const auto logits = add("logits",
                           g.minimalOutputs ? QNN_TENSOR_TYPE_NATIVE
                                            : QNN_TENSOR_TYPE_APP_READ,
@@ -262,6 +270,27 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       ? 0u
       : add("dembedding", QNN_TENSOR_TYPE_APP_READ,
             {vocabularySize, dimension});
+  std::vector<uint32_t> globalPrefixGradients, globalSuffixGradients;
+  if (!g.forwardOnly) {
+    for (const auto &definition : tiny_lm::parameterDefinitions()) {
+      if (!tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+        continue;
+      if (definition.placement ==
+          tiny_lm::ParameterPlacement::GLOBAL_PREFIX) {
+        globalPrefixGradients.push_back(
+            definition.globalMember == &Parameters::tokenEmbedding
+                ? dEmbedding
+                : std::uint32_t{0});
+      } else if (definition.placement ==
+                 tiny_lm::ParameterPlacement::GLOBAL_SUFFIX) {
+        globalSuffixGradients.push_back(
+            definition.globalMember == &Parameters::outputProjection
+                ? dOutputProjection
+                : std::uint32_t{0});
+      }
+    }
+  }
   g.tokenOneHot = oneHot;
   g.tokenEmbedding = embedding;
   g.target = target;
@@ -275,9 +304,6 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     RESIDUAL1, LN2_MEAN, LN2_CENTERED, LN2_CENTERED_S, LN2_SQUARE,
     LN2_VARIANCE, LN2_VARIANCE_EPS, LN2_INV_S, LN2_INV, LN2_XHAT,
     LN2_XHAT_GAMMA, LN2, FF1, RELU, FF2, OUTPUT,
-  };
-  enum LayerGradient : size_t {
-    DWQ, DWK, DWV, DWO, DG1, DB1, DG2, DB2, DW1, DW2,
   };
   enum LayerBackward : size_t {
     DRELU, RELU_MASK, DFF1, DLN2, DXHAT2, SUM_DXHAT2,
@@ -343,35 +369,42 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return false;
     return tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL;
   };
-  // Per-layer parameter tensor slots addressed by tiny_lm::parameterDefinitions()
-  // order.  Names, extents, and the binding order all come from that metadata;
-  // this array is only the record storage that owns the tensor ids.
   using LayerRegistry =
       Impl::GeneralizedTinyTransformerTrainingGraph::LayerRegistry;
-  constexpr std::array<std::uint32_t LayerRegistry::*, 11>
-      kLayerParameterTensors = {
-          &LayerRegistry::gamma1, &LayerRegistry::beta1,
-          &LayerRegistry::wq,     &LayerRegistry::wk,
-          &LayerRegistry::wv,     &LayerRegistry::wo,
-          &LayerRegistry::attentionGateWeight,
-          &LayerRegistry::gamma2, &LayerRegistry::beta2,
-          &LayerRegistry::w1,     &LayerRegistry::w2};
-  std::size_t perLayerParameterDefinitions = 0, enabledLayerParameters = 0;
-  for (const auto &definition : tiny_lm::parameterDefinitions()) {
-    if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER) continue;
-    ++perLayerParameterDefinitions;
-    if (tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
-      ++enabledLayerParameters;
-  }
-  if (perLayerParameterDefinitions != kLayerParameterTensors.size())
-    return fail("generalized tiny training parameter metadata mapping is stale");
+  using LayerParameters = TinyTransformerLayerParameters;
+  const std::size_t perLayerParameterDefinitions =
+      tiny_lm::perLayerParameterDefinitionCount();
+  const auto findParameterSlot = [&](tiny_lm::LayerParameterMember member,
+                                     std::size_t *slot) {
+    return tiny_lm::perLayerParameterDefinitionIndex(member, slot) &&
+           *slot < perLayerParameterDefinitions;
+  };
+  const auto parameterTensor = [&](const LayerRegistry &record,
+                                   tiny_lm::LayerParameterMember member) {
+    std::size_t slot = 0;
+    return findParameterSlot(member, &slot) && slot < record.parameters.size()
+               ? record.parameters[slot]
+               : std::uint32_t{0};
+  };
+  const auto gradientTensor = [&](const LayerRegistry &record,
+                                  tiny_lm::LayerParameterMember member) {
+    std::size_t slot = 0;
+    return findParameterSlot(member, &slot) && slot < record.gradients.size()
+               ? record.gradients[slot]
+               : std::uint32_t{0};
+  };
+  if (perLayerParameterDefinitions == 0)
+    return fail("generalized tiny training parameter metadata is empty");
   // Keep all layer-local parameter and forward-cache tensors separate. The
   // order is the deterministic parameter registry order used by future
   // binding/execution work; activation indices above never cross a layer.
   for (uint32_t layer = 0; layer < numLayers; ++layer) {
     auto &record = g.layers.emplace_back();
+    record.parameters.resize(perLayerParameterDefinitions);
+    if (!g.forwardOnly) record.gradients.resize(perLayerParameterDefinitions);
     const std::string prefix = "layer_" + zeroPadded(layer) + "_";
-    const auto createGateTensors = [&]() {
+    const auto createGateTensors = [&](std::size_t slot,
+                                       const std::vector<uint32_t> &shape) {
       record.gateLogits = add(prefix + "attention_gate_logits",
           QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
       record.gates = add(prefix + "attention_gates",
@@ -386,8 +419,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
         record.dGateSigmoid = add(prefix + "attention_gate_dlogits",
             QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
-        record.dGateWeight = add(prefix + "dattention_gate_weight",
-            QNN_TENSOR_TYPE_APP_READ, {dimension, numHeads});
+        record.gradients[slot] = add(prefix + "dattention_gate_weight",
+            QNN_TENSOR_TYPE_APP_READ, shape);
         record.dLn1Gate = add(prefix + "dln1_gate", QNN_TENSOR_TYPE_NATIVE,
             {tokens, dimension});
         record.dLn1Qkv = add(prefix + "dln1_qkv", QNN_TENSOR_TYPE_NATIVE,
@@ -405,10 +438,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       if (!tiny_lm::parameterDefinitionShape(definition, parameterDimensions,
                                              &parameterShape))
         return fail("generalized tiny training parameter shape is not representable");
-      record.*(kLayerParameterTensors[slot]) = add(
+      record.parameters[slot] = add(
           prefix + definition.suffix, QNN_TENSOR_TYPE_APP_WRITE, parameterShape);
       if (definition.condition == tiny_lm::ParameterCondition::HEADWISE_G1)
-        createGateTensors();
+        createGateTensors(slot, parameterShape);
     }
     record.input = layer == 0 ? input : g.layers[layer - 1].output;
     for (const char *name : {"ln1_mean", "ln1_centered", "ln1_centered_s",
@@ -470,19 +503,33 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     }
     record.output = record.activations.back();
     if (!g.forwardOnly) {
-      for (const char *name : {"dwq", "dwk", "dwv", "dwo", "dg1", "db1",
-           "dg2", "db2", "dw1", "dw2"}) {
-        const std::string gradientName(name);
-        const bool norm = gradientName == "dg1" || gradientName == "db1" ||
-                          gradientName == "dg2" || gradientName == "db2";
-        const bool ff1Gradient = gradientName == "dw1";
-        const bool ff2Gradient = gradientName == "dw2";
-        record.gradients.push_back(add(prefix + name, QNN_TENSOR_TYPE_APP_READ,
-            norm ? std::vector<uint32_t>{dimension} :
-            ff1Gradient ? std::vector<uint32_t>{dimension, feedForwardDimension} :
-            ff2Gradient ? std::vector<uint32_t>{feedForwardDimension, dimension} :
-                          std::vector<uint32_t>{dimension, dimension}));
-      }
+      // This call order is the established QNN tensor-id ABI. Identity and
+      // shape still come from ParameterDefinition, and storage uses its
+      // canonical slot so registry order cannot drift from parameter order.
+      const auto createGradient = [&](const char *name,
+                                      tiny_lm::LayerParameterMember member) {
+        const auto *definition = tiny_lm::parameterDefinition(member);
+        std::size_t slot = 0;
+        std::vector<uint32_t> shape;
+        if (!definition || !findParameterSlot(member, &slot) ||
+            !tiny_lm::parameterDefinitionShape(*definition,
+                                               parameterDimensions, &shape))
+          return false;
+        record.gradients[slot] =
+            add(prefix + name, QNN_TENSOR_TYPE_APP_READ, shape);
+        return record.gradients[slot] != 0;
+      };
+      if (!createGradient("dwq", &LayerParameters::wq) ||
+          !createGradient("dwk", &LayerParameters::wk) ||
+          !createGradient("dwv", &LayerParameters::wv) ||
+          !createGradient("dwo", &LayerParameters::wo) ||
+          !createGradient("dg1", &LayerParameters::gamma1) ||
+          !createGradient("db1", &LayerParameters::beta1) ||
+          !createGradient("dg2", &LayerParameters::gamma2) ||
+          !createGradient("db2", &LayerParameters::beta2) ||
+          !createGradient("dw1", &LayerParameters::w1) ||
+          !createGradient("dw2", &LayerParameters::w2))
+        return fail("generalized tiny training gradient metadata mapping failed");
     }
     if (!g.forwardOnly) {
       for (const char *name : {"drelu", "relu_mask", "dff1", "dln2",
@@ -624,9 +671,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // incidental tensor-creation order can change it.  FORWARD_ONLY drops the
   // target APP_WRITE entirely; the one-hot and parameters keep their order.
   g.appWriteRegistry = g.forwardOnly
-      ? std::vector<uint32_t>{oneHot, embedding}
-      : std::vector<uint32_t>{oneHot, target, embedding};
-  g.parameterRegistry.push_back(embedding);
+      ? std::vector<uint32_t>{oneHot}
+      : std::vector<uint32_t>{oneHot, target};
+  g.appWriteRegistry.insert(g.appWriteRegistry.end(),
+                            globalPrefixParameters.begin(),
+                            globalPrefixParameters.end());
+  g.parameterRegistry.insert(g.parameterRegistry.end(),
+                             globalPrefixParameters.begin(),
+                             globalPrefixParameters.end());
   for (const auto &record : g.layers) {
     std::size_t parameterSlot = 0;
     for (const auto &definition : tiny_lm::parameterDefinitions()) {
@@ -635,15 +687,21 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       const std::size_t slot = parameterSlot++;
       if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
         continue;
-      const uint32_t parameter = record.*(kLayerParameterTensors[slot]);
+      const uint32_t parameter = record.parameters[slot];
       g.appWriteRegistry.push_back(parameter);
       g.parameterRegistry.push_back(parameter);
     }
   }
-  g.appWriteRegistry.push_back(outputProjection);
-  g.parameterRegistry.push_back(outputProjection);
+  g.appWriteRegistry.insert(g.appWriteRegistry.end(),
+                            globalSuffixParameters.begin(),
+                            globalSuffixParameters.end());
+  g.parameterRegistry.insert(g.parameterRegistry.end(),
+                             globalSuffixParameters.begin(),
+                             globalSuffixParameters.end());
   if (!g.forwardOnly) {
-    g.gradientRegistry.push_back(dEmbedding);
+    g.gradientRegistry.insert(g.gradientRegistry.end(),
+                              globalPrefixGradients.begin(),
+                              globalPrefixGradients.end());
   }
   g.appReadRegistry.push_back(g.minimalOutputs ? lastLogits : logits);
   if (diagnosticOutputs && !g.forwardOnly) {
@@ -653,23 +711,25 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   if (!g.forwardOnly) {
     for (const auto &record : g.layers) {
-      for (uint32_t gradient : {record.gradients[DG1], record.gradients[DB1],
-                                record.gradients[DWQ], record.gradients[DWK],
-                                record.gradients[DWV], record.gradients[DWO]})
-        g.gradientRegistry.push_back(gradient);
-      if (headwiseG1Gate) g.gradientRegistry.push_back(record.dGateWeight);
-      for (uint32_t gradient : {record.gradients[DG2], record.gradients[DB2],
-                                record.gradients[DW1], record.gradients[DW2]})
-        g.gradientRegistry.push_back(gradient);
+      std::size_t slot = 0;
+      for (const auto &definition : tiny_lm::parameterDefinitions()) {
+        if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
+          continue;
+        const std::size_t currentSlot = slot++;
+        if (tiny_lm::parameterDefinitionEnabled(definition,
+                                                parameterDimensions))
+          g.gradientRegistry.push_back(record.gradients[currentSlot]);
+      }
     }
-    g.gradientRegistry.push_back(dOutputProjection);
+    g.gradientRegistry.insert(g.gradientRegistry.end(),
+                              globalSuffixGradients.begin(),
+                              globalSuffixGradients.end());
   }
-  if (enabledLayerParameters == 0 || size_t(numLayers) >
-      (std::numeric_limits<size_t>::max() - 2) / enabledLayerParameters) {
+  size_t expectedParameterCount = 0;
+  if (!tiny_lm::checkedParameterInstanceCount(parameterDimensions,
+                                              &expectedParameterCount)) {
     return fail("APP_RESOURCE_ESTIMATOR: parameter registry count overflow");
   }
-  const size_t expectedParameterCount =
-      2 + enabledLayerParameters * size_t(numLayers);
   if (g.parameterRegistry.size() != expectedParameterCount ||
       std::unordered_set<uint32_t>(g.parameterRegistry.begin(),
                                    g.parameterRegistry.end()).size() !=
@@ -887,38 +947,40 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     if (!g.forwardOnly) {
       declared.inputGradient = shapeOf(record.backward[DINPUT]);
     }
-    declared.norm1Gamma = shapeOf(record.gamma1);
-    declared.norm1Beta = shapeOf(record.beta1);
-    declared.norm2Gamma = shapeOf(record.gamma2);
-    declared.norm2Beta = shapeOf(record.beta2);
-    declared.wq = shapeOf(record.wq);
-    declared.wk = shapeOf(record.wk);
-    declared.wv = shapeOf(record.wv);
-    declared.wo = shapeOf(record.wo);
+    declared.norm1Gamma = shapeOf(parameterTensor(record, &LayerParameters::gamma1));
+    declared.norm1Beta = shapeOf(parameterTensor(record, &LayerParameters::beta1));
+    declared.norm2Gamma = shapeOf(parameterTensor(record, &LayerParameters::gamma2));
+    declared.norm2Beta = shapeOf(parameterTensor(record, &LayerParameters::beta2));
+    declared.wq = shapeOf(parameterTensor(record, &LayerParameters::wq));
+    declared.wk = shapeOf(parameterTensor(record, &LayerParameters::wk));
+    declared.wv = shapeOf(parameterTensor(record, &LayerParameters::wv));
+    declared.wo = shapeOf(parameterTensor(record, &LayerParameters::wo));
     if (headwiseG1Gate) {
-      declared.attentionGateWeight = shapeOf(record.attentionGateWeight);
+      declared.attentionGateWeight = shapeOf(
+          parameterTensor(record, &LayerParameters::attentionGateWeight));
       declared.gates = shapeOf(record.gates);
       if (!g.forwardOnly) {
-        declared.dAttentionGateWeight = shapeOf(record.dGateWeight);
+        declared.dAttentionGateWeight = shapeOf(
+            gradientTensor(record, &LayerParameters::attentionGateWeight));
         declared.dGateInput = shapeOf(record.dLn1Gate);
       } else {
         declared.dAttentionGateWeight = {dimension, numHeads};
         declared.dGateInput = {tokens, dimension};
       }
     }
-    declared.ffnW1 = shapeOf(record.w1);
-    declared.ffnW2 = shapeOf(record.w2);
+    declared.ffnW1 = shapeOf(parameterTensor(record, &LayerParameters::w1));
+    declared.ffnW2 = shapeOf(parameterTensor(record, &LayerParameters::w2));
     if (!g.forwardOnly) {
-      declared.dNorm1Gamma = shapeOf(record.gradients[DG1]);
-      declared.dNorm1Beta = shapeOf(record.gradients[DB1]);
-      declared.dNorm2Gamma = shapeOf(record.gradients[DG2]);
-      declared.dNorm2Beta = shapeOf(record.gradients[DB2]);
-      declared.dWq = shapeOf(record.gradients[DWQ]);
-      declared.dWk = shapeOf(record.gradients[DWK]);
-      declared.dWv = shapeOf(record.gradients[DWV]);
-      declared.dWo = shapeOf(record.gradients[DWO]);
-      declared.dFfnW1 = shapeOf(record.gradients[DW1]);
-      declared.dFfnW2 = shapeOf(record.gradients[DW2]);
+      declared.dNorm1Gamma = shapeOf(gradientTensor(record, &LayerParameters::gamma1));
+      declared.dNorm1Beta = shapeOf(gradientTensor(record, &LayerParameters::beta1));
+      declared.dNorm2Gamma = shapeOf(gradientTensor(record, &LayerParameters::gamma2));
+      declared.dNorm2Beta = shapeOf(gradientTensor(record, &LayerParameters::beta2));
+      declared.dWq = shapeOf(gradientTensor(record, &LayerParameters::wq));
+      declared.dWk = shapeOf(gradientTensor(record, &LayerParameters::wk));
+      declared.dWv = shapeOf(gradientTensor(record, &LayerParameters::wv));
+      declared.dWo = shapeOf(gradientTensor(record, &LayerParameters::wo));
+      declared.dFfnW1 = shapeOf(gradientTensor(record, &LayerParameters::w1));
+      declared.dFfnW2 = shapeOf(gradientTensor(record, &LayerParameters::w2));
     }
     declared.norm1Mean = shapeOf(record.activations[LN1_MEAN]);
     declared.norm1Variance = shapeOf(record.activations[LN1_VARIANCE]);
@@ -1132,7 +1194,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     const std::string prefix =
         topologyName + "_layer_" + zeroPadded(layer) + '_';
     if (!layerNorm.forward((prefix + "ln1").c_str(), int(record.input),
-                           int(record.gamma1), int(record.beta1),
+                           int(parameterTensor(record, &LayerParameters::gamma1)),
+                           int(parameterTensor(record, &LayerParameters::beta1)),
                            int(cache(LN1_MEAN)), int(cache(LN1_CENTERED)),
                            int(cache(LN1_CENTERED_S)), int(cache(LN1_SQUARE)),
                            int(cache(LN1_VARIANCE)), int(cache(LN1_VARIANCE_EPS)),
@@ -1140,12 +1203,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                            int(cache(LN1_XHAT)), int(cache(LN1_XHAT_GAMMA)),
                            int(cache(LN1))))
       return fail(error);
-    if (!matmul(prefix + "q", cache(LN1), record.wq, cache(Q), "q") ||
-        !matmul(prefix + "k", cache(LN1), record.wk, cache(K), "k") ||
-        !matmul(prefix + "v", cache(LN1), record.wv, cache(V), "v"))
+    if (!matmul(prefix + "q", cache(LN1),
+                parameterTensor(record, &LayerParameters::wq), cache(Q), "q") ||
+        !matmul(prefix + "k", cache(LN1),
+                parameterTensor(record, &LayerParameters::wk), cache(K), "k") ||
+        !matmul(prefix + "v", cache(LN1),
+                parameterTensor(record, &LayerParameters::wv), cache(V), "v"))
       return fail(error);
     if (headwiseG1Gate &&
-        (!matmul(prefix + "gate_logits", cache(LN1), record.attentionGateWeight,
+        (!matmul(prefix + "gate_logits", cache(LN1),
+                 parameterTensor(record, &LayerParameters::attentionGateWeight),
                  record.gateLogits, "gate logits") ||
          !unary(prefix + "gate_sigmoid", QNN_OP_SIGMOID, record.gateLogits,
                 record.gates, "gate sigmoid")))
@@ -1209,13 +1276,15 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         accumulated = out;
       }
     }
-    if (!matmul(prefix + "project", cache(ATTENTION_CONTEXT), record.wo,
+    if (!matmul(prefix + "project", cache(ATTENTION_CONTEXT),
+                 parameterTensor(record, &LayerParameters::wo),
                  cache(ATTENTION_PROJECTED), "project") ||
         !binary(prefix + "residual1", QNN_OP_ELEMENT_WISE_ADD, record.input,
                 cache(ATTENTION_PROJECTED), cache(RESIDUAL1), "residual1"))
       return fail(error);
     if (!layerNorm.forward((prefix + "ln2").c_str(), int(cache(RESIDUAL1)),
-                           int(record.gamma2), int(record.beta2),
+                           int(parameterTensor(record, &LayerParameters::gamma2)),
+                           int(parameterTensor(record, &LayerParameters::beta2)),
                            int(cache(LN2_MEAN)), int(cache(LN2_CENTERED)),
                            int(cache(LN2_CENTERED_S)), int(cache(LN2_SQUARE)),
                            int(cache(LN2_VARIANCE)), int(cache(LN2_VARIANCE_EPS)),
@@ -1223,9 +1292,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                            int(cache(LN2_XHAT)), int(cache(LN2_XHAT_GAMMA)),
                            int(cache(LN2))))
       return fail(error);
-    if (!matmul(prefix + "ff1", cache(LN2), record.w1, cache(FF1), "ff1") ||
+    if (!matmul(prefix + "ff1", cache(LN2),
+                parameterTensor(record, &LayerParameters::w1), cache(FF1), "ff1") ||
         !unary(prefix + "relu", QNN_OP_RELU, cache(FF1), cache(RELU), "relu") ||
-        !matmul(prefix + "ff2", cache(RELU), record.w2, cache(FF2), "ff2") ||
+        !matmul(prefix + "ff2", cache(RELU),
+                parameterTensor(record, &LayerParameters::w2), cache(FF2), "ff2") ||
         !binary(prefix + "output", QNN_OP_ELEMENT_WISE_ADD, cache(RESIDUAL1),
                 cache(FF2), cache(OUTPUT), "output"))
       return fail(error);
@@ -1256,8 +1327,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     const auto cache = [&](LayerActivation value) {
       return record.activations[size_t(value)];
     };
-    const auto gradient = [&](LayerGradient value) {
-      return record.gradients[size_t(value)];
+    const auto gradient = [&](tiny_lm::LayerParameterMember member) {
+      return gradientTensor(record, member);
     };
     const auto backward = [&](LayerBackward value) {
       return record.backward[size_t(value)];
@@ -1267,21 +1338,26 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                                   : g.layers[size_t(layer + 1)].backward[DINPUT];
     const std::string prefix = topologyName + "_layer_" +
         zeroPadded(uint32_t(layer)) + "_backward_";
-    if (!matmul(prefix + "dw2", cache(RELU), upstream, gradient(DW2), "dw2",
+    if (!matmul(prefix + "dw2", cache(RELU), upstream,
+                 gradient(&LayerParameters::w2), "dw2",
                  QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "drelu", upstream, record.w2, backward(DRELU),
+        !matmul(prefix + "drelu", upstream,
+                 parameterTensor(record, &LayerParameters::w2), backward(DRELU),
                  "drelu", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
         !binary(prefix + "relu_mask", QNN_OP_ELEMENT_WISE_GREATER, cache(FF1),
                 zeroFf, backward(RELU_MASK), "relu mask") ||
         !select(prefix + "relu_select", backward(RELU_MASK), backward(DRELU),
                 zeroFf, backward(DFF1), "relu select") ||
-        !matmul(prefix + "dw1", cache(LN2), backward(DFF1), gradient(DW1),
+        !matmul(prefix + "dw1", cache(LN2), backward(DFF1),
+                 gradient(&LayerParameters::w1),
                  "dw1", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "dln2", backward(DFF1), record.w1, backward(DLN2),
+        !matmul(prefix + "dln2", backward(DFF1),
+                 parameterTensor(record, &LayerParameters::w1), backward(DLN2),
                  "dln2", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
       return fail(error);
     if (!layerNorm.backward((prefix + "ln2").c_str(), int(backward(DLN2)),
-                            int(record.gamma2), int(cache(LN2_XHAT)),
+                            int(parameterTensor(record, &LayerParameters::gamma2)),
+                            int(cache(LN2_XHAT)),
                             int(cache(LN2_INV)), int(backward(DXHAT2)),
                             int(backward(SUM_DXHAT2)),
                             int(backward(DXHAT_XHAT2)), int(backward(DY_XHAT2)),
@@ -1290,14 +1366,17 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                             int(backward(FIRST_DIFF2)),
                             int(backward(XHAT_TIMES_SUM2)), int(backward(BRACKET2)),
                             int(backward(INV_STD_OVER_D2)),
-                            int(backward(DRESIDUAL1_LN)), int(gradient(DG2)),
-                            int(gradient(DB2))))
+                            int(backward(DRESIDUAL1_LN)),
+                            int(gradient(&LayerParameters::gamma2)),
+                            int(gradient(&LayerParameters::beta2))))
       return fail(error);
     if (!binary(prefix + "dresidual1", QNN_OP_ELEMENT_WISE_ADD, upstream,
                 backward(DRESIDUAL1_LN), backward(DRESIDUAL1), "dresidual1") ||
         !matmul(prefix + "dwo", cache(ATTENTION_CONTEXT), backward(DRESIDUAL1),
-                 gradient(DWO), "dwo", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "dcontext", backward(DRESIDUAL1), record.wo,
+                 gradient(&LayerParameters::wo), "dwo",
+                 QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
+        !matmul(prefix + "dcontext", backward(DRESIDUAL1),
+                 parameterTensor(record, &LayerParameters::wo),
                  backward(DCONTEXT), "dcontext", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
       return fail(error);
     if (numHeads == 1) {
@@ -1431,25 +1510,34 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                     record.dGates, record.gateDerivative,
                     record.dGateSigmoid, "gate dlogits") ||
             !matmul(prefix + "gate_dweight", cache(LN1), record.dGateSigmoid,
-                    record.dGateWeight, "gate dweight",
+                    gradient(&LayerParameters::attentionGateWeight),
+                    "gate dweight",
                     QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
             !matmul(prefix + "gate_dln1", record.dGateSigmoid,
-                    record.attentionGateWeight, record.dLn1Gate, "gate dln1",
+                    parameterTensor(record,
+                                    &LayerParameters::attentionGateWeight),
+                    record.dLn1Gate, "gate dln1",
                     QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
           return fail(error);
       }
     }
-    if (!matmul(prefix + "dwq", cache(LN1), backward(DQ), gradient(DWQ),
+    if (!matmul(prefix + "dwq", cache(LN1), backward(DQ),
+                 gradient(&LayerParameters::wq),
                  "dwq", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "dwk", cache(LN1), backward(DK), gradient(DWK),
+        !matmul(prefix + "dwk", cache(LN1), backward(DK),
+                 gradient(&LayerParameters::wk),
                  "dwk", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "dwv", cache(LN1), backward(DV), gradient(DWV),
+        !matmul(prefix + "dwv", cache(LN1), backward(DV),
+                 gradient(&LayerParameters::wv),
                  "dwv", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0) ||
-        !matmul(prefix + "dln1_q", backward(DQ), record.wq, backward(DLN1_Q),
+        !matmul(prefix + "dln1_q", backward(DQ),
+                 parameterTensor(record, &LayerParameters::wq), backward(DLN1_Q),
                  "dln1 q", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
-        !matmul(prefix + "dln1_k", backward(DK), record.wk, backward(DLN1_K),
+        !matmul(prefix + "dln1_k", backward(DK),
+                 parameterTensor(record, &LayerParameters::wk), backward(DLN1_K),
                  "dln1 k", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
-        !matmul(prefix + "dln1_v", backward(DV), record.wv, backward(DLN1_V),
+        !matmul(prefix + "dln1_v", backward(DV),
+                 parameterTensor(record, &LayerParameters::wv), backward(DLN1_V),
                  "dln1 v", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
         !binary(prefix + "dln1_qk", QNN_OP_ELEMENT_WISE_ADD, backward(DLN1_Q),
                 backward(DLN1_K), backward(DLN1_QK), "dln1 qk") ||
@@ -1463,7 +1551,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                 "dln1 gate add"))
       return fail(error);
     if (!layerNorm.backward((prefix + "ln1").c_str(), int(backward(DLN1)),
-                            int(record.gamma1), int(cache(LN1_XHAT)),
+                            int(parameterTensor(record, &LayerParameters::gamma1)),
+                            int(cache(LN1_XHAT)),
                             int(cache(LN1_INV)), int(backward(DXHAT1)),
                             int(backward(SUM_DXHAT1)),
                             int(backward(DXHAT_XHAT1)), int(backward(DY_XHAT1)),
@@ -1472,7 +1561,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                             int(backward(FIRST_DIFF1)),
                             int(backward(XHAT_TIMES_SUM1)), int(backward(BRACKET1)),
                             int(backward(INV_STD_OVER_D1)), int(backward(DINPUT_NORM)),
-                            int(gradient(DG1)), int(gradient(DB1))))
+                            int(gradient(&LayerParameters::gamma1)),
+                            int(gradient(&LayerParameters::beta1))))
       return fail(error);
     if (!binary(prefix + "dinput", QNN_OP_ELEMENT_WISE_ADD,
                 backward(DRESIDUAL1), backward(DINPUT_NORM), backward(DINPUT),

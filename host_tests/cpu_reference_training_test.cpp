@@ -313,6 +313,29 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
         c.vocabularySize, c.dimension, c.feedForwardDimension, c.numLayers,
         c.numHeads, false};
     assert(parameterStorageMatchesDefinitions(a, dimensions));
+    assert(parameterStorageIsFinite(a, dimensions));
+    std::size_t parameterInstances = 0;
+    assert(checkedParameterInstanceCount(dimensions, &parameterInstances));
+    assert(parameterInstances == ar.size());
+    std::size_t gammaSlot = 0, wqSlot = 0, wkSlot = 0, wvSlot = 0, woSlot = 0;
+    std::size_t gateSlot = 0, gamma2Slot = 0;
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::gamma1, &gammaSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wq, &wqSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wk, &wkSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wv, &wvSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wo, &woSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::attentionGateWeight,
+        &gateSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::gamma2, &gamma2Slot));
+    assert(gammaSlot < wqSlot && wqSlot < wkSlot && wkSlot < wvSlot &&
+           wvSlot < woSlot && woSlot < gateSlot && gateSlot < gamma2Slot);
     auto wrongGlobalShape = a;
     wrongGlobalShape.tokenEmbedding.pop_back();
     assert(!parameterStorageMatchesDefinitions(wrongGlobalShape, dimensions));
@@ -330,6 +353,14 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
         gatedConfig.feedForwardDimension, gatedConfig.numLayers,
         gatedConfig.numHeads, true};
     assert(parameterStorageMatchesDefinitions(gated, gatedDimensions));
+    assert(parameterStorageIsFinite(gated, gatedDimensions));
+    assert(checkedParameterInstanceCount(gatedDimensions,
+                                         &parameterInstances));
+    assert(parameterInstances == 2 + 11 * gatedConfig.numLayers);
+    auto nonfiniteGate = gated;
+    nonfiniteGate.layers.back().attentionGateWeight.front() =
+        std::numeric_limits<float>::quiet_NaN();
+    assert(!parameterStorageIsFinite(nonfiniteGate, gatedDimensions));
     auto missingGate = gated;
     missingGate.layers.back().attentionGateWeight.clear();
     assert(!parameterStorageMatchesDefinitions(missingGate, gatedDimensions));

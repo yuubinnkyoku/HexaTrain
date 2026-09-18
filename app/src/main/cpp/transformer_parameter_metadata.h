@@ -4,7 +4,9 @@
 
 #include "qnn/qnn_runtime.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
@@ -219,6 +221,37 @@ inline const ParameterDefinition* parameterDefinition(
   return nullptr;
 }
 
+inline const ParameterDefinition* parameterDefinition(
+    LayerParameterMember member) {
+  for (const auto& definition : parameterDefinitions())
+    if (definition.placement == ParameterPlacement::PER_LAYER &&
+        definition.layerMember == member)
+      return &definition;
+  return nullptr;
+}
+
+inline bool perLayerParameterDefinitionIndex(LayerParameterMember member,
+                                             std::size_t* result) {
+  if (!result) return false;
+  std::size_t index = 0;
+  for (const auto& definition : parameterDefinitions()) {
+    if (definition.placement != ParameterPlacement::PER_LAYER) continue;
+    if (definition.layerMember == member) {
+      *result = index;
+      return true;
+    }
+    ++index;
+  }
+  return false;
+}
+
+inline std::size_t perLayerParameterDefinitionCount() {
+  std::size_t count = 0;
+  for (const auto& definition : parameterDefinitions())
+    if (definition.placement == ParameterPlacement::PER_LAYER) ++count;
+  return count;
+}
+
 inline qnn::TinyTransformerLayerParameters& parameterLayer(
     qnn::TinyTransformerParameters& parameters, std::size_t layerIndex) {
   return layerIndex == 0
@@ -329,6 +362,44 @@ inline bool parameterStorageMatchesDefinitions(
                   values.size() == elements;
       });
   return matches;
+}
+
+inline bool parameterStorageIsFinite(
+    const qnn::TinyTransformerParameters& parameters,
+    const ParameterDimensions& dimensions) {
+  bool finite = true;
+  forEachParameterStorage(
+      parameters,
+      [&](const ParameterDefinition& definition, std::size_t,
+          const std::vector<float>& values) {
+        if (!finite || !parameterDefinitionEnabled(definition, dimensions))
+          return;
+        finite = std::all_of(values.begin(), values.end(), [](float value) {
+          return std::isfinite(value);
+        });
+      });
+  return finite;
+}
+
+inline bool checkedParameterInstanceCount(const ParameterDimensions& dimensions,
+                                          std::size_t* result) {
+  if (!result || !dimensions.layers ||
+      dimensions.layers > std::numeric_limits<std::size_t>::max())
+    return false;
+  std::size_t total = 0;
+  for (const auto& definition : parameterDefinitions()) {
+    if (!validParameterDefinition(definition)) return false;
+    if (!parameterDefinitionEnabled(definition, dimensions)) continue;
+    const std::size_t instances =
+        definition.placement == ParameterPlacement::PER_LAYER
+            ? static_cast<std::size_t>(dimensions.layers)
+            : 1;
+    if (instances > std::numeric_limits<std::size_t>::max() - total)
+      return false;
+    total += instances;
+  }
+  *result = total;
+  return true;
 }
 
 inline bool checkedParameterElementCount(const ParameterDimensions& dimensions,
