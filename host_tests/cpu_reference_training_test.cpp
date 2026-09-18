@@ -283,6 +283,32 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
     assert(parameterDefinitions().size() == 13);
     for (const auto& definition : parameterDefinitions())
         assert(validParameterDefinition(definition));
+    std::vector<const std::vector<float>*> canonicalStorage;
+    std::vector<std::string_view> canonicalSuffixes;
+    forEachParameterStorage(
+        a, [&](const ParameterDefinition& definition, std::size_t,
+               const std::vector<float>& values) {
+            if (!values.empty()) {
+                canonicalStorage.push_back(&values);
+                canonicalSuffixes.push_back(definition.suffix);
+            }
+        });
+    assert(canonicalStorage.size() == ar.size());
+    for (std::size_t i = 0; i < ar.size(); ++i) {
+        assert(canonicalStorage[i] == ar[i].values);
+        assert(canonicalSuffixes[i] == ar[i].suffix);
+    }
+    std::size_t alwaysStorageCount = 0;
+    forEachParameterStorage(
+        a, [&](const ParameterDefinition& definition, std::size_t,
+               const std::vector<float>&) {
+            if (definition.condition == ParameterCondition::ALWAYS)
+                ++alwaysStorageCount;
+            assert(definition.condition == ParameterCondition::ALWAYS ||
+                   std::string_view(definition.suffix) ==
+                       "attention_gate_weight");
+        });
+    assert(alwaysStorageCount == 2 + 10 * c.numLayers);
     ParameterInfo firstRange, duplicateRange;
     firstRange.name = "first";
     firstRange.values = ar[0].values;

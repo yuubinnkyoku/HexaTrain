@@ -219,6 +219,57 @@ inline const ParameterDefinition* parameterDefinition(
   return nullptr;
 }
 
+inline qnn::TinyTransformerLayerParameters& parameterLayer(
+    qnn::TinyTransformerParameters& parameters, std::size_t layerIndex) {
+  return layerIndex == 0
+             ? static_cast<qnn::TinyTransformerLayerParameters&>(parameters)
+             : parameters.layers.at(layerIndex - 1);
+}
+
+inline const qnn::TinyTransformerLayerParameters& parameterLayer(
+    const qnn::TinyTransformerParameters& parameters, std::size_t layerIndex) {
+  return layerIndex == 0
+             ? static_cast<const qnn::TinyTransformerLayerParameters&>(parameters)
+             : parameters.layers.at(layerIndex - 1);
+}
+
+inline std::vector<float>& parameterStorage(
+    qnn::TinyTransformerParameters& parameters,
+    const ParameterDefinition& definition, std::size_t layerIndex = 0) {
+  return definition.placement == ParameterPlacement::PER_LAYER
+             ? parameterLayer(parameters, layerIndex).*(definition.layerMember)
+             : parameters.*(definition.globalMember);
+}
+
+inline const std::vector<float>& parameterStorage(
+    const qnn::TinyTransformerParameters& parameters,
+    const ParameterDefinition& definition, std::size_t layerIndex = 0) {
+  return definition.placement == ParameterPlacement::PER_LAYER
+             ? parameterLayer(parameters, layerIndex).*(definition.layerMember)
+             : parameters.*(definition.globalMember);
+}
+
+// Visit storage in the same global-prefix, layer-major, global-suffix order as
+// parameterMetadata(). Consumers may filter by definition.condition without
+// restating suffix-to-member mappings.
+template <typename Parameters, typename Visitor>
+inline void forEachParameterStorage(Parameters& parameters, Visitor&& visitor) {
+  for (const auto& definition : parameterDefinitions())
+    if (definition.placement == ParameterPlacement::GLOBAL_PREFIX)
+      visitor(definition, std::size_t{0},
+              parameterStorage(parameters, definition));
+  for (std::size_t layerIndex = 0;
+       layerIndex <= parameters.layers.size(); ++layerIndex)
+    for (const auto& definition : parameterDefinitions())
+      if (definition.placement == ParameterPlacement::PER_LAYER)
+        visitor(definition, layerIndex,
+                parameterStorage(parameters, definition, layerIndex));
+  for (const auto& definition : parameterDefinitions())
+    if (definition.placement == ParameterPlacement::GLOBAL_SUFFIX)
+      visitor(definition, std::size_t{0},
+              parameterStorage(parameters, definition));
+}
+
 inline bool parameterDefinitionShape(const ParameterDefinition& definition,
                                      const ParameterDimensions& dimensions,
                                      std::vector<std::uint32_t>* shape) {

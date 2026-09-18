@@ -880,17 +880,6 @@ validation_selection::Metrics validationMetrics(const LanguageQuality &quality) 
   return {quality.loss, quality.accuracy, quality.meanMargin,
           quality.meanCorrectProbability};
 }
-using LanguageMember = std::vector<float> Params::*;
-const std::vector<std::pair<const char *, LanguageMember>> &languageFields() {
-  static const std::vector<std::pair<const char *, LanguageMember>> fields{
-      {"token_embedding", &Params::tokenEmbedding}, {"wq", &Params::wq},
-      {"wk", &Params::wk}, {"wv", &Params::wv}, {"wo", &Params::wo},
-      {"norm1_gamma", &Params::gamma1}, {"norm1_beta", &Params::beta1},
-      {"norm2_gamma", &Params::gamma2}, {"norm2_beta", &Params::beta2},
-      {"ffn_w1", &Params::w1}, {"ffn_w2", &Params::w2},
-      {"output_projection", &Params::outputProjection}};
-  return fields;
-}
 double vectorNorm(const std::vector<float> &values) {
   double sum = 0;
   for (float value : values) sum += double(value) * value;
@@ -909,18 +898,12 @@ double parameterUpdateNorm(const Params &current, const Params &next) {
       sum += difference * difference;
     }
   };
-  add(current.tokenEmbedding, next.tokenEmbedding);
-  auto addLayer = [&](const TinyTransformerLayerParameters &a,
-                      const TinyTransformerLayerParameters &b) {
-    add(a.wq,b.wq); add(a.wk,b.wk); add(a.wv,b.wv); add(a.wo,b.wo);
-    add(a.gamma1,b.gamma1); add(a.beta1,b.beta1); add(a.gamma2,b.gamma2);
-    add(a.beta2,b.beta2);
-    add(a.w1,b.w1); add(a.w2,b.w2);
-  };
-  addLayer(current, next);
-  for (size_t i = 0; i < current.layers.size(); ++i)
-    addLayer(current.layers[i], next.layers[i]);
-  add(current.outputProjection, next.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      current, [&](const tiny_lm::ParameterDefinition &definition,
+                   size_t layerIndex, const std::vector<float> &values) {
+        if (definition.condition == tiny_lm::ParameterCondition::ALWAYS)
+          add(values, tiny_lm::parameterStorage(next, definition, layerIndex));
+      });
   return std::sqrt(sum);
 }
 double gradientNorm(const Params &gradient) {
@@ -929,15 +912,12 @@ double gradientNorm(const Params &gradient) {
     const double norm = vectorNorm(values);
     sum += norm * norm;
   };
-  add(gradient.tokenEmbedding);
-  auto addLayer = [&](const TinyTransformerLayerParameters &layer) {
-    add(layer.wq); add(layer.wk); add(layer.wv); add(layer.wo);
-    add(layer.gamma1); add(layer.beta1); add(layer.gamma2); add(layer.beta2);
-    add(layer.w1); add(layer.w2);
-  };
-  addLayer(gradient);
-  for (const auto &layer : gradient.layers) addLayer(layer);
-  add(gradient.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      gradient, [&](const tiny_lm::ParameterDefinition &definition,
+                    size_t, const std::vector<float> &values) {
+        if (definition.condition == tiny_lm::ParameterCondition::ALWAYS)
+          add(values);
+      });
   return std::sqrt(sum);
 }
 std::vector<uint32_t> languageOrder(uint32_t seed, uint32_t epoch,
@@ -1045,14 +1025,21 @@ std::string languageModelMultiStep(bool inferenceOnly, int candidate = 0) {
                    << currentNorm << "\nseed_" << seed << "_step_" << step
                    << "_update_to_parameter_ratio="
                    << (currentNorm ? updateNorm / currentNorm : 0) << '\n';
-        for (const auto &[name, member] : languageFields()) {
-          std::vector<float> update((htp.*member).size());
+        for (const auto &definition : tiny_lm::parameterDefinitions()) {
+          if (definition.condition != tiny_lm::ParameterCondition::ALWAYS)
+            continue;
+          const auto &parameter = tiny_lm::parameterStorage(htp, definition);
+          const auto &nextParameter =
+              tiny_lm::parameterStorage(output.next, definition);
+          const auto &gradient =
+              tiny_lm::parameterStorage(output.gradients, definition);
+          std::vector<float> update(parameter.size());
           for (size_t i = 0; i < update.size(); ++i)
-            update[i] = (output.next.*member)[i] - (htp.*member)[i];
+            update[i] = nextParameter[i] - parameter[i];
           trajectory << "parameter_diagnostic=" << seed << ',' << step << ','
-                     << name << ',' << vectorNorm(output.gradients.*member) << ','
-                     << vectorNorm(update) << ',' << vectorNorm(htp.*member) << ','
-                     << vectorMaxAbs(output.gradients.*member) << ','
+                     << definition.suffix << ',' << vectorNorm(gradient) << ','
+                     << vectorNorm(update) << ',' << vectorNorm(parameter) << ','
+                     << vectorMaxAbs(gradient) << ','
                      << vectorMaxAbs(update) << '\n';
         }
       }
@@ -1169,21 +1156,12 @@ std::string languageModelMultiStep(bool inferenceOnly, int candidate = 0) {
 
 std::vector<float> flattenLanguageParameters(const Params &p) {
   std::vector<float> flat;
-  auto append = [&](const std::vector<float> &values) {
-    flat.insert(flat.end(), values.begin(), values.end());
-  };
   // Canonical generic registry order. Do not iterate an unordered container.
-  append(p.tokenEmbedding);
-  auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
-    append(layer.gamma1); append(layer.beta1);
-    append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
-    append(layer.attentionGateWeight);
-    append(layer.gamma2); append(layer.beta2);
-    append(layer.w1); append(layer.w2);
-  };
-  appendLayer(p);
-  for (const auto &layer : p.layers) appendLayer(layer);
-  append(p.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      p, [&](const tiny_lm::ParameterDefinition &, size_t,
+             const std::vector<float> &values) {
+        flat.insert(flat.end(), values.begin(), values.end());
+      });
   return flat;
 }
 std::vector<float> flattenLanguageParametersLegacyV1(const Params &p) {
@@ -1214,17 +1192,9 @@ Params unflattenLanguageParameters(const std::vector<float> &flat,
               values.begin());
     offset += values.size();
   };
-  take(result.tokenEmbedding);
-  auto takeLayer = [&](TinyTransformerLayerParameters &layer) {
-    take(layer.gamma1); take(layer.beta1);
-    take(layer.wq); take(layer.wk); take(layer.wv); take(layer.wo);
-    take(layer.attentionGateWeight);
-    take(layer.gamma2); take(layer.beta2);
-    take(layer.w1); take(layer.w2);
-  };
-  takeLayer(result);
-  for (auto &layer : result.layers) takeLayer(layer);
-  take(result.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      result, [&](const tiny_lm::ParameterDefinition &, size_t,
+                  std::vector<float> &values) { take(values); });
   if (offset != flat.size()) throw std::invalid_argument("momentum flat shape");
   return result;
 }
@@ -1238,16 +1208,9 @@ Params zeroLanguageParameters(const Params &shape) {
   auto zero = [](std::vector<float> &values) {
     std::fill(values.begin(), values.end(), 0.0f);
   };
-  zero(result.tokenEmbedding);
-  auto zeroLayer = [&](TinyTransformerLayerParameters &layer) {
-    zero(layer.wq); zero(layer.wk); zero(layer.wv); zero(layer.wo);
-    zero(layer.attentionGateWeight);
-    zero(layer.gamma1); zero(layer.beta1); zero(layer.gamma2); zero(layer.beta2);
-    zero(layer.w1); zero(layer.w2);
-  };
-  zeroLayer(result);
-  for (auto &layer : result.layers) zeroLayer(layer);
-  zero(result.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      result, [&](const tiny_lm::ParameterDefinition &, size_t,
+                  std::vector<float> &values) { zero(values); });
   return result;
 }
 bool executeLanguageMomentum(Runtime &runtime, const Params &current,
