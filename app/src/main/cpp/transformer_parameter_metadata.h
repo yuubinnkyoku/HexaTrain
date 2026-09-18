@@ -304,6 +304,33 @@ inline bool parameterDefinitionElementCount(
   return true;
 }
 
+inline bool parameterStorageMatchesDefinitions(
+    const qnn::TinyTransformerParameters& parameters,
+    const ParameterDimensions& dimensions) {
+  if (!dimensions.layers ||
+      parameters.layers.size() + 1 != dimensions.layers)
+    return false;
+  bool matches = true;
+  forEachParameterStorage(
+      parameters,
+      [&](const ParameterDefinition& definition, std::size_t,
+          const std::vector<float>& values) {
+        if (!matches || !validParameterDefinition(definition)) {
+          matches = false;
+          return;
+        }
+        if (!parameterDefinitionEnabled(definition, dimensions)) {
+          matches = values.empty();
+          return;
+        }
+        std::uint64_t elements = 0;
+        matches = parameterDefinitionElementCount(definition, dimensions,
+                                                  &elements) &&
+                  values.size() == elements;
+      });
+  return matches;
+}
+
 inline bool checkedParameterElementCount(const ParameterDimensions& dimensions,
                                          std::uint64_t* result) {
   if (!result || !dimensions.vocabulary || !dimensions.model ||

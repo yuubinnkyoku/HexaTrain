@@ -42,11 +42,12 @@ LP& layer(P& p,uint32_t i){
   return p.layers.at(i-1);
 }
 const LP& layer(const P& p,uint32_t i){ return layer(const_cast<P&>(p),i); }
-bool exact(const std::vector<float>& v,size_t n){return v.size()==n;}
-bool validLayerShape(const LP& p,const Config& c){const size_t d=c.dimension,f=c.feedForwardDimension;return exact(p.gamma1,d)&&exact(p.beta1,d)&&exact(p.gamma2,d)&&exact(p.beta2,d)&&exact(p.wq,d*d)&&exact(p.wk,d*d)&&exact(p.wv,d*d)&&exact(p.wo,d*d)&&exact(p.w1,d*f)&&exact(p.w2,d*f);}
 void requireGeneralParameterShape(const Config& c,const P& p){
-  if(p.layers.size()!=size_t(c.numLayers-1)||!exact(p.tokenEmbedding,size_t(c.vocabularySize)*c.dimension)||!exact(p.outputProjection,size_t(c.dimension)*c.vocabularySize)||!validLayerShape(layer(p,0),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
-  for(uint32_t i=1;i<c.numLayers;++i)if(!validLayerShape(layer(p,i),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
+  if(!tiny::parameterStorageMatchesDefinitions(
+         p,{c.vocabularySize,c.dimension,c.feedForwardDimension,c.numLayers,
+            c.numHeads,
+            c.attentionGate==tiny::AttentionGate::HEADWISE_G1_SIGMOID}))
+    throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
 }
 N nf(const Config&c,const std::vector<float>&x,const std::vector<float>&g,const std::vector<float>&b){N n;n.xhat.resize(x.size());n.inv.resize(c.tokens);n.out.resize(x.size());for(uint32_t r=0;r<c.tokens;++r){double m=0,v=0;for(uint32_t d=0;d<c.dimension;++d)m+=x[size_t(r)*c.dimension+d];m/=c.dimension;for(uint32_t d=0;d<c.dimension;++d){double z=x[size_t(r)*c.dimension+d]-m;v+=z*z;}v/=c.dimension;n.inv[r]=float(1/std::sqrt(v+c.epsilon));for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;n.xhat[i]=(x[i]-float(m))*n.inv[r];n.out[i]=n.xhat[i]*g[d]+b[d];}}return n;}
 void nb(const Config&c,const std::vector<float>&dy,const N&n,const std::vector<float>&g,std::vector<float>&dx,std::vector<float>&dg,std::vector<float>&db){dx.resize(dy.size());dg.assign(c.dimension,0);db.assign(c.dimension,0);for(uint32_t r=0;r<c.tokens;++r){double s=0,sx=0;for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];s+=z;sx+=z*n.xhat[i];dg[d]+=dy[i]*n.xhat[i];db[d]+=dy[i];}for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];dx[i]=float(n.inv[r]/c.dimension*(c.dimension*z-s-n.xhat[i]*sx));}}}

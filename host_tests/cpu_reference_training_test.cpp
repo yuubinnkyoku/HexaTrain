@@ -309,6 +309,30 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
                        "attention_gate_weight");
         });
     assert(alwaysStorageCount == 2 + 10 * c.numLayers);
+    const ParameterDimensions dimensions{
+        c.vocabularySize, c.dimension, c.feedForwardDimension, c.numLayers,
+        c.numHeads, false};
+    assert(parameterStorageMatchesDefinitions(a, dimensions));
+    auto wrongGlobalShape = a;
+    wrongGlobalShape.tokenEmbedding.pop_back();
+    assert(!parameterStorageMatchesDefinitions(wrongGlobalShape, dimensions));
+    auto wrongLayerShape = a;
+    wrongLayerShape.layers.back().w2.pop_back();
+    assert(!parameterStorageMatchesDefinitions(wrongLayerShape, dimensions));
+    auto unexpectedGate = a;
+    unexpectedGate.attentionGateWeight.push_back(0.0f);
+    assert(!parameterStorageMatchesDefinitions(unexpectedGate, dimensions));
+    Config gatedConfig = c;
+    gatedConfig.attentionGate = AttentionGate::HEADWISE_G1_SIGMOID;
+    const auto gated = initialParameters(gatedConfig, 77);
+    const ParameterDimensions gatedDimensions{
+        gatedConfig.vocabularySize, gatedConfig.dimension,
+        gatedConfig.feedForwardDimension, gatedConfig.numLayers,
+        gatedConfig.numHeads, true};
+    assert(parameterStorageMatchesDefinitions(gated, gatedDimensions));
+    auto missingGate = gated;
+    missingGate.layers.back().attentionGateWeight.clear();
+    assert(!parameterStorageMatchesDefinitions(missingGate, gatedDimensions));
     ParameterInfo firstRange, duplicateRange;
     firstRange.name = "first";
     firstRange.values = ar[0].values;
