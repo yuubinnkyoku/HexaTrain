@@ -118,7 +118,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     *out = a * b;
     return true;
   };
-  auto shapeValid = [&](std::initializer_list<uint32_t> shape) {
+  auto shapeValid = [&](const std::vector<uint32_t> &shape) {
     size_t elements = 1;
     for (uint32_t extent : shape) {
       if (extent == 0 || elements > std::numeric_limits<size_t>::max() / extent) {
@@ -129,7 +129,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     return elements <= std::numeric_limits<uint32_t>::max() / sizeof(float);
   };
   auto add = [&](const std::string &name, Qnn_TensorType_t type,
-                 std::initializer_list<uint32_t> dimensions,
+                 const std::vector<uint32_t> &dimensions,
                  Qnn_DataType_t dataType = QNN_DATATYPE_FLOAT_32,
                  bool preserveFp32 = false) {
     if (!shapeValid(dimensions)) {
@@ -157,8 +157,33 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   };
   const auto oneHot = add("token_one_hot", QNN_TENSOR_TYPE_APP_WRITE,
                           {tokens, vocabularySize});
-  const auto embedding = add("token_embedding", QNN_TENSOR_TYPE_APP_WRITE,
-                             {vocabularySize, dimension});
+  // Global parameters take their name and extents from the shared parameter
+  // metadata; only the record storage below is declared here.
+  const tiny_lm::ParameterDimensions parameterDimensions{
+      vocabularySize, dimension, feedForwardDimension, numLayers, numHeads,
+      headwiseG1Gate};
+  const auto globalParameter =
+      [](tiny_lm::ParameterPlacement placement)
+      -> const tiny_lm::ParameterDefinition * {
+    for (const auto &definition : tiny_lm::parameterDefinitions())
+      if (definition.placement == placement) return &definition;
+    return nullptr;
+  };
+  const tiny_lm::ParameterDefinition *embeddingDefinition =
+      globalParameter(tiny_lm::ParameterPlacement::GLOBAL_PREFIX);
+  const tiny_lm::ParameterDefinition *projectionDefinition =
+      globalParameter(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX);
+  std::vector<uint32_t> embeddingShape, projectionShape;
+  if (!embeddingDefinition || !projectionDefinition ||
+      !tiny_lm::parameterDefinitionShape(*embeddingDefinition,
+                                         parameterDimensions,
+                                         &embeddingShape) ||
+      !tiny_lm::parameterDefinitionShape(*projectionDefinition,
+                                         parameterDimensions,
+                                         &projectionShape))
+    return fail("generalized tiny training global parameter metadata is missing");
+  const auto embedding = add(embeddingDefinition->suffix,
+                             QNN_TENSOR_TYPE_APP_WRITE, embeddingShape);
   const auto position = add("position", QNN_TENSOR_TYPE_STATIC,
                             {tokens, dimension});
   const auto embedded = add("embedded_token", QNN_TENSOR_TYPE_NATIVE,
@@ -178,8 +203,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto gateOne = headwiseG1Gate
       ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
-  const auto outputProjection = add("output_projection", QNN_TENSOR_TYPE_APP_WRITE,
-                                    {dimension, vocabularySize});
+  const auto outputProjection = add(projectionDefinition->suffix,
+                                    QNN_TENSOR_TYPE_APP_WRITE, projectionShape);
   const auto logits = add("logits",
                           g.minimalOutputs ? QNN_TENSOR_TYPE_NATIVE
                                            : QNN_TENSOR_TYPE_APP_READ,
@@ -318,21 +343,35 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return false;
     return tapSet == TinyTransformerTrainingTapSet::ALL_INTERNAL;
   };
+  // Per-layer parameter tensor slots addressed by tiny_lm::parameterDefinitions()
+  // order.  Names, extents, and the binding order all come from that metadata;
+  // this array is only the record storage that owns the tensor ids.
+  using LayerRegistry =
+      Impl::GeneralizedTinyTransformerTrainingGraph::LayerRegistry;
+  constexpr std::array<std::uint32_t LayerRegistry::*, 11>
+      kLayerParameterTensors = {
+          &LayerRegistry::gamma1, &LayerRegistry::beta1,
+          &LayerRegistry::wq,     &LayerRegistry::wk,
+          &LayerRegistry::wv,     &LayerRegistry::wo,
+          &LayerRegistry::attentionGateWeight,
+          &LayerRegistry::gamma2, &LayerRegistry::beta2,
+          &LayerRegistry::w1,     &LayerRegistry::w2};
+  std::size_t perLayerParameterDefinitions = 0, enabledLayerParameters = 0;
+  for (const auto &definition : tiny_lm::parameterDefinitions()) {
+    if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER) continue;
+    ++perLayerParameterDefinitions;
+    if (tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
+      ++enabledLayerParameters;
+  }
+  if (perLayerParameterDefinitions != kLayerParameterTensors.size())
+    return fail("generalized tiny training parameter metadata mapping is stale");
   // Keep all layer-local parameter and forward-cache tensors separate. The
   // order is the deterministic parameter registry order used by future
   // binding/execution work; activation indices above never cross a layer.
   for (uint32_t layer = 0; layer < numLayers; ++layer) {
     auto &record = g.layers.emplace_back();
     const std::string prefix = "layer_" + zeroPadded(layer) + "_";
-    record.gamma1 = add(prefix + "norm1_gamma", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
-    record.beta1 = add(prefix + "norm1_beta", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
-    record.wq = add(prefix + "wq", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
-    record.wk = add(prefix + "wk", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
-    record.wv = add(prefix + "wv", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
-    record.wo = add(prefix + "wo", QNN_TENSOR_TYPE_APP_WRITE, {dimension, dimension});
-    if (headwiseG1Gate) {
-      record.attentionGateWeight = add(prefix + "attention_gate_weight",
-          QNN_TENSOR_TYPE_APP_WRITE, {dimension, numHeads});
+    const auto createGateTensors = [&]() {
       record.gateLogits = add(prefix + "attention_gate_logits",
           QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
       record.gates = add(prefix + "attention_gates",
@@ -354,11 +393,23 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         record.dLn1Qkv = add(prefix + "dln1_qkv", QNN_TENSOR_TYPE_NATIVE,
             {tokens, dimension});
       }
+    };
+    std::size_t parameterSlot = 0;
+    for (const auto &definition : tiny_lm::parameterDefinitions()) {
+      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
+        continue;
+      const std::size_t slot = parameterSlot++;
+      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
+        continue;
+      std::vector<uint32_t> parameterShape;
+      if (!tiny_lm::parameterDefinitionShape(definition, parameterDimensions,
+                                             &parameterShape))
+        return fail("generalized tiny training parameter shape is not representable");
+      record.*(kLayerParameterTensors[slot]) = add(
+          prefix + definition.suffix, QNN_TENSOR_TYPE_APP_WRITE, parameterShape);
+      if (definition.condition == tiny_lm::ParameterCondition::HEADWISE_G1)
+        createGateTensors();
     }
-    record.gamma2 = add(prefix + "norm2_gamma", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
-    record.beta2 = add(prefix + "norm2_beta", QNN_TENSOR_TYPE_APP_WRITE, {dimension});
-    record.w1 = add(prefix + "ffn_w1", QNN_TENSOR_TYPE_APP_WRITE, {dimension, feedForwardDimension});
-    record.w2 = add(prefix + "ffn_w2", QNN_TENSOR_TYPE_APP_WRITE, {feedForwardDimension, dimension});
     record.input = layer == 0 ? input : g.layers[layer - 1].output;
     for (const char *name : {"ln1_mean", "ln1_centered", "ln1_centered_s",
          "ln1_square", "ln1_variance", "ln1_variance_eps", "ln1_inv_s",
@@ -411,10 +462,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       const Qnn_TensorType_t activationType = establishedOutput || selectedTap
           ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
       record.activations.push_back(add(prefix + name, activationType,
-          score ? std::initializer_list<uint32_t>{tokens, tokens} :
-          ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
-          row ? std::initializer_list<uint32_t>{tokens, 1} :
-                std::initializer_list<uint32_t>{tokens, dimension}));
+          score ? std::vector<uint32_t>{tokens, tokens} :
+          ff ? std::vector<uint32_t>{tokens, feedForwardDimension} :
+          row ? std::vector<uint32_t>{tokens, 1} :
+                std::vector<uint32_t>{tokens, dimension}));
       if (selectedTap) g.tapRegistry.push_back(record.activations.back());
     }
     record.output = record.activations.back();
@@ -427,10 +478,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         const bool ff1Gradient = gradientName == "dw1";
         const bool ff2Gradient = gradientName == "dw2";
         record.gradients.push_back(add(prefix + name, QNN_TENSOR_TYPE_APP_READ,
-            norm ? std::initializer_list<uint32_t>{dimension} :
-            ff1Gradient ? std::initializer_list<uint32_t>{dimension, feedForwardDimension} :
-            ff2Gradient ? std::initializer_list<uint32_t>{feedForwardDimension, dimension} :
-                          std::initializer_list<uint32_t>{dimension, dimension}));
+            norm ? std::vector<uint32_t>{dimension} :
+            ff1Gradient ? std::vector<uint32_t>{dimension, feedForwardDimension} :
+            ff2Gradient ? std::vector<uint32_t>{feedForwardDimension, dimension} :
+                          std::vector<uint32_t>{dimension, dimension}));
       }
     }
     if (!g.forwardOnly) {
@@ -468,10 +519,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             ? QNN_TENSOR_TYPE_APP_READ : QNN_TENSOR_TYPE_NATIVE;
         record.backward.push_back(add(
             prefix + name, backwardType,
-            score ? std::initializer_list<uint32_t>{tokens, tokens} :
-            ff ? std::initializer_list<uint32_t>{tokens, feedForwardDimension} :
-            row ? std::initializer_list<uint32_t>{tokens, 1} :
-                  std::initializer_list<uint32_t>{tokens, dimension},
+            score ? std::vector<uint32_t>{tokens, tokens} :
+            ff ? std::vector<uint32_t>{tokens, feedForwardDimension} :
+            row ? std::vector<uint32_t>{tokens, 1} :
+                  std::vector<uint32_t>{tokens, dimension},
             backwardName == "relu_mask" ? QNN_DATATYPE_BOOL_8 : QNN_DATATYPE_FLOAT_32));
         if (selectedTap) g.tapRegistry.push_back(record.backward.back());
       }
@@ -577,17 +628,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       : std::vector<uint32_t>{oneHot, target, embedding};
   g.parameterRegistry.push_back(embedding);
   for (const auto &record : g.layers) {
-    for (uint32_t parameter : {record.gamma1, record.beta1,
-         record.wq, record.wk, record.wv, record.wo}) {
-      g.appWriteRegistry.push_back(parameter);
-      g.parameterRegistry.push_back(parameter);
-    }
-    if (headwiseG1Gate) {
-      g.appWriteRegistry.push_back(record.attentionGateWeight);
-      g.parameterRegistry.push_back(record.attentionGateWeight);
-    }
-    for (uint32_t parameter : {record.gamma2, record.beta2,
-                               record.w1, record.w2}) {
+    std::size_t parameterSlot = 0;
+    for (const auto &definition : tiny_lm::parameterDefinitions()) {
+      if (definition.placement != tiny_lm::ParameterPlacement::PER_LAYER)
+        continue;
+      const std::size_t slot = parameterSlot++;
+      if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))
+        continue;
+      const uint32_t parameter = record.*(kLayerParameterTensors[slot]);
       g.appWriteRegistry.push_back(parameter);
       g.parameterRegistry.push_back(parameter);
     }
@@ -616,11 +664,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     }
     g.gradientRegistry.push_back(dOutputProjection);
   }
-  if (size_t(numLayers) >
-      (std::numeric_limits<size_t>::max() - 2) / size_t(10)) {
+  if (enabledLayerParameters == 0 || size_t(numLayers) >
+      (std::numeric_limits<size_t>::max() - 2) / enabledLayerParameters) {
     return fail("APP_RESOURCE_ESTIMATOR: parameter registry count overflow");
   }
-  const size_t expectedParameterCount = 2 + size_t(headwiseG1Gate ? 11 : 10) * numLayers;
+  const size_t expectedParameterCount =
+      2 + enabledLayerParameters * size_t(numLayers);
   if (g.parameterRegistry.size() != expectedParameterCount ||
       std::unordered_set<uint32_t>(g.parameterRegistry.begin(),
                                    g.parameterRegistry.end()).size() !=

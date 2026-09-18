@@ -70,7 +70,13 @@ $hasL2H1Backward = $hasGeneralizedBuilder -and
     $generalizedText.Contains('backward(DQ_RAW),') -and
     $generalizedText.Contains('backward(DK_RAW),') -and
     $generalizedText.Contains('g.layers.front().backward[DINPUT], dEmbedding') -and
-    $generalizedText.Contains('const size_t expectedParameterCount = 2 + size_t(headwiseG1Gate ? 11 : 10) * numLayers') -and
+    $generalizedText.Contains('const size_t expectedParameterCount =') -and
+    $generalizedText.Contains('2 + enabledLayerParameters * size_t(numLayers)') -and
+    $generalizedText.Contains('if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))') -and
+    $generalizedText.Contains('record.*(kLayerParameterTensors[slot]) = add(') -and
+    $generalizedText.Contains('prefix + definition.suffix') -and
+    -not $generalizedText.Contains('prefix + "norm1_gamma"') -and
+    -not $generalizedText.Contains('prefix + "ffn_w2"') -and
     $generalizedText.Contains('g.gradientRegistry.size() != g.parameterRegistry.size()') -and
     $generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')
 $hasL2H1AttentionLayout = $hasL2H1Backward -and
