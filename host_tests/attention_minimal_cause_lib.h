@@ -57,27 +57,29 @@ inline bool inGroup(const std::string& name, Group group) {
 }
 
 inline std::vector<float>* mutableValues(P& params, const std::string& name) {
-  if (name == "token_embedding") return &params.tokenEmbedding;
-  if (name == "output_projection") return &params.outputProjection;
+  if (name == "token_embedding") {
+    const auto* def = tiny::parameterDefinition(
+        tiny::ParameterPlacement::GLOBAL_PREFIX, "token_embedding");
+    return def ? &tiny::parameterStorage(params, *def) : nullptr;
+  }
+  if (name == "output_projection") {
+    const auto* def = tiny::parameterDefinition(
+        tiny::ParameterPlacement::GLOBAL_SUFFIX, "output_projection");
+    return def ? &tiny::parameterStorage(params, *def) : nullptr;
+  }
   if (name.rfind("layer_", 0) != 0 || name.size() < 10)
     throw std::invalid_argument("PARAMETER_NAME");
   const auto dot = name.find('.');
   if (dot == std::string::npos) throw std::invalid_argument("PARAMETER_NAME");
-  const std::uint32_t layerIndex =
-      static_cast<std::uint32_t>(std::stoul(name.substr(6, dot - 6)));
-  auto& layer = train::layer(params, layerIndex);
-  const std::string field = name.substr(dot + 1);
-  if (field == "norm1_gamma") return &layer.gamma1;
-  if (field == "norm1_beta") return &layer.beta1;
-  if (field == "wq") return &layer.wq;
-  if (field == "wk") return &layer.wk;
-  if (field == "wv") return &layer.wv;
-  if (field == "wo") return &layer.wo;
-  if (field == "norm2_gamma") return &layer.gamma2;
-  if (field == "norm2_beta") return &layer.beta2;
-  if (field == "ffn_w1") return &layer.w1;
-  if (field == "ffn_w2") return &layer.w2;
-  throw std::invalid_argument("PARAMETER_FIELD");
+  const std::size_t layerIndex =
+      static_cast<std::size_t>(std::stoul(name.substr(6, dot - 6)));
+  if (layerIndex > params.layers.size())
+    throw std::invalid_argument("PARAMETER_LAYER_OUT_OF_RANGE");
+  const std::string_view suffix = std::string_view(name).substr(dot + 1);
+  const auto* def = tiny::parameterDefinition(
+      tiny::ParameterPlacement::PER_LAYER, suffix);
+  if (!def) throw std::invalid_argument("PARAMETER_FIELD");
+  return &tiny::parameterStorage(params, *def, layerIndex);
 }
 
 inline void copyGroup(P& destination, const P& source, Group group) {

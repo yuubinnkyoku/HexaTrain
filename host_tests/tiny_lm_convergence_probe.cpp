@@ -13,19 +13,6 @@
 namespace {
 using Params = phonelm::qnn::TinyTransformerParameters;
 using Step = phonelm::tiny_lm::StepResult;
-using Member = std::vector<float> Params::*;
-struct Field { const char* name; Member member; };
-const std::vector<Field>& fields() {
-  static const std::vector<Field> value{
-      {"token_embedding", &Params::tokenEmbedding},
-      {"wq", &Params::wq}, {"wk", &Params::wk}, {"wv", &Params::wv},
-      {"wo", &Params::wo}, {"norm1_gamma", &Params::gamma1},
-      {"norm1_beta", &Params::beta1}, {"norm2_gamma", &Params::gamma2},
-      {"norm2_beta", &Params::beta2}, {"ffn_w1", &Params::w1},
-      {"ffn_w2", &Params::w2},
-      {"output_projection", &Params::outputProjection}};
-  return value;
-}
 const std::vector<std::vector<uint32_t>>& patterns() {
   static const std::vector<std::vector<uint32_t>> value{
       {0,1,2,3}, {4,5,6,7}, {8,9}, {10,11,12}};
@@ -43,10 +30,14 @@ Batch batch(const phonelm::tiny_lm::Config& c, uint32_t pattern, uint32_t phase)
           phonelm::tiny_lm::oneHot(target, c.vocabularySize)};
 }
 void scaleInitialization(Params& p, double scale) {
-  for (Member member : {&Params::tokenEmbedding, &Params::wq, &Params::wk,
-                        &Params::wv, &Params::wo, &Params::w1, &Params::w2,
-                        &Params::outputProjection})
-    for (float& value : p.*member) value = float(value * scale);
+  phonelm::tiny_lm::forEachParameterStorage(
+      p, [scale](const auto& def, std::size_t, std::vector<float>& values) {
+        if (def.role == phonelm::tiny_lm::ParameterRole::MUON ||
+            std::string_view(def.suffix) == "token_embedding" ||
+            std::string_view(def.suffix) == "output_projection") {
+          for (float& value : values) value = float(value * scale);
+        }
+      });
 }
 double l2(const std::vector<float>& values) {
   double sum = 0; for (float v : values) sum += double(v) * v; return std::sqrt(sum);
@@ -101,14 +92,24 @@ std::vector<uint32_t> orderFor(uint32_t seed, uint32_t epoch, bool shuffle) {
 }
 struct Norms { double gradient=0, update=0, parameter=0, ratio=0; };
 Norms norms(const Params& current, const Step& step) {
-  double g2=0,u2=0,p2=0;
-  for (const auto& field : fields()) {
-    const auto& p=current.*field.member; const auto& g=step.gradients.*field.member;
-    const auto& n=step.next.*field.member;
-    for(size_t i=0;i<p.size();++i){g2+=double(g[i])*g[i];double u=double(n[i])-p[i];u2+=u*u;p2+=double(p[i])*p[i];}
+  double g2 = 0, u2 = 0, p2 = 0;
+  const auto curReg = phonelm::tiny_lm::parameterRegistry(current);
+  const auto gradReg = phonelm::tiny_lm::parameterRegistry(step.gradients);
+  const auto nextReg = phonelm::tiny_lm::parameterRegistry(step.next);
+  for (std::size_t i = 0; i < curReg.size(); ++i) {
+    const auto& p = *curReg[i].values;
+    const auto& g = *gradReg[i].values;
+    const auto& n = *nextReg[i].values;
+    for (std::size_t j = 0; j < p.size(); ++j) {
+      g2 += double(g[j]) * g[j];
+      double u = double(n[j]) - p[j];
+      u2 += u * u;
+      p2 += double(p[j]) * p[j];
+    }
   }
-  Norms result{std::sqrt(g2),std::sqrt(u2),std::sqrt(p2),0};
-  result.ratio=result.parameter?result.update/result.parameter:0; return result;
+  Norms result{std::sqrt(g2), std::sqrt(u2), std::sqrt(p2), 0};
+  result.ratio = result.parameter ? result.update / result.parameter : 0;
+  return result;
 }
 void printDiagnostics(const std::string& id,uint32_t seed,int stepIndex,const std::string& split,
                       const Quality& q,const Params& current,const Step* step) {
@@ -120,19 +121,29 @@ void printDiagnostics(const std::string& id,uint32_t seed,int stepIndex,const st
   else std::cout<<",0,0,0,0";
   std::cout<<'\n';
   if(!step)return;
-  for(const auto& field:fields()){
-    const auto& p=current.*field.member;const auto& g=step->gradients.*field.member;const auto& next=step->next.*field.member;
-    std::vector<float> update(p.size());for(size_t i=0;i<p.size();++i)update[i]=next[i]-p[i];
-    std::cout<<"parameter_diagnostic="<<id<<","<<seed<<","<<stepIndex<<","<<field.name
-             <<","<<l2(g)<<","<<l2(update)<<","<<l2(p)<<","<<maxAbs(g)<<","<<maxAbs(update)<<'\n';
+  const auto curReg = phonelm::tiny_lm::parameterRegistry(current);
+  const auto gradReg = phonelm::tiny_lm::parameterRegistry(step->gradients);
+  const auto nextReg = phonelm::tiny_lm::parameterRegistry(step->next);
+  for (std::size_t i = 0; i < curReg.size(); ++i) {
+    const auto& p = *curReg[i].values;
+    const auto& g = *gradReg[i].values;
+    const auto& next = *nextReg[i].values;
+    std::vector<float> update(p.size());
+    for (std::size_t j = 0; j < p.size(); ++j) update[j] = next[j] - p[j];
+    std::cout << "parameter_diagnostic=" << id << "," << seed << "," << stepIndex << "," << curReg[i].name
+              << "," << l2(g) << "," << l2(update) << "," << l2(p) << "," << maxAbs(g) << "," << maxAbs(update) << '\n';
   }
 }
 struct SeedResult { Quality initialTrain,initialEval,finalTrain,finalEval; Params parameters; bool finite=true; };
 SeedResult train(const std::string& id,uint32_t seed,double lr,int steps,double initScale,
                  bool shuffle,bool diagnostics,double momentum,bool adam) {
   phonelm::tiny_lm::Config c; auto p=phonelm::tiny_lm::initialParameters(c,seed);scaleInitialization(p,initScale);
-  Params velocity=p;for(const auto&field:fields())std::fill((velocity.*field.member).begin(),(velocity.*field.member).end(),0.0f);
-  Params secondMoment=velocity;
+  Params velocity = p;
+  phonelm::tiny_lm::forEachParameterStorage(
+      velocity, [](const auto&, std::size_t, std::vector<float>& values) {
+        std::fill(values.begin(), values.end(), 0.0f);
+      });
+  Params secondMoment = velocity;
   SeedResult result;result.initialTrain=quality(c,p,0);result.initialEval=quality(c,p,1);
   const std::vector<int> checkpoints{0,1,2,5,10,20,50,100,200,320,640,1000};
   if(diagnostics)printDiagnostics(id,seed,0,"train",result.initialTrain,p,nullptr);
@@ -152,12 +163,23 @@ SeedResult train(const std::string& id,uint32_t seed,double lr,int steps,double 
     bool checkpoint=std::find(checkpoints.begin(),checkpoints.end(),index)!=checkpoints.end();
     if(diagnostics&&checkpoint){printDiagnostics(id,seed,index,"train",quality(c,step.next,0),p,&step);printDiagnostics(id,seed,index,"evaluation",quality(c,step.next,1),p,&step);}
     p=step.next;
-    for(const auto& field:fields())for(float value:p.*field.member)result.finite=result.finite&&std::isfinite(value);
+    phonelm::tiny_lm::forEachParameterStorage(
+        p, [&](const auto&, std::size_t, const std::vector<float>& values) {
+          for (float value : values) result.finite = result.finite && std::isfinite(value);
+        });
     if(!result.finite)break;
   }
   result.finalTrain=quality(c,p,0);result.finalEval=quality(c,p,1);result.parameters=std::move(p);return result;
 }
-bool sameParameters(const Params&a,const Params&b){for(const auto&f:fields())if(a.*f.member!=b.*f.member)return false;return true;}
+bool sameParameters(const Params& a, const Params& b) {
+  const auto regA = phonelm::tiny_lm::parameterRegistry(a);
+  const auto regB = phonelm::tiny_lm::parameterRegistry(b);
+  if (regA.size() != regB.size()) return false;
+  for (std::size_t i = 0; i < regA.size(); ++i) {
+    if (*regA[i].values != *regB[i].values) return false;
+  }
+  return true;
+}
 }
 int main(int argc,char**argv){
   if(argc<7||argc>9){std::cerr<<"usage: probe id lr steps init_scale fixed|shuffle diagnostics0|1 [momentum] [adam0|1]\n";return 2;}

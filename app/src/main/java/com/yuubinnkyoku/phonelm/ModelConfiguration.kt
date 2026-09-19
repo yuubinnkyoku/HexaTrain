@@ -10,6 +10,7 @@ data class ModelArchitecture(
     val vocabularySize: Int,
     val tokenizerKind: String,
     val tokenizerHash: String?,
+    val headwiseG1: Boolean = false,
 ) {
     fun validationError(): String? = when {
         layers !in 1..128 -> "layers must be in 1..128"
@@ -42,7 +43,8 @@ data class ModelArchitecture(
         val norms = Math.multiplyExact(4L, d)
         val attention = Math.multiplyExact(4L, Math.multiplyExact(d, d))
         val feedForward = Math.multiplyExact(2L, Math.multiplyExact(d, ffn))
-        val perLayer = Math.addExact(Math.addExact(norms, attention), feedForward)
+        val gate = if (headwiseG1) Math.multiplyExact(d, heads.toLong()) else 0L
+        val perLayer = Math.addExact(Math.addExact(Math.addExact(norms, attention), gate), feedForward)
         return Math.addExact(embeddingAndProjection, Math.multiplyExact(layers.toLong(), perLayer))
     }
 
