@@ -33,8 +33,9 @@ data class ModelArchitecture(
     val headDimension: Int get() = dimension / heads
 
     /** Mirrors the native/checkpoint parameter registry via the generated SSOT metadata.
-     *  headwiseG1 is an evaluator argument for gated attention (HEADWISE_G1 parameter),
-     *  not part of the architecture identity. */
+     *  headwiseG1 is an evaluator argument for gated attention (HEADWISE_G1 parameter)
+     *  used by parameterCount(); it is not a ModelArchitecture field. Native V5
+     *  checkpoint identity still distinguishes gate values separately. */
     fun parameterCount(headwiseG1: Boolean = false): Long {
         validationError()?.let { throw IllegalArgumentException(it) }
         return GeneratedTransformerParameterMetadata.calculateParameterCount(

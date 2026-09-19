@@ -97,7 +97,14 @@ $Fixed = [ordered]@{
 # parameter upstream only requires regenerating the artifact.  The MUON pilot
 # architecture is ungated (headwiseG1=false), matching the frozen Adam
 # reference and $Fixed.parameter_count.
+#
+# Manifest compatibility: muon_parameter_roles / aux_adam_parameter_roles keep
+# the original Muon-pilot semantic labels under the same schema_version.
+# SSOT-derived suffix lists are written under the new explicit fields
+# muon_parameter_suffixes / aux_adam_parameter_suffixes.
 $MetadataJsonPath = Join-Path $Root 'metadata\transformer_parameter_metadata.json'
+$MuonParameterRolesCompatibility = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
+$AuxAdamParameterRolesCompatibility = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
 function Get-MetadataDerivationFromSsot {
   if (-not (Test-Path -LiteralPath $MetadataJsonPath -PathType Leaf)) {
     throw 'PARAMETER_METADATA_JSON_MISSING: regenerate scripts\generate_parameter_metadata.ps1'
@@ -112,8 +119,8 @@ function Get-MetadataDerivationFromSsot {
     FEED_FORWARD = [uint64]$Fixed.feed_forward_dimension
     HEADS = [uint64]$Fixed.heads
   }
-  $muonRoles = [Collections.Generic.List[string]]::new()
-  $auxRoles = [Collections.Generic.List[string]]::new()
+  $muonSuffixes = [Collections.Generic.List[string]]::new()
+  $auxSuffixes = [Collections.Generic.List[string]]::new()
   $total = [uint64]0
   $muonElements = [uint64]0
   $auxElements = [uint64]0
@@ -130,12 +137,12 @@ function Get-MetadataDerivationFromSsot {
     $count = $elements * $instances
     $total += $count
     if ($def.role -eq 'MUON') {
-      $muonRoles.Add([string]$def.suffix)
+      $muonSuffixes.Add([string]$def.suffix)
       $muonElements += $count
       $matrixInstances = if ($def.placement -eq 'PER_LAYER') { [uint64]$Fixed.layers } else { [uint64]1 }
       $muonMatrices += $matrixInstances
     } elseif ($def.role -eq 'AUX_ADAM') {
-      $auxRoles.Add([string]$def.suffix)
+      $auxSuffixes.Add([string]$def.suffix)
       $auxElements += $count
     } else {
       throw "PARAMETER_METADATA_ROLE_UNKNOWN:$($def.role)"
@@ -143,8 +150,12 @@ function Get-MetadataDerivationFromSsot {
   }
   return [ordered]@{
     parameter_count = $total
-    muon_parameter_roles = @($muonRoles)
-    aux_adam_parameter_roles = @($auxRoles)
+    # Compatibility: original semantic labels, same schema field meaning.
+    muon_parameter_roles = @($MuonParameterRolesCompatibility)
+    aux_adam_parameter_roles = @($AuxAdamParameterRolesCompatibility)
+    # SSOT-derived concrete suffix lists.
+    muon_parameter_suffixes = @($muonSuffixes)
+    aux_adam_parameter_suffixes = @($auxSuffixes)
     muon_matrix_count = $muonMatrices
     muon_parameter_count = $muonElements
     aux_adam_parameter_count = $auxElements
@@ -879,6 +890,8 @@ function New-Manifest {
     muon_ns_steps = $MuonNsSteps
     muon_parameter_roles = $MetadataDerived.muon_parameter_roles
     aux_adam_parameter_roles = $MetadataDerived.aux_adam_parameter_roles
+    muon_parameter_suffixes = $MetadataDerived.muon_parameter_suffixes
+    aux_adam_parameter_suffixes = $MetadataDerived.aux_adam_parameter_suffixes
     muon_matrix_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.muon_matrix_count } else { 0 }
     muon_parameter_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.muon_parameter_count } else { 0 }
     aux_adam_parameter_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.aux_adam_parameter_count } else { $Fixed.parameter_count }
@@ -958,6 +971,25 @@ function Assert-ManifestIdentity {
   if ($Manifest.ContainsKey('muon_algorithm_identity') -and $Manifest.muon_algorithm_identity -ne $MuonAlgorithmIdentity) { throw 'MANIFEST_ALGORITHM_IDENTITY_REJECTED' }
   if ($Manifest.ContainsKey('muon_learning_rate_schedule') -and $Manifest.muon_learning_rate_schedule -ne 'linear_decay') { throw 'MANIFEST_SCHEDULE_IDENTITY_REJECTED' }
   if ($Manifest.ContainsKey('initial_parameter_hash') -and $Manifest.initial_parameter_hash -ne $Fixed.initial_parameter_hash) { throw 'MANIFEST_INITIAL_PARAMETER_IDENTITY_REJECTED' }
+  # Compatibility: *_parameter_roles keep the original semantic labels under
+  # the same schema field names. Old manifests without the new suffix fields
+  # remain accepted; new suffix fields are validated when present.
+  if ($Manifest.ContainsKey('muon_parameter_roles') -and
+      [string](@($Manifest.muon_parameter_roles) -join ',') -ne [string]($MetadataDerived.muon_parameter_roles -join ',')) {
+    throw 'MANIFEST_MUON_PARAMETER_ROLES_REJECTED'
+  }
+  if ($Manifest.ContainsKey('aux_adam_parameter_roles') -and
+      [string](@($Manifest.aux_adam_parameter_roles) -join ',') -ne [string]($MetadataDerived.aux_adam_parameter_roles -join ',')) {
+    throw 'MANIFEST_AUX_ADAM_PARAMETER_ROLES_REJECTED'
+  }
+  if ($Manifest.ContainsKey('muon_parameter_suffixes') -and
+      [string](@($Manifest.muon_parameter_suffixes) -join ',') -ne [string]($MetadataDerived.muon_parameter_suffixes -join ',')) {
+    throw 'MANIFEST_MUON_PARAMETER_SUFFIXES_REJECTED'
+  }
+  if ($Manifest.ContainsKey('aux_adam_parameter_suffixes') -and
+      [string](@($Manifest.aux_adam_parameter_suffixes) -join ',') -ne [string]($MetadataDerived.aux_adam_parameter_suffixes -join ',')) {
+    throw 'MANIFEST_AUX_ADAM_PARAMETER_SUFFIXES_REJECTED'
+  }
   if ($Manifest.ContainsKey('muon_target_learning_rate')) {
     $expectedTarget = Get-ExpectedMuonTargetLearningRate ([double]$LearningRate)
     if ([math]::Abs([double]$Manifest.muon_target_learning_rate - $expectedTarget) -gt 1.0e-7) { throw 'MANIFEST_MUON_TARGET_LR_REJECTED' }
@@ -1534,11 +1566,29 @@ function Invoke-SelfTest {
   if ((Get-OptimizerKind) -eq 'MUON') {
     if ((Get-OptimizerIdentity) -ne 'muon_aux_adam') { throw 'SELFTEST_OPTIMIZER_IDENTITY' }
     $manifest = New-Manifest '0.005'
-    if ($manifest.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or $manifest.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or $manifest.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or $manifest.optimizer -ne 'MUON' -or $manifest.optimizer_identity -ne 'muon_aux_adam' -or $manifest.muon_algorithm_identity -ne $MuonAlgorithmIdentity -or $manifest.muon_learning_rate_schedule -ne 'linear_decay' -or $manifest.checkpoint_format -ne 'NPRTCKPTV4' -or $manifest.initial_parameter_hash -ne $Fixed.initial_parameter_hash -or $manifest.aux_adam_beta1 -ne $Fixed.adam_beta1 -or $manifest.aux_adam_beta2 -ne $Fixed.adam_beta2 -or $manifest.aux_adam_epsilon -ne $Fixed.adam_epsilon -or $manifest.aux_adam_weight_decay -ne $Fixed.weight_decay -or $manifest.final_test_opened -ne $false -or $manifest.final_test_used -ne $false -or [string]($manifest.muon_parameter_roles -join ',') -ne [string]($MetadataDerived.muon_parameter_roles -join ',')) { throw 'SELFTEST_PARAMETER_SPLIT_OR_MANIFEST' }
+    if ($manifest.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or $manifest.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or $manifest.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or $manifest.optimizer -ne 'MUON' -or $manifest.optimizer_identity -ne 'muon_aux_adam' -or $manifest.muon_algorithm_identity -ne $MuonAlgorithmIdentity -or $manifest.muon_learning_rate_schedule -ne 'linear_decay' -or $manifest.checkpoint_format -ne 'NPRTCKPTV4' -or $manifest.initial_parameter_hash -ne $Fixed.initial_parameter_hash -or $manifest.aux_adam_beta1 -ne $Fixed.adam_beta1 -or $manifest.aux_adam_beta2 -ne $Fixed.adam_beta2 -or $manifest.aux_adam_epsilon -ne $Fixed.adam_epsilon -or $manifest.aux_adam_weight_decay -ne $Fixed.weight_decay -or $manifest.final_test_opened -ne $false -or $manifest.final_test_used -ne $false -or [string]($manifest.muon_parameter_roles -join ',') -ne [string]($MetadataDerived.muon_parameter_roles -join ',') -or [string]($manifest.aux_adam_parameter_roles -join ',') -ne [string]($MetadataDerived.aux_adam_parameter_roles -join ',') -or [string]($manifest.muon_parameter_suffixes -join ',') -ne [string]($MetadataDerived.muon_parameter_suffixes -join ',') -or [string]($manifest.aux_adam_parameter_suffixes -join ',') -ne [string]($MetadataDerived.aux_adam_parameter_suffixes -join ',')) { throw 'SELFTEST_PARAMETER_SPLIT_OR_MANIFEST' }
     $knownCheckpoint = Join-Path (Get-TrainingDirectory '0.005') (Get-CheckpointName 1000)
     if (Test-Path -LiteralPath $knownCheckpoint -PathType Leaf) {
       $knownIdentity = Get-CoreCheckpointIdentity $knownCheckpoint
       if ($knownIdentity.magic -ne $CheckpointFormatMuon -or $knownIdentity.optimizer_identity -ne 'muon_aux_adam' -or $knownIdentity.schema_version -ne 4 -or $knownIdentity.registry_version -ne 1 -or $knownIdentity.registry_count -ne 192 -or @([uint64]$Fixed.training_order_seed,[uint64]$Fixed.seed) -notcontains [uint64]$knownIdentity.order_seed) { throw 'SELFTEST_V4_CHECKPOINT_IDENTITY' }
+    }
+    # Legacy resume/recovery compatibility: manifests written before the suffix
+    # fields existed keep the original semantic labels and remain accepted.
+    # Existing field meaning must not change under schema_version.
+    $legacyManifest = @{}
+    foreach ($key in $manifest.Keys) {
+      if ($key -in @('muon_parameter_suffixes','aux_adam_parameter_suffixes')) { continue }
+      $legacyManifest[$key] = $manifest[$key]
+    }
+    $legacyManifest['muon_parameter_roles'] = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
+    $legacyManifest['aux_adam_parameter_roles'] = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
+    Assert-ManifestIdentity $legacyManifest '0.005'
+    if ($legacyManifest.ContainsKey('muon_parameter_suffixes') -or $legacyManifest.ContainsKey('aux_adam_parameter_suffixes')) {
+      throw 'SELFTEST_LEGACY_MANIFEST_MUST_OMIT_SUFFIX_FIELDS'
+    }
+    if ([string]($legacyManifest.muon_parameter_roles -join ',') -ne 'Wq,Wk,Wv,Wo,FFN_W1,FFN_W2' -or
+        [string]($legacyManifest.aux_adam_parameter_roles -join ',') -ne 'token_embedding,output_projection,norm_scale_gain,bias,other_non_hidden') {
+      throw 'SELFTEST_LEGACY_ROLE_LABEL_MEANING_CHANGED'
     }
   } else {
     if ((Get-OptimizerIdentity) -ne 'adam') { throw 'SELFTEST_ADAM_OPTIMIZER_IDENTITY' }

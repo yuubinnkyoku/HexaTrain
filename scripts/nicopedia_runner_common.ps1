@@ -442,6 +442,13 @@ function Get-PhoneLmKeyValueMap {
 # hand-write parameter name/count registries: adding a parameter upstream only
 # requires regenerating the artifact.  Returns both the requested (headwiseG1)
 # total and the always-ungated total so gated deltas can be derived exactly.
+#
+# Manifest compatibility: muon_parameter_roles / aux_adam_parameter_roles keep
+# the original Muon-pilot semantic labels (protocol vocabulary, not a live
+# parameter table).  SSOT-derived suffix lists are exposed under the explicit
+# muon_parameter_suffixes / aux_adam_parameter_suffixes fields instead.
+$PhoneLmMuonParameterRolesCompatibility = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
+$PhoneLmAuxAdamParameterRolesCompatibility = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
 function Get-PhoneLmParameterMetadataDerivation {
     param(
         [Parameter(Mandatory = $true)][uint64]$Vocabulary,
@@ -467,8 +474,8 @@ function Get-PhoneLmParameterMetadataDerivation {
         FEED_FORWARD = $FeedForwardDimension
         HEADS = $Heads
     }
-    $muonRoles = [Collections.Generic.List[string]]::new()
-    $auxRoles = [Collections.Generic.List[string]]::new()
+    $muonSuffixes = [Collections.Generic.List[string]]::new()
+    $auxSuffixes = [Collections.Generic.List[string]]::new()
     $total = [uint64]0
     $totalUngated = [uint64]0
     $muonElements = [uint64]0
@@ -488,12 +495,12 @@ function Get-PhoneLmParameterMetadataDerivation {
         $total += $count
         if (-not $gated) { $totalUngated += $count }
         if ($def.role -eq 'MUON') {
-            $muonRoles.Add([string]$def.suffix)
+            $muonSuffixes.Add([string]$def.suffix)
             $muonElements += $count
             $matrixInstances = if ($def.placement -eq 'PER_LAYER') { $Layers } else { [uint64]1 }
             $muonMatrices += $matrixInstances
         } elseif ($def.role -eq 'AUX_ADAM') {
-            $auxRoles.Add([string]$def.suffix)
+            $auxSuffixes.Add([string]$def.suffix)
             $auxElements += $count
         } else {
             throw "PARAMETER_METADATA_ROLE_UNKNOWN:$($def.role)"
@@ -503,8 +510,12 @@ function Get-PhoneLmParameterMetadataDerivation {
         parameter_count = $total
         parameter_count_ungated = $totalUngated
         parameter_delta = $total - $totalUngated
-        muon_parameter_roles = @($muonRoles)
-        aux_adam_parameter_roles = @($auxRoles)
+        # Compatibility fields: original semantic labels, unchanged schema meaning.
+        muon_parameter_roles = @($PhoneLmMuonParameterRolesCompatibility)
+        aux_adam_parameter_roles = @($PhoneLmAuxAdamParameterRolesCompatibility)
+        # SSOT-derived concrete suffix lists.
+        muon_parameter_suffixes = @($muonSuffixes)
+        aux_adam_parameter_suffixes = @($auxSuffixes)
         muon_matrix_count = $muonMatrices
         muon_parameter_count = $muonElements
         aux_adam_parameter_count = $auxElements

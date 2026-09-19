@@ -14,6 +14,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -73,6 +74,55 @@ inline const char* dimensionString(tiny_lm::ParameterDimension dimension) {
   return "UNKNOWN";
 }
 
+// Lossless string emitters for exporter artifacts. validParameterDefinition()
+// only requires a non-empty suffix; the exporters must therefore escape
+// quote/backslash (and other controls) rather than narrow the vocabulary.
+inline std::string escapeJsonString(std::string_view input) {
+  std::ostringstream out;
+  for (unsigned char c : input) {
+    switch (c) {
+      case '\\': out << "\\\\"; break;
+      case '"': out << "\\\""; break;
+      case '\n': out << "\\n"; break;
+      case '\r': out << "\\r"; break;
+      case '\t': out << "\\t"; break;
+      case '\b': out << "\\b"; break;
+      case '\f': out << "\\f"; break;
+      default:
+        if (c < 0x20) {
+          out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+              << static_cast<int>(c) << std::dec << std::setfill(' ');
+        } else {
+          out << static_cast<char>(c);
+        }
+    }
+  }
+  return out.str();
+}
+
+inline std::string escapeKotlinString(std::string_view input) {
+  std::ostringstream out;
+  for (unsigned char c : input) {
+    switch (c) {
+      case '\\': out << "\\\\"; break;
+      case '"': out << "\\\""; break;
+      case '\n': out << "\\n"; break;
+      case '\r': out << "\\r"; break;
+      case '\t': out << "\\t"; break;
+      case '$': out << "\\$"; break;
+      case '\'': out << "\\'"; break;
+      default:
+        if (c < 0x20) {
+          out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+              << static_cast<int>(c) << std::dec << std::setfill(' ');
+        } else {
+          out << static_cast<char>(c);
+        }
+    }
+  }
+  return out.str();
+}
+
 inline std::string generateParameterMetadataJson() {
   std::ostringstream out;
   out << "{\n";
@@ -84,7 +134,7 @@ inline std::string generateParameterMetadataJson() {
   for (std::size_t i = 0; i < definitions.size(); ++i) {
     const auto& def = definitions[i];
     out << "    {\n";
-    out << "      \"suffix\": \"" << def.suffix << "\",\n";
+    out << "      \"suffix\": \"" << escapeJsonString(def.suffix) << "\",\n";
     out << "      \"role\": \"" << roleString(def.role) << "\",\n";
     out << "      \"placement\": \"" << placementString(def.placement) << "\",\n";
     out << "      \"condition\": \"" << conditionString(def.condition) << "\",\n";
@@ -135,7 +185,7 @@ inline std::string generateParameterMetadataKotlin() {
   for (std::size_t i = 0; i < definitions.size(); ++i) {
     const auto& def = definitions[i];
     out << "        GeneratedParameterDefinition(\n";
-    out << "            suffix = \"" << def.suffix << "\",\n";
+    out << "            suffix = \"" << escapeKotlinString(def.suffix) << "\",\n";
     out << "            role = GeneratedParameterRole." << roleString(def.role) << ",\n";
     out << "            placement = GeneratedParameterPlacement." << placementString(def.placement) << ",\n";
     out << "            condition = GeneratedParameterCondition." << conditionString(def.condition) << ",\n";
@@ -314,17 +364,130 @@ inline bool runGenericContractTests() {
     return false;
   }
 
-  // 7. Lossless representation: all suffixes are present in generated artifacts
+  // 7. Lossless representation: generated artifacts carry each definition's
+  // suffix after JSON/Kotlin escaping. Synthetic quote/backslash cases are
+  // asserted separately so the current table is not copied as a fixture.
   for (const auto& def : defs) {
-    const std::string needle = std::string("\"suffix\": \"") + def.suffix + "\"";
+    const std::string needle =
+        std::string("\"suffix\": \"") + escapeJsonString(def.suffix) + "\"";
     if (json1.find(needle) == std::string::npos) {
       std::cerr << "CONTRACT_FAIL: JSON missing definition " << def.suffix << "\n";
       return false;
     }
-    const std::string ktNeedle = std::string("suffix = \"") + def.suffix + "\"";
+    const std::string ktNeedle =
+        std::string("suffix = \"") + escapeKotlinString(def.suffix) + "\"";
     if (kt1.find(ktNeedle) == std::string::npos) {
       std::cerr << "CONTRACT_FAIL: Kotlin missing definition " << def.suffix << "\n";
       return false;
+    }
+  }
+
+  // 7b. Synthetic suffix serialization contract (quote / backslash / mixed).
+  // validParameterDefinition allows any non-empty C-string suffix; the
+  // exporters must emit lossless JSON and Kotlin strings for those too.
+  {
+    struct SyntheticCase {
+      const char* raw;
+      const char* json;
+      const char* kotlin;
+    };
+    const SyntheticCase cases[] = {
+        {"synthetic\\backslash", "synthetic\\\\backslash", "synthetic\\\\backslash"},
+        {"synthetic\"quote", "synthetic\\\"quote", "synthetic\\\"quote"},
+        {"synthetic\"\\mixed", "synthetic\\\"\\\\mixed", "synthetic\\\"\\\\mixed"},
+        {"synthetic\tdollar$", "synthetic\\tdollar$", "synthetic\\tdollar\\$"},
+    };
+    for (const auto& item : cases) {
+      const std::string raw = item.raw;
+      tiny_lm::ParameterDefinition synthetic{};
+      synthetic.suffix = raw.c_str();
+      synthetic.role = tiny_lm::ParameterRole::AUX_ADAM;
+      synthetic.placement = tiny_lm::ParameterPlacement::PER_LAYER;
+      synthetic.condition = tiny_lm::ParameterCondition::ALWAYS;
+      synthetic.shape = {tiny_lm::ParameterDimension::MODEL,
+                         tiny_lm::ParameterDimension::NONE};
+      synthetic.rank = 1;
+      synthetic.fanOutAxis = -1;
+      synthetic.fanInAxis = -1;
+      synthetic.layerMember = &qnn::TinyTransformerLayerParameters::gamma1;
+      synthetic.globalMember = nullptr;
+      if (!tiny_lm::validParameterDefinition(synthetic)) {
+        std::cerr << "CONTRACT_FAIL: synthetic suffix rejected: " << raw << "\n";
+        return false;
+      }
+      const std::string jsonEscaped = escapeJsonString(raw);
+      const std::string kotlinEscaped = escapeKotlinString(raw);
+      if (jsonEscaped != item.json || kotlinEscaped != item.kotlin) {
+        std::cerr << "CONTRACT_FAIL: suffix escaping mismatch for synthetic="
+                  << raw << " json=" << jsonEscaped
+                  << " kotlin=" << kotlinEscaped << "\n";
+        return false;
+      }
+      const std::string jsonFragment =
+          std::string("\"suffix\": \"") + jsonEscaped + "\"";
+      const std::string kotlinFragment =
+          std::string("suffix = \"") + kotlinEscaped + "\"";
+      if (raw.find('"') != std::string::npos) {
+        if (jsonFragment.find("\\\"") == std::string::npos ||
+            kotlinFragment.find("\\\"") == std::string::npos) {
+          std::cerr << "CONTRACT_FAIL: synthetic quote not escaped\n";
+          return false;
+        }
+      }
+      if (raw.find('\\') != std::string::npos) {
+        if (jsonFragment.find("\\\\") == std::string::npos ||
+            kotlinFragment.find("\\\\") == std::string::npos) {
+          std::cerr << "CONTRACT_FAIL: synthetic backslash not escaped\n";
+          return false;
+        }
+      }
+    }
+  }
+
+  // 7c. Role-count helpers must agree with per-definition traversal without
+  // restating the current numeric table.
+  {
+    const std::vector<tiny_lm::ParameterDimensions> sampleDims = {
+        {256, 32, 64, 2, 2, false},
+        {256, 32, 64, 2, 2, true},
+        {1024, 64, 128, 19, 2, false},
+        {1024, 64, 128, 19, 2, true},
+    };
+    for (const auto& dims : sampleDims) {
+      tiny_lm::ParameterRoleCounts roles;
+      if (!tiny_lm::checkedParameterRoleCounts(dims, &roles)) {
+        std::cerr << "CONTRACT_FAIL: checkedParameterRoleCounts failed\n";
+        return false;
+      }
+      std::uint64_t total = 0, muon = 0, aux = 0, matrices = 0;
+      for (const auto& def : defs) {
+        if (!tiny_lm::parameterDefinitionEnabled(def, dims)) continue;
+        std::uint64_t elements = 0;
+        if (!tiny_lm::parameterDefinitionElementCount(def, dims, &elements)) {
+          std::cerr << "CONTRACT_FAIL: role traversal element count failed\n";
+          return false;
+        }
+        const std::uint64_t instances =
+            def.placement == tiny_lm::ParameterPlacement::PER_LAYER ? dims.layers
+                                                                    : 1;
+        const std::uint64_t count = elements * instances;
+        total += count;
+        if (def.role == tiny_lm::ParameterRole::MUON) {
+          muon += count;
+          matrices += instances;
+        } else if (def.role == tiny_lm::ParameterRole::AUX_ADAM) {
+          aux += count;
+        }
+      }
+      if (roles.totalParameterCount != total ||
+          roles.muonParameterCount != muon ||
+          roles.auxiliaryAdamParameterCount != aux ||
+          roles.muonMatrixCount != matrices ||
+          roles.muonParameterCount + roles.auxiliaryAdamParameterCount !=
+              roles.totalParameterCount) {
+        std::cerr << "CONTRACT_FAIL: role counts disagree with SSOT traversal\n";
+        return false;
+      }
     }
   }
 
