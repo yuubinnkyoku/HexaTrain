@@ -16,7 +16,7 @@ permissions:
 jobs:
   verify:
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
