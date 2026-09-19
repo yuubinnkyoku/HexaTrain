@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #pragma once
-#include "qnn/qnn_runtime.h"
+#include "transformer_parameter_metadata.h"
 #include "transformer_resource_estimator.h"
 #include <cstdint>
 #include <string>
@@ -20,34 +20,6 @@ struct Config {
   uint32_t numLayers=1,numHeads=1;
   AttentionGate attentionGate=AttentionGate::NONE;
 };
-// Semantic ownership of a trainable tensor.  Keep this metadata alongside
-// the established name/pointer pair so optimizer pilots cannot infer role
-// from a fragile name substring.  The default values preserve the existing
-// two-field aggregate initialization used by host diagnostics.
-enum class ParameterRole : std::uint8_t {
-  UNKNOWN = 0,
-  MUON = 1,
-  AUX_ADAM = 2,
-  // Source-compatible spelling for callers that use the repository's
-  // k-prefixed enum convention.
-  kUnknown = UNKNOWN,
-  kMuon = MUON,
-  kAuxAdam = AUX_ADAM,
-};
-using ParameterSemanticRole = ParameterRole;
-
-struct ParameterInfo {
-  std::string name;
-  const std::vector<float>* values = nullptr;
-  ParameterRole role = ParameterRole::UNKNOWN;
-  std::vector<std::uint32_t> shape;
-  // Semantic linear-map axes used by Keller-original Muon LR adjustment.
-  // Storage is [input, output] in this model, while Muon defines the ratio as
-  // fan_out/fan_in; keeping both avoids name-based inference.
-  std::uint32_t fanOut = 0;
-  std::uint32_t fanIn = 0;
-};
-
 const char* parameterRoleName(ParameterRole role);
 
 // Validate a registry's identity, shapes, and semantic ownership.  The

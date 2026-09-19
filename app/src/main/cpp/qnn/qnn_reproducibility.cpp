@@ -8,7 +8,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -97,21 +96,6 @@ std::pair<std::vector<float>,std::vector<float>> batch(const tiny_lm::Config& c,
   for(uint32_t i=0;i<c.tokens;++i){x[i]=p[index%p.size()][i%4];y[i]=p[index%p.size()][(i+1)%4];}
   return {tiny_lm::oneHot(x,c.vocabularySize),tiny_lm::oneHot(y,c.vocabularySize)};
 }
-// The optimizer/reproducibility registry is intentionally explicit.  A
-// pointer-to-member initializer list cannot mix TinyTransformerParameters'
-// global members with inherited TinyTransformerLayerParameters members, and
-// it would not enumerate additional layers in any event.
-void forEachParameter(TinyTransformerParameters& p,
-                      const std::function<void(std::vector<float>&)>& f) {
-  f(p.tokenEmbedding);
-  auto visitLayer = [&](TinyTransformerLayerParameters& layer) {
-    f(layer.wq); f(layer.wk); f(layer.wv); f(layer.wo); f(layer.gamma1);
-    f(layer.beta1); f(layer.gamma2); f(layer.beta2); f(layer.w1); f(layer.w2);
-  };
-  visitLayer(p);
-  for (auto& layer : p.layers) visitLayer(layer);
-  f(p.outputProjection);
-}
 struct Snapshot {
   const char* id;
   int completedStep;
@@ -121,12 +105,16 @@ struct Snapshot {
 };
 std::vector<Snapshot> snapshots() {
   tiny_lm::Config c; auto current=tiny_lm::initialParameters(c,1); auto m=current, v=current;
-  forEachParameter(m, [](std::vector<float>& values) {
-    std::fill(values.begin(), values.end(), 0.0f);
-  });
-  forEachParameter(v, [](std::vector<float>& values) {
-    std::fill(values.begin(), values.end(), 0.0f);
-  });
+  tiny_lm::forEachParameterStorage(
+      m, [](const tiny_lm::ParameterDefinition&, std::size_t,
+            std::vector<float>& values) {
+        std::fill(values.begin(), values.end(), 0.0f);
+      });
+  tiny_lm::forEachParameterStorage(
+      v, [](const tiny_lm::ParameterDefinition&, std::size_t,
+            std::vector<float>& values) {
+        std::fill(values.begin(), values.end(), 0.0f);
+      });
   std::vector<Snapshot> result; const std::array<int,3> wanted{{2,10,100}};
   for(int completed=0;completed<=100;++completed) {
     const auto b=batch(c,uint32_t(completed%4));
@@ -231,8 +219,11 @@ bool runSame(Runtime& rt,const Snapshot& s,int repeats,Aggregate& a,std::string&
 
 std::vector<float> flattenParameters(const TinyTransformerParameters& p) {
   std::vector<float> flat;
-  auto copy=p;
-  forEachParameter(copy,[&](std::vector<float>& v){flat.insert(flat.end(),v.begin(),v.end());});
+  tiny_lm::forEachParameterStorage(
+      p, [&](const tiny_lm::ParameterDefinition&, std::size_t,
+             const std::vector<float>& values) {
+        flat.insert(flat.end(), values.begin(), values.end());
+      });
   return flat;
 }
 void poisonOutputs(TinyTransformerTrainingOutputs& o,
@@ -246,8 +237,16 @@ void poisonOutputs(TinyTransformerTrainingOutputs& o,
   o.dEmbeddedInput.assign(8*16,poison);
   o.gradients=shape;
   o.next=shape;
-  forEachParameter(o.gradients,[&](std::vector<float>& v){std::fill(v.begin(),v.end(),poison);});
-  forEachParameter(o.next,[&](std::vector<float>& v){std::fill(v.begin(),v.end(),poison);});
+  tiny_lm::forEachParameterStorage(
+      o.gradients, [&](const tiny_lm::ParameterDefinition&, std::size_t,
+                       std::vector<float>& values) {
+        std::fill(values.begin(), values.end(), poison);
+      });
+  tiny_lm::forEachParameterStorage(
+      o.next, [&](const tiny_lm::ParameterDefinition&, std::size_t,
+                  std::vector<float>& values) {
+        std::fill(values.begin(), values.end(), poison);
+      });
 }
 struct TensorRepeat {
   std::set<std::string> raw, canonical;

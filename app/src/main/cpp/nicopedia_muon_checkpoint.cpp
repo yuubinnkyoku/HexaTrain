@@ -6,9 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 
 namespace phonelm::nicopedia_muon_checkpoint {
@@ -25,12 +23,6 @@ bool fail(std::string* error, const char* message) {
   return false;
 }
 
-std::string layerPrefix(std::uint32_t index) {
-  std::ostringstream text;
-  text << "layer_" << std::setw(3) << std::setfill('0') << index << '.';
-  return text.str();
-}
-
 bool validConfig(const tiny_lm::Config& config) {
   // This function is called before expectedRegistry()/initialParameters() in
   // the decoder. Keep the cheap shape checks here and reject any config that
@@ -45,32 +37,14 @@ bool validConfig(const tiny_lm::Config& config) {
       !std::isfinite(config.epsilon) || config.epsilon <= 0.0f)
     return false;
 
-  constexpr std::uint64_t kMax = std::numeric_limits<std::uint64_t>::max();
-  const auto multiply = [kMax](std::uint64_t left, std::uint64_t right,
-                               std::uint64_t* result) {
-    if (left != 0 && right > kMax / left) return false;
-    *result = left * right;
-    return true;
-  };
-  const auto add = [kMax](std::uint64_t left, std::uint64_t right,
-                          std::uint64_t* result) {
-    if (right > kMax - left) return false;
-    *result = left + right;
-    return true;
-  };
-  std::uint64_t dd = 0, df = 0, vd = 0, twoDf = 0, fourD = 0,
-                layer = 0, allLayers = 0, twoVd = 0, total = 0;
-  if (!multiply(config.dimension, config.dimension, &dd) ||
-      !multiply(config.dimension, config.feedForwardDimension, &df) ||
-      !multiply(config.vocabularySize, config.dimension, &vd) ||
-      !multiply(2, df, &twoDf) || !multiply(4, config.dimension, &fourD) ||
-      !multiply(2, vd, &twoVd) || !multiply(4, dd, &layer) ||
-      !add(layer, twoDf, &layer) || !add(layer, fourD, &layer) ||
-      (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID &&
-       (!multiply(config.dimension, config.numHeads, &total) ||
-        !add(layer, total, &layer))) ||
-      !multiply(config.numLayers, layer, &allLayers) ||
-      !add(twoVd, allLayers, &total) || total > kMaxParameterElements)
+  std::uint64_t total = 0;
+  if (!tiny_lm::checkedParameterElementCount(
+          {config.vocabularySize, config.dimension,
+           config.feedForwardDimension, config.numLayers, config.numHeads,
+           config.attentionGate ==
+               tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID},
+          &total) ||
+      total > kMaxParameterElements)
     return false;
 
   std::string modelError;
@@ -298,40 +272,27 @@ bool validHyperparameters(const Hyperparameters& hyperparameters) {
 std::vector<RegistryEntry> expectedRegistry(const tiny_lm::Config& config) {
   std::vector<RegistryEntry> registry;
   if (config.numLayers == 0 || config.numLayers > 999) return registry;
-
-  registry.push_back({"token_embedding", ParameterRole::AUX_ADAM,
-                      {config.vocabularySize, config.dimension}});
-  const auto addLayer = [&](std::uint32_t index) {
-    const std::string prefix = layerPrefix(index);
-    registry.push_back({prefix + "norm1_gamma", ParameterRole::AUX_ADAM,
-                        {1, config.dimension}});
-    registry.push_back({prefix + "norm1_beta", ParameterRole::AUX_ADAM,
-                        {1, config.dimension}});
-    registry.push_back({prefix + "wq", ParameterRole::MUON,
-                        {config.dimension, config.dimension}});
-    registry.push_back({prefix + "wk", ParameterRole::MUON,
-                        {config.dimension, config.dimension}});
-    registry.push_back({prefix + "wv", ParameterRole::MUON,
-                        {config.dimension, config.dimension}});
-    registry.push_back({prefix + "wo", ParameterRole::MUON,
-                        {config.dimension, config.dimension}});
-    if (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID)
-      registry.push_back({prefix + "attention_gate_weight",
-                          ParameterRole::AUX_ADAM,
-                          {config.dimension, config.numHeads}});
-    registry.push_back({prefix + "norm2_gamma", ParameterRole::AUX_ADAM,
-                        {1, config.dimension}});
-    registry.push_back({prefix + "norm2_beta", ParameterRole::AUX_ADAM,
-                        {1, config.dimension}});
-    registry.push_back({prefix + "ffn_w1", ParameterRole::MUON,
-                        {config.dimension, config.feedForwardDimension}});
-    registry.push_back({prefix + "ffn_w2", ParameterRole::MUON,
-                        {config.feedForwardDimension, config.dimension}});
-  };
-  for (std::uint32_t index = 0; index < config.numLayers; ++index)
-    addLayer(index);
-  registry.push_back({"output_projection", ParameterRole::AUX_ADAM,
-                      {config.dimension, config.vocabularySize}});
+  const auto metadata = tiny_lm::parameterMetadata(
+      {config.vocabularySize, config.dimension, config.feedForwardDimension,
+       config.numLayers, config.numHeads,
+       config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID});
+  registry.reserve(metadata.size());
+  for (const auto& source : metadata) {
+    ParameterRole role;
+    if (source.role == tiny_lm::ParameterRole::MUON) {
+      role = ParameterRole::MUON;
+    } else if (source.role == tiny_lm::ParameterRole::AUX_ADAM) {
+      role = ParameterRole::AUX_ADAM;
+    } else {
+      return {};
+    }
+    if (source.shape.empty() || source.shape.size() > 2) return {};
+    const MatrixShape shape =
+        source.shape.size() == 1
+            ? MatrixShape{1, source.shape[0]}
+            : MatrixShape{source.shape[0], source.shape[1]};
+    registry.push_back({source.name, role, shape});
+  }
   return registry;
 }
 

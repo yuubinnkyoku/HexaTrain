@@ -553,13 +553,13 @@ struct Runtime::Impl {
         };
         struct LayerRegistry {
             std::uint32_t input = 0, output = 0;
-            std::uint32_t gamma1 = 0, beta1 = 0, wq = 0, wk = 0, wv = 0,
-                          wo = 0, attentionGateWeight = 0, gamma2 = 0,
-                          beta2 = 0, w1 = 0, w2 = 0;
             std::uint32_t gateLogits = 0, gates = 0, dGates = 0,
                           oneMinusGates = 0, gateDerivative = 0,
-                          dGateSigmoid = 0, dGateWeight = 0,
+                          dGateSigmoid = 0,
                           dLn1Gate = 0, dLn1Qkv = 0;
+            // Both vectors use the per-layer ParameterDefinition order.
+            // Tensor creation order remains controlled by the builder.
+            std::vector<std::uint32_t> parameters;
             std::vector<std::uint32_t> activations;
             std::vector<std::uint32_t> backward;
             std::vector<std::uint32_t> gradients;

@@ -30,11 +30,15 @@ if ([IO.Path]::GetFullPath($OutputDirectory) -ne $approvedOutputDirectory) {
 $enumSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_qairt.cpp'
 $graphSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_transformer_training.inc'
 $generalizedSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_transformer_training_generalized.inc'
+$generalizedExecuteSource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_runtime_transformer_training_generalized_execute.inc'
+$reproducibilitySource = Join-Path $repositoryRoot 'app\src\main\cpp\qnn\qnn_reproducibility.cpp'
 Assert-True (Test-Path -LiteralPath $enumSource) 'TensorIndex source is missing'
 Assert-True (Test-Path -LiteralPath $graphSource) 'training graph source is missing'
 $enumText = Get-Content -LiteralPath $enumSource -Raw
 $graphText = Get-Content -LiteralPath $graphSource -Raw
 $generalizedText = if (Test-Path -LiteralPath $generalizedSource) { Get-Content -LiteralPath $generalizedSource -Raw } else { '' }
+$generalizedExecuteText = if (Test-Path -LiteralPath $generalizedExecuteSource) { Get-Content -LiteralPath $generalizedExecuteSource -Raw } else { '' }
+$reproducibilityText = if (Test-Path -LiteralPath $reproducibilitySource) { Get-Content -LiteralPath $reproducibilitySource -Raw } else { '' }
 Assert-True $enumText.Contains('struct TinyTransformerTrainingGraph') 'TensorIndex owner is missing'
 Assert-True ($graphText -match 'g\.names\[i\]\s*=\s*"layer_00_tensor_"') `
     'runtime tensor naming must retain the layer_00 indexed contract'
@@ -70,7 +74,14 @@ $hasL2H1Backward = $hasGeneralizedBuilder -and
     $generalizedText.Contains('backward(DQ_RAW),') -and
     $generalizedText.Contains('backward(DK_RAW),') -and
     $generalizedText.Contains('g.layers.front().backward[DINPUT], dEmbedding') -and
-    $generalizedText.Contains('const size_t expectedParameterCount = 2 + size_t(headwiseG1Gate ? 11 : 10) * numLayers') -and
+    $generalizedText.Contains('size_t expectedParameterCount = 0;') -and
+    $generalizedText.Contains('tiny_lm::checkedParameterInstanceCount(parameterDimensions,') -and
+    $generalizedText.Contains('if (!tiny_lm::parameterDefinitionEnabled(definition, parameterDimensions))') -and
+    $generalizedText.Contains('record.parameters[slot] = add(') -and
+    -not $generalizedText.Contains('kLayerParameterTensors') -and
+    $generalizedText.Contains('prefix + definition.suffix') -and
+    -not $generalizedText.Contains('prefix + "norm1_gamma"') -and
+    -not $generalizedText.Contains('prefix + "ffn_w2"') -and
     $generalizedText.Contains('g.gradientRegistry.size() != g.parameterRegistry.size()') -and
     $generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')
 $hasL2H1AttentionLayout = $hasL2H1Backward -and
@@ -80,7 +91,7 @@ $hasL2H1AttentionLayout = $hasL2H1Backward -and
     $generalizedText.Contains('activationName == "attention_masked"') -and
     $generalizedText.Contains('activationName == "attention_probabilities"') -and
     $generalizedText.Contains('cache(ATTENTION_PROBABILITIES), cache(V),') -and
-    $generalizedText.Contains('cache(ATTENTION_CONTEXT), record.wo,')
+    $generalizedText.Contains('parameterTensor(record, &LayerParameters::wo),')
 $hasH2Builder = $hasL2H1AttentionLayout -and
     $generalizedText.Contains('const uint32_t headDimension = dimension / numHeads;') -and
     $generalizedText.Contains('{dimension, headDimension}') -and
@@ -458,6 +469,14 @@ if ($SelfTest) {
     Assert-True $hasL2H1AttentionLayout 'L2/H1 generalized forward/backward attention layout source contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.push_back(record.backward[DINPUT])')) 'layer DINPUT APP_READ contract self-test failed'
     Assert-True ($generalizedText.Contains('g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin()')) 'gradient APP_READ contract self-test failed'
+    Assert-True ($generalizedText.Contains('g.gradientRegistry.push_back(record.gradients[currentSlot])')) 'gradient registry must use canonical parameter-definition slots'
+    Assert-True ($generalizedText.Contains('tiny_lm::perLayerParameterDefinitionIndex(member, slot)')) 'parameter tensor identity must use parameter-definition member mapping'
+    Assert-True ($generalizedExecuteText.Contains('tiny_lm::parameterStorageIsFinite(current, parameterDimensions)')) 'execute parameter finiteness must traverse enabled parameter metadata'
+    Assert-True (-not ($generalizedExecuteText -match 'finite\(layer\.(wq|wk|wv|wo|gamma1|beta1|gamma2|beta2|w1|w2)\)')) 'execute must not retain a handwritten parameter finiteness list'
+    Assert-True (($generalizedText + $generalizedExecuteText).Contains('tiny_lm::checkedParameterInstanceCount(parameterDimensions,')) 'QNN parameter counts must come from metadata'
+    Assert-True (-not (($generalizedText + $generalizedExecuteText).Contains('2 + enabledLayerParameters'))) 'QNN parameter counts must not assume two global parameters'
+    Assert-True ($reproducibilityText.Contains('tiny_lm::forEachParameterStorage(')) 'QNN reproducibility must use canonical parameter storage traversal'
+    Assert-True (-not ($reproducibilityText -match 'f\(layer\.(wq|wk|wv|wo|gamma1|beta1|gamma2|beta2|w1|w2)\)')) 'QNN reproducibility must not retain a handwritten parameter list'
     Assert-True $hasH2Builder 'generic multi-head builder source contract self-test failed'
     Assert-True (-not $generalizedText.Contains('numLayers > 2')) 'source must not retain the legacy L2 limit'
     Assert-True (-not $generalizedText.Contains('numHeads > 2')) 'source must not retain the legacy H2 limit'

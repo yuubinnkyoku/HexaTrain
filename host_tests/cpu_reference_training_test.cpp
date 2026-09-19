@@ -245,15 +245,131 @@ void testTinyLanguageModelSchemaFailClosedAndRegistry() {
     Config c{}; c.tokens = 4; c.dimension = 8; c.feedForwardDimension = 16; c.numLayers = 2; c.numHeads = 2;
     const auto a = initialParameters(c, 77), b = initialParameters(c, 77);
     const auto ar = parameterRegistry(a), br = parameterRegistry(b);
+    const auto metadata = parameterMetadata(
+        {c.vocabularySize, c.dimension, c.feedForwardDimension, c.numLayers,
+         c.numHeads, false});
     assert(ar.size() == br.size()); std::set<std::string> names;
-    for (size_t i = 0; i < ar.size(); ++i) { assert(names.insert(ar[i].name).second); assert(ar[i].name == br[i].name); assert(*ar[i].values == *br[i].values); }
+    assert(ar.size() == metadata.size());
+    for (size_t i = 0; i < ar.size(); ++i) {
+        assert(names.insert(ar[i].name).second);
+        assert(ar[i].name == br[i].name && ar[i].name == metadata[i].name);
+        assert(ar[i].suffix == metadata[i].suffix);
+        assert(ar[i].placement == metadata[i].placement);
+        assert(ar[i].condition == metadata[i].condition);
+        assert(ar[i].role == metadata[i].role);
+        assert(ar[i].shape == metadata[i].shape);
+        assert(ar[i].fanOut == metadata[i].fanOut);
+        assert(ar[i].fanIn == metadata[i].fanIn);
+        assert(metadata[i].values == nullptr);
+        assert(*ar[i].values == *br[i].values);
+    }
     assert(ar.front().name == "token_embedding" && ar.back().name == "output_projection");
+    assert(ar.front().suffix == "token_embedding" &&
+           ar.front().placement == ParameterPlacement::GLOBAL_PREFIX);
+    assert(ar.back().suffix == "output_projection" &&
+           ar.back().placement == ParameterPlacement::GLOBAL_SUFFIX);
     assert(ar[1].name == "layer_000.norm1_gamma");
     assert(ar[3].name == "layer_000.wq");
+    assert(ar[3].suffix == "wq" &&
+           ar[3].placement == ParameterPlacement::PER_LAYER &&
+           ar[3].role == ParameterRole::MUON && ar[3].fanOut == 8 &&
+           ar[3].fanIn == 8);
+    assert(ar[9].name == "layer_000.ffn_w1" && ar[9].fanOut == 16 &&
+           ar[9].fanIn == 8);
+    assert(ar[10].name == "layer_000.ffn_w2" && ar[10].fanOut == 8 &&
+           ar[10].fanIn == 16);
     assert(ar[11].name == "layer_001.norm1_gamma");
     assert(ar[13].name == "layer_001.wq");
-    const std::vector<ParameterInfo> duplicateRanges{
-        {"first", ar[0].values}, {"duplicate", ar[0].values}};
+    assert(parameterDefinitions().size() == 13);
+    for (const auto& definition : parameterDefinitions())
+        assert(validParameterDefinition(definition));
+    std::vector<const std::vector<float>*> canonicalStorage;
+    std::vector<std::string_view> canonicalSuffixes;
+    forEachParameterStorage(
+        a, [&](const ParameterDefinition& definition, std::size_t,
+               const std::vector<float>& values) {
+            if (!values.empty()) {
+                canonicalStorage.push_back(&values);
+                canonicalSuffixes.push_back(definition.suffix);
+            }
+        });
+    assert(canonicalStorage.size() == ar.size());
+    for (std::size_t i = 0; i < ar.size(); ++i) {
+        assert(canonicalStorage[i] == ar[i].values);
+        assert(canonicalSuffixes[i] == ar[i].suffix);
+    }
+    std::size_t alwaysStorageCount = 0;
+    forEachParameterStorage(
+        a, [&](const ParameterDefinition& definition, std::size_t,
+               const std::vector<float>&) {
+            if (definition.condition == ParameterCondition::ALWAYS)
+                ++alwaysStorageCount;
+            assert(definition.condition == ParameterCondition::ALWAYS ||
+                   std::string_view(definition.suffix) ==
+                       "attention_gate_weight");
+        });
+    assert(alwaysStorageCount == 2 + 10 * c.numLayers);
+    const ParameterDimensions dimensions{
+        c.vocabularySize, c.dimension, c.feedForwardDimension, c.numLayers,
+        c.numHeads, false};
+    assert(parameterStorageMatchesDefinitions(a, dimensions));
+    assert(parameterStorageIsFinite(a, dimensions));
+    std::size_t parameterInstances = 0;
+    assert(checkedParameterInstanceCount(dimensions, &parameterInstances));
+    assert(parameterInstances == ar.size());
+    std::size_t gammaSlot = 0, wqSlot = 0, wkSlot = 0, wvSlot = 0, woSlot = 0;
+    std::size_t gateSlot = 0, gamma2Slot = 0;
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::gamma1, &gammaSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wq, &wqSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wk, &wkSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wv, &wvSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::wo, &woSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::attentionGateWeight,
+        &gateSlot));
+    assert(perLayerParameterDefinitionIndex(
+        &phonelm::qnn::TinyTransformerLayerParameters::gamma2, &gamma2Slot));
+    assert(gammaSlot < wqSlot && wqSlot < wkSlot && wkSlot < wvSlot &&
+           wvSlot < woSlot && woSlot < gateSlot && gateSlot < gamma2Slot);
+    auto wrongGlobalShape = a;
+    wrongGlobalShape.tokenEmbedding.pop_back();
+    assert(!parameterStorageMatchesDefinitions(wrongGlobalShape, dimensions));
+    auto wrongLayerShape = a;
+    wrongLayerShape.layers.back().w2.pop_back();
+    assert(!parameterStorageMatchesDefinitions(wrongLayerShape, dimensions));
+    auto unexpectedGate = a;
+    unexpectedGate.attentionGateWeight.push_back(0.0f);
+    assert(!parameterStorageMatchesDefinitions(unexpectedGate, dimensions));
+    Config gatedConfig = c;
+    gatedConfig.attentionGate = AttentionGate::HEADWISE_G1_SIGMOID;
+    const auto gated = initialParameters(gatedConfig, 77);
+    const ParameterDimensions gatedDimensions{
+        gatedConfig.vocabularySize, gatedConfig.dimension,
+        gatedConfig.feedForwardDimension, gatedConfig.numLayers,
+        gatedConfig.numHeads, true};
+    assert(parameterStorageMatchesDefinitions(gated, gatedDimensions));
+    assert(parameterStorageIsFinite(gated, gatedDimensions));
+    assert(checkedParameterInstanceCount(gatedDimensions,
+                                         &parameterInstances));
+    assert(parameterInstances == 2 + 11 * gatedConfig.numLayers);
+    auto nonfiniteGate = gated;
+    nonfiniteGate.layers.back().attentionGateWeight.front() =
+        std::numeric_limits<float>::quiet_NaN();
+    assert(!parameterStorageIsFinite(nonfiniteGate, gatedDimensions));
+    auto missingGate = gated;
+    missingGate.layers.back().attentionGateWeight.clear();
+    assert(!parameterStorageMatchesDefinitions(missingGate, gatedDimensions));
+    ParameterInfo firstRange, duplicateRange;
+    firstRange.name = "first";
+    firstRange.values = ar[0].values;
+    duplicateRange.name = "duplicate";
+    duplicateRange.values = ar[0].values;
+    const std::vector<ParameterInfo> duplicateRanges{firstRange, duplicateRange};
     assert(!storageRangesHaveNoAliases(duplicateRanges));
     Config policy = base;
     policy.tokens = std::numeric_limits<uint32_t>::max();

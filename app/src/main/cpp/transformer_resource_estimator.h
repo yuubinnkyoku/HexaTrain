@@ -2,6 +2,8 @@
 // Copyright 2026 yuubinnkyoku
 #pragma once
 
+#include "transformer_parameter_metadata.h"
+
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
@@ -116,31 +118,14 @@ inline ResourceEstimate estimateTrainingResources(
   const std::uint64_t l = numLayers;
   const std::uint64_t h = numHeads;
   const std::uint64_t dh = d / h;
-  std::uint64_t td = 0, tf = 0, tv = 0, tt = 0, dd = 0, df = 0;
+  std::uint64_t td = 0, tf = 0, tv = 0, tt = 0;
   if (!multiply(t, d, &td) || !multiply(t, f, &tf) ||
-      !multiply(t, v, &tv) || !multiply(t, t, &tt) ||
-      !multiply(d, d, &dd) || !multiply(d, f, &df)) {
+      !multiply(t, v, &tv) || !multiply(t, t, &tt)) {
     return fail("APP_RESOURCE_ESTIMATOR", "derived tensor element overflow");
   }
 
-  std::uint64_t layerParameterElements = 0, globalParameterElements = 0;
-  std::uint64_t fourDd = 0, fourD = 0, twoDf = 0, vd = 0;
-  if (!multiply(4, dd, &fourDd) || !multiply(4, d, &fourD) ||
-      !multiply(2, df, &twoDf) ||
-      !sum({fourDd, fourD, twoDf}, &layerParameterElements) ||
-      !multiply(v, d, &vd) || !multiply(2, vd, &globalParameterElements)) {
-    return fail("APP_RESOURCE_ESTIMATOR", "parameter element overflow");
-  }
-  if (headwiseG1Gate) {
-    std::uint64_t gateParameters = 0;
-    if (!multiply(d, h, &gateParameters) ||
-        !add(layerParameterElements, gateParameters, &layerParameterElements))
-      return fail("APP_RESOURCE_ESTIMATOR", "gate parameter element overflow");
-  }
-  std::uint64_t allLayerParameters = 0;
-  if (!multiply(l, layerParameterElements, &allLayerParameters) ||
-      !add(globalParameterElements, allLayerParameters,
-           &result.parameterElements) ||
+  if (!tiny_lm::checkedParameterElementCount(
+          {v, d, f, l, h, headwiseG1Gate}, &result.parameterElements) ||
       !bytes(result.parameterElements, &result.parameterBytes)) {
     return fail("APP_RESOURCE_ESTIMATOR", "parameter byte overflow");
   }

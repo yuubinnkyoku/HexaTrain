@@ -97,20 +97,27 @@ inline std::vector<std::uint8_t> nprtReadFileBytes(const std::string &path,
   return bytes;
 }
 
+// Assigns a decoded registry entry to the storage member declared by the
+// shared parameter metadata.  The accepted name set, the layer index rules,
+// and the failure mode are exactly the ones the hand-written suffix dispatch
+// used; only the mapping itself is no longer re-declared here.
 inline void nprtAssignRegistryMember(TinyTransformerParameters &target,
                                      uint32_t layers, const std::string &name,
                                      std::vector<float> &&values) {
   using Layer = TinyTransformerLayerParameters;
-  if (name == "token_embedding") {
-    target.tokenEmbedding = std::move(values);
+  const auto assignGlobal = [&](tiny_lm::ParameterPlacement placement) {
+    const tiny_lm::ParameterDefinition *definition =
+        tiny_lm::parameterDefinition(placement, name);
+    if (!definition || !definition->globalMember) return false;
+    target.*(definition->globalMember) = std::move(values);
+    return true;
+  };
+  if (name.rfind("layer_", 0) != 0) {
+    if (!assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_PREFIX) &&
+        !assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX))
+      throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
     return;
   }
-  if (name == "output_projection") {
-    target.outputProjection = std::move(values);
-    return;
-  }
-  if (name.rfind("layer_", 0) != 0)
-    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const size_t dot = name.find('.');
   if (dot == std::string::npos || dot < 7)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
@@ -123,21 +130,14 @@ inline void nprtAssignRegistryMember(TinyTransformerParameters &target,
       static_cast<uint32_t>(index) >= layers)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const std::string suffix = name.substr(dot + 1);
+  const tiny_lm::ParameterDefinition *definition =
+      tiny_lm::parameterDefinition(tiny_lm::ParameterPlacement::PER_LAYER,
+                                   suffix);
+  if (!definition || !definition->layerMember)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   Layer *layer =
       index == 0 ? static_cast<Layer *>(&target) : &target.layers[static_cast<std::size_t>(index) - 1];
-  if (suffix == "norm1_gamma") layer->gamma1 = std::move(values);
-  else if (suffix == "norm1_beta") layer->beta1 = std::move(values);
-  else if (suffix == "wq") layer->wq = std::move(values);
-  else if (suffix == "wk") layer->wk = std::move(values);
-  else if (suffix == "wv") layer->wv = std::move(values);
-  else if (suffix == "wo") layer->wo = std::move(values);
-  else if (suffix == "attention_gate_weight")
-    layer->attentionGateWeight = std::move(values);
-  else if (suffix == "norm2_gamma") layer->gamma2 = std::move(values);
-  else if (suffix == "norm2_beta") layer->beta2 = std::move(values);
-  else if (suffix == "ffn_w1") layer->w1 = std::move(values);
-  else if (suffix == "ffn_w2") layer->w2 = std::move(values);
-  else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  layer->*(definition->layerMember) = std::move(values);
 }
 
 struct LoadedNprtCheckpoint {

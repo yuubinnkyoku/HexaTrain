@@ -3,7 +3,6 @@
 #include "tiny_language_model_cpu.h"
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
 #include <initializer_list>
 #include <limits>
 #include <sstream>
@@ -25,16 +24,16 @@ LP& layer(P& p,uint32_t i){
 }
 const LP& layer(const P& p,uint32_t i){ return layer(const_cast<P&>(p),i); }
 void updateLayer(LP& n,const LP&w,const LP&d,float lr){
-  upd(n.gamma1,w.gamma1,d.gamma1,lr); upd(n.beta1,w.beta1,d.beta1,lr);
-  upd(n.wq,w.wq,d.wq,lr); upd(n.wk,w.wk,d.wk,lr); upd(n.wv,w.wv,d.wv,lr); upd(n.wo,w.wo,d.wo,lr);
-  upd(n.gamma2,w.gamma2,d.gamma2,lr); upd(n.beta2,w.beta2,d.beta2,lr); upd(n.w1,w.w1,d.w1,lr); upd(n.w2,w.w2,d.w2,lr);
-  upd(n.attentionGateWeight,w.attentionGateWeight,d.attentionGateWeight,lr);
+  for(const auto&definition:parameterDefinitions())
+    if(definition.placement==ParameterPlacement::PER_LAYER)
+      upd(n.*(definition.layerMember),w.*(definition.layerMember),
+          d.*(definition.layerMember),lr);
 }
-bool exact(const std::vector<float>& v,size_t n){return v.size()==n;}
-bool validLayerShape(const LP& p,const Config& c){const size_t d=c.dimension,f=c.feedForwardDimension;return exact(p.gamma1,d)&&exact(p.beta1,d)&&exact(p.gamma2,d)&&exact(p.beta2,d)&&exact(p.wq,d*d)&&exact(p.wk,d*d)&&exact(p.wv,d*d)&&exact(p.wo,d*d)&&exact(p.w1,d*f)&&exact(p.w2,d*f)&&(c.attentionGate==AttentionGate::HEADWISE_G1_SIGMOID?exact(p.attentionGateWeight,d*c.numHeads):p.attentionGateWeight.empty());}
 void requireGeneralParameterShape(const Config& c,const P& p){
-  if(p.layers.size()!=size_t(c.numLayers-1)||!exact(p.tokenEmbedding,size_t(c.vocabularySize)*c.dimension)||!exact(p.outputProjection,size_t(c.dimension)*c.vocabularySize)||!validLayerShape(layer(p,0),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
-  for(uint32_t i=1;i<c.numLayers;++i)if(!validLayerShape(layer(p,i),c))throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
+  if(!parameterStorageMatchesDefinitions(
+         p,{c.vocabularySize,c.dimension,c.feedForwardDimension,c.numLayers,
+            c.numHeads,c.attentionGate==AttentionGate::HEADWISE_G1_SIGMOID}))
+    throw std::invalid_argument("INVALID_TINY_LM_PARAMETER_SCHEMA");
 }
 N nf(const Config&c,const std::vector<float>&x,const std::vector<float>&g,const std::vector<float>&b){N n;n.xhat.resize(x.size());n.inv.resize(c.tokens);n.out.resize(x.size());n.centered.resize(x.size());n.square.resize(x.size());n.variance_eps.resize(c.tokens);for(uint32_t r=0;r<c.tokens;++r){double m=0,v=0;for(uint32_t d=0;d<c.dimension;++d)m+=x[size_t(r)*c.dimension+d];m/=c.dimension;for(uint32_t d=0;d<c.dimension;++d){double z=x[size_t(r)*c.dimension+d]-m;v+=z*z;n.centered[size_t(r)*c.dimension+d]=float(z);}v/=c.dimension;n.variance_eps[r]=float(v+c.epsilon);n.inv[r]=float(1/std::sqrt(v+c.epsilon));for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;n.square[i]=n.centered[i]*n.centered[i];n.xhat[i]=(x[i]-float(m))*n.inv[r];n.out[i]=n.xhat[i]*g[d]+b[d];}}return n;}
 void nb(const Config&c,const std::vector<float>&dy,const N&n,const std::vector<float>&g,std::vector<float>&dx,std::vector<float>&dg,std::vector<float>&db){dx.resize(dy.size());dg.assign(c.dimension,0);db.assign(c.dimension,0);for(uint32_t r=0;r<c.tokens;++r){double s=0,sx=0;for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];s+=z;sx+=z*n.xhat[i];dg[d]+=dy[i]*n.xhat[i];db[d]+=dy[i];}for(uint32_t d=0;d<c.dimension;++d){size_t i=size_t(r)*c.dimension+d;double z=dy[i]*g[d];dx[i]=float(n.inv[r]/c.dimension*(c.dimension*z-s-n.xhat[i]*sx));}}}
@@ -53,7 +52,6 @@ GF generalForward(const Config& c,const std::vector<float>&oh,const P&w){
   g.logits=mm(x,w.outputProjection,c.tokens,c.dimension,c.vocabularySize);g.prob.resize(g.logits.size());for(uint32_t r=0;r<c.tokens;++r){size_t b=size_t(r)*c.vocabularySize;float mx=*std::max_element(g.logits.begin()+b,g.logits.begin()+b+c.vocabularySize);double s=0;for(uint32_t j=0;j<c.vocabularySize;++j){float e=std::exp(g.logits[b+j]-mx);g.prob[b+j]=e;s+=e;}for(uint32_t j=0;j<c.vocabularySize;++j)g.prob[b+j]/=float(s);}return g;
 }
 void upd(std::vector<float>&n,const std::vector<float>&w,const std::vector<float>&d,float lr){n.resize(w.size());for(size_t i=0;i<w.size();++i)n[i]=w[i]-lr*d[i];}
-using M=std::vector<float>P::*;std::vector<std::pair<const char*,M>> fields(){return{{"token_embedding",&P::tokenEmbedding},{"output_projection",&P::outputProjection},{"wq",&P::wq},{"wk",&P::wk},{"wv",&P::wv},{"wo",&P::wo},{"norm1_gamma",&P::gamma1},{"norm1_beta",&P::beta1},{"norm2_gamma",&P::gamma2},{"norm2_beta",&P::beta2},{"ffn_w1",&P::w1},{"ffn_w2",&P::w2}};}
 }
 const char* attentionGateName(AttentionGate gate){switch(gate){case AttentionGate::NONE:return "none";case AttentionGate::HEADWISE_G1_SIGMOID:return "headwise_g1_sigmoid";}return "invalid";}
 bool validateConfig(const Config& c,std::string* error){
@@ -69,9 +67,6 @@ transformer::ResourceEstimate resourceEstimate(const Config& c){
 }
 uint32_t headDim(const Config& c){std::string e;if(!validateConfig(c,&e))throw std::invalid_argument(e);return c.dimension/c.numHeads;}
 std::vector<ParameterInfo> parameterRegistry(const P& p) {
-  // The model keeps layer zero flattened for ABI compatibility.  Infer the
-  // dimensions only to describe the registry; semantic ownership comes from
-  // this explicit field table below, never from a name substring.
   const uint32_t dimension = static_cast<uint32_t>(p.gamma1.size());
   const uint32_t feedForward =
       dimension != 0 && p.w1.size() % dimension == 0
@@ -81,55 +76,14 @@ std::vector<ParameterInfo> parameterRegistry(const P& p) {
       dimension != 0 && p.tokenEmbedding.size() % dimension == 0
           ? static_cast<uint32_t>(p.tokenEmbedding.size() / dimension)
           : 0;
-  const auto shape = [](std::initializer_list<uint32_t> dimensions) {
-    std::vector<uint32_t> result(dimensions);
-    for (const uint32_t extent : result)
-      if (extent == 0) return std::vector<uint32_t>{};
-    return result;
-  };
-  std::vector<ParameterInfo> result;
-  auto addLayer = [&](uint32_t index, const LP& values) {
-    std::ostringstream indexText;
-    indexText << std::setw(3) << std::setfill('0') << index;
-    const std::string prefix = "layer_" + indexText.str() + ".";
-    // Keep this mapping explicit.  These six hidden matrices are the only
-    // tensors eligible for Muon in the v1 research pilot.
-    result.push_back({prefix + "norm1_gamma", &values.gamma1,
-                      ParameterRole::AUX_ADAM, shape({dimension})});
-    result.push_back({prefix + "norm1_beta", &values.beta1,
-                      ParameterRole::AUX_ADAM, shape({dimension})});
-    result.push_back({prefix + "wq", &values.wq, ParameterRole::MUON,
-                      shape({dimension, dimension}), dimension, dimension});
-    result.push_back({prefix + "wk", &values.wk, ParameterRole::MUON,
-                      shape({dimension, dimension}), dimension, dimension});
-    result.push_back({prefix + "wv", &values.wv, ParameterRole::MUON,
-                      shape({dimension, dimension}), dimension, dimension});
-    result.push_back({prefix + "wo", &values.wo, ParameterRole::MUON,
-                      shape({dimension, dimension}), dimension, dimension});
-    if (!values.attentionGateWeight.empty())
-      result.push_back({prefix + "attention_gate_weight",
-                        &values.attentionGateWeight, ParameterRole::AUX_ADAM,
-                        shape({dimension, static_cast<uint32_t>(
-                            values.attentionGateWeight.size() / dimension)})});
-    result.push_back({prefix + "norm2_gamma", &values.gamma2,
-                      ParameterRole::AUX_ADAM, shape({dimension})});
-    result.push_back({prefix + "norm2_beta", &values.beta2,
-                      ParameterRole::AUX_ADAM, shape({dimension})});
-    result.push_back({prefix + "ffn_w1", &values.w1, ParameterRole::MUON,
-                      shape({dimension, feedForward}), feedForward, dimension});
-    result.push_back({prefix + "ffn_w2", &values.w2, ParameterRole::MUON,
-                      shape({feedForward, dimension}), dimension, feedForward});
-  };
-  result.push_back({"token_embedding", &p.tokenEmbedding,
-                    ParameterRole::AUX_ADAM,
-                    shape({vocabulary, dimension})});
-  addLayer(0, layer(p, 0));
-  for (uint32_t index = 1; index <= p.layers.size(); ++index)
-    addLayer(index, p.layers[index - 1]);
-  result.push_back({"output_projection", &p.outputProjection,
-                    ParameterRole::AUX_ADAM,
-                    shape({dimension, vocabulary})});
-  return result;
+  const bool gated = !p.attentionGateWeight.empty();
+  const uint32_t heads =
+      gated && dimension != 0 && p.attentionGateWeight.size() % dimension == 0
+          ? static_cast<uint32_t>(p.attentionGateWeight.size() / dimension)
+          : 1;
+  return parameterMetadata(
+      {vocabulary, dimension, feedForward, p.layers.size() + 1, heads, gated},
+      &p);
 }
 const char* parameterRoleName(ParameterRole role) {
   switch (role) {
@@ -190,31 +144,11 @@ bool validateParameterRegistry(const std::vector<ParameterInfo>& registry,
 bool validateParameterRegistry(const P& parameters, std::string* error) {
   const auto registry = parameterRegistry(parameters);
   if (!validateParameterRegistry(registry, error)) return false;
-  // The registry is intentionally generated from the model's semantic field
-  // table.  This second pass verifies the complete partition expected by a
-  // Transformer parameter object, including all six Muon matrices per layer.
   const size_t expectedLayers = parameters.layers.size() + 1;
-  size_t muonCount = 0;
-  size_t auxCount = 0;
-  for (const auto& entry : registry) {
-    if (entry.role == ParameterRole::MUON) {
-      ++muonCount;
-      if (entry.shape.size() != 2)
-        return setRegistryError(error, "REGISTRY_MUON_SHAPE_INVALID:" + entry.name);
-    } else if (entry.role == ParameterRole::AUX_ADAM) {
-      ++auxCount;
-    } else {
-      return setRegistryError(error, "REGISTRY_ROLE_UNKNOWN:" + entry.name);
-    }
-  }
-  if (muonCount != expectedLayers * 6)
-    return setRegistryError(error, "REGISTRY_MUON_COUNT_MISMATCH");
   const bool gated = !parameters.attentionGateWeight.empty();
   for (size_t layerIndex = 1; layerIndex < expectedLayers; ++layerIndex)
     if (parameters.layers[layerIndex - 1].attentionGateWeight.empty() == gated)
       return setRegistryError(error, "REGISTRY_GATE_PRESENCE_MISMATCH");
-  if (auxCount != expectedLayers * (gated ? 5 : 4) + 2)
-    return setRegistryError(error, "REGISTRY_AUX_ADAM_COUNT_MISMATCH");
   return true;
 }
 bool splitParameterRegistry(const P& parameters, ParameterPartition* partition,
@@ -302,17 +236,19 @@ GeneralizedCpuTrace forwardTraceGeneralized(const Config& c, const std::vector<f
   }
   return trace;
 }
-MomentumResult momentumUpdate(const P&current,const P&gradient,const P&velocity,float lr,float momentum){MomentumResult result;for(auto[name,member]:fields()){(void)name;const auto&w=current.*member;const auto&g=gradient.*member;const auto&v=velocity.*member;auto&nv=result.velocity.*member;auto&nw=result.next.*member;nv.resize(w.size());nw.resize(w.size());for(size_t i=0;i<w.size();++i){nv[i]=momentum*v[i]+g[i];nw[i]=w[i]-lr*nv[i];}}result.velocity.layers.resize(current.layers.size());result.next.layers.resize(current.layers.size());for(size_t li=0;li<current.layers.size();++li){const LP&w=current.layers[li],&g=gradient.layers[li],&v=velocity.layers[li];LP&nv=result.velocity.layers[li];LP&nw=result.next.layers[li];auto f=[&](const std::vector<float>&a,const std::vector<float>&b,const std::vector<float>&old,std::vector<float>&m,std::vector<float>&out){m.resize(a.size());out.resize(a.size());for(size_t i=0;i<a.size();++i){m[i]=momentum*old[i]+b[i];out[i]=a[i]-lr*m[i];}};f(w.gamma1,g.gamma1,v.gamma1,nv.gamma1,nw.gamma1);f(w.beta1,g.beta1,v.beta1,nv.beta1,nw.beta1);f(w.wq,g.wq,v.wq,nv.wq,nw.wq);f(w.wk,g.wk,v.wk,nv.wk,nw.wk);f(w.wv,g.wv,v.wv,nv.wv,nw.wv);f(w.wo,g.wo,v.wo,nv.wo,nw.wo);f(w.gamma2,g.gamma2,v.gamma2,nv.gamma2,nw.gamma2);f(w.beta2,g.beta2,v.beta2,nv.beta2,nw.beta2);f(w.w1,g.w1,v.w1,nv.w1,nw.w1);f(w.w2,g.w2,v.w2,nv.w2,nw.w2);}return result;}
+MomentumResult momentumUpdate(const P&current,const P&gradient,const P&velocity,float lr,float momentum){MomentumResult result;result.velocity.layers.resize(current.layers.size());result.next.layers.resize(current.layers.size());forEachParameterStorage(current,[&](const ParameterDefinition&definition,size_t layerIndex,const std::vector<float>&w){if(definition.condition!=ParameterCondition::ALWAYS)return;const auto&g=parameterStorage(gradient,definition,layerIndex);const auto&v=parameterStorage(velocity,definition,layerIndex);auto&nv=parameterStorage(result.velocity,definition,layerIndex);auto&nw=parameterStorage(result.next,definition,layerIndex);nv.resize(w.size());nw.resize(w.size());for(size_t i=0;i<w.size();++i){nv[i]=momentum*v[i]+g[i];nw[i]=w[i]-lr*nv[i];}});return result;}
 AdamResult adamUpdate(const P&current,const P&gradient,const P&firstMoment,
                       const P&secondMoment,float lr,float beta1,float beta2,
                       float epsilon,float firstCorrection,float secondCorrection){
   AdamResult result;
-  for(auto[name,member]:fields()){
-    (void)name;const auto&w=current.*member;const auto&g=gradient.*member;
-    const auto&m=firstMoment.*member;const auto&v=secondMoment.*member;
-    auto&nm=result.firstMoment.*member;auto&nv=result.secondMoment.*member;
-    auto&mh=result.firstMomentHat.*member;auto&vh=result.secondMomentHat.*member;
-    auto&nw=result.next.*member;
+  result.firstMoment.layers.resize(current.layers.size());result.secondMoment.layers.resize(current.layers.size());result.firstMomentHat.layers.resize(current.layers.size());result.secondMomentHat.layers.resize(current.layers.size());result.next.layers.resize(current.layers.size());
+  forEachParameterStorage(current,[&](const ParameterDefinition&definition,size_t layerIndex,const std::vector<float>&w){
+    if(definition.condition!=ParameterCondition::ALWAYS)return;
+    const auto&g=parameterStorage(gradient,definition,layerIndex);
+    const auto&m=parameterStorage(firstMoment,definition,layerIndex);const auto&v=parameterStorage(secondMoment,definition,layerIndex);
+    auto&nm=parameterStorage(result.firstMoment,definition,layerIndex);auto&nv=parameterStorage(result.secondMoment,definition,layerIndex);
+    auto&mh=parameterStorage(result.firstMomentHat,definition,layerIndex);auto&vh=parameterStorage(result.secondMomentHat,definition,layerIndex);
+    auto&nw=parameterStorage(result.next,definition,layerIndex);
     nm.resize(w.size());nv.resize(w.size());mh.resize(w.size());vh.resize(w.size());nw.resize(w.size());
     for(size_t i=0;i<w.size();++i){
       nm[i]=beta1*m[i]+(1-beta1)*g[i];
@@ -320,11 +256,9 @@ AdamResult adamUpdate(const P&current,const P&gradient,const P&firstMoment,
       mh[i]=nm[i]*firstCorrection;vh[i]=nv[i]*secondCorrection;
       nw[i]=w[i]-lr*mh[i]/(std::sqrt(vh[i])+epsilon);
     }
-  }
-  result.firstMoment.layers.resize(current.layers.size());result.secondMoment.layers.resize(current.layers.size());result.firstMomentHat.layers.resize(current.layers.size());result.secondMomentHat.layers.resize(current.layers.size());result.next.layers.resize(current.layers.size());
-  for(size_t li=0;li<current.layers.size();++li){const LP&w=current.layers[li],&g=gradient.layers[li],&m=firstMoment.layers[li],&v=secondMoment.layers[li];LP&nm=result.firstMoment.layers[li],&nv=result.secondMoment.layers[li],&mh=result.firstMomentHat.layers[li],&vh=result.secondMomentHat.layers[li],&nw=result.next.layers[li];auto f=[&](const std::vector<float>&a,const std::vector<float>&b,const std::vector<float>&om,const std::vector<float>&ov,std::vector<float>&a1,std::vector<float>&a2,std::vector<float>&h1,std::vector<float>&h2,std::vector<float>&out){a1.resize(a.size());a2.resize(a.size());h1.resize(a.size());h2.resize(a.size());out.resize(a.size());for(size_t i=0;i<a.size();++i){a1[i]=beta1*om[i]+(1-beta1)*b[i];a2[i]=beta2*ov[i]+(1-beta2)*b[i]*b[i];h1[i]=a1[i]*firstCorrection;h2[i]=a2[i]*secondCorrection;out[i]=a[i]-lr*h1[i]/(std::sqrt(h2[i])+epsilon);}};f(w.gamma1,g.gamma1,m.gamma1,v.gamma1,nm.gamma1,nv.gamma1,mh.gamma1,vh.gamma1,nw.gamma1);f(w.beta1,g.beta1,m.beta1,v.beta1,nm.beta1,nv.beta1,mh.beta1,vh.beta1,nw.beta1);f(w.wq,g.wq,m.wq,v.wq,nm.wq,nv.wq,mh.wq,vh.wq,nw.wq);f(w.wk,g.wk,m.wk,v.wk,nm.wk,nv.wk,mh.wk,vh.wk,nw.wk);f(w.wv,g.wv,m.wv,v.wv,nm.wv,nv.wv,mh.wv,vh.wv,nw.wv);f(w.wo,g.wo,m.wo,v.wo,nm.wo,nv.wo,mh.wo,vh.wo,nw.wo);f(w.gamma2,g.gamma2,m.gamma2,v.gamma2,nm.gamma2,nv.gamma2,mh.gamma2,vh.gamma2,nw.gamma2);f(w.beta2,g.beta2,m.beta2,v.beta2,nm.beta2,nv.beta2,mh.beta2,vh.beta2,nw.beta2);f(w.w1,g.w1,m.w1,v.w1,nm.w1,nv.w1,mh.w1,vh.w1,nw.w1);f(w.w2,g.w2,m.w2,v.w2,nm.w2,nv.w2,mh.w2,vh.w2,nw.w2);}
+  });
   return result;
 }
-GradientCheckResult gradientCheck(uint32_t seed,float eps){Config c;c.vocabularySize=8;c.tokens=3;c.dimension=4;c.feedForwardDimension=8;auto x=oneHot({0,1,2},8),y=oneHot({1,2,3},8);auto p=initialParameters(c,seed);auto a=forwardBackward(c,x,y,p,0);GradientCheckResult r;std::ostringstream s;s<<std::setprecision(9);for(auto[name,m]:fields()){auto&v=p.*m;const auto&g=a.gradients.*m;size_t ix[3]{0,v.size()/2,v.size()-1};float ma=0,mr=0;for(size_t i:ix){float old=v[i];v[i]=old+eps;float plus=forwardBackward(c,x,y,p,0).loss;v[i]=old-eps;float minus=forwardBackward(c,x,y,p,0).loss;v[i]=old;float n=(plus-minus)/(2*eps),ae=std::abs(g[i]-n),re=ae/std::max(1e-4f,std::abs(g[i])+std::abs(n));ma=std::max(ma,ae);mr=std::max(mr,re);s<<"gradient_check_parameter="<<name<<" index="<<i<<" analytic="<<g[i]<<" numeric="<<n<<" absolute_error="<<ae<<" relative_error="<<re<<'\n';}s<<"gradient_check_parameter_summary="<<name<<" max_absolute_error="<<ma<<" max_relative_error="<<mr<<'\n';r.maximumAbsoluteError=std::max(r.maximumAbsoluteError,ma);r.maximumRelativeError=std::max(r.maximumRelativeError,mr);}r.passed=r.maximumAbsoluteError<=2e-3f;r.report=s.str();return r;}
+GradientCheckResult gradientCheck(uint32_t seed,float eps){Config c;c.vocabularySize=8;c.tokens=3;c.dimension=4;c.feedForwardDimension=8;auto x=oneHot({0,1,2},8),y=oneHot({1,2,3},8);auto p=initialParameters(c,seed);auto a=forwardBackward(c,x,y,p,0);GradientCheckResult r;std::ostringstream s;s<<std::setprecision(9);forEachParameterStorage(p,[&](const ParameterDefinition&definition,size_t layerIndex,std::vector<float>&v){if(definition.condition!=ParameterCondition::ALWAYS)return;const auto&g=parameterStorage(a.gradients,definition,layerIndex);size_t ix[3]{0,v.size()/2,v.size()-1};float ma=0,mr=0;for(size_t i:ix){float old=v[i];v[i]=old+eps;float plus=forwardBackward(c,x,y,p,0).loss;v[i]=old-eps;float minus=forwardBackward(c,x,y,p,0).loss;v[i]=old;float n=(plus-minus)/(2*eps),ae=std::abs(g[i]-n),re=ae/std::max(1e-4f,std::abs(g[i])+std::abs(n));ma=std::max(ma,ae);mr=std::max(mr,re);s<<"gradient_check_parameter="<<definition.suffix<<" index="<<i<<" analytic="<<g[i]<<" numeric="<<n<<" absolute_error="<<ae<<" relative_error="<<re<<'\n';}s<<"gradient_check_parameter_summary="<<definition.suffix<<" max_absolute_error="<<ma<<" max_relative_error="<<mr<<'\n';r.maximumAbsoluteError=std::max(r.maximumAbsoluteError,ma);r.maximumRelativeError=std::max(r.maximumRelativeError,mr);});r.passed=r.maximumAbsoluteError<=2e-3f;r.report=s.str();return r;}
 GradientCheckResult headwiseG1GateGradientCheck(uint32_t seed,float eps){const uint32_t t=3,d=4,h=2,dh=2;uint32_t state=seed;auto values=[&](size_t n,float scale){std::vector<float> out(n);for(float&v:out){state=state*1664525u+1013904223u;v=(float(int((state>>8)&65535u))/32767.5f-1)*scale;}return out;};auto n=values(t*d,.7f),w=values(d*h,.12f),a=values(t*d,.5f),dy=values(t*d,.4f);auto objective=[&](){auto z=mm(n,w,t,d,h);double loss=0;for(uint32_t r=0;r<t;++r)for(uint32_t head=0;head<h;++head){const float g=1.0f/(1.0f+std::exp(-z[size_t(r)*h+head]));for(uint32_t x=0;x<dh;++x){const size_t i=size_t(r)*d+head*dh+x;loss+=double(dy[i])*a[i]*g;}}return float(loss);};auto z=mm(n,w,t,d,h);std::vector<float> dz(t*h);for(uint32_t r=0;r<t;++r)for(uint32_t head=0;head<h;++head){const size_t gi=size_t(r)*h+head;const float g=1.0f/(1.0f+std::exp(-z[gi]));double dg=0;for(uint32_t x=0;x<dh;++x){const size_t i=size_t(r)*d+head*dh+x;dg+=double(dy[i])*a[i];}dz[gi]=float(dg)*g*(1-g);}const auto dw=atb(n,dz,t,d,h);const auto dn=abt(dz,w,t,d,h);GradientCheckResult result;std::ostringstream report;report<<std::setprecision(9);auto check=[&](const char*name,std::vector<float>&v,const std::vector<float>&analytic){for(size_t i=0;i<v.size();++i){const float old=v[i];v[i]=old+eps;const float plus=objective();v[i]=old-eps;const float minus=objective();v[i]=old;const float numeric=(plus-minus)/(2*eps);const float absolute=std::abs(analytic[i]-numeric);const float relative=absolute/std::max(1e-4f,std::abs(analytic[i])+std::abs(numeric));result.maximumAbsoluteError=std::max(result.maximumAbsoluteError,absolute);if(relative>result.maximumRelativeError){result.maximumRelativeError=relative;result.worstRelativeParameter=name;result.worstRelativeIndex=int(i);result.worstRelativeAnalytic=analytic[i];result.worstRelativeNumeric=numeric;result.worstRelativeAbsoluteError=absolute;result.worstRelativeRelativeError=relative;}report<<"gate_gradient_parameter="<<name<<" index="<<i<<" analytic="<<analytic[i]<<" numeric="<<numeric<<" absolute_error="<<absolute<<" relative_error="<<relative<<'\n';}};check("Wg",w,dw);check("N",n,dn);result.passed=result.maximumAbsoluteError<=2e-4f;result.report=report.str();return result;}
 }

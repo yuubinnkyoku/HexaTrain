@@ -880,17 +880,6 @@ validation_selection::Metrics validationMetrics(const LanguageQuality &quality) 
   return {quality.loss, quality.accuracy, quality.meanMargin,
           quality.meanCorrectProbability};
 }
-using LanguageMember = std::vector<float> Params::*;
-const std::vector<std::pair<const char *, LanguageMember>> &languageFields() {
-  static const std::vector<std::pair<const char *, LanguageMember>> fields{
-      {"token_embedding", &Params::tokenEmbedding}, {"wq", &Params::wq},
-      {"wk", &Params::wk}, {"wv", &Params::wv}, {"wo", &Params::wo},
-      {"norm1_gamma", &Params::gamma1}, {"norm1_beta", &Params::beta1},
-      {"norm2_gamma", &Params::gamma2}, {"norm2_beta", &Params::beta2},
-      {"ffn_w1", &Params::w1}, {"ffn_w2", &Params::w2},
-      {"output_projection", &Params::outputProjection}};
-  return fields;
-}
 double vectorNorm(const std::vector<float> &values) {
   double sum = 0;
   for (float value : values) sum += double(value) * value;
@@ -909,18 +898,12 @@ double parameterUpdateNorm(const Params &current, const Params &next) {
       sum += difference * difference;
     }
   };
-  add(current.tokenEmbedding, next.tokenEmbedding);
-  auto addLayer = [&](const TinyTransformerLayerParameters &a,
-                      const TinyTransformerLayerParameters &b) {
-    add(a.wq,b.wq); add(a.wk,b.wk); add(a.wv,b.wv); add(a.wo,b.wo);
-    add(a.gamma1,b.gamma1); add(a.beta1,b.beta1); add(a.gamma2,b.gamma2);
-    add(a.beta2,b.beta2);
-    add(a.w1,b.w1); add(a.w2,b.w2);
-  };
-  addLayer(current, next);
-  for (size_t i = 0; i < current.layers.size(); ++i)
-    addLayer(current.layers[i], next.layers[i]);
-  add(current.outputProjection, next.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      current, [&](const tiny_lm::ParameterDefinition &definition,
+                   size_t layerIndex, const std::vector<float> &values) {
+        if (definition.condition == tiny_lm::ParameterCondition::ALWAYS)
+          add(values, tiny_lm::parameterStorage(next, definition, layerIndex));
+      });
   return std::sqrt(sum);
 }
 double gradientNorm(const Params &gradient) {
@@ -929,15 +912,12 @@ double gradientNorm(const Params &gradient) {
     const double norm = vectorNorm(values);
     sum += norm * norm;
   };
-  add(gradient.tokenEmbedding);
-  auto addLayer = [&](const TinyTransformerLayerParameters &layer) {
-    add(layer.wq); add(layer.wk); add(layer.wv); add(layer.wo);
-    add(layer.gamma1); add(layer.beta1); add(layer.gamma2); add(layer.beta2);
-    add(layer.w1); add(layer.w2);
-  };
-  addLayer(gradient);
-  for (const auto &layer : gradient.layers) addLayer(layer);
-  add(gradient.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      gradient, [&](const tiny_lm::ParameterDefinition &definition,
+                    size_t, const std::vector<float> &values) {
+        if (definition.condition == tiny_lm::ParameterCondition::ALWAYS)
+          add(values);
+      });
   return std::sqrt(sum);
 }
 std::vector<uint32_t> languageOrder(uint32_t seed, uint32_t epoch,
@@ -1045,14 +1025,21 @@ std::string languageModelMultiStep(bool inferenceOnly, int candidate = 0) {
                    << currentNorm << "\nseed_" << seed << "_step_" << step
                    << "_update_to_parameter_ratio="
                    << (currentNorm ? updateNorm / currentNorm : 0) << '\n';
-        for (const auto &[name, member] : languageFields()) {
-          std::vector<float> update((htp.*member).size());
+        for (const auto &definition : tiny_lm::parameterDefinitions()) {
+          if (definition.condition != tiny_lm::ParameterCondition::ALWAYS)
+            continue;
+          const auto &parameter = tiny_lm::parameterStorage(htp, definition);
+          const auto &nextParameter =
+              tiny_lm::parameterStorage(output.next, definition);
+          const auto &gradient =
+              tiny_lm::parameterStorage(output.gradients, definition);
+          std::vector<float> update(parameter.size());
           for (size_t i = 0; i < update.size(); ++i)
-            update[i] = (output.next.*member)[i] - (htp.*member)[i];
+            update[i] = nextParameter[i] - parameter[i];
           trajectory << "parameter_diagnostic=" << seed << ',' << step << ','
-                     << name << ',' << vectorNorm(output.gradients.*member) << ','
-                     << vectorNorm(update) << ',' << vectorNorm(htp.*member) << ','
-                     << vectorMaxAbs(output.gradients.*member) << ','
+                     << definition.suffix << ',' << vectorNorm(gradient) << ','
+                     << vectorNorm(update) << ',' << vectorNorm(parameter) << ','
+                     << vectorMaxAbs(gradient) << ','
                      << vectorMaxAbs(update) << '\n';
         }
       }
@@ -1169,21 +1156,12 @@ std::string languageModelMultiStep(bool inferenceOnly, int candidate = 0) {
 
 std::vector<float> flattenLanguageParameters(const Params &p) {
   std::vector<float> flat;
-  auto append = [&](const std::vector<float> &values) {
-    flat.insert(flat.end(), values.begin(), values.end());
-  };
   // Canonical generic registry order. Do not iterate an unordered container.
-  append(p.tokenEmbedding);
-  auto appendLayer = [&](const TinyTransformerLayerParameters &layer) {
-    append(layer.gamma1); append(layer.beta1);
-    append(layer.wq); append(layer.wk); append(layer.wv); append(layer.wo);
-    append(layer.attentionGateWeight);
-    append(layer.gamma2); append(layer.beta2);
-    append(layer.w1); append(layer.w2);
-  };
-  appendLayer(p);
-  for (const auto &layer : p.layers) appendLayer(layer);
-  append(p.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      p, [&](const tiny_lm::ParameterDefinition &, size_t,
+             const std::vector<float> &values) {
+        flat.insert(flat.end(), values.begin(), values.end());
+      });
   return flat;
 }
 std::vector<float> flattenLanguageParametersLegacyV1(const Params &p) {
@@ -1214,17 +1192,9 @@ Params unflattenLanguageParameters(const std::vector<float> &flat,
               values.begin());
     offset += values.size();
   };
-  take(result.tokenEmbedding);
-  auto takeLayer = [&](TinyTransformerLayerParameters &layer) {
-    take(layer.gamma1); take(layer.beta1);
-    take(layer.wq); take(layer.wk); take(layer.wv); take(layer.wo);
-    take(layer.attentionGateWeight);
-    take(layer.gamma2); take(layer.beta2);
-    take(layer.w1); take(layer.w2);
-  };
-  takeLayer(result);
-  for (auto &layer : result.layers) takeLayer(layer);
-  take(result.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      result, [&](const tiny_lm::ParameterDefinition &, size_t,
+                  std::vector<float> &values) { take(values); });
   if (offset != flat.size()) throw std::invalid_argument("momentum flat shape");
   return result;
 }
@@ -1238,16 +1208,9 @@ Params zeroLanguageParameters(const Params &shape) {
   auto zero = [](std::vector<float> &values) {
     std::fill(values.begin(), values.end(), 0.0f);
   };
-  zero(result.tokenEmbedding);
-  auto zeroLayer = [&](TinyTransformerLayerParameters &layer) {
-    zero(layer.wq); zero(layer.wk); zero(layer.wv); zero(layer.wo);
-    zero(layer.attentionGateWeight);
-    zero(layer.gamma1); zero(layer.beta1); zero(layer.gamma2); zero(layer.beta2);
-    zero(layer.w1); zero(layer.w2);
-  };
-  zeroLayer(result);
-  for (auto &layer : result.layers) zeroLayer(layer);
-  zero(result.outputProjection);
+  tiny_lm::forEachParameterStorage(
+      result, [&](const tiny_lm::ParameterDefinition &, size_t,
+                  std::vector<float> &values) { zero(values); });
   return result;
 }
 bool executeLanguageMomentum(Runtime &runtime, const Params &current,
@@ -4059,22 +4022,18 @@ first_nonfinite::Config lateDiagnosticConfig(const tiny_lm::Config &config,
 
 std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
     const tiny_lm::Config &config, const Params &parameters) {
+  const tiny_lm::ParameterDimensions dimensions{
+      config.vocabularySize, config.dimension, config.feedForwardDimension,
+      config.numLayers, config.numHeads,
+      config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID};
   std::vector<first_nonfinite::RegistryEntry> registry;
   for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
+    const tiny_lm::ParameterDefinition *definition =
+        tiny_lm::parameterDefinition(entry.placement, entry.suffix);
     std::vector<uint32_t> shape;
-    if (entry.name == "token_embedding") {
-      shape = {config.vocabularySize, config.dimension};
-    } else if (entry.name == "output_projection") {
-      shape = {config.dimension, config.vocabularySize};
-    } else if (entry.name.find("norm") != std::string::npos) {
-      shape = {config.dimension};
-    } else if (entry.name.find("ffn_w1") != std::string::npos) {
-      shape = {config.dimension, config.feedForwardDimension};
-    } else if (entry.name.find("ffn_w2") != std::string::npos) {
-      shape = {config.feedForwardDimension, config.dimension};
-    } else {
-      shape = {config.dimension, config.dimension};
-    }
+    if (!definition ||
+        !tiny_lm::parameterDefinitionShape(*definition, dimensions, &shape))
+      return {};
     registry.push_back({entry.name, std::move(shape)});
   }
   return registry;
@@ -5310,19 +5269,28 @@ std::vector<std::uint8_t> nprtReadFileBytes(const std::string &path,
   return bytes;
 }
 
+// Registry name -> storage member assignment, resolved through the shared
+// parameter metadata.  The accepted name set is the canonical registry's own
+// suffix set, so this copy can no longer drift from
+// nicopedia_checkpoint_loader.h (the hand-written chain here was missing the
+// headwise gate weight that parameterRegistry already declares).
 void nprtAssignRegistryMember(Params &target, uint32_t layers,
                               const std::string &name,
                               std::vector<float> &&values) {
-  if (name == "token_embedding") {
-    target.tokenEmbedding = std::move(values);
+  using Layer = TinyTransformerLayerParameters;
+  const auto assignGlobal = [&](tiny_lm::ParameterPlacement placement) {
+    const tiny_lm::ParameterDefinition *definition =
+        tiny_lm::parameterDefinition(placement, name);
+    if (!definition || !definition->globalMember) return false;
+    target.*(definition->globalMember) = std::move(values);
+    return true;
+  };
+  if (name.rfind("layer_", 0) != 0) {
+    if (!assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_PREFIX) &&
+        !assignGlobal(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX))
+      throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
     return;
   }
-  if (name == "output_projection") {
-    target.outputProjection = std::move(values);
-    return;
-  }
-  if (name.rfind("layer_", 0) != 0)
-    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const size_t dot = name.find('.');
   if (dot == std::string::npos || dot < 7)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
@@ -5335,20 +5303,15 @@ void nprtAssignRegistryMember(Params &target, uint32_t layers,
       static_cast<uint32_t>(index) >= layers)
     throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
   const std::string suffix = name.substr(dot + 1);
-  TinyTransformerLayerParameters *layer =
-      index == 0 ? static_cast<TinyTransformerLayerParameters *>(&target)
+  const tiny_lm::ParameterDefinition *definition =
+      tiny_lm::parameterDefinition(tiny_lm::ParameterPlacement::PER_LAYER,
+                                   suffix);
+  if (!definition || !definition->layerMember)
+    throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  Layer *layer =
+      index == 0 ? static_cast<Layer *>(&target)
                  : &target.layers[static_cast<std::size_t>(index) - 1];
-  if (suffix == "norm1_gamma") layer->gamma1 = std::move(values);
-  else if (suffix == "norm1_beta") layer->beta1 = std::move(values);
-  else if (suffix == "wq") layer->wq = std::move(values);
-  else if (suffix == "wk") layer->wk = std::move(values);
-  else if (suffix == "wv") layer->wv = std::move(values);
-  else if (suffix == "wo") layer->wo = std::move(values);
-  else if (suffix == "norm2_gamma") layer->gamma2 = std::move(values);
-  else if (suffix == "norm2_beta") layer->beta2 = std::move(values);
-  else if (suffix == "ffn_w1") layer->w1 = std::move(values);
-  else if (suffix == "ffn_w2") layer->w2 = std::move(values);
-  else throw std::runtime_error("NPRT_CKPT_REGISTRY_NAME");
+  layer->*(definition->layerMember) = std::move(values);
 }
 
 // Checkpoint file naming: the production anchor T32/D32/FFN32 keeps the

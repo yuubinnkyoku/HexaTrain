@@ -24,6 +24,7 @@ $docsResultsRoot = ([IO.Path]::GetFullPath((Join-Path $repoRoot 'docs\results'))
 $buildReportsRoot = ([IO.Path]::GetFullPath((Join-Path $repoRoot 'build\reports'))).TrimEnd('\', '/') +
     [IO.Path]::DirectorySeparatorChar
 $allowedOutputRoots = @($docsResultsRoot, $buildReportsRoot)
+$historicalManifestGitPath = 'docs/results/qnn-l19-seed-instability-root-cause-2026-08/manifest.json'
 $outputScopeAllowed = $false
 foreach ($allowedRoot in $allowedOutputRoots) {
     if ($OutputRoot.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -60,11 +61,88 @@ function Export-StableCsv([object[]]$Rows, [string]$Path) {
     @($Rows) | Export-Csv -LiteralPath $Path -NoTypeInformation -Encoding utf8
 }
 
-function Get-Sha256([string]$Path) {
-    $text = [IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+function Get-TextSha256([string]$Text) {
+    $text = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
     $bytes = [Text.Encoding]::UTF8.GetBytes($text)
     $hash = [Security.Cryptography.SHA256]::HashData($bytes)
     return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+}
+
+function Get-Sha256([string]$Path) {
+    return Get-TextSha256 ([IO.File]::ReadAllText($Path))
+}
+
+function Invoke-GitReadText([string[]]$Arguments) {
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+
+    try {
+        $process = [Diagnostics.Process]::Start($startInfo)
+    } catch {
+        throw "GIT_PROVENANCE_UNAVAILABLE:$($_.Exception.Message)"
+    }
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "GIT_PROVENANCE_READ_FAILED:$($Arguments -join ' '):$($stderr.Trim())"
+    }
+    return $stdout
+}
+
+function Get-GitObjectSha256([string]$Revision, [string]$Path) {
+    $gitPath = $Path.Replace('\', '/')
+    return Get-TextSha256 (Invoke-GitReadText @('show', "${Revision}:$gitPath"))
+}
+
+function Assert-HistoricalProductionSources(
+    [string]$ManifestPath,
+    [object]$Manifest,
+    [string]$HistoricalManifestPath = $historicalManifestGitPath
+) {
+    $manifestHash = Get-Sha256 $ManifestPath
+    $historyText = Invoke-GitReadText @('log', '--format=%H', '--', $HistoricalManifestPath)
+    $revisions = @($historyText -split "`r?`n" | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+    if ($revisions.Count -eq 0) {
+        throw "HISTORICAL_MANIFEST_HISTORY_MISSING:$HistoricalManifestPath"
+    }
+
+    foreach ($revision in $revisions) {
+        try {
+            if ((Get-GitObjectSha256 $revision $HistoricalManifestPath) -ne $manifestHash) {
+                continue
+            }
+        } catch {
+            continue
+        }
+
+        $allSourcesMatch = $true
+        foreach ($source in $Manifest.production_sources) {
+            if ($source.name -notmatch '^[^:]+$' -or $source.name -match '(^|[\\/])\.\.([\\/]|$)' -or
+                $source.sha256 -notmatch '^[0-9a-f]{64}$') {
+                $allSourcesMatch = $false
+                break
+            }
+            try {
+                if ((Get-GitObjectSha256 $revision $source.name) -ne $source.sha256) {
+                    $allSourcesMatch = $false
+                    break
+                }
+            } catch {
+                $allSourcesMatch = $false
+                break
+            }
+        }
+        if ($allSourcesMatch) {
+            return $revision
+        }
+    }
+    throw 'HISTORICAL_SOURCE_PROVENANCE_NOT_FOUND'
 }
 
 function Assert-NoPrivateData([string]$Root) {
@@ -87,7 +165,10 @@ function Assert-NoPrivateData([string]$Root) {
     }
 }
 
-function Assert-PublicBundle([string]$Root) {
+function Assert-PublicBundle(
+    [string]$Root,
+    [ValidateSet('Current', 'Historical')][string]$SourceProvenance = 'Current'
+) {
     $manifestPath = Join-Path $Root 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'MANIFEST_MISSING' }
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
@@ -103,9 +184,13 @@ function Assert-PublicBundle([string]$Root) {
         if (-not (Test-Path -LiteralPath $path)) { throw "PUBLIC_FILE_MISSING:$($item.name)" }
         if ((Get-Sha256 $path) -ne $item.sha256) { throw "PUBLIC_HASH_MISMATCH:$($item.name)" }
     }
-    foreach ($source in $manifest.production_sources) {
-        $path = Join-Path $repoRoot $source.name
-        if ((Get-Sha256 $path) -ne $source.sha256) { throw "SOURCE_HASH_MISMATCH:$($source.name)" }
+    if ($SourceProvenance -eq 'Historical') {
+        $null = Assert-HistoricalProductionSources $manifestPath $manifest
+    } else {
+        foreach ($source in $manifest.production_sources) {
+            $path = Join-Path $repoRoot $source.name
+            if ((Get-Sha256 $path) -ne $source.sha256) { throw "SOURCE_HASH_MISMATCH:$($source.name)" }
+        }
     }
     $requiredSourceNames = @(
         'app\src\main\cpp\tiny_language_model_cpu.cpp',
@@ -192,7 +277,7 @@ function Assert-PublicBundle([string]$Root) {
 }
 
 if ($SelfTest) {
-    Assert-PublicBundle $OutputRoot
+    Assert-PublicBundle $OutputRoot -SourceProvenance Historical
     $negativeRoot = Join-Path $repoRoot 'build\reports\qnn-l19-seed-instability-export-selftest'
     if (Test-Path -LiteralPath $negativeRoot) { Remove-Item -Recurse -Force -LiteralPath $negativeRoot }
     New-Item -ItemType Directory -Force -Path $negativeRoot | Out-Null
@@ -202,6 +287,30 @@ if ($SelfTest) {
     try { Assert-NoPrivateData $negativeRoot } catch { $rejected = $true }
     if (-not $rejected) { throw 'PRIVATE_SCAN_NEGATIVE_TEST_INEFFECTIVE' }
     Remove-Item -Recurse -Force -LiteralPath $negativeRoot
+
+    $tamperedRoot = Join-Path $repoRoot 'build\reports\qnn-l19-seed-instability-provenance-tamper-selftest'
+    if (Test-Path -LiteralPath $tamperedRoot) { Remove-Item -Recurse -Force -LiteralPath $tamperedRoot }
+    Copy-Item -Recurse -LiteralPath $OutputRoot -Destination $tamperedRoot
+    $tamperedManifestPath = Join-Path $tamperedRoot 'manifest.json'
+    $tamperedManifest = Get-Content -Raw -LiteralPath $tamperedManifestPath | ConvertFrom-Json
+    $tamperedManifest.production_sources[0].sha256 = '0' * 64
+    $tamperedManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tamperedManifestPath -Encoding utf8
+    $tamperRejected = $false
+    try { Assert-PublicBundle $tamperedRoot -SourceProvenance Historical } catch {
+        $tamperRejected = $_.Exception.Message -eq 'HISTORICAL_SOURCE_PROVENANCE_NOT_FOUND'
+    }
+    if (-not $tamperRejected) { throw 'HISTORICAL_SOURCE_TAMPER_NEGATIVE_TEST_INEFFECTIVE' }
+    Remove-Item -Recurse -Force -LiteralPath $tamperedRoot
+
+    $missingProvenanceRejected = $false
+    $manifestPath = Join-Path $OutputRoot 'manifest.json'
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    try {
+        $null = Assert-HistoricalProductionSources $manifestPath $manifest 'docs/results/missing-historical-evidence/manifest.json'
+    } catch {
+        $missingProvenanceRejected = $_.Exception.Message -like 'HISTORICAL_MANIFEST_HISTORY_MISSING:*'
+    }
+    if (-not $missingProvenanceRejected) { throw 'HISTORICAL_PROVENANCE_MISSING_NEGATIVE_TEST_INEFFECTIVE' }
     Write-Host 'L19 seed-instability public exporter self-test PASS'
     exit 0
 }
