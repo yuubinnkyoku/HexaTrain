@@ -14,7 +14,7 @@ $MetadataExporterExecutable = Join-Path $OutputDirectory "export_transformer_par
 if ($LASTEXITCODE -ne 0) { throw "Parameter metadata exporter compilation failed" }
 & $MetadataExporterExecutable --self-test
 if ($LASTEXITCODE -ne 0) { throw "Parameter metadata contract tests failed" }
-& $MetadataExporterExecutable --check (Join-Path $Root "metadata\transformer_parameter_metadata.json")
+& $MetadataExporterExecutable --check (Join-Path $Root "metadata\transformer_parameter_metadata.json") (Join-Path $Root "app\src\main\java\com\yuubinnkyoku\phonelm\GeneratedTransformerParameterMetadata.kt")
 if ($LASTEXITCODE -ne 0) { throw "Parameter metadata staleness check failed" }
 Write-Host "transformer_parameter_metadata_contract=PASS"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `

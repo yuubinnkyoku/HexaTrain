@@ -10,7 +10,6 @@ data class ModelArchitecture(
     val vocabularySize: Int,
     val tokenizerKind: String,
     val tokenizerHash: String?,
-    val headwiseG1: Boolean = false,
 ) {
     fun validationError(): String? = when {
         layers !in 1..128 -> "layers must be in 1..128"
@@ -33,19 +32,19 @@ data class ModelArchitecture(
 
     val headDimension: Int get() = dimension / heads
 
-    /** Mirrors the native/checkpoint parameter registry exactly. */
-    fun parameterCount(): Long {
+    /** Mirrors the native/checkpoint parameter registry via the generated SSOT metadata.
+     *  headwiseG1 is an evaluator argument for gated attention (HEADWISE_G1 parameter),
+     *  not part of the architecture identity. */
+    fun parameterCount(headwiseG1: Boolean = false): Long {
         validationError()?.let { throw IllegalArgumentException(it) }
-        val d = dimension.toLong()
-        val ffn = feedForwardDimension.toLong()
-        val vocabulary = vocabularySize.toLong()
-        val embeddingAndProjection = Math.multiplyExact(Math.multiplyExact(vocabulary, d), 2L)
-        val norms = Math.multiplyExact(4L, d)
-        val attention = Math.multiplyExact(4L, Math.multiplyExact(d, d))
-        val feedForward = Math.multiplyExact(2L, Math.multiplyExact(d, ffn))
-        val gate = if (headwiseG1) Math.multiplyExact(d, heads.toLong()) else 0L
-        val perLayer = Math.addExact(Math.addExact(Math.addExact(norms, attention), gate), feedForward)
-        return Math.addExact(embeddingAndProjection, Math.multiplyExact(layers.toLong(), perLayer))
+        return GeneratedTransformerParameterMetadata.calculateParameterCount(
+            vocabularySize = vocabularySize.toLong(),
+            dimension = dimension.toLong(),
+            feedForwardDimension = feedForwardDimension.toLong(),
+            layers = layers.toLong(),
+            heads = heads.toLong(),
+            headwiseG1 = headwiseG1,
+        )
     }
 
     val displayLabel: String

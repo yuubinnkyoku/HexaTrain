@@ -90,6 +90,71 @@ $Fixed = [ordered]@{
   development_chunks = 256
 }
 
+# Parameter role and count derivations come from the checked-in machine-readable
+# SSOT artifact (metadata/transformer_parameter_metadata.json), which is
+# generated from app/src/main/cpp/transformer_parameter_metadata.h.  No
+# parameter name/count registry is hand-written in this script: adding a
+# parameter upstream only requires regenerating the artifact.  The MUON pilot
+# architecture is ungated (headwiseG1=false), matching the frozen Adam
+# reference and $Fixed.parameter_count.
+$MetadataJsonPath = Join-Path $Root 'metadata\transformer_parameter_metadata.json'
+function Get-MetadataDerivationFromSsot {
+  if (-not (Test-Path -LiteralPath $MetadataJsonPath -PathType Leaf)) {
+    throw 'PARAMETER_METADATA_JSON_MISSING: regenerate scripts\generate_parameter_metadata.ps1'
+  }
+  $raw = Get-Content -LiteralPath $MetadataJsonPath -Raw | ConvertFrom-Json
+  $defs = @($raw.parameter_definitions)
+  if ($defs.Count -eq 0) { throw 'PARAMETER_METADATA_EMPTY' }
+  $headwiseG1 = $false
+  $dimensionExtent = @{
+    VOCABULARY = [uint64]$Fixed.vocabulary
+    MODEL = [uint64]$Fixed.dimension
+    FEED_FORWARD = [uint64]$Fixed.feed_forward_dimension
+    HEADS = [uint64]$Fixed.heads
+  }
+  $muonRoles = [Collections.Generic.List[string]]::new()
+  $auxRoles = [Collections.Generic.List[string]]::new()
+  $total = [uint64]0
+  $muonElements = [uint64]0
+  $auxElements = [uint64]0
+  $muonMatrices = [uint64]0
+  foreach ($def in $defs) {
+    if ($def.condition -eq 'HEADWISE_G1' -and -not $headwiseG1) { continue }
+    $elements = [uint64]1
+    foreach ($dim in $def.shape) {
+      $extent = $dimensionExtent[$dim]
+      if ($null -eq $extent -or $extent -eq 0) { throw "PARAMETER_METADATA_DIMENSION_UNKNOWN:$dim" }
+      $elements = $elements * $extent
+    }
+    $instances = if ($def.placement -eq 'PER_LAYER') { [uint64]$Fixed.layers } else { [uint64]1 }
+    $count = $elements * $instances
+    $total += $count
+    if ($def.role -eq 'MUON') {
+      $muonRoles.Add([string]$def.suffix)
+      $muonElements += $count
+      $matrixInstances = if ($def.placement -eq 'PER_LAYER') { [uint64]$Fixed.layers } else { [uint64]1 }
+      $muonMatrices += $matrixInstances
+    } elseif ($def.role -eq 'AUX_ADAM') {
+      $auxRoles.Add([string]$def.suffix)
+      $auxElements += $count
+    } else {
+      throw "PARAMETER_METADATA_ROLE_UNKNOWN:$($def.role)"
+    }
+  }
+  return [ordered]@{
+    parameter_count = $total
+    muon_parameter_roles = @($muonRoles)
+    aux_adam_parameter_roles = @($auxRoles)
+    muon_matrix_count = $muonMatrices
+    muon_parameter_count = $muonElements
+    aux_adam_parameter_count = $auxElements
+  }
+}
+$MetadataDerived = Get-MetadataDerivationFromSsot
+if ($MetadataDerived.parameter_count -ne [uint64]$Fixed.parameter_count) {
+  throw "PARAMETER_METADATA_TOTAL_MISMATCH: derived=$($MetadataDerived.parameter_count) fixed=$($Fixed.parameter_count)"
+}
+
 $MuonLearningRateCandidates = @('0.005','0.010','0.020')
 $MuonLearningRateWasExplicit = $PSBoundParameters.ContainsKey('MuonLearningRate')
 $SmokeUpdates = 8
@@ -454,9 +519,9 @@ function Assert-HealthyMuonTrainingReport {
       [double]$map.muon_momentum -ne $MuonMomentum -or
       $map.muon_nesterov -ne $MuonNesterov.ToString().ToLowerInvariant() -or
       [int]$map.muon_ns_steps -ne $MuonNsSteps -or
-      [int]$map.muon_matrix_count -ne 114 -or
-      [int]$map.muon_parameter_count -ne 622592 -or
-      [int]$map.aux_adam_parameter_count -ne ($Fixed.parameter_count - 622592)) {
+      [int]$map.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or
+      [int]$map.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or
+      [int]$map.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count) {
     throw 'MUON_PARAMETER_SPLIT_OR_HYPERPARAMETER_REJECTED'
   }
   if ($map.checkpoint_format -ne $CheckpointFormatMuon -or $map.checkpoint_written -ne 'true' -or
@@ -812,11 +877,11 @@ function New-Manifest {
     muon_momentum = $MuonMomentum
     muon_nesterov = $MuonNesterov
     muon_ns_steps = $MuonNsSteps
-    muon_parameter_roles = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
-    aux_adam_parameter_roles = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
-    muon_matrix_count = if ($optimizerKind -eq 'MUON') { 114 } else { 0 }
-    muon_parameter_count = if ($optimizerKind -eq 'MUON') { 622592 } else { 0 }
-    aux_adam_parameter_count = if ($optimizerKind -eq 'MUON') { 135936 } else { $Fixed.parameter_count }
+    muon_parameter_roles = $MetadataDerived.muon_parameter_roles
+    aux_adam_parameter_roles = $MetadataDerived.aux_adam_parameter_roles
+    muon_matrix_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.muon_matrix_count } else { 0 }
+    muon_parameter_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.muon_parameter_count } else { 0 }
+    aux_adam_parameter_count = if ($optimizerKind -eq 'MUON') { $MetadataDerived.aux_adam_parameter_count } else { $Fixed.parameter_count }
     aux_adam_beta1 = $Fixed.adam_beta1
     aux_adam_beta2 = $Fixed.adam_beta2
     aux_adam_epsilon = $Fixed.adam_epsilon
@@ -868,8 +933,8 @@ function Assert-ManifestIdentity {
       [int]$Manifest.vocabulary -ne $Fixed.vocabulary -or [int]$Manifest.tokens -ne $Fixed.tokens -or
       [int]$Manifest.dimension -ne $Fixed.dimension -or [int]$Manifest.feed_forward_dimension -ne $Fixed.feed_forward_dimension -or
       [int]$Manifest.layers -ne $Fixed.layers -or [int]$Manifest.heads -ne $Fixed.heads -or
-      [int]$Manifest.muon_matrix_count -ne 114 -or [int]$Manifest.muon_parameter_count -ne 622592 -or
-      [int]$Manifest.aux_adam_parameter_count -ne 135936 -or
+      [int]$Manifest.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or [int]$Manifest.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or
+      [int]$Manifest.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or
       [int]$Manifest.parameter_count -ne $Fixed.parameter_count -or [int]$Manifest.batch_size -ne $Fixed.batch_size -or
       [int]$Manifest.seed -ne $Fixed.seed -or $Manifest.tokenizer_kind -ne $Fixed.tokenizer_kind -or
       $Manifest.tokenizer_hash -ne $Fixed.tokenizer_hash -or $Manifest.dataset_identity -ne $Fixed.dataset_identity -or
@@ -879,8 +944,8 @@ function Assert-ManifestIdentity {
        [bool]$Manifest.fresh_initialization_required -ne $true -or [bool]$Manifest.resume_from_adam_forbidden -ne $true -or
        [bool]$Manifest.same_seed_as_adam -ne $true -or [bool]$Manifest.same_data_order_as_adam -ne $true -or
        [bool]$Manifest.same_tokenizer_as_adam -ne $true -or [bool]$Manifest.same_cache_as_adam -ne $true -or
-       [double]$Manifest.muon_matrix_count -ne 114 -or [double]$Manifest.muon_parameter_count -ne 622592 -or
-       [double]$Manifest.aux_adam_parameter_count -ne 135936 -or [double]$Manifest.parameter_count -ne $Fixed.parameter_count -or
+       [double]$Manifest.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or [double]$Manifest.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or
+       [double]$Manifest.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or [double]$Manifest.parameter_count -ne $Fixed.parameter_count -or
        [double]$Manifest.batch_size -ne $Fixed.batch_size -or [double]$Manifest.seed -ne $Fixed.seed -or
        [double]$Manifest.aux_adam_beta1 -ne [double]$Fixed.adam_beta1 -or
        [double]$Manifest.aux_adam_beta2 -ne [double]$Fixed.adam_beta2 -or
@@ -1006,9 +1071,9 @@ function Write-TelemetryRow {
     muon_momentum = $MuonMomentum
     muon_nesterov = $MuonNesterov
     muon_ns_steps = $MuonNsSteps
-    muon_matrix_count = 114
-    muon_parameter_count = 622592
-    aux_adam_parameter_count = 135936
+    muon_matrix_count = $MetadataDerived.muon_matrix_count
+    muon_parameter_count = $MetadataDerived.muon_parameter_count
+    aux_adam_parameter_count = $MetadataDerived.aux_adam_parameter_count
     learning_rate_schedule = Get-MapValue $Map @('learning_rate_schedule','muon_learning_rate_schedule')
     learning_rate_decay_start_step = Get-MapValue $Map @('learning_rate_decay_start_step','decay_start_step')
     learning_rate_decay_end_step = Get-MapValue $Map @('learning_rate_decay_end_step','decay_end_step')
@@ -1469,7 +1534,7 @@ function Invoke-SelfTest {
   if ((Get-OptimizerKind) -eq 'MUON') {
     if ((Get-OptimizerIdentity) -ne 'muon_aux_adam') { throw 'SELFTEST_OPTIMIZER_IDENTITY' }
     $manifest = New-Manifest '0.005'
-    if ($manifest.muon_matrix_count -ne 114 -or $manifest.muon_parameter_count -ne 622592 -or $manifest.aux_adam_parameter_count -ne 135936 -or $manifest.optimizer -ne 'MUON' -or $manifest.optimizer_identity -ne 'muon_aux_adam' -or $manifest.muon_algorithm_identity -ne $MuonAlgorithmIdentity -or $manifest.muon_learning_rate_schedule -ne 'linear_decay' -or $manifest.checkpoint_format -ne 'NPRTCKPTV4' -or $manifest.initial_parameter_hash -ne $Fixed.initial_parameter_hash -or $manifest.aux_adam_beta1 -ne $Fixed.adam_beta1 -or $manifest.aux_adam_beta2 -ne $Fixed.adam_beta2 -or $manifest.aux_adam_epsilon -ne $Fixed.adam_epsilon -or $manifest.aux_adam_weight_decay -ne $Fixed.weight_decay -or $manifest.final_test_opened -ne $false -or $manifest.final_test_used -ne $false -or (($manifest.muon_parameter_roles -join ',') -ne 'Wq,Wk,Wv,Wo,FFN_W1,FFN_W2')) { throw 'SELFTEST_PARAMETER_SPLIT_OR_MANIFEST' }
+    if ($manifest.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or $manifest.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or $manifest.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or $manifest.optimizer -ne 'MUON' -or $manifest.optimizer_identity -ne 'muon_aux_adam' -or $manifest.muon_algorithm_identity -ne $MuonAlgorithmIdentity -or $manifest.muon_learning_rate_schedule -ne 'linear_decay' -or $manifest.checkpoint_format -ne 'NPRTCKPTV4' -or $manifest.initial_parameter_hash -ne $Fixed.initial_parameter_hash -or $manifest.aux_adam_beta1 -ne $Fixed.adam_beta1 -or $manifest.aux_adam_beta2 -ne $Fixed.adam_beta2 -or $manifest.aux_adam_epsilon -ne $Fixed.adam_epsilon -or $manifest.aux_adam_weight_decay -ne $Fixed.weight_decay -or $manifest.final_test_opened -ne $false -or $manifest.final_test_used -ne $false -or [string]($manifest.muon_parameter_roles -join ',') -ne [string]($MetadataDerived.muon_parameter_roles -join ',')) { throw 'SELFTEST_PARAMETER_SPLIT_OR_MANIFEST' }
     $knownCheckpoint = Join-Path (Get-TrainingDirectory '0.005') (Get-CheckpointName 1000)
     if (Test-Path -LiteralPath $knownCheckpoint -PathType Leaf) {
       $knownIdentity = Get-CoreCheckpointIdentity $knownCheckpoint

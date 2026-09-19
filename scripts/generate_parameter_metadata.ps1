@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 yuubinnkyoku
 #
-# Generates or validates metadata/transformer_parameter_metadata.json
-# directly from the C++ SSOT (app/src/main/cpp/transformer_parameter_metadata.h).
+# Generates or validates the machine-readable artifacts derived from the C++
+# SSOT (app/src/main/cpp/transformer_parameter_metadata.h):
+#   - metadata/transformer_parameter_metadata.json
+#   - app/src/main/java/com/yuubinnkyoku/phonelm/GeneratedTransformerParameterMetadata.kt
 #
 # Usage:
-#   .\scripts\generate_parameter_metadata.ps1          # generate/update checked-in artifact
+#   .\scripts\generate_parameter_metadata.ps1          # generate/update checked-in artifacts
 #   .\scripts\generate_parameter_metadata.ps1 -Check   # check for staleness (fail if differs)
-#   .\scripts\generate_parameter_metadata.ps1 -SelfTest# run contract self-tests
+#   .\scripts\generate_parameter_metadata.ps1 -SelfTest# run generic contract self-tests
 param(
     [switch]$Check,
     [switch]$SelfTest
@@ -19,7 +21,8 @@ $BuildDir = Join-Path $Root "build\host-tests"
 $Executable = Join-Path $BuildDir "export_transformer_parameter_metadata.exe"
 $Source = Join-Path $Root "host_tests\export_transformer_parameter_metadata.cpp"
 $Header = Join-Path $Root "app\src\main\cpp\transformer_parameter_metadata.h"
-$Artifact = Join-Path $Root "metadata\transformer_parameter_metadata.json"
+$JsonArtifact = Join-Path $Root "metadata\transformer_parameter_metadata.json"
+$KotlinArtifact = Join-Path $Root "app\src\main\java\com\yuubinnkyoku\phonelm\GeneratedTransformerParameterMetadata.kt"
 
 if (-not (Test-Path -LiteralPath $BuildDir)) {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
@@ -57,30 +60,32 @@ if ($SelfTest) {
 }
 
 if ($Check) {
-    if (-not (Test-Path -LiteralPath $Artifact -PathType Leaf)) {
-        throw "STALENESS_CHECK_FAILED: $Artifact does not exist. Run scripts\generate_parameter_metadata.ps1 to generate it."
+    if (-not (Test-Path -LiteralPath $JsonArtifact -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $KotlinArtifact -PathType Leaf)) {
+        throw "STALENESS_CHECK_FAILED: generated artifacts missing. Run scripts\generate_parameter_metadata.ps1 to generate them."
     }
-    & $Executable --check $Artifact
+    & $Executable --check $JsonArtifact $KotlinArtifact
     if ($LASTEXITCODE -ne 0) {
-        throw "STALENESS_CHECK_FAILED: $Artifact is stale compared to transformer_parameter_metadata.h."
+        throw "STALENESS_CHECK_FAILED: generated artifacts are stale compared to transformer_parameter_metadata.h."
     }
     exit 0
 }
 
-# Default: generate / write
-$metadataDir = Split-Path -Parent $Artifact
+# Default: generate / write both artifacts
+$metadataDir = Split-Path -Parent $JsonArtifact
 if (-not (Test-Path -LiteralPath $metadataDir)) {
     New-Item -ItemType Directory -Force -Path $metadataDir | Out-Null
 }
 
-& $Executable --write $Artifact
+& $Executable --write $JsonArtifact $KotlinArtifact
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to write parameter metadata to $Artifact"
+    throw "Failed to write generated metadata artifacts"
 }
 
-# Verify generated artifact passes check
-& $Executable --check $Artifact
+# Verify generated artifacts pass check
+& $Executable --check $JsonArtifact $KotlinArtifact
 if ($LASTEXITCODE -ne 0) {
     throw "Generated parameter metadata verification failed"
 }
-Write-Host "Generated parameter metadata: $Artifact"
+Write-Host "Generated parameter metadata: $JsonArtifact"
+Write-Host "Generated Kotlin metadata: $KotlinArtifact"

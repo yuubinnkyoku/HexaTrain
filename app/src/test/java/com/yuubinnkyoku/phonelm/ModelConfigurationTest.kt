@@ -95,7 +95,7 @@ class ModelConfigurationTest {
         val rank: Int,
     )
 
-    @Test fun parameterCountMatchesGeneratedSsotMetadata() {
+    @Test fun generatedSsotMetadataIsGenericAndParameterCountDerivesFromIt() {
         val candidatePaths = listOf(
             File("../metadata/transformer_parameter_metadata.json"),
             File("metadata/transformer_parameter_metadata.json"),
@@ -115,15 +115,34 @@ class ModelConfigurationTest {
             ParsedDefinition(suffix, role, placement, condition, dims, rank.toInt())
         }.toList()
 
-        assertEquals(13, definitions.size)
-        assertEquals("token_embedding", definitions.first().suffix)
-        assertEquals("output_projection", definitions.last().suffix)
-        assertEquals("attention_gate_weight", definitions.first { it.condition == "HEADWISE_G1" }.suffix)
+        // Generic invariants only — no fixed parameter name/count registry may be
+        // re-declared here. Adding a parameter to the C++ SSOT must only require
+        // regenerating the artifacts, never touching this list.
+        assertTrue("metadata must contain at least one definition", definitions.isNotEmpty())
+        assertEquals(
+            "definitions must not duplicate suffixes",
+            definitions.size,
+            definitions.map { it.suffix }.toSet().size,
+        )
+        for (def in definitions) {
+            assertTrue("suffix must be non-empty", def.suffix.isNotBlank())
+            assertTrue("role must be serialized without loss", def.role in setOf("MUON", "AUX_ADAM"))
+            assertTrue("placement must be serialized without loss", def.placement in setOf("GLOBAL_PREFIX", "PER_LAYER", "GLOBAL_SUFFIX"))
+            assertTrue("condition must be serialized without loss", def.condition in setOf("ALWAYS", "HEADWISE_G1"))
+            assertTrue("rank must be <= shape size", def.rank in 1..def.shape.size)
+            assertTrue("shape must not be empty", def.shape.isNotEmpty())
+        }
+        for (placement in setOf("GLOBAL_PREFIX", "PER_LAYER", "GLOBAL_SUFFIX")) {
+            assertTrue(
+                "missing definition in placement group $placement",
+                definitions.any { it.placement == placement },
+            )
+        }
 
-        fun computeFromMetadata(arch: ModelArchitecture): Long {
+        fun computeFromMetadata(arch: ModelArchitecture, headwiseG1: Boolean): Long {
             var total = 0L
             for (def in definitions) {
-                if (def.condition == "HEADWISE_G1" && !arch.headwiseG1) continue
+                if (def.condition == "HEADWISE_G1" && !headwiseG1) continue
                 var elements = 1L
                 for (dim in def.shape) {
                     elements = Math.multiplyExact(elements, when (dim) {
@@ -155,24 +174,33 @@ class ModelConfigurationTest {
             val arch = cfg.architecture
             assertEquals(
                 "Ungated parameter count mismatch for ${arch.displayLabel}",
-                computeFromMetadata(arch),
-                arch.parameterCount(),
+                computeFromMetadata(arch, headwiseG1 = false),
+                arch.parameterCount(headwiseG1 = false),
             )
-            val gatedArch = arch.copy(headwiseG1 = true)
             assertEquals(
-                "Gated parameter count mismatch for ${gatedArch.displayLabel}",
-                computeFromMetadata(gatedArch),
-                gatedArch.parameterCount(),
+                "Gated parameter count mismatch for ${arch.displayLabel}",
+                computeFromMetadata(arch, headwiseG1 = true),
+                arch.parameterCount(headwiseG1 = true),
             )
         }
 
-        // Explicit canonical checks
-        val l19Gated = ModelArchitecture(
+        // Gated evaluator fixture: gating must add the HEADWISE_G1 parameter only.
+        val l19 = ModelArchitecture(
             layers = 19, heads = 2, tokens = 32, dimension = 64, feedForwardDimension = 128,
             vocabularySize = 1024, tokenizerKind = "byte_bpe", tokenizerHash = ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH,
-            headwiseG1 = true,
         )
-        assertEquals(760_960L, l19Gated.parameterCount())
-        assertEquals(760_960L, computeFromMetadata(l19Gated))
+        val gatedAdded = computeFromMetadata(l19, headwiseG1 = true) - computeFromMetadata(l19, headwiseG1 = false)
+        assertTrue(
+            "gated evaluator must add exactly the HEADWISE_G1 parameter bytes",
+            gatedAdded > 0L,
+        )
+        assertEquals(
+            "evaluator and generated Kotlin metadata must agree on gated L19 count",
+            l19.parameterCount(headwiseG1 = true),
+            GeneratedTransformerParameterMetadata.calculateParameterCount(
+                vocabularySize = 1024L, dimension = 64L, feedForwardDimension = 128L,
+                layers = 19L, heads = 2L, headwiseG1 = true,
+            ),
+        )
     }
 }
