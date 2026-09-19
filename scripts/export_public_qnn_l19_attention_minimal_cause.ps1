@@ -19,12 +19,89 @@ $allowList = @(
     'causal-evidence.csv', 'diagnosis.csv', 'remaining-uncertainties.csv',
     'next-step-candidates.csv', 'manifest.json'
 )
+$historicalManifestGitPath = 'docs/results/qnn-l19-attention-minimal-cause-2026-08/manifest.json'
 
-function Get-NormalizedSha256([string]$Path) {
-    $text = [IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+function Get-TextSha256([string]$Text) {
+    $text = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
     $bytes = [Text.Encoding]::UTF8.GetBytes($text)
     $hash = [Security.Cryptography.SHA256]::HashData($bytes)
     return ([Convert]::ToHexString($hash)).ToLowerInvariant()
+}
+
+function Get-NormalizedSha256([string]$Path) {
+    return Get-TextSha256 ([IO.File]::ReadAllText($Path))
+}
+
+function Invoke-GitReadText([string[]]$Arguments) {
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    try {
+        $process = [Diagnostics.Process]::Start($startInfo)
+    } catch {
+        throw "GIT_PROVENANCE_UNAVAILABLE:$($_.Exception.Message)"
+    }
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "GIT_PROVENANCE_READ_FAILED:$($Arguments -join ' '):$($stderr.Trim())"
+    }
+    return $stdout
+}
+
+function Get-GitObjectSha256([string]$Revision, [string]$Path) {
+    $gitPath = $Path.Replace('\', '/')
+    return Get-TextSha256 (Invoke-GitReadText @('show', "${Revision}:$gitPath"))
+}
+
+function Assert-HistoricalProductionSources(
+    [string]$ManifestPath,
+    [object]$Manifest,
+    [string]$HistoricalManifestPath = $historicalManifestGitPath
+) {
+    $manifestHash = Get-NormalizedSha256 $ManifestPath
+    $historyText = Invoke-GitReadText @('log', '--format=%H', '--', $HistoricalManifestPath)
+    $revisions = @($historyText -split "`r?`n" | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+    if ($revisions.Count -eq 0) {
+        throw "HISTORICAL_MANIFEST_HISTORY_MISSING:$HistoricalManifestPath"
+    }
+
+    foreach ($revision in $revisions) {
+        try {
+            if ((Get-GitObjectSha256 $revision $HistoricalManifestPath) -ne $manifestHash) {
+                continue
+            }
+        } catch {
+            continue
+        }
+
+        $allSourcesMatch = $true
+        foreach ($source in $Manifest.sources) {
+            if ($source.path -notmatch '^[^:]+$' -or $source.path -match '(^|[\\/])\.\.([\\/]|$)' -or
+                $source.sha256_normalized_lf -notmatch '^[0-9a-f]{64}$') {
+                $allSourcesMatch = $false
+                break
+            }
+            try {
+                if ((Get-GitObjectSha256 $revision $source.path) -ne $source.sha256_normalized_lf) {
+                    $allSourcesMatch = $false
+                    break
+                }
+            } catch {
+                $allSourcesMatch = $false
+                break
+            }
+        }
+        if ($allSourcesMatch) {
+            return $revision
+        }
+    }
+    throw 'HISTORICAL_SOURCE_PROVENANCE_NOT_FOUND'
 }
 
 function Write-Csv([object[]]$Rows, [string]$Path) {
@@ -112,12 +189,7 @@ function Assert-TrackedBundle([string]$Output) {
             throw "TRACKED_FILE_HASH_MISMATCH:$($entry.path)"
         }
     }
-    foreach ($entry in $manifest.sources) {
-        $path = Join-Path $repoRoot $entry.path
-        if ((Get-NormalizedSha256 $path) -ne $entry.sha256_normalized_lf) {
-            throw "PRODUCTION_SOURCE_HASH_MISMATCH:$($entry.path)"
-        }
-    }
+    $null = Assert-HistoricalProductionSources $manifestPath $manifest
     foreach ($entry in $manifest.private_aggregates) {
         if ($entry.sha256_normalized_lf -notmatch '^[0-9a-f]{64}$') {
             throw "PRIVATE_AGGREGATE_HASH_INVALID:$($entry.aggregate)"
@@ -213,8 +285,9 @@ function Assert-TrackedBundle([string]$Output) {
     return $manifest
 }
 
-function Export-Bundle([string]$Private, [string]$Output, [string]$Commit) {
+function Export-Bundle([string]$Private, [string]$Output, [string]$Commit, [string]$SourceIdentityCommit = '') {
     Assert-PrivateInputs $Private
+    if (-not $SourceIdentityCommit) { $SourceIdentityCommit = $Commit }
     New-Item -ItemType Directory -Force -Path $Output | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $Output 'README.md') -PathType Leaf)) {
         throw 'README_MUST_EXIST_BEFORE_EXPORT'
@@ -352,7 +425,7 @@ function Export-Bundle([string]$Private, [string]$Output, [string]$Commit) {
         'scripts/export_public_qnn_l19_attention_minimal_cause.ps1'
     )
     $sourceEntries = foreach ($relative in $sourceFiles) {
-        [ordered]@{path=$relative;sha256_normalized_lf=(Get-NormalizedSha256 (Join-Path $repoRoot $relative))}
+        [ordered]@{path=$relative;sha256_normalized_lf=(Get-GitObjectSha256 $SourceIdentityCommit $relative)}
     }
     $privateFiles = @(
         'cycle-001/measurement-audit.csv','cycle-001/evaluation-interventions.csv',
@@ -393,11 +466,13 @@ $resolvedOutput = Join-Path $repoRoot $OutputRoot
 if ($SelfTest) {
     $trackedManifest = Assert-TrackedBundle $resolvedOutput
     if (Test-PrivateInputs $resolvedPrivate) {
+        $historicalSourceRevision = Assert-HistoricalProductionSources `
+            (Join-Path $resolvedOutput 'manifest.json') $trackedManifest
         $temp = Join-Path ([IO.Path]::GetTempPath()) ("phonelm-attention-minimal-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $temp | Out-Null
         try {
             Copy-Item -LiteralPath (Join-Path $resolvedOutput 'README.md') -Destination (Join-Path $temp 'README.md')
-            Export-Bundle $resolvedPrivate $temp $trackedManifest.source_commit
+            Export-Bundle $resolvedPrivate $temp $trackedManifest.source_commit $historicalSourceRevision
             foreach ($name in $allowList) {
                 if ((Get-NormalizedSha256 (Join-Path $temp $name)) -ne
                     (Get-NormalizedSha256 (Join-Path $resolvedOutput $name))) {
@@ -410,6 +485,29 @@ if ($SelfTest) {
     } else {
         Write-Host 'ATTENTION_MINIMAL_CAUSE_PRIVATE_REGEN_SKIPPED: tracked hashes, source hashes, schemas, controls, and safety contract verified'
     }
+
+    $tamperedRoot = Join-Path $repoRoot 'build\reports\qnn-l19-attention-minimal-cause-provenance-tamper-selftest'
+    if (Test-Path -LiteralPath $tamperedRoot) { Remove-Item -Recurse -Force -LiteralPath $tamperedRoot }
+    Copy-Item -Recurse -LiteralPath $resolvedOutput -Destination $tamperedRoot
+    $tamperedManifestPath = Join-Path $tamperedRoot 'manifest.json'
+    $tamperedManifest = Get-Content -Raw -LiteralPath $tamperedManifestPath | ConvertFrom-Json
+    $tamperedManifest.sources[0].sha256_normalized_lf = '0' * 64
+    $tamperedManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tamperedManifestPath -Encoding utf8
+    $tamperRejected = $false
+    try { Assert-TrackedBundle $tamperedRoot } catch {
+        $tamperRejected = $_.Exception.Message -eq 'HISTORICAL_SOURCE_PROVENANCE_NOT_FOUND'
+    }
+    if (-not $tamperRejected) { throw 'HISTORICAL_SOURCE_TAMPER_NEGATIVE_TEST_INEFFECTIVE' }
+    Remove-Item -Recurse -Force -LiteralPath $tamperedRoot
+
+    $missingProvenanceRejected = $false
+    try {
+        $null = Assert-HistoricalProductionSources (Join-Path $resolvedOutput 'manifest.json') $trackedManifest `
+            'docs/results/missing-historical-evidence/manifest.json'
+    } catch {
+        $missingProvenanceRejected = $_.Exception.Message -like 'HISTORICAL_MANIFEST_HISTORY_MISSING:*'
+    }
+    if (-not $missingProvenanceRejected) { throw 'HISTORICAL_PROVENANCE_MISSING_NEGATIVE_TEST_INEFFECTIVE' }
     Write-Host 'ATTENTION_MINIMAL_CAUSE_EXPORT_SELF_TEST_PASS'
 } else {
     Export-Bundle $resolvedPrivate $resolvedOutput $SourceCommit
