@@ -7573,6 +7573,17 @@ std::string nicopediaMuonHybridTraining(
       checkpointIoUs;
   const double unclassifiedHostUs = std::max(
       0.0, seconds * 1000000.0 - explicitlyMeasuredExclusiveUs);
+  tiny_lm::ParameterDimensions reportDimensions{
+      static_cast<std::uint64_t>(config.vocabularySize),
+      static_cast<std::uint64_t>(config.dimension),
+      static_cast<std::uint64_t>(config.feedForwardDimension),
+      static_cast<std::uint64_t>(config.numLayers),
+      static_cast<std::uint64_t>(config.numHeads),
+      gated};
+  tiny_lm::ParameterRoleCounts reportRoleCounts{};
+  if (!tiny_lm::checkedParameterRoleCounts(reportDimensions, &reportRoleCounts))
+    return failure("nicopedia_muon_role_counts", "PARAMETER_ROLE_COUNTS_UNAVAILABLE",
+                   runtime);
   std::ostringstream report;
   report << std::setprecision(10) << "NICOPEDIA_HTP\ntest=nicopedia_muon_hybrid_training\nstatus="
          << (interrupted ? "CANCELLED" : (ok ? "SUCCESS" : "FAILED"))
@@ -7603,8 +7614,9 @@ std::string nicopediaMuonHybridTraining(
          << "\nmuon_momentum=0.95\nmuon_nesterov=true\nmuon_ns_steps=5"
          << "\nattention_gate=" << tiny_lm::attentionGateName(config.attentionGate)
          << "\nparameter_count=" << tiny_lm::parameterElementCount(current)
-         << "\nmuon_matrix_count=114\nmuon_parameter_count=622592"
-         << "\naux_adam_parameter_count=" << (gated ? 138368 : 135936)
+         << "\nmuon_matrix_count=" << reportRoleCounts.muonMatrixCount
+         << "\nmuon_parameter_count=" << reportRoleCounts.muonParameterCount
+         << "\naux_adam_parameter_count=" << reportRoleCounts.auxiliaryAdamParameterCount
          << "\nfirst_loss=" << firstLoss
          << "\nlast_loss=" << lastLoss
          << "\nforward_backward_backend=HTP\noptimizer_muon_backend="

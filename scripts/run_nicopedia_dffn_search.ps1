@@ -67,21 +67,29 @@ $candidates = @(
 
 function Get-ModelEstimate {
     param([Parameter(Mandatory = $true)]$Candidate)
-    # Exact flattened parameter count: tied input/output vocabulary matrices
-    # plus, per layer, Q/K/V/O, four layer-norm vectors and two FFN matrices.
+    # Parameter counts come from the generated SSOT artifact via
+    # Get-PhoneLmParameterMetadataDerivation.  This is a current consumer for
+    # new planning rows; historical capacity anchors remain fixed in self-tests.
     # Optimizer m/v and one gradient buffer are extra working-set estimates;
     # checkpoint payload stores parameters+m+v.
-    $d = [int64]$Candidate.dimension; $f = [int64]$Candidate.feed_forward_dimension
-    $v = [int64]$fixed.vocabulary; $t = [int64]$fixed.tokens; $l = [int64]$fixed.layers
-    $embedding = 2 * $v * $d
-    $perLayer = 4 * $d * $d + 2 * $d * $f + 4 * $d
-    $parameters = $embedding + $l * $perLayer
+    $derived = Get-PhoneLmParameterMetadataDerivation `
+        -Vocabulary ([uint64]$fixed.vocabulary) `
+        -Dimension ([uint64]$Candidate.dimension) `
+        -FeedForwardDimension ([uint64]$Candidate.feed_forward_dimension) `
+        -Layers ([uint64]$fixed.layers) `
+        -Heads ([uint64]$fixed.heads) `
+        -HeadwiseG1 $false
+    $parameters = [int64]$derived.parameter_count
+    $d = [int64]$Candidate.dimension
+    $f = [int64]$Candidate.feed_forward_dimension
+    $v = [int64]$fixed.vocabulary
+    $t = [int64]$fixed.tokens
     [pscustomobject][ordered]@{
         parameter_count = $parameters
         parameter_bytes_fp32 = 4 * $parameters
         checkpoint_payload_estimate_bytes = 12 * $parameters
         optimizer_working_set_estimate_bytes = 16 * $parameters
-        activation_estimate_bytes_per_batch = 4 * $fixed.batch_size * $fixed.tokens * ($d * 14 + $f * 4 + $v * 3)
+        activation_estimate_bytes_per_batch = 4 * $fixed.batch_size * $t * ($d * 14 + $f * 4 + $v * 3)
     }
 }
 
