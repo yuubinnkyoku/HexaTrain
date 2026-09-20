@@ -443,12 +443,33 @@ function Get-PhoneLmKeyValueMap {
 # requires regenerating the artifact.  Returns both the requested (headwiseG1)
 # total and the always-ungated total so gated deltas can be derived exactly.
 #
+# Fail-closed vocabulary: unknown schema_version / condition / placement / role
+# / dimension values are rejected.  Unknown metadata must never fall back to an
+# existing semantic (ALWAYS / PER_LAYER / global / known role).
+#
 # Manifest compatibility: muon_parameter_roles / aux_adam_parameter_roles keep
 # the original Muon-pilot semantic labels (protocol vocabulary, not a live
 # parameter table).  SSOT-derived suffix lists are exposed under the explicit
 # muon_parameter_suffixes / aux_adam_parameter_suffixes fields instead.
+$PhoneLmParameterMetadataSupportedSchemaVersion = 1
 $PhoneLmMuonParameterRolesCompatibility = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
 $PhoneLmAuxAdamParameterRolesCompatibility = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
+function Assert-PhoneLmParameterMetadataSchemaVersion {
+    param([Parameter(Mandatory = $true)]$Raw)
+    $hasSchema = $false
+    $schemaVersion = $null
+    if ($Raw -and $Raw.PSObject -and $Raw.PSObject.Properties['schema_version']) {
+        $hasSchema = $true
+        $schemaVersion = $Raw.schema_version
+    }
+    if (-not $hasSchema -or $null -eq $schemaVersion -or [string]$schemaVersion -eq '') {
+        throw 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:'
+    }
+    $text = [string]$schemaVersion
+    if ($text -notmatch '^\d+$' -or [int64]$text -ne $PhoneLmParameterMetadataSupportedSchemaVersion) {
+        throw "PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:$text"
+    }
+}
 function Get-PhoneLmParameterMetadataDerivation {
     param(
         [Parameter(Mandatory = $true)][uint64]$Vocabulary,
@@ -466,6 +487,7 @@ function Get-PhoneLmParameterMetadataDerivation {
         throw "PARAMETER_METADATA_JSON_MISSING: $MetadataPath (run scripts\generate_parameter_metadata.ps1)"
     }
     $raw = Get-Content -LiteralPath $MetadataPath -Raw | ConvertFrom-Json
+    Assert-PhoneLmParameterMetadataSchemaVersion -Raw $raw
     $defs = @($raw.parameter_definitions)
     if ($defs.Count -eq 0) { throw 'PARAMETER_METADATA_EMPTY' }
     $dimensionExtent = @{
@@ -482,23 +504,37 @@ function Get-PhoneLmParameterMetadataDerivation {
     $auxElements = [uint64]0
     $muonMatrices = [uint64]0
     foreach ($def in $defs) {
-        $gated = ($def.condition -eq 'HEADWISE_G1')
+        $condition = [string]$def.condition
+        $gated = $false
+        if ($condition -eq 'HEADWISE_G1') {
+            $gated = $true
+        } elseif ($condition -ne 'ALWAYS') {
+            throw "PARAMETER_METADATA_CONDITION_UNKNOWN:$($def.condition)"
+        }
         if ($gated -and -not $HeadwiseG1) { continue }
         $elements = [uint64]1
         foreach ($dim in $def.shape) {
-            $extent = $dimensionExtent[$dim]
+            $extent = $null
+            if ($null -ne $dim -and $dimensionExtent.ContainsKey([string]$dim)) {
+                $extent = $dimensionExtent[[string]$dim]
+            }
             if ($null -eq $extent -or $extent -eq 0) { throw "PARAMETER_METADATA_DIMENSION_UNKNOWN:$dim" }
             $elements = $elements * $extent
         }
-        $instances = if ($def.placement -eq 'PER_LAYER') { $Layers } else { [uint64]1 }
+        $placement = [string]$def.placement
+        $instances = switch ($placement) {
+            'PER_LAYER' { $Layers }
+            'GLOBAL_PREFIX' { [uint64]1 }
+            'GLOBAL_SUFFIX' { [uint64]1 }
+            default { throw "PARAMETER_METADATA_PLACEMENT_UNKNOWN:$($def.placement)" }
+        }
         $count = $elements * $instances
         $total += $count
         if (-not $gated) { $totalUngated += $count }
         if ($def.role -eq 'MUON') {
             $muonSuffixes.Add([string]$def.suffix)
             $muonElements += $count
-            $matrixInstances = if ($def.placement -eq 'PER_LAYER') { $Layers } else { [uint64]1 }
-            $muonMatrices += $matrixInstances
+            $muonMatrices += $instances
         } elseif ($def.role -eq 'AUX_ADAM') {
             $auxSuffixes.Add([string]$def.suffix)
             $auxElements += $count
@@ -519,6 +555,94 @@ function Get-PhoneLmParameterMetadataDerivation {
         muon_matrix_count = $muonMatrices
         muon_parameter_count = $muonElements
         aux_adam_parameter_count = $auxElements
+    }
+}
+function Test-PhoneLmParameterMetadataDerivationFailClosed {
+    param(
+        [Parameter(Mandatory = $true)][string]$CheckedInMetadataPath
+    )
+    function Write-TempMetadata([string]$Directory, $Payload) {
+        $path = Join-Path $Directory 'transformer_parameter_metadata.json'
+        $Payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8
+        return $path
+    }
+    function Assert-DerivationRejects([string]$Path, [string]$ExpectedPrefix, [string]$Label) {
+        $rejected = $false
+        try {
+            [void](Get-PhoneLmParameterMetadataDerivation `
+                -Vocabulary 256 -Dimension 16 -FeedForwardDimension 32 -Layers 19 -Heads 2 `
+                -HeadwiseG1 $false -MetadataPath $Path)
+        } catch {
+            $rejected = ([string]$_.Exception.Message).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)
+        }
+        if (-not $rejected) { throw "SELFTEST_PARAMETER_METADATA_FAIL_CLOSED:$Label" }
+    }
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ('phonelm-parameter-metadata-selftest-' + [guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($temp) | Out-Null
+    try {
+        $valid = Get-PhoneLmParameterMetadataDerivation `
+            -Vocabulary 1024 -Dimension 64 -FeedForwardDimension 128 -Layers 19 -Heads 2 `
+            -HeadwiseG1 $false -MetadataPath $CheckedInMetadataPath
+        if ([int64]$valid.parameter_count -ne 758528 -or
+            [int64]$valid.parameter_count_ungated -ne 758528 -or
+            [int64]$valid.muon_parameter_count -ne 622592 -or
+            [int64]$valid.aux_adam_parameter_count -ne 135936 -or
+            [int64]$valid.muon_matrix_count -ne 114 -or
+            [string]($valid.muon_parameter_suffixes -join ',') -ne 'wq,wk,wv,wo,ffn_w1,ffn_w2') {
+            throw 'SELFTEST_PARAMETER_METADATA_VALID_BASELINE'
+        }
+        function New-CommonMetadataDefinition {
+            param(
+                [string]$Condition = 'ALWAYS',
+                [string]$Placement = 'GLOBAL_PREFIX',
+                [string]$Role = 'AUX_ADAM',
+                $Shape = @('VOCABULARY', 'MODEL')
+            )
+            return @{
+                suffix = 'token_embedding'
+                role = $Role
+                placement = $Placement
+                condition = $Condition
+                shape = $Shape
+                rank = 2
+                fan_out_axis = -1
+                fan_in_axis = -1
+            }
+        }
+        $cases = @(
+            @{ Name = 'unknown-condition'; Expected = 'PARAMETER_METADATA_CONDITION_UNKNOWN:'; Definition = (New-CommonMetadataDefinition -Condition 'SOMETIMES') },
+            @{ Name = 'unknown-placement'; Expected = 'PARAMETER_METADATA_PLACEMENT_UNKNOWN:'; Definition = (New-CommonMetadataDefinition -Placement 'EVERYWHERE') },
+            @{ Name = 'unknown-role'; Expected = 'PARAMETER_METADATA_ROLE_UNKNOWN:'; Definition = (New-CommonMetadataDefinition -Role 'ADAM') },
+            @{ Name = 'unknown-dimension'; Expected = 'PARAMETER_METADATA_DIMENSION_UNKNOWN:'; Definition = (New-CommonMetadataDefinition -Shape @('CHANNELS')) },
+            @{ Name = 'missing-schema-version'; Expected = 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:'; Definition = (New-CommonMetadataDefinition); Schema = $null },
+            @{ Name = 'unsupported-schema-version'; Expected = 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:2'; Definition = (New-CommonMetadataDefinition); Schema = 2 }
+        )
+        foreach ($case in $cases) {
+            $caseDir = Join-Path $temp $case.Name
+            [IO.Directory]::CreateDirectory($caseDir) | Out-Null
+            $schema = 1
+            if ($case.ContainsKey('Schema')) { $schema = $case.Schema }
+            $payload = if ($null -eq $schema) {
+                [ordered]@{ parameter_definitions = @($case.Definition) }
+            } else {
+                [ordered]@{ schema_version = $schema; parameter_definitions = @($case.Definition) }
+            }
+            Assert-DerivationRejects (Write-TempMetadata $caseDir $payload) $case.Expected $case.Name
+        }
+        $validTemp = Join-Path $temp 'valid'
+        [IO.Directory]::CreateDirectory($validTemp) | Out-Null
+        $validPath = Write-TempMetadata $validTemp ([ordered]@{
+            schema_version = 1
+            parameter_definitions = @((New-CommonMetadataDefinition))
+        })
+        $synthetic = Get-PhoneLmParameterMetadataDerivation `
+            -Vocabulary 256 -Dimension 16 -FeedForwardDimension 32 -Layers 19 -Heads 2 `
+            -HeadwiseG1 $false -MetadataPath $validPath
+        if ([int64]$synthetic.parameter_count -ne (256 * 16)) {
+            throw 'SELFTEST_PARAMETER_METADATA_VALID_SYNTHETIC'
+        }
+    } finally {
+        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

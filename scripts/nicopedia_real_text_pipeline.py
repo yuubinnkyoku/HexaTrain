@@ -254,6 +254,17 @@ def inventory(source_root: Path, private_root: Path) -> dict[str, object]:
     return report
 
 
+PARAMETER_METADATA_SUPPORTED_SCHEMA_VERSION = 1
+PARAMETER_METADATA_SUPPORTED_CONDITIONS = frozenset({"ALWAYS", "HEADWISE_G1"})
+PARAMETER_METADATA_SUPPORTED_PLACEMENTS = frozenset(
+    {"GLOBAL_PREFIX", "PER_LAYER", "GLOBAL_SUFFIX"}
+)
+PARAMETER_METADATA_SUPPORTED_ROLES = frozenset({"MUON", "AUX_ADAM"})
+PARAMETER_METADATA_SUPPORTED_DIMENSIONS = frozenset(
+    {"VOCABULARY", "MODEL", "FEED_FORWARD", "HEADS"}
+)
+
+
 def load_parameter_metadata(metadata_path: Path | None = None) -> list[dict[str, object]]:
     if metadata_path is None:
         metadata_path = (
@@ -267,6 +278,15 @@ def load_parameter_metadata(metadata_path: Path | None = None) -> list[dict[str,
             "(run scripts/generate_parameter_metadata.ps1)"
         )
     raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if "schema_version" not in raw or raw["schema_version"] is None:
+        raise ValueError("PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:")
+    schema_version = raw["schema_version"]
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != PARAMETER_METADATA_SUPPORTED_SCHEMA_VERSION
+    ):
+        raise ValueError(f"PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:{schema_version}")
     definitions = raw.get("parameter_definitions") or []
     if not definitions:
         raise ValueError("PARAMETER_METADATA_EMPTY")
@@ -287,6 +307,10 @@ def parameter_count(
     This intentionally does not restate the closed-form architecture formula.
     Frozen historical/experiment anchors live in self-tests and research
     manifests, not in this planning path.
+
+    Fail-closed: unknown schema_version / condition / placement / role /
+    dimension values are rejected instead of being coerced to an existing
+    semantic.
     """
     definitions = load_parameter_metadata(metadata_path)
     extents = {
@@ -297,15 +321,33 @@ def parameter_count(
     }
     total = 0
     for definition in definitions:
-        if definition.get("condition") == "HEADWISE_G1" and not headwise_g1:
-            continue
+        condition = definition.get("condition")
+        if condition == "HEADWISE_G1":
+            if not headwise_g1:
+                continue
+        elif condition != "ALWAYS":
+            raise ValueError(f"PARAMETER_METADATA_CONDITION_UNKNOWN:{condition}")
+        role = definition.get("role")
+        if role not in PARAMETER_METADATA_SUPPORTED_ROLES:
+            raise ValueError(f"PARAMETER_METADATA_ROLE_UNKNOWN:{role}")
+        placement = definition.get("placement")
+        if placement not in PARAMETER_METADATA_SUPPORTED_PLACEMENTS:
+            raise ValueError(f"PARAMETER_METADATA_PLACEMENT_UNKNOWN:{placement}")
+        if placement == "PER_LAYER":
+            instances = layers
+        else:
+            instances = 1
         elements = 1
-        for dim in definition["shape"]:
+        shape = definition.get("shape")
+        if not isinstance(shape, (list, tuple)):
+            raise ValueError(f"PARAMETER_METADATA_DIMENSION_UNKNOWN:{shape}")
+        for dim in shape:
+            if dim not in PARAMETER_METADATA_SUPPORTED_DIMENSIONS:
+                raise ValueError(f"PARAMETER_METADATA_DIMENSION_UNKNOWN:{dim}")
             extent = extents[dim]
             if not extent:
                 raise ValueError(f"PARAMETER_METADATA_DIMENSION_UNKNOWN:{dim}")
             elements *= int(extent)
-        instances = layers if definition.get("placement") == "PER_LAYER" else 1
         total += elements * int(instances)
     return total
 
@@ -874,6 +916,32 @@ def verify_private_evidence(private_root: Path) -> None:
     print("private_evidence_verification=PASS caches=3 final_test_cache=0")
 
 
+def _assert_parameter_metadata_rejects(
+    payload: dict[str, object],
+    expected_prefix: str,
+    *,
+    parameter_count_call: bool = False,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="phonelm-parameter-metadata-selftest-") as temporary:
+        path = Path(temporary) / "transformer_parameter_metadata.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            if parameter_count_call:
+                parameter_count(256, 16, 32, 19, metadata_path=path)
+            else:
+                load_parameter_metadata(path)
+        except (ValueError, FileNotFoundError) as error:
+            if str(error).startswith(expected_prefix):
+                return
+            raise AssertionError(
+                f"SELFTEST_PARAMETER_METADATA_FAIL_CLOSED: got {error!r}, "
+                f"expected prefix {expected_prefix!r}"
+            ) from error
+        raise AssertionError(
+            f"SELFTEST_PARAMETER_METADATA_FAIL_CLOSED: no rejection for {expected_prefix!r}"
+        )
+
+
 def self_test() -> None:
     set_csv_limit()
     bpe_self_test()
@@ -888,11 +956,82 @@ def self_test() -> None:
     assert parameter_count(256, 16, 32, 19) > 0
     # Historical research anchor for the DFFN search/probe (V256/D16/FFN32/L19).
     assert parameter_count(256, 16, 32, 19) == 48320
+    assert parameter_count(1024, 64, 128, 19) == 758528
     # Structural: gated evaluator adds exactly the HEADWISE_G1 instances when
     # requested; ungated planning must not silently include them.
     ungated = parameter_count(256, 16, 32, 19, headwise_g1=False)
     gated = parameter_count(256, 16, 32, 19, headwise_g1=True)
     assert gated > ungated
+    assert gated == 48928
+    base_definition: dict[str, object] = {
+        "suffix": "token_embedding",
+        "role": "AUX_ADAM",
+        "placement": "GLOBAL_PREFIX",
+        "condition": "ALWAYS",
+        "shape": ["VOCABULARY", "MODEL"],
+        "rank": 2,
+        "fan_out_axis": -1,
+        "fan_in_axis": -1,
+    }
+    # Fail-closed vocabulary: unknown values must not fall back to known
+    # semantics; missing/unsupported schema_version must be rejected.
+    _assert_parameter_metadata_rejects(
+        {
+            "schema_version": 1,
+            "parameter_definitions": [
+                {**base_definition, "condition": "SOMETIMES"}
+            ],
+        },
+        "PARAMETER_METADATA_CONDITION_UNKNOWN:",
+        parameter_count_call=True,
+    )
+    _assert_parameter_metadata_rejects(
+        {
+            "schema_version": 1,
+            "parameter_definitions": [
+                {**base_definition, "placement": "EVERYWHERE"}
+            ],
+        },
+        "PARAMETER_METADATA_PLACEMENT_UNKNOWN:",
+        parameter_count_call=True,
+    )
+    _assert_parameter_metadata_rejects(
+        {
+            "schema_version": 1,
+            "parameter_definitions": [{**base_definition, "role": "ADAM"}],
+        },
+        "PARAMETER_METADATA_ROLE_UNKNOWN:",
+        parameter_count_call=True,
+    )
+    _assert_parameter_metadata_rejects(
+        {
+            "schema_version": 1,
+            "parameter_definitions": [
+                {**base_definition, "shape": ["CHANNELS"]}
+            ],
+        },
+        "PARAMETER_METADATA_DIMENSION_UNKNOWN:",
+        parameter_count_call=True,
+    )
+    _assert_parameter_metadata_rejects(
+        {"parameter_definitions": [base_definition]},
+        "PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:",
+    )
+    _assert_parameter_metadata_rejects(
+        {
+            "schema_version": 2,
+            "parameter_definitions": [base_definition],
+        },
+        "PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:",
+    )
+    valid_synthetic = parameter_count(
+        256,
+        16,
+        32,
+        19,
+        metadata_path=None,
+    )
+    assert valid_synthetic == 48320
     assert clean_text("Ａ\r\n<b>日&amp;本</b>\x01") == "A\n日&本"
     assert clean_text("<script>secret</script><p>可視</p>") == "可視"
     assert split_name("123") == split_name("123")

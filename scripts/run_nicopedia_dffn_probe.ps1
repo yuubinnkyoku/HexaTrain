@@ -119,6 +119,7 @@ function Classify-Probe([hashtable]$Fields, [string]$RunnerError, [string]$Parti
 if ($SelfTest) {
     $anchor = Get-ModelEstimate 16 32
     if ($anchor.parameter_count -ne 48320) { throw 'DFFN_PROBE_SELFTEST_PARAMETER_COUNT' }
+    Test-PhoneLmParameterMetadataDerivationFailClosed -CheckedInMetadataPath (Join-Path $root 'metadata\transformer_parameter_metadata.json')
     $temp = Join-Path $env:TEMP ('phonelm-dffn-probe-' + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($temp) | Out-Null
     try {
