@@ -2,8 +2,9 @@
 // Copyright 2026 yuubinnkyoku
 // Host tests for the direct-seed contract, depth-pair initialization,
 // stability modes, validation selection and checkpoint codecs.
+// qnn_first_nonfinite diagnostics codec coverage lives in
+// host_tests/qnn_first_nonfinite_diagnostics_test.cpp.
 #include "depth_quality_lib.h"
-#include "qnn/qnn_first_nonfinite_diagnostics.h"
 #include "seed_selection.h"
 #include "validation_checkpoint.h"
 #include <cassert>
@@ -14,7 +15,6 @@
 
 namespace dq = phonelm::depth_quality;
 namespace ar = phonelm::autoregressive_validation;
-namespace ff = phonelm::qnn::first_nonfinite;
 namespace vs = phonelm::validation_selection;
 namespace vc = phonelm::validation_checkpoint;
 using phonelm::tiny_lm::Config;
@@ -518,70 +518,6 @@ static void testFirstDivergenceSelection() {
   assert(dq::firstTrajectoryDivergence(a, c) == -1);  // below threshold
 }
 
-static ff::Checkpoint makeCheckpoint(const Config& config, uint32_t seed,
-                                     uint32_t step) {
-  const auto params = phonelm::tiny_lm::initialParameters(config, seed);
-  ff::Checkpoint result;
-  result.config = {config.tokens, config.vocabularySize, config.dimension,
-                   config.feedForwardDimension, config.numLayers,
-                   config.numHeads, config.epsilon, 0.003f, .9f, .999f, 1e-8f,
-                   0.0f, 0, 0, 320};
-  result.seed = seed;
-  result.completedStep = step;
-  result.nextOptimizerStep = step + 1;
-  result.deterministicState = "fixed_language_batch=" + std::to_string(step % 4);
-  for (const auto& e : phonelm::tiny_lm::parameterRegistry(params)) {
-    result.registry.push_back({e.name, {uint32_t(e.values->size())}});
-    result.parameters.insert(result.parameters.end(), e.values->begin(),
-                             e.values->end());
-  }
-  result.adamM.assign(result.parameters.size(), 0.0f);
-  result.adamV.assign(result.parameters.size(), 0.0f);
-  result.input.assign(size_t(config.tokens) * config.vocabularySize, 0.0f);
-  result.target = result.input;
-  result.input[0] = 1.0f;
-  result.target[config.vocabularySize + 1] = 1.0f;
-  ff::finalizeCheckpoint(&result);
-  return result;
-}
-
-static void testCheckpointCodecV2() {
-  const auto config = smallConfig(2, 2);
-  const auto checkpoint = makeCheckpoint(config, 2, 32);
-  std::vector<std::uint8_t> bytes;
-  std::string error;
-  assert(ff::encodeCheckpoint(checkpoint, &bytes, &error));
-  ff::Checkpoint decoded;
-  assert(ff::decodeCheckpoint(bytes, &decoded, &error));
-  assert(decoded.config.trainingStabilityMode == 0);
-  assert(decoded.config.depthPairInitMode == 0);
-  assert(decoded.config.totalSteps == 320);
-  assert(decoded.stateHash == checkpoint.stateHash);
-
-  // seeded checkpoint carries a different hash; same-seed roundtrip passes
-  const auto otherSeed = makeCheckpoint(config, 3, 32);
-  assert(otherSeed.stateHash != checkpoint.stateHash);
-
-  // registry mismatch (different depth) rejected fail-closed
-  const auto deep = makeCheckpoint(smallConfig(3, 2), 2, 32);
-  ff::Checkpoint out;
-  assert(!ff::decodeCheckpoint(bytes, &out, &error, &deep.config, &deep.registry));
-
-  // stability mode out of range rejected fail-closed
-  auto badMode = checkpoint;
-  badMode.config.trainingStabilityMode = 7;
-  ff::finalizeCheckpoint(&badMode);
-  std::vector<std::uint8_t> badBytes;
-  assert(!ff::encodeCheckpoint(badMode, &badBytes, &error));
-
-  // checkpoint version 1 payload rejected fail-closed
-  std::vector<std::uint8_t> downgraded = bytes;
-  // version is the uint32 after the 4-byte magic header
-  std::memcpy(downgraded.data() + 4, "\x01\x00\x00\x00", 4);
-  ff::Checkpoint any;
-  assert(!ff::decodeCheckpoint(downgraded, &any, &error));
-}
-
 static void testValidationCheckpointCodec() {
   vc::Checkpoint checkpoint;
   checkpoint.configHash = "config-v1";
@@ -659,8 +595,6 @@ int main() {
   std::puts("trajectory_classification=PASS");
   testFirstDivergenceSelection();
   std::puts("first_divergence_selection=PASS");
-  testCheckpointCodecV2();
-  std::puts("checkpoint_codec_v2=PASS");
   testValidationCheckpointCodec();
   std::puts("validation_checkpoint_codec=PASS");
   std::puts("depth_quality_tests=PASS");
