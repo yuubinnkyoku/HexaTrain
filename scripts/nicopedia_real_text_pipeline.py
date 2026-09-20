@@ -254,8 +254,60 @@ def inventory(source_root: Path, private_root: Path) -> dict[str, object]:
     return report
 
 
-def parameter_count(vocabulary: int, dimension: int, ffn: int, layers: int) -> int:
-    return 2 * vocabulary * dimension + layers * (4 * dimension * dimension + 4 * dimension + 2 * dimension * ffn)
+def load_parameter_metadata(metadata_path: Path | None = None) -> list[dict[str, object]]:
+    if metadata_path is None:
+        metadata_path = (
+            Path(__file__).resolve().parent.parent
+            / "metadata"
+            / "transformer_parameter_metadata.json"
+        )
+    if not metadata_path.is_file():
+        raise FileNotFoundError(
+            f"PARAMETER_METADATA_JSON_MISSING: {metadata_path} "
+            "(run scripts/generate_parameter_metadata.ps1)"
+        )
+    raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    definitions = raw.get("parameter_definitions") or []
+    if not definitions:
+        raise ValueError("PARAMETER_METADATA_EMPTY")
+    return list(definitions)
+
+
+def parameter_count(
+    vocabulary: int,
+    dimension: int,
+    ffn: int,
+    layers: int,
+    heads: int = 2,
+    headwise_g1: bool = False,
+    metadata_path: Path | None = None,
+) -> int:
+    """Current consumer for planning counts: derive from checked-in SSOT JSON.
+
+    This intentionally does not restate the closed-form architecture formula.
+    Frozen historical/experiment anchors live in self-tests and research
+    manifests, not in this planning path.
+    """
+    definitions = load_parameter_metadata(metadata_path)
+    extents = {
+        "VOCABULARY": vocabulary,
+        "MODEL": dimension,
+        "FEED_FORWARD": ffn,
+        "HEADS": heads,
+    }
+    total = 0
+    for definition in definitions:
+        if definition.get("condition") == "HEADWISE_G1" and not headwise_g1:
+            continue
+        elements = 1
+        for dim in definition["shape"]:
+            extent = extents[dim]
+            if not extent:
+                raise ValueError(f"PARAMETER_METADATA_DIMENSION_UNKNOWN:{dim}")
+            elements *= int(extent)
+        instances = layers if definition.get("placement") == "PER_LAYER" else 1
+        total += elements * int(instances)
+    return total
 
 
 def write_byte_cache(path: Path, articles: list[tuple[int, int, str]], context: int) -> dict[str, object]:
@@ -825,6 +877,22 @@ def verify_private_evidence(private_root: Path) -> None:
 def self_test() -> None:
     set_csv_limit()
     bpe_self_test()
+    # Current planning consumer must derive counts from the checked-in SSOT
+    # artifact, not from a closed-form architecture formula.  The historical
+    # D16/F32/V256/L19 research anchor stays fixed as an experiment fixture.
+    definitions = load_parameter_metadata()
+    assert definitions, "parameter metadata definitions must be non-empty"
+    assert parameter_count(256, 16, 32, 19) == parameter_count(
+        256, 16, 32, 19, heads=2, metadata_path=None
+    )
+    assert parameter_count(256, 16, 32, 19) > 0
+    # Historical research anchor for the DFFN search/probe (V256/D16/FFN32/L19).
+    assert parameter_count(256, 16, 32, 19) == 48320
+    # Structural: gated evaluator adds exactly the HEADWISE_G1 instances when
+    # requested; ungated planning must not silently include them.
+    ungated = parameter_count(256, 16, 32, 19, headwise_g1=False)
+    gated = parameter_count(256, 16, 32, 19, headwise_g1=True)
+    assert gated > ungated
     assert clean_text("Ａ\r\n<b>日&amp;本</b>\x01") == "A\n日&本"
     assert clean_text("<script>secret</script><p>可視</p>") == "可視"
     assert split_name("123") == split_name("123")

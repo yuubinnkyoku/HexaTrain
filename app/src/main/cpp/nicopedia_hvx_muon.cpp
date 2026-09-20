@@ -391,8 +391,22 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   result.update = std::move(candidateUpdate);
   result.timings.unpackFinalCommitUs = elapsedUs(subphase);
   if (result.update.error.empty()) {
-    result.update.muonMatrixCount = 114;
-    result.update.muonParameterCount = 622592;
+    // Derive Muon partition counts from the live ParameterDefinition registry
+    // rather than restating current-table constants. Aux Adam counts are
+    // already produced by updateAuxiliaryAdamCandidateInPlace.
+    tiny_lm::ParameterPartition partition;
+    std::string partitionError;
+    if (!tiny_lm::splitParameterRegistry(result.update.parameters, &partition,
+                                         &partitionError)) {
+      result.update.error = "HVX_MUON_PARTITION_UNAVAILABLE:" + partitionError;
+    } else {
+      result.update.muonMatrixCount = 0;
+      result.update.muonParameterCount = 0;
+      for (const auto& entry : partition.muon) {
+        ++result.update.muonMatrixCount;
+        result.update.muonParameterCount += entry.values->size();
+      }
+    }
   }
   result.timings.unpackApplyUs = elapsedUs(phase);
   result.timings.totalUs = elapsedUs(totalStarted);

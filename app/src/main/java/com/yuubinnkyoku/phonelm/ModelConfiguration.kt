@@ -32,18 +32,20 @@ data class ModelArchitecture(
 
     val headDimension: Int get() = dimension / heads
 
-    /** Mirrors the native/checkpoint parameter registry exactly. */
-    fun parameterCount(): Long {
+    /** Mirrors the native/checkpoint parameter registry via the generated SSOT metadata.
+     *  headwiseG1 is an evaluator argument for gated attention (HEADWISE_G1 parameter)
+     *  used by parameterCount(); it is not a ModelArchitecture field. Native V5
+     *  checkpoint identity still distinguishes gate values separately. */
+    fun parameterCount(headwiseG1: Boolean = false): Long {
         validationError()?.let { throw IllegalArgumentException(it) }
-        val d = dimension.toLong()
-        val ffn = feedForwardDimension.toLong()
-        val vocabulary = vocabularySize.toLong()
-        val embeddingAndProjection = Math.multiplyExact(Math.multiplyExact(vocabulary, d), 2L)
-        val norms = Math.multiplyExact(4L, d)
-        val attention = Math.multiplyExact(4L, Math.multiplyExact(d, d))
-        val feedForward = Math.multiplyExact(2L, Math.multiplyExact(d, ffn))
-        val perLayer = Math.addExact(Math.addExact(norms, attention), feedForward)
-        return Math.addExact(embeddingAndProjection, Math.multiplyExact(layers.toLong(), perLayer))
+        return GeneratedTransformerParameterMetadata.calculateParameterCount(
+            vocabularySize = vocabularySize.toLong(),
+            dimension = dimension.toLong(),
+            feedForwardDimension = feedForwardDimension.toLong(),
+            layers = layers.toLong(),
+            heads = heads.toLong(),
+            headwiseG1 = headwiseG1,
+        )
     }
 
     val displayLabel: String

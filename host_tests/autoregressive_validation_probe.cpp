@@ -147,20 +147,7 @@ bool bindCheckpoint(const ff::Checkpoint& checkpoint, const tiny::Config& config
       if (error) *error = "REGISTRY_NAME";
       return false;
     }
-    std::vector<std::uint32_t> expectedShape;
-    if (source.name == "token_embedding") {
-      expectedShape = {config.vocabularySize, config.dimension};
-    } else if (source.name == "output_projection") {
-      expectedShape = {config.dimension, config.vocabularySize};
-    } else if (source.name.find("norm") != std::string::npos) {
-      expectedShape = {config.dimension};
-    } else if (source.name.find("ffn_w1") != std::string::npos) {
-      expectedShape = {config.dimension, config.feedForwardDimension};
-    } else if (source.name.find("ffn_w2") != std::string::npos) {
-      expectedShape = {config.feedForwardDimension, config.dimension};
-    } else {
-      expectedShape = {config.dimension, config.dimension};
-    }
+    const auto& expectedShape = target.shape;
     const std::size_t count = target.values->size();
     if (source.shape != expectedShape || shapeElements(source.shape) != count) {
       if (error) *error = "REGISTRY_SHAPE";

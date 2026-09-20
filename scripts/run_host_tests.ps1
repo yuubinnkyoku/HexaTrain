@@ -6,6 +6,17 @@ $QnnSdkIndependentExecutable = Join-Path $OutputDirectory "qnn_sdk_independent_t
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
+$MetadataExporterExecutable = Join-Path $OutputDirectory "export_transformer_parameter_metadata.exe"
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    (Join-Path $Root "host_tests\export_transformer_parameter_metadata.cpp") `
+    -o $MetadataExporterExecutable
+if ($LASTEXITCODE -ne 0) { throw "Parameter metadata exporter compilation failed" }
+& $MetadataExporterExecutable --self-test
+if ($LASTEXITCODE -ne 0) { throw "Parameter metadata contract tests failed" }
+& $MetadataExporterExecutable --check (Join-Path $Root "metadata\transformer_parameter_metadata.json") (Join-Path $Root "app\src\main\java\com\yuubinnkyoku\phonelm\GeneratedTransformerParameterMetadata.kt")
+if ($LASTEXITCODE -ne 0) { throw "Parameter metadata staleness check failed" }
+Write-Host "transformer_parameter_metadata_contract=PASS"
 & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
     -I (Join-Path $Root "app\src\main\cpp") `
     (Join-Path $Root "app\src\main\cpp\cpu_reference_training.cpp") `

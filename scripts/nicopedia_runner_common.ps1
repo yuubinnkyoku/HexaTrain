@@ -436,6 +436,92 @@ function Get-PhoneLmKeyValueMap {
     return $map
 }
 
+# Derives parameter role/count facts from the checked-in machine-readable SSOT
+# artifact (metadata/transformer_parameter_metadata.json), which is generated
+# from app/src/main/cpp/transformer_parameter_metadata.h.  Consumers must not
+# hand-write parameter name/count registries: adding a parameter upstream only
+# requires regenerating the artifact.  Returns both the requested (headwiseG1)
+# total and the always-ungated total so gated deltas can be derived exactly.
+#
+# Manifest compatibility: muon_parameter_roles / aux_adam_parameter_roles keep
+# the original Muon-pilot semantic labels (protocol vocabulary, not a live
+# parameter table).  SSOT-derived suffix lists are exposed under the explicit
+# muon_parameter_suffixes / aux_adam_parameter_suffixes fields instead.
+$PhoneLmMuonParameterRolesCompatibility = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
+$PhoneLmAuxAdamParameterRolesCompatibility = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
+function Get-PhoneLmParameterMetadataDerivation {
+    param(
+        [Parameter(Mandatory = $true)][uint64]$Vocabulary,
+        [Parameter(Mandatory = $true)][uint64]$Dimension,
+        [Parameter(Mandatory = $true)][uint64]$FeedForwardDimension,
+        [Parameter(Mandatory = $true)][uint64]$Layers,
+        [Parameter(Mandatory = $true)][uint64]$Heads,
+        [bool]$HeadwiseG1 = $false,
+        [string]$MetadataPath = ''
+    )
+    if (-not $MetadataPath) {
+        $MetadataPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'metadata\transformer_parameter_metadata.json'
+    }
+    if (-not (Test-Path -LiteralPath $MetadataPath -PathType Leaf)) {
+        throw "PARAMETER_METADATA_JSON_MISSING: $MetadataPath (run scripts\generate_parameter_metadata.ps1)"
+    }
+    $raw = Get-Content -LiteralPath $MetadataPath -Raw | ConvertFrom-Json
+    $defs = @($raw.parameter_definitions)
+    if ($defs.Count -eq 0) { throw 'PARAMETER_METADATA_EMPTY' }
+    $dimensionExtent = @{
+        VOCABULARY = $Vocabulary
+        MODEL = $Dimension
+        FEED_FORWARD = $FeedForwardDimension
+        HEADS = $Heads
+    }
+    $muonSuffixes = [Collections.Generic.List[string]]::new()
+    $auxSuffixes = [Collections.Generic.List[string]]::new()
+    $total = [uint64]0
+    $totalUngated = [uint64]0
+    $muonElements = [uint64]0
+    $auxElements = [uint64]0
+    $muonMatrices = [uint64]0
+    foreach ($def in $defs) {
+        $gated = ($def.condition -eq 'HEADWISE_G1')
+        if ($gated -and -not $HeadwiseG1) { continue }
+        $elements = [uint64]1
+        foreach ($dim in $def.shape) {
+            $extent = $dimensionExtent[$dim]
+            if ($null -eq $extent -or $extent -eq 0) { throw "PARAMETER_METADATA_DIMENSION_UNKNOWN:$dim" }
+            $elements = $elements * $extent
+        }
+        $instances = if ($def.placement -eq 'PER_LAYER') { $Layers } else { [uint64]1 }
+        $count = $elements * $instances
+        $total += $count
+        if (-not $gated) { $totalUngated += $count }
+        if ($def.role -eq 'MUON') {
+            $muonSuffixes.Add([string]$def.suffix)
+            $muonElements += $count
+            $matrixInstances = if ($def.placement -eq 'PER_LAYER') { $Layers } else { [uint64]1 }
+            $muonMatrices += $matrixInstances
+        } elseif ($def.role -eq 'AUX_ADAM') {
+            $auxSuffixes.Add([string]$def.suffix)
+            $auxElements += $count
+        } else {
+            throw "PARAMETER_METADATA_ROLE_UNKNOWN:$($def.role)"
+        }
+    }
+    return [ordered]@{
+        parameter_count = $total
+        parameter_count_ungated = $totalUngated
+        parameter_delta = $total - $totalUngated
+        # Compatibility fields: original semantic labels, unchanged schema meaning.
+        muon_parameter_roles = @($PhoneLmMuonParameterRolesCompatibility)
+        aux_adam_parameter_roles = @($PhoneLmAuxAdamParameterRolesCompatibility)
+        # SSOT-derived concrete suffix lists.
+        muon_parameter_suffixes = @($muonSuffixes)
+        aux_adam_parameter_suffixes = @($auxSuffixes)
+        muon_matrix_count = $muonMatrices
+        muon_parameter_count = $muonElements
+        aux_adam_parameter_count = $auxElements
+    }
+}
+
 function Assert-PhoneLmHealthReport {
     param(
         [Parameter(Mandatory = $true)][string]$Text,

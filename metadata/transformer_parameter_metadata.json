@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "generator": "export_transformer_parameter_metadata",
+  "parameter_definitions": [
+    {
+      "suffix": "token_embedding",
+      "role": "AUX_ADAM",
+      "placement": "GLOBAL_PREFIX",
+      "condition": "ALWAYS",
+      "shape": ["VOCABULARY", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "norm1_gamma",
+      "role": "AUX_ADAM",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL"],
+      "rank": 1,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "norm1_beta",
+      "role": "AUX_ADAM",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL"],
+      "rank": 1,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "wq",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "wk",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "wv",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "wo",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "attention_gate_weight",
+      "role": "AUX_ADAM",
+      "placement": "PER_LAYER",
+      "condition": "HEADWISE_G1",
+      "shape": ["MODEL", "HEADS"],
+      "rank": 2,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "norm2_gamma",
+      "role": "AUX_ADAM",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL"],
+      "rank": 1,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "norm2_beta",
+      "role": "AUX_ADAM",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL"],
+      "rank": 1,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    },
+    {
+      "suffix": "ffn_w1",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "FEED_FORWARD"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "ffn_w2",
+      "role": "MUON",
+      "placement": "PER_LAYER",
+      "condition": "ALWAYS",
+      "shape": ["FEED_FORWARD", "MODEL"],
+      "rank": 2,
+      "fan_out_axis": 1,
+      "fan_in_axis": 0
+    },
+    {
+      "suffix": "output_projection",
+      "role": "AUX_ADAM",
+      "placement": "GLOBAL_SUFFIX",
+      "condition": "ALWAYS",
+      "shape": ["MODEL", "VOCABULARY"],
+      "rank": 2,
+      "fan_out_axis": -1,
+      "fan_in_axis": -1
+    }
+  ]
+}

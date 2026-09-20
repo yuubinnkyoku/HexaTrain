@@ -53,11 +53,61 @@ $fixed = [ordered]@{
   target_learning_rate = '0.0001'; muon_learning_rate = '0.005'
   muon_momentum = '0.95'; muon_nesterov = $true; muon_ns_steps = 5
   checkpoint_format = 'NPRTCKPTV5'
-  parameter_count = 760960; parameter_delta = 2432
-  muon_matrix_count = 114; muon_parameter_count = 622592
-  aux_adam_parameter_count = 138368
   validation_chunks = 256; development_chunks = 256
 }
+
+# Parameter counts are derived from the generated SSOT artifact; no hand-written
+# count registry.  This experiment is headwise-G1 gated.
+$MetadataDerived = Get-PhoneLmParameterMetadataDerivation `
+  -Vocabulary ([uint64]$fixed.vocabulary) `
+  -Dimension ([uint64]$fixed.dimension) `
+  -FeedForwardDimension ([uint64]$fixed.feed_forward_dimension) `
+  -Layers ([uint64]$fixed.layers) `
+  -Heads ([uint64]$fixed.heads) `
+  -HeadwiseG1 $true
+$MetadataDerivedUngated = Get-PhoneLmParameterMetadataDerivation `
+  -Vocabulary ([uint64]$fixed.vocabulary) `
+  -Dimension ([uint64]$fixed.dimension) `
+  -FeedForwardDimension ([uint64]$fixed.feed_forward_dimension) `
+  -Layers ([uint64]$fixed.layers) `
+  -Heads ([uint64]$fixed.heads) `
+  -HeadwiseG1 $false
+# Frozen experiment/capacity identity for this fixed comparison protocol.
+# Independent of current metadata: if the SSOT ever changes capacity under the
+# same experiment ID / control checkpoints, startup must fail closed instead of
+# silently accepting a different model.
+$ExperimentCapacityAnchor = [ordered]@{
+  parameter_count = 760960
+  parameter_count_ungated = 758528
+  parameter_delta = 2432
+  muon_matrix_count = 114
+  muon_parameter_count = 622592
+  aux_adam_parameter_count = 138368
+}
+function Assert-PhoneLmHeadwiseCapacityAnchor {
+  if ([int64]$MetadataDerived.parameter_count -ne [int64]$ExperimentCapacityAnchor.parameter_count -or
+      [int64]$MetadataDerived.parameter_count_ungated -ne [int64]$ExperimentCapacityAnchor.parameter_count_ungated -or
+      [int64]$MetadataDerived.parameter_delta -ne [int64]$ExperimentCapacityAnchor.parameter_delta -or
+      [int64]$MetadataDerived.muon_matrix_count -ne [int64]$ExperimentCapacityAnchor.muon_matrix_count -or
+      [int64]$MetadataDerived.muon_parameter_count -ne [int64]$ExperimentCapacityAnchor.muon_parameter_count -or
+      [int64]$MetadataDerived.aux_adam_parameter_count -ne [int64]$ExperimentCapacityAnchor.aux_adam_parameter_count -or
+      [int64]$MetadataDerivedUngated.parameter_count -ne [int64]$ExperimentCapacityAnchor.parameter_count_ungated) {
+    throw ("HEADWISE_G1_CAPACITY_ANCHOR_MISMATCH derived=" +
+      "$($MetadataDerived.parameter_count)/$($MetadataDerived.parameter_count_ungated)/" +
+      "$($MetadataDerived.parameter_delta)/$($MetadataDerived.muon_matrix_count)/" +
+      "$($MetadataDerived.muon_parameter_count)/$($MetadataDerived.aux_adam_parameter_count) " +
+      "anchor=" +
+      "$($ExperimentCapacityAnchor.parameter_count)/$($ExperimentCapacityAnchor.parameter_count_ungated)/" +
+      "$($ExperimentCapacityAnchor.parameter_delta)/$($ExperimentCapacityAnchor.muon_matrix_count)/" +
+      "$($ExperimentCapacityAnchor.muon_parameter_count)/$($ExperimentCapacityAnchor.aux_adam_parameter_count)")
+  }
+}
+Assert-PhoneLmHeadwiseCapacityAnchor
+$fixed.parameter_count = $MetadataDerived.parameter_count
+$fixed.parameter_delta = $MetadataDerived.parameter_delta
+$fixed.muon_matrix_count = $MetadataDerived.muon_matrix_count
+$fixed.muon_parameter_count = $MetadataDerived.muon_parameter_count
+$fixed.aux_adam_parameter_count = $MetadataDerived.aux_adam_parameter_count
 
 $controlCheckpoints = [ordered]@{
   '500'  = Join-Path $ControlRoot 'quality-hvx-step1000/htp-seed1-l19-t32-d64-f128-step500.ckpt'
@@ -116,10 +166,10 @@ function Assert-PhoneLmHeadwiseCandidateIdentity {
       throw "CANDIDATE_IDENTITY_FIELD_MISMATCH: $($pair[0]) expected=$($pair[1]) actual=$(if($map.Contains($pair[0])){$map[$pair[0]]}else{'<missing>'})"
     }
   }
-  if ([int]$map.parameter_count -ne 760960 -or
-      [int]$map.muon_matrix_count -ne 114 -or
-      [int]$map.muon_parameter_count -ne 622592 -or
-      [int]$map.aux_adam_parameter_count -ne 138368) {
+  if ([int]$map.parameter_count -ne $MetadataDerived.parameter_count -or
+      [int]$map.muon_matrix_count -ne $MetadataDerived.muon_matrix_count -or
+      [int]$map.muon_parameter_count -ne $MetadataDerived.muon_parameter_count -or
+      [int]$map.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count) {
     throw 'CANDIDATE_PARAMETER_PARTITION_MISMATCH'
   }
   if ($map.Contains('completed_steps') -and [int]$map.completed_steps -lt $Step) {
@@ -156,9 +206,16 @@ function Write-PhoneLmHeadwiseManifest {
 }
 
 if ($SelfTest) {
-  if ($Mode -ne 'Plan' -or $fixed.parameter_count -ne 760960 -or
+  Assert-PhoneLmHeadwiseCapacityAnchor
+  if ($Mode -ne 'Plan' -or $fixed.parameter_count -ne $MetadataDerived.parameter_count -or
       $fixed.muon_learning_rate -ne '0.005' -or
-      $fixed.aux_adam_parameter_count -ne 138368) {
+      $fixed.aux_adam_parameter_count -ne $MetadataDerived.aux_adam_parameter_count -or
+      $MetadataDerived.parameter_delta -eq 0 -or
+      $MetadataDerived.muon_parameter_count + $MetadataDerived.aux_adam_parameter_count -ne $MetadataDerived.parameter_count -or
+      [int64]$MetadataDerived.parameter_count -ne [int64]$ExperimentCapacityAnchor.parameter_count -or
+      [int64]$MetadataDerived.muon_matrix_count -ne [int64]$ExperimentCapacityAnchor.muon_matrix_count -or
+      [int64]$MetadataDerived.muon_parameter_count -ne [int64]$ExperimentCapacityAnchor.muon_parameter_count -or
+      [int64]$MetadataDerived.aux_adam_parameter_count -ne [int64]$ExperimentCapacityAnchor.aux_adam_parameter_count) {
     throw 'HEADWISE_G1_AB_SELFTEST_IDENTITY'
   }
   Write-Host 'run_headwise_g1_ab_self_test=PASS'

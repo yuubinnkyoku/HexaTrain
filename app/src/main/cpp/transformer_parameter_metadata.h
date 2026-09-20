@@ -428,6 +428,55 @@ inline bool checkedParameterElementCount(const ParameterDimensions& dimensions,
   return true;
 }
 
+// Role/partition counts derived from ParameterDefinition + dimensions only.
+// Native telemetry and PowerShell consumers must both use this SSOT path so
+// regenerating the artifact keeps their numbers aligned without restating
+// hand-written count formulas.
+struct ParameterRoleCounts {
+  std::uint64_t muonMatrixCount = 0;
+  std::uint64_t muonParameterCount = 0;
+  std::uint64_t auxiliaryAdamParameterCount = 0;
+  std::uint64_t totalParameterCount = 0;
+};
+
+inline bool checkedParameterRoleCounts(const ParameterDimensions& dimensions,
+                                       ParameterRoleCounts* result) {
+  if (!result || !dimensions.vocabulary || !dimensions.model ||
+      !dimensions.feedForward || !dimensions.layers || !dimensions.heads)
+    return false;
+  constexpr std::uint64_t kMax = std::numeric_limits<std::uint64_t>::max();
+  ParameterRoleCounts counts;
+  for (const auto& definition : parameterDefinitions()) {
+    if (!validParameterDefinition(definition)) return false;
+    if (!parameterDefinitionEnabled(definition, dimensions)) continue;
+    std::uint64_t elements = 0;
+    if (!parameterDefinitionElementCount(definition, dimensions, &elements))
+      return false;
+    const std::uint64_t instances =
+        definition.placement == ParameterPlacement::PER_LAYER
+            ? dimensions.layers
+            : 1;
+    if (elements > kMax / instances) return false;
+    const std::uint64_t count = elements * instances;
+    if (count > kMax - counts.totalParameterCount) return false;
+    counts.totalParameterCount += count;
+    if (definition.role == ParameterRole::MUON) {
+      if (definition.rank != 2) return false;
+      if (instances > kMax - counts.muonMatrixCount) return false;
+      counts.muonMatrixCount += instances;
+      if (count > kMax - counts.muonParameterCount) return false;
+      counts.muonParameterCount += count;
+    } else if (definition.role == ParameterRole::AUX_ADAM) {
+      if (count > kMax - counts.auxiliaryAdamParameterCount) return false;
+      counts.auxiliaryAdamParameterCount += count;
+    } else {
+      return false;
+    }
+  }
+  *result = counts;
+  return true;
+}
+
 inline std::vector<ParameterInfo> parameterMetadata(
     const ParameterDimensions& dimensions,
     const qnn::TinyTransformerParameters* parameters = nullptr) {

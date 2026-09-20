@@ -23,6 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
+. (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -34,9 +35,13 @@ if (-not $ReportRoot.StartsWith($buildRoot + [IO.Path]::DirectorySeparatorChar, 
 }
 
 function Get-ModelEstimate([int]$D, [int]$F) {
-    # Exact flattened parameter count used by the D/FFN search: 2VD +
-    # L(4D^2 + 4D + 2D*FFN), with V=256 and L=19.
-    $parameters = [int64](2 * 256 * $D + 19 * (4 * $D * $D + 4 * $D + 2 * $D * $F))
+    # Parameter counts come from the generated SSOT artifact via
+    # Get-PhoneLmParameterMetadataDerivation (same current consumer as the
+    # D/FFN search).  Historical research anchors stay fixed in self-tests.
+    $derived = Get-PhoneLmParameterMetadataDerivation `
+        -Vocabulary 256 -Dimension $D -FeedForwardDimension $F -Layers 19 -Heads 2 `
+        -HeadwiseG1 $false
+    $parameters = [int64]$derived.parameter_count
     return [ordered]@{
         parameter_count = $parameters
         parameter_bytes_fp32 = 4 * $parameters

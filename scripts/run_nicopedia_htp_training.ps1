@@ -432,8 +432,15 @@ $reportMap = if ($OneUpdateProbe) {
       [int]$probeMap.api_trace_graph_execute_failure_count -ne 0) { throw 'PROBE_REPORT_EXECUTE_COUNT_MISMATCH' }
   $probeMap
 } elseif ($Optimizer -eq 'Muon') {
+  # The Muon health branch is bound to the Nicopedia Muon pilot architecture
+  # (V1024/D64/FFN128/L19/H2).  Its parameter counts are derived from the
+  # generated SSOT metadata artifact so adding a parameter upstream only
+  # requires regenerating the artifact.
+  $muonDerived = Get-PhoneLmParameterMetadataDerivation `
+      -Vocabulary 1024 -Dimension 64 -FeedForwardDimension 128 -Layers 19 -Heads 2 `
+      -HeadwiseG1 ($AttentionGate -eq 'headwise_g1_sigmoid')
   $expectedCheckpointFormat = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
-  $expectedAuxAdamParameters = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 138368 } else { 135936 }
+  $expectedAuxAdamParameters = $muonDerived.aux_adam_parameter_count
   $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
   foreach ($key in @('optimizer','qnn_return_code_success','output_tensors_finite','final_finite','all_steps_finite','cpu_fallback','fallback','checkpoint_format','completed_steps','muon_matrix_count','muon_parameter_count','aux_adam_parameter_count','forward_backward_backend','optimizer_muon_backend','optimizer_aux_adam_backend','api_trace_graph_execute_failure_count','api_trace_fallback_attempted','api_trace_fallback_succeeded')) {
@@ -442,8 +449,8 @@ $reportMap = if ($OneUpdateProbe) {
   if ($muonMap.optimizer -ne 'muon_aux_adam' -or $muonMap.qnn_return_code_success -ne 'true' -or
       $muonMap.output_tensors_finite -ne 'true' -or $muonMap.final_finite -ne 'true' -or $muonMap.all_steps_finite -ne 'true' -or
       $muonMap.cpu_fallback -ne 'false' -or $muonMap.fallback -ne 'false' -or $muonMap.checkpoint_format -ne $expectedCheckpointFormat -or
-      [int]$muonMap.completed_steps -ne $Steps -or [int]$muonMap.muon_matrix_count -ne 114 -or
-      [long]$muonMap.muon_parameter_count -ne 622592 -or [long]$muonMap.aux_adam_parameter_count -ne $expectedAuxAdamParameters -or
+      [int]$muonMap.completed_steps -ne $Steps -or [int]$muonMap.muon_matrix_count -ne $muonDerived.muon_matrix_count -or
+      [long]$muonMap.muon_parameter_count -ne $muonDerived.muon_parameter_count -or [long]$muonMap.aux_adam_parameter_count -ne $expectedAuxAdamParameters -or
       $muonMap.forward_backward_backend -ne 'HTP' -or $muonMap.optimizer_muon_backend -ne $expectedMuonBackend -or
       $muonMap.optimizer_aux_adam_backend -ne 'CPU' -or $muonMap.api_trace_graph_execute_failure_count -ne '0' -or
       $muonMap.api_trace_fallback_attempted -ne 'false' -or $muonMap.api_trace_fallback_succeeded -ne 'false') { throw 'MUON_REPORT_HEALTH_REJECTED' }
