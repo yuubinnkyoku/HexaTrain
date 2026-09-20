@@ -394,6 +394,7 @@ if ($SelfTest) {
     if (($candidates.id -join ',') -ne 'anchor-d16-f32,d16-f64,d24-f48,d32-f32' -or $ScreenSteps -ne 32 -or $CheckpointInterval -ne 32) { throw 'SELFTEST_SCREEN_CONTRACT' }
     $anchor = Get-ModelEstimate $candidates[0]
     if ($anchor.parameter_count -ne 48320 -or $anchor.checkpoint_payload_estimate_bytes -ne 3 * $anchor.parameter_bytes_fp32) { throw 'SELFTEST_ESTIMATE' }
+    Test-PhoneLmParameterMetadataDerivationFailClosed -CheckedInMetadataPath (Join-Path $root 'metadata\transformer_parameter_metadata.json')
     $temp = Join-Path $env:TEMP ('phonelm-dffn-search-' + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($temp) | Out-Null
     try { $sample = Join-Path $temp 'health.txt'; "status=SUCCESS`ncpu_fallback=false`nqnn_return_code_success=true`noutput_tensors_finite=true" | Set-Content -LiteralPath $sample -Encoding utf8; $h = Require-Health (Get-Map $sample) 'SELFTEST'; if (-not $h.status_success -or -not $h.qnn_return_success -or -not $h.tensors_finite -or $h.cpu_fallback) { throw 'SELFTEST_HEALTH' } } finally { Remove-Item -LiteralPath $temp -Recurse -Force }

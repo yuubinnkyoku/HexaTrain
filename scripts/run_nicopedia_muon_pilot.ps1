@@ -98,18 +98,39 @@ $Fixed = [ordered]@{
 # architecture is ungated (headwiseG1=false), matching the frozen Adam
 # reference and $Fixed.parameter_count.
 #
+# This runner intentionally keeps a local derivation helper instead of sourcing
+# nicopedia_runner_common.ps1: the pilot is a frozen experiment runner whose
+# manifest contract depends on $Fixed and a narrower return shape.  Coupling it
+# to the shared helper is deferred; fail-closed vocabulary is mirrored here.
+#
 # Manifest compatibility: muon_parameter_roles / aux_adam_parameter_roles keep
 # the original Muon-pilot semantic labels under the same schema_version.
 # SSOT-derived suffix lists are written under the new explicit fields
 # muon_parameter_suffixes / aux_adam_parameter_suffixes.
 $MetadataJsonPath = Join-Path $Root 'metadata\transformer_parameter_metadata.json'
+$ParameterMetadataSupportedSchemaVersion = 1
 $MuonParameterRolesCompatibility = @('Wq','Wk','Wv','Wo','FFN_W1','FFN_W2')
 $AuxAdamParameterRolesCompatibility = @('token_embedding','output_projection','norm_scale_gain','bias','other_non_hidden')
 function Get-MetadataDerivationFromSsot {
-  if (-not (Test-Path -LiteralPath $MetadataJsonPath -PathType Leaf)) {
+  param([string]$MetadataPath = '')
+  if (-not $MetadataPath) { $MetadataPath = $MetadataJsonPath }
+  if (-not (Test-Path -LiteralPath $MetadataPath -PathType Leaf)) {
     throw 'PARAMETER_METADATA_JSON_MISSING: regenerate scripts\generate_parameter_metadata.ps1'
   }
-  $raw = Get-Content -LiteralPath $MetadataJsonPath -Raw | ConvertFrom-Json
+  $raw = Get-Content -LiteralPath $MetadataPath -Raw | ConvertFrom-Json
+  $hasSchema = $false
+  $schemaVersion = $null
+  if ($raw -and $raw.PSObject -and $raw.PSObject.Properties['schema_version']) {
+    $hasSchema = $true
+    $schemaVersion = $raw.schema_version
+  }
+  if (-not $hasSchema -or $null -eq $schemaVersion -or [string]$schemaVersion -eq '') {
+    throw 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:'
+  }
+  $schemaText = [string]$schemaVersion
+  if ($schemaText -notmatch '^\d+$' -or [int64]$schemaText -ne $ParameterMetadataSupportedSchemaVersion) {
+    throw "PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:$schemaText"
+  }
   $defs = @($raw.parameter_definitions)
   if ($defs.Count -eq 0) { throw 'PARAMETER_METADATA_EMPTY' }
   $headwiseG1 = $false
@@ -126,21 +147,34 @@ function Get-MetadataDerivationFromSsot {
   $auxElements = [uint64]0
   $muonMatrices = [uint64]0
   foreach ($def in $defs) {
-    if ($def.condition -eq 'HEADWISE_G1' -and -not $headwiseG1) { continue }
+    $condition = [string]$def.condition
+    if ($condition -eq 'HEADWISE_G1') {
+      if (-not $headwiseG1) { continue }
+    } elseif ($condition -ne 'ALWAYS') {
+      throw "PARAMETER_METADATA_CONDITION_UNKNOWN:$($def.condition)"
+    }
     $elements = [uint64]1
     foreach ($dim in $def.shape) {
-      $extent = $dimensionExtent[$dim]
+      $extent = $null
+      if ($null -ne $dim -and $dimensionExtent.ContainsKey([string]$dim)) {
+        $extent = $dimensionExtent[[string]$dim]
+      }
       if ($null -eq $extent -or $extent -eq 0) { throw "PARAMETER_METADATA_DIMENSION_UNKNOWN:$dim" }
       $elements = $elements * $extent
     }
-    $instances = if ($def.placement -eq 'PER_LAYER') { [uint64]$Fixed.layers } else { [uint64]1 }
+    $placement = [string]$def.placement
+    $instances = switch ($placement) {
+      'PER_LAYER' { [uint64]$Fixed.layers }
+      'GLOBAL_PREFIX' { [uint64]1 }
+      'GLOBAL_SUFFIX' { [uint64]1 }
+      default { throw "PARAMETER_METADATA_PLACEMENT_UNKNOWN:$($def.placement)" }
+    }
     $count = $elements * $instances
     $total += $count
     if ($def.role -eq 'MUON') {
       $muonSuffixes.Add([string]$def.suffix)
       $muonElements += $count
-      $matrixInstances = if ($def.placement -eq 'PER_LAYER') { [uint64]$Fixed.layers } else { [uint64]1 }
-      $muonMatrices += $matrixInstances
+      $muonMatrices += $instances
     } elseif ($def.role -eq 'AUX_ADAM') {
       $auxSuffixes.Add([string]$def.suffix)
       $auxElements += $count
@@ -1550,8 +1584,72 @@ function Invoke-Summarize {
   foreach ($manifest in $manifests) { Write-Output ("{0} status={1} steps={2}" -f $manifest.trial_id,$manifest.status,$manifest.completed_steps) }
 }
 
+function Assert-PilotMetadataDerivationRejects([string]$Path, [string]$ExpectedPrefix, [string]$Label) {
+  $rejected = $false
+  try {
+    [void](Get-MetadataDerivationFromSsot -MetadataPath $Path)
+  } catch {
+    $rejected = ([string]$_.Exception.Message).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)
+  }
+  if (-not $rejected) { throw "SELFTEST_PILOT_METADATA_FAIL_CLOSED:$Label" }
+}
+
 function Invoke-SelfTest {
   if ($Fixed.vocabulary -ne 1024 -or $Fixed.tokens -ne 32 -or $Fixed.dimension -ne 64 -or $Fixed.feed_forward_dimension -ne 128 -or $Fixed.layers -ne 19 -or $Fixed.heads -ne 2 -or $Fixed.parameter_count -ne 758528 -or $Fixed.batch_size -ne 8 -or $Fixed.seed -ne 1) { throw 'SELFTEST_FIXED_ARCHITECTURE' }
+  # Valid current metadata must keep the frozen pilot counts unchanged.
+  if ([int64]$MetadataDerived.parameter_count -ne 758528 -or
+      [int64]$MetadataDerived.muon_parameter_count -ne 622592 -or
+      [int64]$MetadataDerived.aux_adam_parameter_count -ne 135936 -or
+      [int64]$MetadataDerived.muon_matrix_count -ne 114 -or
+      [string]($MetadataDerived.muon_parameter_suffixes -join ',') -ne 'wq,wk,wv,wo,ffn_w1,ffn_w2') {
+    throw 'SELFTEST_PILOT_METADATA_VALID_BASELINE'
+  }
+  $temp = Join-Path ([IO.Path]::GetTempPath()) ('phonelm-muon-pilot-metadata-selftest-' + [guid]::NewGuid().ToString('N'))
+  [IO.Directory]::CreateDirectory($temp) | Out-Null
+  try {
+    function New-PilotMetadataDefinition {
+      param(
+        [string]$Condition = 'ALWAYS',
+        [string]$Placement = 'GLOBAL_PREFIX',
+        [string]$Role = 'AUX_ADAM',
+        $Shape = @('VOCABULARY', 'MODEL')
+      )
+      return @{
+        suffix = 'token_embedding'
+        role = $Role
+        placement = $Placement
+        condition = $Condition
+        shape = $Shape
+        rank = 2
+        fan_out_axis = -1
+        fan_in_axis = -1
+      }
+    }
+    $cases = @(
+      @{ Name = 'unknown-condition'; Expected = 'PARAMETER_METADATA_CONDITION_UNKNOWN:'; Definition = (New-PilotMetadataDefinition -Condition 'SOMETIMES') },
+      @{ Name = 'unknown-placement'; Expected = 'PARAMETER_METADATA_PLACEMENT_UNKNOWN:'; Definition = (New-PilotMetadataDefinition -Placement 'EVERYWHERE') },
+      @{ Name = 'unknown-role'; Expected = 'PARAMETER_METADATA_ROLE_UNKNOWN:'; Definition = (New-PilotMetadataDefinition -Role 'ADAM') },
+      @{ Name = 'unknown-dimension'; Expected = 'PARAMETER_METADATA_DIMENSION_UNKNOWN:'; Definition = (New-PilotMetadataDefinition -Shape @('CHANNELS')) },
+      @{ Name = 'missing-schema-version'; Expected = 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:'; Definition = (New-PilotMetadataDefinition); Schema = $null },
+      @{ Name = 'unsupported-schema-version'; Expected = 'PARAMETER_METADATA_SCHEMA_VERSION_UNSUPPORTED:2'; Definition = (New-PilotMetadataDefinition); Schema = 2 }
+    )
+    foreach ($case in $cases) {
+      $caseDir = Join-Path $temp $case.Name
+      [IO.Directory]::CreateDirectory($caseDir) | Out-Null
+      $schema = 1
+      if ($case.ContainsKey('Schema')) { $schema = $case.Schema }
+      $payload = if ($null -eq $schema) {
+        [ordered]@{ parameter_definitions = @($case.Definition) }
+      } else {
+        [ordered]@{ schema_version = $schema; parameter_definitions = @($case.Definition) }
+      }
+      $path = Join-Path $caseDir 'transformer_parameter_metadata.json'
+      $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8
+      Assert-PilotMetadataDerivationRejects $path $case.Expected $case.Name
+    }
+  } finally {
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+  }
   if (@($MuonLearningRateCandidates).Count -ne 3 -or ($MuonLearningRateCandidates -join ',') -ne '0.005,0.010,0.020') { throw 'SELFTEST_MUON_LR_CANDIDATES' }
   if ($SmokeUpdates -lt 8 -or $SmokeUpdates -gt 32) { throw 'SELFTEST_SMOKE_UPDATE_RANGE' }
   if ([math]::Abs((Get-ExpectedMuonTargetLearningRate 0.005) - 0.00022727272727272728) -gt 1.0e-14 -or [math]::Abs((Get-ExpectedMuonTargetLearningRate 0.010) - 0.00045454545454545456) -gt 1.0e-14 -or [math]::Abs((Get-ExpectedMuonTargetLearningRate 0.020) - 0.0009090909090909091) -gt 1.0e-14) { throw 'SELFTEST_MUON_TARGET_SCALING' }
