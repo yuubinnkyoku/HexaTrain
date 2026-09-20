@@ -20,7 +20,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $BuildDir = Join-Path $Root "build\host-tests"
 $Executable = Join-Path $BuildDir "export_transformer_parameter_metadata.exe"
 $Source = Join-Path $Root "host_tests\export_transformer_parameter_metadata.cpp"
-$Header = Join-Path $Root "app\src\main\cpp\transformer_parameter_metadata.h"
 $JsonArtifact = Join-Path $Root "metadata\transformer_parameter_metadata.json"
 $KotlinArtifact = Join-Path $Root "app\src\main\java\com\yuubinnkyoku\phonelm\GeneratedTransformerParameterMetadata.kt"
 
@@ -28,27 +27,17 @@ if (-not (Test-Path -LiteralPath $BuildDir)) {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 }
 
-$needBuild = $true
-if (Test-Path -LiteralPath $Executable -PathType Leaf) {
-    $exeTime = (Get-Item -LiteralPath $Executable).LastWriteTimeUtc
-    $srcTime = (Get-Item -LiteralPath $Source).LastWriteTimeUtc
-    $hdrTime = (Get-Item -LiteralPath $Header).LastWriteTimeUtc
-    if ($exeTime -gt $srcTime -and $exeTime -gt $hdrTime) {
-        $needBuild = $false
-    }
+# Always recompile: the exporter includes the SSOT header transitively, so an
+# mtime check on the direct sources alone can leave a stale executable.
+if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
+    throw "g++ compiler not found on PATH (required to build export_transformer_parameter_metadata)"
 }
-
-if ($needBuild) {
-    if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-        throw "g++ compiler not found on PATH (required to build export_transformer_parameter_metadata)"
-    }
-    & g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
-        -I (Join-Path $Root "app\src\main\cpp") `
-        $Source `
-        -o $Executable
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to compile export_transformer_parameter_metadata"
-    }
+& g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic `
+    -I (Join-Path $Root "app\src\main\cpp") `
+    $Source `
+    -o $Executable
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to compile export_transformer_parameter_metadata"
 }
 
 if ($SelfTest) {

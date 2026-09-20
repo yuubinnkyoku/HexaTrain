@@ -1,6 +1,5 @@
 package com.yuubinnkyoku.phonelm
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -86,39 +85,42 @@ class ModelConfigurationTest {
         }.exceptionOrNull())
     }
 
-    private data class ParsedDefinition(
-        val suffix: String,
-        val role: String,
-        val placement: String,
-        val condition: String,
-        val shape: List<String>,
-        val rank: Int,
-    )
+    private fun computeFromDefinitions(
+        definitions: List<GeneratedParameterDefinition>,
+        arch: ModelArchitecture,
+        headwiseG1: Boolean,
+    ): Long {
+        var total = 0L
+        for (def in definitions) {
+            if (def.condition == GeneratedParameterCondition.HEADWISE_G1 && !headwiseG1) continue
+            var elements = 1L
+            for (dim in def.shape) {
+                elements = Math.multiplyExact(elements, when (dim) {
+                    GeneratedParameterDimension.VOCABULARY -> arch.vocabularySize.toLong()
+                    GeneratedParameterDimension.MODEL -> arch.dimension.toLong()
+                    GeneratedParameterDimension.FEED_FORWARD -> arch.feedForwardDimension.toLong()
+                    GeneratedParameterDimension.HEADS -> arch.heads.toLong()
+                })
+            }
+            val instances = when (def.placement) {
+                GeneratedParameterPlacement.PER_LAYER -> arch.layers.toLong()
+                GeneratedParameterPlacement.GLOBAL_PREFIX, GeneratedParameterPlacement.GLOBAL_SUFFIX -> 1L
+            }
+            total = Math.addExact(total, Math.multiplyExact(elements, instances))
+        }
+        return total
+    }
 
     @Test fun generatedSsotMetadataIsGenericAndParameterCountDerivesFromIt() {
-        val candidatePaths = listOf(
-            File("../metadata/transformer_parameter_metadata.json"),
-            File("metadata/transformer_parameter_metadata.json"),
-            File("../../metadata/transformer_parameter_metadata.json"),
-        )
-        val metadataFile = candidatePaths.firstOrNull { it.isFile }
-        assertNotNull("metadata/transformer_parameter_metadata.json must exist", metadataFile)
-        val json = metadataFile!!.readText()
-
-        val paramRegex = Regex(
-            """\{\s*"suffix":\s*"([^"]+)",\s*"role":\s*"([^"]+)",\s*"placement":\s*"([^"]+)",\s*"condition":\s*"([^"]+)",\s*"shape":\s*\[([^\]]*)\],\s*"rank":\s*(\d+)""",
-            RegexOption.DOT_MATCHES_ALL,
-        )
-        val definitions = paramRegex.findAll(json).map { match ->
-            val (suffix, role, placement, condition, shapeStr, rank) = match.destructured
-            val dims = shapeStr.split(",").map { it.trim().removeSurrounding("\"") }.filter { it.isNotEmpty() }
-            ParsedDefinition(suffix, role, placement, condition, dims, rank.toInt())
-        }.toList()
+        // Traverse the generated Kotlin SSOT table directly. JSON artifact identity
+        // with the C++ header is the exporter --check / stale-check responsibility;
+        // JSON/Kotlin escaping is the exporter self-test responsibility.
+        val definitions = GeneratedTransformerParameterMetadata.DEFINITIONS
 
         // Generic invariants only — no fixed parameter name/count registry may be
         // re-declared here. Adding a parameter to the C++ SSOT must only require
         // regenerating the artifacts, never touching this list.
-        assertTrue("metadata must contain at least one definition", definitions.isNotEmpty())
+        assertTrue("generated metadata must contain at least one definition", definitions.isNotEmpty())
         assertEquals(
             "definitions must not duplicate suffixes",
             definitions.size,
@@ -126,42 +128,17 @@ class ModelConfigurationTest {
         )
         for (def in definitions) {
             assertTrue("suffix must be non-empty", def.suffix.isNotBlank())
-            assertTrue("role must be serialized without loss", def.role in setOf("MUON", "AUX_ADAM"))
-            assertTrue("placement must be serialized without loss", def.placement in setOf("GLOBAL_PREFIX", "PER_LAYER", "GLOBAL_SUFFIX"))
-            assertTrue("condition must be serialized without loss", def.condition in setOf("ALWAYS", "HEADWISE_G1"))
-            assertTrue("rank must be <= shape size", def.rank in 1..def.shape.size)
             assertTrue("shape must not be empty", def.shape.isNotEmpty())
+            assertTrue("rank must be <= shape size", def.rank in 1..def.shape.size)
         }
-        for (placement in setOf("GLOBAL_PREFIX", "PER_LAYER", "GLOBAL_SUFFIX")) {
+        for (placement in GeneratedParameterPlacement.entries) {
             assertTrue(
                 "missing definition in placement group $placement",
                 definitions.any { it.placement == placement },
             )
         }
 
-        fun computeFromMetadata(arch: ModelArchitecture, headwiseG1: Boolean): Long {
-            var total = 0L
-            for (def in definitions) {
-                if (def.condition == "HEADWISE_G1" && !headwiseG1) continue
-                var elements = 1L
-                for (dim in def.shape) {
-                    elements = Math.multiplyExact(elements, when (dim) {
-                        "VOCABULARY" -> arch.vocabularySize.toLong()
-                        "MODEL" -> arch.dimension.toLong()
-                        "FEED_FORWARD" -> arch.feedForwardDimension.toLong()
-                        "HEADS" -> arch.heads.toLong()
-                        else -> error("Unknown dimension: $dim")
-                    })
-                }
-                val instances = when (def.placement) {
-                    "PER_LAYER" -> arch.layers.toLong()
-                    "GLOBAL_PREFIX", "GLOBAL_SUFFIX" -> 1L
-                    else -> error("Unknown placement: ${def.placement}")
-                }
-                total = Math.addExact(total, Math.multiplyExact(elements, instances))
-            }
-            return total
-        }
+        val hasHeadwiseG1 = definitions.any { it.condition == GeneratedParameterCondition.HEADWISE_G1 }
 
         val configs = ModelConfigurationCatalog.vocabularySizes.flatMap { vocabulary ->
             ModelConfigurationCatalog.dimensions.flatMap { dimension ->
@@ -172,35 +149,54 @@ class ModelConfigurationTest {
         }
         for (cfg in configs) {
             val arch = cfg.architecture
+            val ungated = computeFromDefinitions(definitions, arch, headwiseG1 = false)
+            val gated = computeFromDefinitions(definitions, arch, headwiseG1 = true)
             assertEquals(
                 "Ungated parameter count mismatch for ${arch.displayLabel}",
-                computeFromMetadata(arch, headwiseG1 = false),
+                ungated,
                 arch.parameterCount(headwiseG1 = false),
             )
             assertEquals(
                 "Gated parameter count mismatch for ${arch.displayLabel}",
-                computeFromMetadata(arch, headwiseG1 = true),
+                gated,
                 arch.parameterCount(headwiseG1 = true),
             )
+            assertEquals(
+                "Generated evaluator ungated mismatch for ${arch.displayLabel}",
+                ungated,
+                GeneratedTransformerParameterMetadata.calculateParameterCount(
+                    vocabularySize = arch.vocabularySize.toLong(),
+                    dimension = arch.dimension.toLong(),
+                    feedForwardDimension = arch.feedForwardDimension.toLong(),
+                    layers = arch.layers.toLong(),
+                    heads = arch.heads.toLong(),
+                    headwiseG1 = false,
+                ),
+            )
+            assertEquals(
+                "Generated evaluator gated mismatch for ${arch.displayLabel}",
+                gated,
+                GeneratedTransformerParameterMetadata.calculateParameterCount(
+                    vocabularySize = arch.vocabularySize.toLong(),
+                    dimension = arch.dimension.toLong(),
+                    feedForwardDimension = arch.feedForwardDimension.toLong(),
+                    layers = arch.layers.toLong(),
+                    heads = arch.heads.toLong(),
+                    headwiseG1 = true,
+                ),
+            )
+            if (hasHeadwiseG1) {
+                assertTrue(
+                    "gated count must exceed ungated when HEADWISE_G1 definitions exist for ${arch.displayLabel}",
+                    gated > ungated,
+                )
+            } else {
+                assertEquals(
+                    "gated and ungated counts must match when no HEADWISE_G1 definition exists",
+                    ungated,
+                    gated,
+                )
+            }
         }
-
-        // Gated evaluator fixture: gating must add the HEADWISE_G1 parameter only.
-        val l19 = ModelArchitecture(
-            layers = 19, heads = 2, tokens = 32, dimension = 64, feedForwardDimension = 128,
-            vocabularySize = 1024, tokenizerKind = "byte_bpe", tokenizerHash = ModelConfigurationCatalog.CANONICAL_BPE_TOKENIZER_HASH,
-        )
-        val gatedAdded = computeFromMetadata(l19, headwiseG1 = true) - computeFromMetadata(l19, headwiseG1 = false)
-        assertTrue(
-            "gated evaluator must add exactly the HEADWISE_G1 parameter bytes",
-            gatedAdded > 0L,
-        )
-        assertEquals(
-            "evaluator and generated Kotlin metadata must agree on gated L19 count",
-            l19.parameterCount(headwiseG1 = true),
-            GeneratedTransformerParameterMetadata.calculateParameterCount(
-                vocabularySize = 1024L, dimension = 64L, feedForwardDimension = 128L,
-                layers = 19L, heads = 2L, headwiseG1 = true,
-            ),
-        )
     }
 }
