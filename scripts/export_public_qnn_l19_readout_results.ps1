@@ -416,10 +416,22 @@ $selfTestContext = $null
 function Write-FixtureCsv([string]$Path, [string]$Header, [string[]]$Rows) {
     [IO.File]::WriteAllLines($Path, (@($Header) + $Rows), $utf8)
 }
-function ExpectSelfTestRejects([string]$Label, [scriptblock]$Action) {
-    $failed = $false
-    try { & $Action } catch { $failed = $true }
-    if (-not $failed) { Fail "self-test negative case did not fail: $Label" }
+function ExpectSelfTestRejects([string]$Label, [string]$ExpectedMarker, [scriptblock]$Action) {
+    # Every case starts with the exact positive fixture, including files removed by earlier cases.
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:FixtureInput -File)) {
+        [IO.File]::Delete($file.FullName)
+    }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PristineSelfTestInput -File)) {
+        [IO.File]::Copy($file.FullName, (Join-Path $script:FixtureInput $file.Name))
+    }
+    try { & $Action } catch {
+        if ($_.Exception.Message.Contains($ExpectedMarker, [StringComparison]::Ordinal)) {
+            Write-Host "self-test expected rejection: $Label [$ExpectedMarker]"
+            return
+        }
+        Fail "self-test wrong rejection for ${Label}: $($_.Exception.Message) (expected $ExpectedMarker)"
+    }
+    Fail "self-test negative case did not fail: $Label"
 }
 function New-SyntheticSelfTestRoot() {
     $root = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\exporter-selftest-fixture-" + [Guid]::NewGuid().ToString('N'))))
@@ -548,24 +560,26 @@ if ($SelfTest) {
         Write-FixtureCsv (Join-Path $in 'summary.csv') 'configuration_id,checkpoint,scope,metric,value' $summary
         $script:FixtureInput = $in
         AssertSourceEvidence
+        $script:PristineSelfTestInput = Join-Path $fixture.Root 'pristine'
+        [void](New-Item -ItemType Directory -Path $script:PristineSelfTestInput)
+        foreach ($file in @(Get-ChildItem -LiteralPath $in -File)) {
+            [IO.File]::Copy($file.FullName, (Join-Path $script:PristineSelfTestInput $file.Name))
+        }
         $script:FixtureInput = $in
-        ExpectSelfTestRejects 'tampered decision thresholds' {
+        ExpectSelfTestRejects 'tampered decision thresholds' 'decision thresholds_fixed_before_results must be true' {
             Write-FixtureCsv (Join-Path $in 'decision.csv') 'verdict,thresholds_fixed_before_results,reasons' @(
                 'UNDETERMINED,false,synthetic-fixture-contract-check')
             AssertSourceEvidence
         }
         $script:FixtureInput = $in
-        ExpectSelfTestRejects 'trajectory match false' {
-            Write-FixtureCsv (Join-Path $in 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' @(
-                "$($allConfigs[0]),AR_DEV_SELECTED,$($kPinned[$allConfigs[0]].arSelected),token_exact,$($kPinned[$allConfigs[0]].arSelTok),false",
-                "$($allConfigs[0]),AR_DEV_SELECTED,$($kPinned[$allConfigs[0]].arSelected),sequence_exact,$($kPinned[$allConfigs[0]].arSelSeq),true",
-                "$($allConfigs[0]),AR_DEV_FINAL,320,token_exact,$($kPinned[$allConfigs[0]].arFinalTok),true",
-                "$($allConfigs[0]),AR_DEV_FINAL,320,sequence_exact,$($kPinned[$allConfigs[0]].arFinalSeq),true",
-                "$($allConfigs[0]),AR_DEV_FINAL,320,autoregressive_nll,$($kPinned[$allConfigs[0]].arFinalNll),true")
+        ExpectSelfTestRejects 'trajectory match false' 'trajectory-anchors pinned anchor mismatch:' {
+            $anchors = @(Import-Csv -LiteralPath (Join-Path $in 'trajectory-anchors.csv'))
+            $anchors[0].match = 'false'
+            $anchors | Export-Csv -LiteralPath (Join-Path $in 'trajectory-anchors.csv') -NoTypeInformation -Encoding utf8
             AssertSourceEvidence
         }
         $script:FixtureInput = $in
-        ExpectSelfTestRejects 'tampered final hash' {
+        ExpectSelfTestRejects 'tampered final hash' 'FINAL hash pin mismatch' {
             Write-FixtureCsv (Join-Path $in 'dataset-anchors.csv') 'dataset,role,hash,rows' @(
                 "TRAIN,probe,$kTrainHash,32",
                 "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
@@ -574,13 +588,14 @@ if ($SelfTest) {
             AssertSourceEvidence
         }
         $script:FixtureInput = $in
-        ExpectSelfTestRejects 'missing required file' {
+        ExpectSelfTestRejects 'missing required file' 'dataset-anchors.csv' {
             Remove-Item -LiteralPath (Join-Path $in 'dataset-anchors.csv') -Force
             AssertSourceEvidence
         }
         Write-Host 'readout diagnosis public exporter self-test PASS (fixture-contained)'
     } finally {
         $script:FixtureInput = $null
+        $script:PristineSelfTestInput = $null
         if (Test-Path -LiteralPath $fixture.Root) { [IO.Directory]::Delete($fixture.Root, $true) }
     }
     exit 0
