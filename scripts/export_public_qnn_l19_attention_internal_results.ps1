@@ -34,6 +34,24 @@ $sourceFiles = @(
     'teacher-forced-free-running.csv', 'depth-control.csv',
     'diagnosis.csv', 'next-step-candidates.csv', 'budget.csv'
 )
+$sourceSchemas = [ordered]@{
+    'dataset-anchors.csv' = 'dataset,role,hash,rows'
+    'trajectory-anchors.csv' = 'configuration_id,checkpoint,step,metric,value,pinned_anchor,match'
+    'head-probe-by-seed.csv' = 'configuration_id,tap_id,tap_name,kind,block,dim,selected_step,finite,train_tf_token_exact,cal_tf_token_exact,dev_tf_token_exact,dev_tf_mean_rank,dev_tf_mean_nll,dev_tf_mean_margin,dev_tf_margin_q10,dev_tf_top2,dev_tf_top3'
+    'attention-statistics.csv' = 'configuration_id,layer,head,mean_entropy,entropy_p10,entropy_p90,mean_max_weight,mean_self_weight,mean_prev_weight,mean_top1_minus_top2,head_pair_cosine,case_variance_entropy,case_variance_max_weight,low_margin_entropy,high_margin_entropy,low_margin_max_weight,high_margin_max_weight,dist_0,dist_1,dist_2,dist_3,dist_4,dist_5,dist_6,dist_7'
+    'head-ablation.csv' = 'configuration_id,layer,head,baseline_token_exact,intervened_token_exact,token_delta,baseline_mean_margin,intervened_mean_margin,margin_delta,intervened_mean_rank,intervened_mean_nll,intervened_margin_q10,finite'
+    'head-only.csv' = 'configuration_id,layer,head,intervened_token_exact,token_delta,intervened_mean_margin,margin_delta,intervened_mean_rank,intervened_mean_nll,intervened_margin_q10,finite'
+    'context-vs-projection.csv' = 'configuration_id,layer,ctx_concat_dev_tf_exact,attn_update_dev_tf_exact,proj_drop'
+    'projection-contributions.csv' = 'configuration_id,layer,head,norm,cosine_with_input,correct_logit_contribution,max_competitor_contribution,margin_contribution'
+    'attention-vs-value-swap.csv' = 'configuration_id,layer,head,combo,intervened_token_exact,token_delta,intervened_mean_margin,margin_delta,finite'
+    'head-pair-interactions.csv' = 'configuration_id,layer,action,intervened_token_exact,token_delta,intervened_mean_margin,margin_delta,contribution_cosine,cancellation_ratio,finite'
+    'teacher-forced-free-running.csv' = 'configuration_id,tap_name,tf_token_exact,fr_token_exact,fr_sequence_exact,fr_nll,fr_first_error_survival,fr_margin_q10,fr_all_finite'
+    'depth-control.csv' = 'configuration_id,layers,max_drop_block,proj_drop'
+    'diagnosis.csv' = 'verdict,reasons,thresholds_fixed_before_results'
+    'next-step-candidates.csv' = 'candidate,rationale,verdict'
+    'budget.csv' = 'item,count,limit,ok'
+}
+
 $allConfigs = @('L19_SEED_1', 'L19_SEED_2', 'L19_SEED_4', 'L18_SEED_2_CONTROL')
 $kTrainHash = 'fnv1a64:5a64ca2d1aa7f29f'
 $kCalibrationHash = 'fnv1a64:71806d5bf19c090a'
@@ -77,6 +95,33 @@ function SourcePath([string]$Name) {
     if ($script:FixtureInput) { return (Join-Path $script:FixtureInput $Name) }
     return (Join-Path $ReportRoot $Name)
 }
+function RequireHeader([string]$Name, [string]$Expected) {
+    $path = SourcePath $Name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "source file missing: $Name" }
+    $line = Get-Content -LiteralPath $path -TotalCount 1
+    if ([string]::IsNullOrWhiteSpace($line)) { Fail "source schema mismatch: $Name" }
+    # Export-Csv quotes column names; compare parsed ordered names, not quoting style.
+    $actual = @($line.Split(',') | ForEach-Object { $_.Trim('"') }) -join ','
+    if ($actual -cne $Expected) { Fail "source schema mismatch: $Name" }
+}
+function Write-CanonicalFixtureCsv([string]$Dir, [string]$Name, [string]$PartialHeader, [string[]]$Rows) {
+    $partialColumns = @($PartialHeader.Split(','))
+    $columns = @($sourceSchemas[$Name].Split(','))
+    $canonicalRows = foreach ($row in $Rows) {
+        $values = @($row.Split(','))
+        if ($values.Count -ne $partialColumns.Count) { Fail "self-test fixture row shape mismatch: $Name" }
+        $fields = @{}
+        for ($i = 0; $i -lt $partialColumns.Count; $i++) { $fields[$partialColumns[$i]] = $values[$i] }
+        ($columns | ForEach-Object { if ($fields.ContainsKey($_)) { $fields[$_] } else { '0' } }) -join ','
+    }
+    Write-FixtureCsv (Join-Path $Dir $Name) $sourceSchemas[$Name] @($canonicalRows)
+}
+function Set-FixtureField([string]$Dir, [string]$Name, [int]$Index, [string]$Field, [string]$Value) {
+    $path = Join-Path $Dir $Name
+    $rows = @(Import-Csv -LiteralPath $path)
+    $rows[$Index].$Field = $Value
+    $rows | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding utf8
+}
 function ParseFinite([string]$Value, [string]$Field, [string]$RowName) {
     if ([string]::IsNullOrWhiteSpace($Value)) { Fail "missing numeric value: $RowName.$Field" }
     $parsed = 0.0
@@ -94,6 +139,7 @@ function AssertConfig([string]$Value, [string]$Field, [string]$RowName) {
 }
 
 function AssertSourceEvidence() {
+    foreach ($name in $sourceFiles) { RequireHeader $name $sourceSchemas[$name] }
     $ds = @(Import-Csv -LiteralPath (SourcePath 'dataset-anchors.csv'))
     if ($ds.Count -ne 4) { Fail 'dataset-anchors row count mismatch (expected 4)' }
     foreach ($row in $ds) {
@@ -127,7 +173,7 @@ function AssertSourceEvidence() {
             default { Fail "trajectory-anchors unknown checkpoint: $($row.checkpoint)" }
         }
     }
-    foreach ($name in @('attention-statistics.csv', 'head-ablation.csv', 'head-only.csv',
+    foreach ($name in @('head-probe-by-seed.csv', 'attention-statistics.csv', 'head-ablation.csv', 'head-only.csv',
         'context-vs-projection.csv', 'projection-contributions.csv',
         'attention-vs-value-swap.csv', 'head-pair-interactions.csv',
         'teacher-forced-free-running.csv', 'depth-control.csv')) {
@@ -348,7 +394,7 @@ function Write-TrajectoryAnchorFixture([string]$Dir) {
         $rows += "$($cfg),AR_DEV_FINAL,320,sequence_exact,$($p.arFinalSeq),true"
         $rows += "$($cfg),AR_DEV_FINAL,320,autoregressive_nll,$($p.arFinalNll),true"
     }
-    Write-FixtureCsv (Join-Path $Dir 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' $rows
+    Write-CanonicalFixtureCsv $Dir 'trajectory-anchors.csv' 'configuration_id,checkpoint,step,metric,value,match' $rows
 }
 if ($SelfTest) {
     # Tracked historical bundle verification stays in SelfTest (not live build reports).
@@ -361,12 +407,12 @@ if ($SelfTest) {
         Write-DatasetAnchorFixture $in
         Write-TrajectoryAnchorFixture $in
         foreach ($name in @('head-probe-by-seed.csv','attention-statistics.csv','head-ablation.csv','head-only.csv','context-vs-projection.csv','projection-contributions.csv','attention-vs-value-swap.csv','head-pair-interactions.csv','teacher-forced-free-running.csv','depth-control.csv')) {
-            Write-FixtureCsv (Join-Path $in $name) 'configuration_id,value' @('L19_SEED_1,0.5')
+            Write-CanonicalFixtureCsv $in $name 'configuration_id,value' @('L19_SEED_1,0.5')
         }
-        Write-FixtureCsv (Join-Path $in 'diagnosis.csv') 'verdict,reasons,thresholds_fixed_before_results' @(
+        Write-CanonicalFixtureCsv $in 'diagnosis.csv' 'verdict,reasons,thresholds_fixed_before_results' @(
             'UNDETERMINED,synthetic-fixture-contract-check,true')
-        Write-FixtureCsv (Join-Path $in 'next-step-candidates.csv') 'id,note' @('n1,synthetic')
-        Write-FixtureCsv (Join-Path $in 'budget.csv') 'item,count,limit,ok' @('interventions,4,4,true')
+        Write-CanonicalFixtureCsv $in 'next-step-candidates.csv' 'id,note' @('n1,synthetic')
+        Write-CanonicalFixtureCsv $in 'budget.csv' 'item,count,limit,ok' @('interventions,4,4,true')
         $script:FixtureInput = $in
         AssertSourceEvidence
         $script:PristineSelfTestInput = Join-Path $fixture.Root 'pristine'
@@ -375,9 +421,21 @@ if ($SelfTest) {
             [IO.File]::Copy($file.FullName, (Join-Path $script:PristineSelfTestInput $file.Name))
         }
         $script:FixtureInput = $in
+        ExpectSelfTestRejects 'source schema mismatch' 'source schema mismatch: head-probe-by-seed.csv' {
+            $path = Join-Path $in 'head-probe-by-seed.csv'
+            $lines = [IO.File]::ReadAllLines($path)
+            $lines[0] = $lines[0].Replace('configuration_id', 'wrong_configuration_id')
+            [IO.File]::WriteAllLines($path, $lines, $utf8)
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'missing head-probe evidence' 'source file missing: head-probe-by-seed.csv' {
+            Remove-Item -LiteralPath (Join-Path $in 'head-probe-by-seed.csv') -Force
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
         ExpectSelfTestRejects 'tampered diagnosis thresholds' 'diagnosis thresholds_fixed_before_results must be true' {
-            Write-FixtureCsv (Join-Path $in 'diagnosis.csv') 'verdict,reasons,thresholds_fixed_before_results' @(
-                'UNDETERMINED,synthetic-fixture-contract-check,false')
+            Set-FixtureField $in 'diagnosis.csv' 0 'thresholds_fixed_before_results' 'false'
             AssertSourceEvidence
         }
         $script:FixtureInput = $in
