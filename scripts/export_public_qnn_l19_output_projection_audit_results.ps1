@@ -34,6 +34,24 @@ $sourceFiles = @(
     'depth-control.csv', 'diagnosis.csv',
     'previous-result-correction.csv', 'next-step-candidates.csv', 'budget.csv'
 )
+$sourceSchemas = [ordered]@{
+    'configuration.csv' = 'configuration_id,seed,layers,final_step,max_drop_block,ar_selected_step'
+    'dataset-usage.csv' = 'dataset,role,hash,rows'
+    'projection-matrix-summary.csv' = 'configuration_id,layer,sigma_min,sigma_max,condition_double,condition_float,math_rank,float_rank,effective_rank,participation_ratio,frobenius_norm,spectral_norm,determinant_sign,log_abs_determinant'
+    'singular-value-summary.csv' = 'configuration_id,layer,sigma_min,sigma_max,condition_double,math_rank,float_rank,effective_rank'
+    'rank-and-conditioning.csv' = 'configuration_id,layer,sigma_min,sigma_max,condition_double,condition_float,math_rank,float_rank,effective_rank,participation_ratio,frobenius_norm,spectral_norm,determinant_sign,log_abs_determinant'
+    'probe-transport-summary.csv' = 'configuration_id,layer,partition,context_token_exact,from_scratch_token_exact,transport_token_exact,warm_start_token_exact,max_logit_diff,mean_logit_diff,rms_logit_diff,argmax_flips,token_exact_diff'
+    'probe-transport-by-seed.csv' = 'configuration_id,layer,partition,context_token_exact,from_scratch_token_exact,transport_token_exact,warm_start_token_exact,max_logit_diff,mean_logit_diff,rms_logit_diff,argmax_flips,token_exact_diff'
+    'float-double-comparison.csv' = 'configuration_id,layer,partition,max_logit_diff,mean_logit_diff,rms_logit_diff,argmax_flips,token_exact_diff'
+    'nullspace-summary.csv' = 'configuration_id,layer,overall_lost_fraction'
+    'from-scratch-vs-transport.csv' = 'configuration_id,layer,partition,from_scratch_exact,transport_exact,warm_start_exact,transport_argmax_flips'
+    'depth-control.csv' = 'configuration_id,layers,max_drop_block,math_rank,condition_double,nullspace_fraction'
+    'diagnosis.csv' = 'verdict,preserved_layers,ill_conditioned_layers,lost_layers,audited_layers,criteria_fixed_before_results,reason'
+    'previous-result-correction.csv' = 'previous_claim,previous_evidence,this_audit_verdict,correction_required'
+    'next-step-candidates.csv' = 'candidate,rationale,verdict'
+    'budget.csv' = 'item,count,limit,ok'
+}
+
 $allConfigs = @('L19_SEED_1', 'L19_SEED_2', 'L19_SEED_4', 'L18_SEED_2_CONTROL')
 $kTrainHash = 'fnv1a64:5a64ca2d1aa7f29f'
 $kCalibrationHash = 'fnv1a64:71806d5bf19c090a'
@@ -71,6 +89,33 @@ function SourcePath([string]$Name) {
     if ($script:FixtureInput) { return (Join-Path $script:FixtureInput $Name) }
     return (Join-Path $ReportRoot $Name)
 }
+function RequireHeader([string]$Name, [string]$Expected) {
+    $path = SourcePath $Name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "source file missing: $Name" }
+    $line = Get-Content -LiteralPath $path -TotalCount 1
+    if ([string]::IsNullOrWhiteSpace($line)) { Fail "source schema mismatch: $Name" }
+    # Export-Csv quotes column names; compare parsed ordered names, not quoting style.
+    $actual = @($line.Split(',') | ForEach-Object { $_.Trim('"') }) -join ','
+    if ($actual -cne $Expected) { Fail "source schema mismatch: $Name" }
+}
+function Write-CanonicalFixtureCsv([string]$Dir, [string]$Name, [string]$PartialHeader, [string[]]$Rows) {
+    $partialColumns = @($PartialHeader.Split(','))
+    $columns = @($sourceSchemas[$Name].Split(','))
+    $canonicalRows = foreach ($row in $Rows) {
+        $values = @($row.Split(','))
+        if ($values.Count -ne $partialColumns.Count) { Fail "self-test fixture row shape mismatch: $Name" }
+        $fields = @{}
+        for ($i = 0; $i -lt $partialColumns.Count; $i++) { $fields[$partialColumns[$i]] = $values[$i] }
+        ($columns | ForEach-Object { if ($fields.ContainsKey($_)) { $fields[$_] } else { '0' } }) -join ','
+    }
+    Write-FixtureCsv (Join-Path $Dir $Name) $sourceSchemas[$Name] @($canonicalRows)
+}
+function Set-FixtureField([string]$Dir, [string]$Name, [int]$Index, [string]$Field, [string]$Value) {
+    $path = Join-Path $Dir $Name
+    $rows = @(Import-Csv -LiteralPath $path)
+    $rows[$Index].$Field = $Value
+    $rows | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding utf8
+}
 function ParseFinite([string]$Value, [string]$Field, [string]$RowName) {
     if ([string]::IsNullOrWhiteSpace($Value)) { Fail "missing numeric value: $RowName.$Field" }
     $parsed = 0.0
@@ -88,6 +133,7 @@ function AssertConfig([string]$Value, [string]$Field, [string]$RowName) {
 }
 
 function AssertSourceEvidence() {
+    foreach ($name in $sourceFiles) { RequireHeader $name $sourceSchemas[$name] }
     $ds = @(Import-Csv -LiteralPath (SourcePath 'dataset-usage.csv'))
     if ($ds.Count -ne 4) { Fail 'dataset-usage row count mismatch (expected 4)' }
     foreach ($row in $ds) {
@@ -224,45 +270,136 @@ any results were produced.
 "@
 }
 
-if ($SelfTest) {
-    $script:FixtureInput = $null
-    AssertSourceEvidence
-    $fixtureRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\output-projection-exporter-selftest-{0}" -f ([Guid]::NewGuid().ToString('N')))))
-    $buildPrefix = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build')) + '\'
-    if (-not $fixtureRoot.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail 'self-test fixture escaped build' }
-    $fixtureInput = Join-Path $fixtureRoot 'input'
-    $fixtureOutput = Join-Path $fixtureRoot 'output'
-    [void](New-Item -ItemType Directory -Path $fixtureInput -Force)
-    [void](New-Item -ItemType Directory -Path $fixtureOutput -Force)
-    foreach ($name in $sourceFiles) {
-        $source = Join-Path $ReportRoot $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Fail "self-test fixture source missing: $name" }
-        [IO.File]::Copy($source, (Join-Path $fixtureInput $name), $true)
+
+function Write-FixtureCsv([string]$Path, [string]$Header, [string[]]$Rows) {
+    [IO.File]::WriteAllLines($Path, (@($Header) + $Rows), $utf8)
+}
+function ExpectSelfTestRejects([string]$Label, [string]$ExpectedMarker, [scriptblock]$Action) {
+    # Every case starts with the exact positive fixture, including files removed by earlier cases.
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:FixtureInput -File)) {
+        [IO.File]::Delete($file.FullName)
     }
-    $script:FixtureInput = $fixtureInput
-    $savedOutput = $OutputRoot
-    $OutputRoot = $fixtureOutput
-    $failed = $false
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PristineSelfTestInput -File)) {
+        [IO.File]::Copy($file.FullName, (Join-Path $script:FixtureInput $file.Name))
+    }
+    try { & $Action } catch {
+        if ($_.Exception.Message.Contains($ExpectedMarker, [StringComparison]::Ordinal)) {
+            Write-Host "self-test expected rejection: $Label [$ExpectedMarker]"
+            return
+        }
+        Fail "self-test wrong rejection for ${Label}: $($_.Exception.Message) (expected $ExpectedMarker)"
+    }
+    Fail "self-test negative case did not fail: $Label"
+}
+function New-SyntheticSelfTestRoot() {
+    $root = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\exporter-selftest-fixture-" + [Guid]::NewGuid().ToString('N'))))
+    $buildPrefix = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build')) + '\'
+    if (-not $root.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail 'self-test fixture escaped build' }
+    $input = Join-Path $root 'input'
+    $output = Join-Path $root 'output'
+    [void](New-Item -ItemType Directory -Path $input -Force)
+    [void](New-Item -ItemType Directory -Path $output -Force)
+    return [pscustomobject]@{ Root = $root; Input = $input; Output = $output }
+}
+function Write-DatasetUsageFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-usage.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-ConfigurationFixture([string]$Dir, [string]$Header) {
+    Write-FixtureCsv (Join-Path $Dir 'configuration.csv') $Header @(
+        'L19_SEED_1,1,19,320,2,16',
+        'L19_SEED_2,2,19,320,1,4',
+        'L19_SEED_4,4,19,320,0,12',
+        'L18_SEED_2_CONTROL,2,18,320,2,4')
+}
+function Write-DatasetAnchorFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-anchors.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-TrajectoryAnchorFixture([string]$Dir) {
+    $rows = @()
+    foreach ($cfg in $allConfigs) {
+        $p = $kPinned[$cfg]
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),token_exact,$($p.arSelTok),true"
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),sequence_exact,$($p.arSelSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,token_exact,$($p.arFinalTok),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,sequence_exact,$($p.arFinalSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,autoregressive_nll,$($p.arFinalNll),true"
+    }
+    Write-FixtureCsv (Join-Path $Dir 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' $rows
+}
+if ($SelfTest) {
+    $fixture = New-SyntheticSelfTestRoot
     try {
-        $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'diagnosis.csv'))
-        $tampered = $text -replace 'criteria_fixed_before_results', 'criteria_fixed_after_results'
-        [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'diagnosis.csv'), $tampered)
+        $in = $fixture.Input
+        Write-DatasetUsageFixture $in
+        Write-ConfigurationFixture $in 'configuration_id,seed,layers,final_step,max_drop_block,ar_selected_step'
+        foreach ($name in @('projection-matrix-summary.csv','singular-value-summary.csv','rank-and-conditioning.csv','float-double-comparison.csv','from-scratch-vs-transport.csv','depth-control.csv')) {
+            Write-CanonicalFixtureCsv $in $name 'configuration_id,layer,value' @('L19_SEED_1,10,0.5')
+        }
+        Write-CanonicalFixtureCsv $in 'probe-transport-summary.csv' 'configuration_id,layer,partition,max_logit_diff,argmax_flips,token_exact_diff' @(
+            'L19_SEED_1,10,AR_DEVELOPMENT_V3,0.001,0,0')
+        Write-CanonicalFixtureCsv $in 'probe-transport-by-seed.csv' 'configuration_id,layer,partition,max_logit_diff,argmax_flips,token_exact_diff' @(
+            'L19_SEED_1,10,AR_DEVELOPMENT_V3,0.001,0,0')
+        Write-CanonicalFixtureCsv $in 'nullspace-summary.csv' 'configuration_id,layer,overall_lost_fraction' @(
+            'L19_SEED_1,10,0.05')
+        Write-CanonicalFixtureCsv $in 'diagnosis.csv' 'verdict,criteria_fixed_before_results,reasons' @(
+            'OUTPUT_PROJECTION_PRESERVES_INFORMATION,true,synthetic-fixture-contract-check')
+        Write-CanonicalFixtureCsv $in 'previous-result-correction.csv' 'id,note' @('c1,synthetic')
+        Write-CanonicalFixtureCsv $in 'next-step-candidates.csv' 'id,note' @('n1,synthetic')
+        Write-CanonicalFixtureCsv $in 'budget.csv' 'item,count,limit,ok' @('audits,4,4,true')
+        $script:FixtureInput = $in
         AssertSourceEvidence
-    } catch { $failed = $true }
-    if (-not $failed) { Fail 'self-test negative case did not fail: tampered diagnosis header' }
-    $script:FixtureInput = $fixtureInput
-    $failed = $false
-    try {
-        $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'budget.csv'))
-        $tampered = $text -replace '(?m)^([^,]+,[^,]+,[^,]+,)true$', '$1false'
-        [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'budget.csv'), $tampered)
-        AssertSourceEvidence
-    } catch { $failed = $true }
-    if (-not $failed) { Fail 'self-test negative case did not fail: tampered budget ok flag' }
-    $OutputRoot = $savedOutput
-    $script:FixtureInput = $null
-    [IO.Directory]::Delete($fixtureRoot, $true)
-    Write-Host "output-projection public export: self-test PASS"
+        $script:PristineSelfTestInput = Join-Path $fixture.Root 'pristine'
+        [void](New-Item -ItemType Directory -Path $script:PristineSelfTestInput)
+        foreach ($file in @(Get-ChildItem -LiteralPath $in -File)) {
+            [IO.File]::Copy($file.FullName, (Join-Path $script:PristineSelfTestInput $file.Name))
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'source schema mismatch' 'source schema mismatch: projection-matrix-summary.csv' {
+            $path = Join-Path $in 'projection-matrix-summary.csv'
+            $lines = [IO.File]::ReadAllLines($path)
+            $lines[0] = $lines[0].Replace('configuration_id', 'wrong_configuration_id')
+            [IO.File]::WriteAllLines($path, $lines, $utf8)
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'criteria_fixed=false' 'diagnosis criteria_fixed_before_results must be true' {
+            Set-FixtureField $in 'diagnosis.csv' 0 'criteria_fixed_before_results' 'false'
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'budget ok=false' 'budget limit exceeded: audits' {
+            Set-FixtureField $in 'budget.csv' 0 'ok' 'false'
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'missing dataset-usage' 'dataset-usage.csv' {
+            Remove-Item -LiteralPath (Join-Path $in 'dataset-usage.csv') -Force
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'bad FINAL rows' 'FINAL holdout must remain unopened' {
+            Set-FixtureField $in 'dataset-usage.csv' 3 'rows' '24'
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'non-finite nullspace' 'non-finite value: nullspace-summary:' {
+            Set-FixtureField $in 'nullspace-summary.csv' 0 'overall_lost_fraction' 'nan'
+            AssertSourceEvidence
+        }
+        Write-Host 'output-projection public export: self-test PASS (fixture-contained)'
+    } finally {
+        $script:FixtureInput = $null
+        $script:PristineSelfTestInput = $null
+        if (Test-Path -LiteralPath $fixture.Root) { [IO.Directory]::Delete($fixture.Root, $true) }
+    }
     exit 0
 }
 

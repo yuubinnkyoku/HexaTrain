@@ -531,17 +531,59 @@ function NewSelfTestFixture() {
     $fixtureOutput = Join-Path $fixtureRoot 'output'
     [void](New-Item -ItemType Directory -Path $fixtureInput -Force)
     [void](New-Item -ItemType Directory -Path $fixtureOutput -Force)
+    # Tracked historical public CSVs are allowed; live build/reports are not required.
     $publicRoot = Join-Path $repoRoot 'docs\results\qnn-htp-l19-first-error-margin-2026-08'
     foreach ($name in $copied) {
         $source = Join-Path $publicRoot $name
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Fail "self-test fixture source missing: $name" }
         [IO.File]::Copy($source, (Join-Path $fixtureInput $name), $true)
     }
-    $reportRoot = Join-Path $repoRoot 'build\reports\qnn-l19-first-error-margin-2026-08'
-    foreach ($name in $privateTokenFiles) {
-        $source = Join-Path $reportRoot $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Fail "self-test fixture private source missing: $name" }
-        [IO.File]::Copy($source, (Join-Path $fixtureInput $name), $true)
+    # Synthesize private margin-token files that satisfy SWFC count/median pins
+    # from the tracked public configuration.csv.
+    $cfgRows = @(Import-Csv -LiteralPath (Join-Path $fixtureInput 'configuration.csv'))
+    $hypRows = @(Import-Csv -LiteralPath (Join-Path $fixtureInput 'hypothesis-decision.csv'))
+    $h2MedianRow = @($hypRows | Where-Object { $_.hypothesis -eq 'H2_CRITICAL_TOKEN_MARGIN_LOSS' -and $_.evidence_metric -eq 'SWFC_MEDIAN_MARGIN' })[0]
+    if ($null -eq $h2MedianRow) { Fail 'self-test missing H2 median hypothesis row' }
+    $pooledMedian = [double]$h2MedianRow.evidence_value
+    $perConfig = [ordered]@{}
+    foreach ($config in @('L19_SEED_1','L19_SEED_2','L19_SEED_4','L18_SEED_2_CONTROL')) {
+        $cfgRow = @($cfgRows | Where-Object configuration_id -eq $config)[0]
+        if ($null -eq $cfgRow) { Fail "self-test missing configuration row: $config" }
+        $swfc = [int]$cfgRow.swfc_count
+        $median = [double]$cfgRow.swfc_median_margin
+        $vals = New-Object 'System.Collections.Generic.List[double]'
+        for ($i = 0; $i -lt $swfc; $i++) { $vals.Add($median) }
+        $perConfig[$config] = @{ Count=$swfc; Median=$median; Vals=$vals }
+    }
+    # L19-only pooled SWFC set must reproduce the pinned hypothesis median.
+    $seed4 = $perConfig['L19_SEED_4']
+    $replaceCount = 4
+    $vals4 = New-Object 'System.Collections.Generic.List[double]'
+    for ($i = 0; $i -lt ($seed4.Count - $replaceCount); $i++) { $vals4.Add($seed4.Median) }
+    for ($i = 0; $i -lt $replaceCount; $i++) { $vals4.Add($pooledMedian) }
+    $perConfig['L19_SEED_4'].Vals = $vals4
+    $l19 = @()
+    foreach ($cfg in @('L19_SEED_1','L19_SEED_2','L19_SEED_4')) {
+        foreach ($v in $perConfig[$cfg].Vals) { $l19 += [double]$v }
+    }
+    $s = @($l19 | Sort-Object)
+    $pi = [int][math]::Floor(($s.Count - 1) / 2)
+    if ([double]$s[$pi] -ne $pooledMedian) {
+        Fail "unable to synthesize pooled SWFC median fixture ($($s[$pi]) != $pooledMedian)"
+    }
+    foreach ($cfg in @('L19_SEED_1','L19_SEED_2','L19_SEED_4')) {
+        $ss = @($perConfig[$cfg].Vals | Sort-Object)
+        $mi = [int][math]::Floor(($ss.Count - 1) / 2)
+        if ([double]$ss[$mi] -ne $perConfig[$cfg].Median) { Fail "per-config median broken: $cfg" }
+    }
+    foreach ($config in @('L19_SEED_1','L19_SEED_2','L19_SEED_4','L18_SEED_2_CONTROL')) {
+        $rows = New-Object 'System.Collections.Generic.List[string]'
+        $rows.Add('bucket,selected_self_margin')
+        foreach ($v in $perConfig[$config].Vals) {
+            $rows.Add("SELECTED_WRONG_FINAL_CORRECT,$([string]$v)")
+        }
+        for ($i = 0; $i -lt 8; $i++) { $rows.Add('BOTH_CORRECT,1.5') }
+        [IO.File]::WriteAllLines((Join-Path $fixtureInput "margin-tokens-$config.csv"), $rows)
     }
     return [pscustomobject]@{ Root=$fixtureRoot; Input=$fixtureInput; Output=$fixtureOutput }
 }
