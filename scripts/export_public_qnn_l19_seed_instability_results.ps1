@@ -167,7 +167,8 @@ function Assert-NoPrivateData([string]$Root) {
 
 function Assert-PublicBundle(
     [string]$Root,
-    [ValidateSet('Current', 'Historical')][string]$SourceProvenance = 'Current'
+    [ValidateSet('Current', 'Historical')][string]$SourceProvenance = 'Current',
+    [switch]$AllowMissingLiveIdentity
 ) {
     $manifestPath = Join-Path $Root 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'MANIFEST_MISSING' }
@@ -228,9 +229,14 @@ function Assert-PublicBundle(
         throw 'PRIVATE_IDENTITY_HASH_INTEGRITY'
     }
     $liveIdentityPath = Join-Path $repoRoot 'build\reports\qnn-probe-optimization-audit\manifest.csv'
-    # Live diagnostic identity file is optional in SelfTest isolation mode.
-    if ((Test-Path -LiteralPath $liveIdentityPath) -and
-        (Get-Sha256 $liveIdentityPath) -ne $identityHashes[0].sha256) {
+    # Production export is strict: live identity must exist and match the
+    # pinned manifest hash. Self-test isolation may pass
+    # -AllowMissingLiveIdentity so historical bundle checks can run without
+    # live diagnostic reports. When the live file exists, a hash mismatch is
+    # rejected in both modes.
+    if (-not (Test-Path -LiteralPath $liveIdentityPath)) {
+        if (-not $AllowMissingLiveIdentity) { throw 'PRIVATE_IDENTITY_SOURCE_MISSING' }
+    } elseif ((Get-Sha256 $liveIdentityPath) -ne $identityHashes[0].sha256) {
         throw 'PRIVATE_IDENTITY_SOURCE_HASH_MISMATCH'
     }
     $diagnosis = Import-Csv -LiteralPath (Join-Path $Root 'diagnosis.csv')
@@ -278,7 +284,7 @@ function Assert-PublicBundle(
 }
 
 if ($SelfTest) {
-    Assert-PublicBundle $OutputRoot -SourceProvenance Historical
+    Assert-PublicBundle $OutputRoot -SourceProvenance Historical -AllowMissingLiveIdentity
     $negativeRoot = Join-Path $repoRoot 'build\reports\qnn-l19-seed-instability-export-selftest'
     if (Test-Path -LiteralPath $negativeRoot) { Remove-Item -Recurse -Force -LiteralPath $negativeRoot }
     New-Item -ItemType Directory -Force -Path $negativeRoot | Out-Null
@@ -297,7 +303,7 @@ if ($SelfTest) {
     $tamperedManifest.production_sources[0].sha256 = '0' * 64
     $tamperedManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tamperedManifestPath -Encoding utf8
     $tamperRejected = $false
-    try { Assert-PublicBundle $tamperedRoot -SourceProvenance Historical } catch {
+    try { Assert-PublicBundle $tamperedRoot -SourceProvenance Historical -AllowMissingLiveIdentity } catch {
         $tamperRejected = $_.Exception.Message -eq 'HISTORICAL_SOURCE_PROVENANCE_NOT_FOUND'
     }
     if (-not $tamperRejected) { throw 'HISTORICAL_SOURCE_TAMPER_NEGATIVE_TEST_INEFFECTIVE' }

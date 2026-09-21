@@ -124,17 +124,6 @@ function Assert-PrivateInputs([string]$Root) {
     }
 }
 
-function Test-PrivateInputs([string]$Root) {
-    if (-not (Test-Path -LiteralPath $Root)) {
-        return $false
-    }
-    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
-        throw 'PRIVATE_ROOT_NOT_DIRECTORY'
-    }
-    Assert-PrivateInputs $Root
-    return $true
-}
-
 function Assert-ExactUniqueSet([object[]]$Actual, [string[]]$Expected, [string]$Label) {
     $actualStrings = @($Actual | ForEach-Object {[string]$_})
     if (@($actualStrings | Sort-Object -Unique).Count -ne $actualStrings.Count) {
@@ -464,27 +453,10 @@ function Export-Bundle([string]$Private, [string]$Output, [string]$Commit, [stri
 $resolvedPrivate = Join-Path $repoRoot $PrivateRoot
 $resolvedOutput = Join-Path $repoRoot $OutputRoot
 if ($SelfTest) {
+    # SelfTest is intentionally tracked-bundle-only. It never reads live
+    # private diagnostic reports under build/private-diagnostics.
+    # Production export path (else branch) is unchanged.
     $trackedManifest = Assert-TrackedBundle $resolvedOutput
-    if ($false -and (Test-PrivateInputs $resolvedPrivate)) {
-        $historicalSourceRevision = Assert-HistoricalProductionSources `
-            (Join-Path $resolvedOutput 'manifest.json') $trackedManifest
-        $temp = Join-Path ([IO.Path]::GetTempPath()) ("phonelm-attention-minimal-" + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Force -Path $temp | Out-Null
-        try {
-            Copy-Item -LiteralPath (Join-Path $resolvedOutput 'README.md') -Destination (Join-Path $temp 'README.md')
-            Export-Bundle $resolvedPrivate $temp $trackedManifest.source_commit $historicalSourceRevision
-            foreach ($name in $allowList) {
-                if ((Get-NormalizedSha256 (Join-Path $temp $name)) -ne
-                    (Get-NormalizedSha256 (Join-Path $resolvedOutput $name))) {
-                    throw "DETERMINISTIC_EXPORT_MISMATCH:$name"
-                }
-            }
-        } finally {
-            Remove-Item -LiteralPath $temp -Recurse -Force
-        }
-    } else {
-        Write-Host 'ATTENTION_MINIMAL_CAUSE_PRIVATE_REGEN_SKIPPED: tracked hashes, source hashes, schemas, controls, and safety contract verified'
-    }
 
     $tamperedRoot = Join-Path $repoRoot 'build\reports\qnn-l19-attention-minimal-cause-provenance-tamper-selftest'
     if (Test-Path -LiteralPath $tamperedRoot) { Remove-Item -Recurse -Force -LiteralPath $tamperedRoot }
@@ -508,6 +480,7 @@ if ($SelfTest) {
         $missingProvenanceRejected = $_.Exception.Message -like 'HISTORICAL_MANIFEST_HISTORY_MISSING:*'
     }
     if (-not $missingProvenanceRejected) { throw 'HISTORICAL_PROVENANCE_MISSING_NEGATIVE_TEST_INEFFECTIVE' }
+    Write-Host 'ATTENTION_MINIMAL_CAUSE_PRIVATE_REGEN_SKIPPED: tracked hashes, source hashes, schemas, controls, and safety contract verified'
     Write-Host 'ATTENTION_MINIMAL_CAUSE_EXPORT_SELF_TEST_PASS'
 } else {
     Export-Bundle $resolvedPrivate $resolvedOutput $SourceCommit
