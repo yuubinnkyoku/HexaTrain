@@ -450,13 +450,89 @@ function Export-Bundle([string]$Private, [string]$Output, [string]$Commit, [stri
     }
 }
 
+function New-SyntheticPrivateFixture([string]$Root) {
+    foreach ($relative in @('decisions','cycle-001','cycle-002','cycle-003')) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $Root $relative) | Out-Null
+    }
+    $registry = @{hypotheses=@(@{id='H1';hypothesis='synthetic hypothesis';supporting_evidence=@('synthetic support');counterevidence=@('synthetic counter');prediction='synthetic prediction';cheapest_test='synthetic test';negative_control='synthetic control'})}
+    $registry | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'hypothesis-registry.json') -Encoding utf8
+    foreach ($number in 1..3) {
+        $decision = @{made_before_results=$true;experiment="synthetic cycle $number";reason='synthetic reason';negative_controls=@('synthetic control');budget=@{full_training_runs=1;internal_state_interventions=1}}
+        $decision | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root ("decisions/decision-{0:d3}.json" -f $number)) -Encoding utf8
+    }
+    Write-Csv @([pscustomobject]@{audit='synthetic';status='PASS'}) (Join-Path $Root 'cycle-001/measurement-audit.csv')
+    $evaluation = @(
+        [pscustomobject]@{configuration_id='L19_SEED_1';depth=19;seed=1;intervention='LEARNED_ALPHA_1_NOOP';checkpoint_preserved='true';teacher_token_exact=7;teacher_token_total=8;teacher_nll=0.1;free_token_exact=6;free_token_total=8;free_sequence_exact=1;free_sequence_total=2;free_nll=0.2;median_first_error=4;margin_q10=0.01;minimum_teacher_margin=0.001;tie_count=0;all_finite='true';private_sentinel='synthetic-private-eval-only'},
+        [pscustomobject]@{configuration_id='L19_SEED_2';depth=19;seed=2;intervention='EVAL_ATTENTION_ALPHA_0';checkpoint_preserved='true';teacher_token_exact=5;teacher_token_total=8;teacher_nll=0.3;free_token_exact=4;free_token_total=8;free_sequence_exact=0;free_sequence_total=2;free_nll=0.4;median_first_error=2;margin_q10=0.02;minimum_teacher_margin=0.002;tie_count=0;all_finite='true';private_sentinel='synthetic-private-eval-only'}
+    )
+    Write-Csv $evaluation (Join-Path $Root 'cycle-001/evaluation-interventions.csv')
+    $training = @(
+        [pscustomobject]@{configuration_id='L19_SEED_1';depth=19;seed=1;intervention='TRAIN_FIXED_SELF';steps=2;train_finite='true';final_train_loss=0.7;frozen_scope_pass='true';teacher_token_exact=7;teacher_token_total=8;teacher_nll=0.1;free_token_exact=6;free_token_total=8;free_sequence_exact=1;free_sequence_total=2;free_nll=0.2;median_first_error=4;margin_q10=0.01;all_finite='true';private_sentinel='synthetic-private-train-only'},
+        [pscustomobject]@{configuration_id='L19_SEED_2';depth=19;seed=2;intervention='FREEZE_VO_INITIAL';steps=2;train_finite='true';final_train_loss=0.8;frozen_scope_pass='true';teacher_token_exact=5;teacher_token_total=8;teacher_nll=0.3;free_token_exact=4;free_token_total=8;free_sequence_exact=0;free_sequence_total=2;free_nll=0.4;median_first_error=2;margin_q10=0.02;all_finite='true';private_sentinel='synthetic-private-train-only'}
+    )
+    Write-Csv @($training[0]) (Join-Path $Root 'cycle-002/training-results-cycle2.csv')
+    Write-Csv @($training[1]) (Join-Path $Root 'cycle-003/training-results-cycle3.csv')
+}
+
+function Assert-SyntheticExportBundle([string]$Private, [string]$Output, [string]$Commit) {
+    $manifest = Get-Content -Raw -LiteralPath (Join-Path $Output 'manifest.json') | ConvertFrom-Json
+    Assert-ExactUniqueSet @(Get-ChildItem -LiteralPath $Output -File | ForEach-Object Name) $allowList 'SYNTHETIC_FILES'
+    Assert-ExactUniqueSet @($manifest.allow_list) $allowList 'SYNTHETIC_ALLOW_LIST'
+    Assert-ExactUniqueSet @($manifest.files.path) @($allowList | Where-Object {$_ -ne 'manifest.json'}) 'SYNTHETIC_MANIFEST_FILES'
+    if ($manifest.schema_version -ne 1 -or $manifest.protocol -ne 'ATTENTION_MINIMAL_CAUSE_V1' -or $manifest.source_commit -ne $Commit) { throw 'SYNTHETIC_IDENTITY_MISMATCH' }
+    foreach ($entry in $manifest.files) {
+        if ($entry.sha256_normalized_lf -ne (Get-NormalizedSha256 (Join-Path $Output $entry.path))) { throw "SYNTHETIC_FILE_HASH_MISMATCH:$($entry.path)" }
+    }
+    $expectedSources = @('host_tests/attention_minimal_cause_lib.h','host_tests/attention_minimal_cause.cpp','scripts/run_l19_attention_minimal_cause.ps1','scripts/export_public_qnn_l19_attention_minimal_cause.ps1')
+    Assert-ExactUniqueSet @($manifest.sources.path) $expectedSources 'SYNTHETIC_SOURCES'
+    foreach ($entry in $manifest.sources) {
+        if ($entry.sha256_normalized_lf -ne (Get-GitObjectSha256 $Commit $entry.path)) { throw "SYNTHETIC_SOURCE_HASH_MISMATCH:$($entry.path)" }
+    }
+    $expectedAggregates = @('cycle-001/measurement-audit.csv','cycle-001/evaluation-interventions.csv','cycle-002/training-results-cycle2.csv','cycle-003/training-results-cycle3.csv')
+    Assert-ExactUniqueSet @($manifest.private_aggregates.aggregate) $expectedAggregates 'SYNTHETIC_PRIVATE_AGGREGATES'
+    foreach ($entry in $manifest.private_aggregates) {
+        if ($entry.sha256_normalized_lf -ne (Get-NormalizedSha256 (Join-Path $Private $entry.aggregate))) { throw "SYNTHETIC_PRIVATE_HASH_MISMATCH:$($entry.aggregate)" }
+    }
+    $evaluation = @(Import-Csv (Join-Path $Output 'evaluation-interventions.csv'))
+    $training = @(Import-Csv (Join-Path $Output 'training-results.csv'))
+    if ($evaluation.Count -ne 2 -or $training.Count -ne 2 -or
+        $evaluation[0].intervention -ne 'LEARNED_ALPHA_1_NOOP' -or $evaluation[1].free_token_exact -ne '4' -or
+        $training[0].intervention -ne 'TRAIN_FIXED_SELF' -or $training[1].final_train_loss -ne '0.8' -or
+        $evaluation[0].PSObject.Properties.Name -contains 'private_sentinel' -or
+        $training[0].PSObject.Properties.Name -contains 'private_sentinel') { throw 'SYNTHETIC_ROW_PROJECTION_MISMATCH' }
+    if ($manifest.final_holdout_opens -ne 0 -or $manifest.device_runs -ne 0 -or $manifest.htp_runs -ne 0 -or
+        $manifest.adb_operations -ne 0 -or $manifest.ui_operations -ne 0 -or $manifest.count_from_one -ne 0) { throw 'SYNTHETIC_SAFETY_COUNT_MISMATCH' }
+    foreach ($file in Get-ChildItem -LiteralPath $Output -File) {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        if ($text -match '[A-Za-z]:[\\/]' -or $text -match 'build[\\/]private-diagnostics' -or $text -match 'synthetic-private-(eval|train)-only') { throw "SYNTHETIC_PRIVATE_LEAK:$($file.Name)" }
+    }
+}
+
 $resolvedPrivate = Join-Path $repoRoot $PrivateRoot
 $resolvedOutput = Join-Path $repoRoot $OutputRoot
 if ($SelfTest) {
-    # SelfTest is intentionally tracked-bundle-only. It never reads live
-    # private diagnostic reports under build/private-diagnostics.
-    # Production export path (else branch) is unchanged.
+    # Historical bundle checks use tracked evidence; integration uses only generated synthetic inputs.
     $trackedManifest = Assert-TrackedBundle $resolvedOutput
+
+    $syntheticRoot = Join-Path $repoRoot ("build/attention-minimal-export-selftest-" + [Guid]::NewGuid().ToString('N'))
+    $syntheticPrivate = Join-Path $syntheticRoot 'private'
+    $syntheticOutput = Join-Path $syntheticRoot 'public'
+    try {
+        New-SyntheticPrivateFixture $syntheticPrivate
+        New-Item -ItemType Directory -Force -Path $syntheticOutput | Out-Null
+        [IO.File]::WriteAllText((Join-Path $syntheticOutput 'README.md'), "Synthetic export integration fixture.`n")
+        Export-Bundle $syntheticPrivate $syntheticOutput $SourceCommit
+        Assert-SyntheticExportBundle $syntheticPrivate $syntheticOutput $SourceCommit
+        Remove-Item -LiteralPath (Join-Path $syntheticPrivate 'cycle-001/measurement-audit.csv') -Force
+        $missingRejected = $false
+        try { Export-Bundle $syntheticPrivate $syntheticOutput $SourceCommit } catch {
+            $missingRejected = $_.Exception.Message -eq 'MISSING_PRIVATE_INPUT:cycle-001/measurement-audit.csv'
+        }
+        if (-not $missingRejected) { throw 'SYNTHETIC_MISSING_INPUT_NEGATIVE_TEST_INEFFECTIVE' }
+        Write-Host 'ATTENTION_MINIMAL_CAUSE_SYNTHETIC_PRODUCTION_EXPORT_PASS'
+    } finally {
+        if (Test-Path -LiteralPath $syntheticRoot) { Remove-Item -Recurse -Force -LiteralPath $syntheticRoot }
+    }
 
     $tamperedRoot = Join-Path $repoRoot 'build\reports\qnn-l19-attention-minimal-cause-provenance-tamper-selftest'
     if (Test-Path -LiteralPath $tamperedRoot) { Remove-Item -Recurse -Force -LiteralPath $tamperedRoot }
