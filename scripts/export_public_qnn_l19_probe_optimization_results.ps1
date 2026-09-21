@@ -218,20 +218,120 @@ root-cause evidence.
 "@
 }
 
+
+function Write-FixtureCsv([string]$Path, [string]$Header, [string[]]$Rows) {
+    [IO.File]::WriteAllLines($Path, (@($Header) + $Rows), $utf8)
+}
+function ExpectSelfTestRejects([string]$Label, [scriptblock]$Action) {
+    $failed = $false
+    try { & $Action } catch { $failed = $true }
+    if (-not $failed) { Fail "self-test negative case did not fail: $Label" }
+}
+function New-SyntheticSelfTestRoot() {
+    $root = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\exporter-selftest-fixture-" + [Guid]::NewGuid().ToString('N'))))
+    $buildPrefix = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build')) + '\'
+    if (-not $root.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail 'self-test fixture escaped build' }
+    $input = Join-Path $root 'input'
+    $output = Join-Path $root 'output'
+    [void](New-Item -ItemType Directory -Path $input -Force)
+    [void](New-Item -ItemType Directory -Path $output -Force)
+    return [pscustomobject]@{ Root = $root; Input = $input; Output = $output }
+}
+function Write-DatasetUsageFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-usage.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-ConfigurationFixture([string]$Dir, [string]$Header) {
+    Write-FixtureCsv (Join-Path $Dir 'configuration.csv') $Header @(
+        'L19_SEED_1,1,19,320,2,16',
+        'L19_SEED_2,2,19,320,1,4',
+        'L19_SEED_4,4,19,320,0,12',
+        'L18_SEED_2_CONTROL,2,18,320,2,4')
+}
+function Write-DatasetAnchorFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-anchors.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-TrajectoryAnchorFixture([string]$Dir) {
+    $rows = @()
+    foreach ($cfg in $allConfigs) {
+        $p = $kPinned[$cfg]
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),token_exact,$($p.arSelTok),true"
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),sequence_exact,$($p.arSelSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,token_exact,$($p.arFinalTok),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,sequence_exact,$($p.arFinalSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,autoregressive_nll,$($p.arFinalNll),true"
+    }
+    Write-FixtureCsv (Join-Path $Dir 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' $rows
+}
 if ($SelfTest) {
-    $script:ReportRootBackup = $ReportRoot
-    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('qnn-probe-opt-export-selftest-' + [Guid]::NewGuid().ToString('N'))
-    [void](New-Item -ItemType Directory -Path $tempRoot -Force)
+    $fixture = New-SyntheticSelfTestRoot
     try {
-        foreach ($name in $sourceFiles) {
-            Copy-Item -LiteralPath (Join-Path $ReportRoot $name) -Destination $tempRoot
+        $in = $fixture.Input
+        Write-DatasetUsageFixture $in
+        Write-FixtureCsv (Join-Path $in 'configuration.csv') 'configuration_id,seed,layers,final_step,max_drop_block,ar_selected_step' @(
+            'L19_SEED_1,1,19,320,2,16','L19_SEED_2,2,19,320,1,4','L19_SEED_4,4,19,320,0,12','L18_SEED_2_CONTROL,2,18,320,2,4')
+        Write-FixtureCsv (Join-Path $in 'legacy-vs-canonical-probe.csv') 'configuration_id,layer,tap,legacy_dev_exact,canonical_gd_dev_exact,canonical_lbfgs_dev_exact,canonical_minus_legacy_dev_exact,canonical_lbfgs_train_ce' @(
+            'L19_SEED_1,10,ATT,20,22,23,3,1.25')
+        foreach ($name in @('corrected-layer-curve.csv','corrected-attention-taps.csv','feature-geometry.csv','row-nullspace.csv','calibration-selection.csv')) {
+            Write-FixtureCsv (Join-Path $in $name) 'configuration_id,layer,tap,value' @('L19_SEED_1,10,ATT,0.5')
         }
-        $script:FixtureInput = $tempRoot
+        Write-FixtureCsv (Join-Path $in 'optimization-summary.csv') 'configuration_id,layer,tap,condition,solver,init,lambda,converged,grad_norm,objective,train_ce,dev_exact' @(
+            'L19_SEED_1,10,ATT,CLEAN,CANONICAL_LBFGS,zero,0,1,0.01,0.5,1.0,23')
+        Write-FixtureCsv (Join-Path $in 'diagnosis.csv') 'verdict,criteria_fixed_before_results,reasons' @(
+            'C1_OPTIMIZATION_INSUFFICIENCY,true,synthetic-fixture-contract-check')
+        Write-FixtureCsv (Join-Path $in 'previous-result-corrections.csv') 'id,note' @('c1,synthetic')
+        Write-FixtureCsv (Join-Path $in 'next-step-candidates.csv') 'id,note' @('n1,synthetic')
+        Write-FixtureCsv (Join-Path $in 'budget.csv') 'item,count,limit,ok' @('trajectory,4,4,true')
+        $script:FixtureInput = $in
         AssertSourceEvidence
-        Write-Host 'probe-optimization public export: SELF-TEST PASS (schema checks)'
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'diagnosis criteria_fixed' {
+            Write-FixtureCsv (Join-Path $in 'diagnosis.csv') 'verdict,criteria_fixed_before_results,reasons' @(
+                'C1_OPTIMIZATION_INSUFFICIENCY,false,synthetic-fixture-contract-check')
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'budget ok=false' {
+            Write-FixtureCsv (Join-Path $in 'budget.csv') 'item,count,limit,ok' @('trajectory,4,4,false')
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'non-finite train_ce' {
+            Write-FixtureCsv (Join-Path $in 'optimization-summary.csv') 'configuration_id,layer,tap,condition,solver,init,lambda,converged,grad_norm,objective,train_ce,dev_exact' @(
+                'L19_SEED_1,10,ATT,CLEAN,CANONICAL_LBFGS,zero,0,1,nan,0.5,1.0,23')
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'missing required file' {
+            Remove-Item -LiteralPath (Join-Path $in 'dataset-usage.csv') -Force
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'bad TRAIN hash' {
+            Write-FixtureCsv (Join-Path $in 'dataset-usage.csv') 'dataset,role,hash,rows' @(
+                "TRAIN,probe,fnv1a64:0000000000000000,32",
+                "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+                "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+                "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'unknown verdict' {
+            Write-FixtureCsv (Join-Path $in 'diagnosis.csv') 'verdict,criteria_fixed_before_results,reasons' @(
+                'NOT_A_REAL_VERDICT,true,synthetic-fixture-contract-check')
+            AssertSourceEvidence
+        }
+        Write-Host 'probe-optimization public export: SELF-TEST PASS (fixture-contained)'
     } finally {
         $script:FixtureInput = $null
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $fixture.Root) { [IO.Directory]::Delete($fixture.Root, $true) }
     }
     exit 0
 }

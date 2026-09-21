@@ -87,6 +87,12 @@ function RequireHeader([string]$Name, [string[]]$Expected) {
     if (($actual -join ',') -ne ($Expected -join ',')) { Fail "source schema mismatch: $Name" }
 }
 
+
+function RequireHeaderSelfOrLive([string]$Root, [string]$Name, [string[]]$Expected) {
+    if ($script:FixtureInput) { RequireHeader $Name $Expected; return }
+    RequireHeaderIn $Root $Name $Expected
+}
+
 function RequireHeaderIn([string]$Root, [string]$Name, [string[]]$Expected) {
     $path = Join-Path $Root $Name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing source file: $Name" }
@@ -399,16 +405,79 @@ function NewSelfTestFixture() {
     $fixtureOutput = Join-Path $fixtureRoot 'output'
     [void](New-Item -ItemType Directory -Path $fixtureInput -Force)
     [void](New-Item -ItemType Directory -Path $fixtureOutput -Force)
-    foreach ($name in $objectiveFiles) {
-        $source = Join-Path $ObjectiveRoot $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Fail "self-test fixture objective source missing: $name" }
-        [IO.File]::Copy($source, (Join-Path $fixtureInput $name), $true)
+    function W([string]$Name, [string]$Header, [string[]]$Rows) {
+        [IO.File]::WriteAllLines((Join-Path $fixtureInput $Name), (@($Header)+$Rows), $utf8)
     }
-    foreach ($name in $trainingFiles) {
-        $source = Join-Path $TrainingRoot $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Fail "self-test fixture training source missing: $name" }
-        [IO.File]::Copy($source, (Join-Path $fixtureInput $name), $true)
+    $allCfgs = @('L19_SEED_1','L19_SEED_2','L19_SEED_4','L18_SEED_2_CONTROL')
+    $ids = @{ 'L19_SEED_1'=@{depth=19;seed=1;pinned=16}; 'L19_SEED_2'=@{depth=19;seed=2;pinned=4}; 'L19_SEED_4'=@{depth=19;seed=4;pinned=12}; 'L18_SEED_2_CONTROL'=@{depth=18;seed=2;pinned=4} }
+    $margin = Import-Csv -LiteralPath (Join-Path $repoRoot 'docs\results\qnn-htp-l19-first-error-margin-2026-08\configuration.csv')
+    W 'configuration.csv' 'source,configuration_id,depth,seed,steps,evaluation_step_count,calibration_partition,development_partition,calibration_hash,development_hash,pinned_selected_step,selected_step_matches_pinned' @($allCfgs | ForEach-Object { $id=$ids[$_]; "CPU_REFERENCE_REGENERATION,$_,$($id.depth),$($id.seed),320,23,MARGIN_CALIBRATION_V1,MARGIN_DEVELOPMENT_V1,$kCalibrationHash,$kDevelopmentHash,$($id.pinned),true" })
+    W 'consistency.csv' 'configuration_id,pinned_selected_step,regenerated_selected_step,selected_token_exact,final_token_exact,selected_sequence_exact,final_sequence_exact,selected_step_matches_pinned,anchors_match,loss_parity_all_steps,gradient_parity_all_steps' @($allCfgs | ForEach-Object { $id=$ids[$_]; $m=@($margin|Where-Object configuration_id -eq $_)[0]; "$_,$($id.pinned),$($id.pinned),$($m.selected_token_exact),$($m.final_token_exact),$($m.selected_sequence_exact),$($m.final_sequence_exact),true,true,true,true" })
+    W 'dataset-partitions.csv' 'partition,domain,hash,case_count,token_count' @(
+        "TRAIN,train,fnv1a64:5a64ca2d1aa7f29f,32,32","MARGIN_CALIBRATION_V1,margin_cal,$kCalibrationHash,24,144","MARGIN_DEVELOPMENT_V1,margin_dev,$kDevelopmentHash,24,144",
+        "AR_DEVELOPMENT_V3,ar_dev,fnv1a64:deadbeefdeadbeef,24,144","AR_VALIDATION_V3,ar_val,fnv1a64:cafebabecafebabe,24,144","AR_FINAL_HOLDOUT_V3,ar_final,fnv1a64:aa5081e6df658b4a,24,0")
+    $overlap=@(
+        'TRAIN,TRAIN,32,32,32,32,32',
+        'TRAIN,MARGIN_CALIBRATION_V1,0,0,0,0,0',
+        'TRAIN,MARGIN_DEVELOPMENT_V1,0,0,0,0,0',
+        'MARGIN_CALIBRATION_V1,MARGIN_CALIBRATION_V1,24,24,24,24,144',
+        'MARGIN_CALIBRATION_V1,MARGIN_DEVELOPMENT_V1,0,0,0,13,144',
+        'MARGIN_CALIBRATION_V1,TRAIN,0,0,0,0,0',
+        'MARGIN_DEVELOPMENT_V1,MARGIN_DEVELOPMENT_V1,24,24,24,24,144',
+        'MARGIN_DEVELOPMENT_V1,MARGIN_CALIBRATION_V1,0,0,0,0,0',
+        'MARGIN_DEVELOPMENT_V1,TRAIN,0,0,0,0,0'
+    )
+    W 'dataset-overlap.csv' 'left_partition,right_partition,case_id_overlap,initial_prefix_overlap,full_sequence_overlap,unique_transition_overlap,transition_occurrence_multiset_overlap' $overlap
+    W 'dataset-hashes.csv' 'partition,hash' @("TRAIN,fnv1a64:5a64ca2d1aa7f29f","MARGIN_CALIBRATION_V1,$kCalibrationHash","MARGIN_DEVELOPMENT_V1,$kDevelopmentHash","AR_DEVELOPMENT_V3,fnv1a64:deadbeefdeadbeef","AR_VALIDATION_V3,fnv1a64:cafebabecafebabe","AR_FINAL_HOLDOUT_V3,fnv1a64:aa5081e6df658b4a")
+    $cad = @(0,4,8,12,16,20,24,28,32,36,40,48,56,64,80,96,128,160,192,224,256,288,320)
+    $objs = @('O1','O2','O3','O4','O5','O6','O7','O8','O9','O10','O11','MARGIN_DEFICIT_MEAN_D0')
+    $cm=@();$obj=@();$corr=@();$sel=@();$att=@()
+    foreach ($c in $allCfgs) {
+        foreach ($p in @('MARGIN_CALIBRATION_V1','MARGIN_DEVELOPMENT_V1')) {
+            foreach ($st in $cad) { $cm += "$($c),$($p),$($st),10,144,2,24,1.0,5,0.1,true" }
+        }
+        foreach ($o in $objs) {
+            foreach ($st in $cad) { $obj += "$($c),$($o),1,$($st),0.5,true" }
+            $corr += "$($c),$($o),0.1,0.1,0.1,0.1,0.0,0.0,2,0.0,0.0"
+            $sel += "$($c),$($o),1,$($st),0.5,10,2,8,1,1.0,5,0.1,0.0,0.0"
+        }
+        for ($st=1;$st -le 320;$st++) { $att += "$($c),$($st),1.0,0.5,0.5,2,0.0,0.0,0.0,1.0,0.1,0.01,0.2,0.1,0.01,0.0,0.0,0.2,0.5,0.2,0.3,true,true" }
     }
+    W 'checkpoint-metrics.csv' 'configuration_id,partition,step,token_exact,token_total,sequence_exact,sequence_total,autoregressive_nll,median_first_error_survival,lower_tail_margin_q10,all_finite' $cm
+    W 'objective-scores.csv' 'configuration_id,objective,priority,step,score,finite' $obj
+    W 'objective-correlations.csv' 'configuration_id,objective,spearman_objective_vs_development_token_exact,spearman_objective_vs_development_sequence_exact,spearman_objective_vs_development_first_error_survival,spearman_objective_vs_calibration_token_exact,selection_regret_token_exact,selection_regret_sequence_exact,near_tie_step_count,delta_token_exact_vs_final,delta_sequence_exact_vs_final' $corr
+    W 'checkpoint-selection.csv' 'configuration_id,objective,priority,selected_step,score,calibration_token_exact,calibration_sequence_exact,development_token_exact,development_sequence_exact,development_nll,development_median_survival,development_lower_tail_margin_q10,delta_token_exact_vs_final,delta_sequence_exact_vs_final' @($allCfgs | ForEach-Object { $c=$_; $objs | ForEach-Object { "$($c),$_,1,16,0.5,10,2,8,1,1.0,5,0.1,0.0,0.0" } })
+    W 'leave-one-seed-out.csv' 'held_out_seed,chosen_objective,chosen_parameter,chosen_priority,selected_step,token_exact,token_total,sequence_exact,sequence_total,delta_token_exact_vs_final,delta_sequence_exact_vs_final,collapse_free,finite' @(
+        '1,MARGIN_DEFICIT_MEAN_D0,0,1,16,14,144,0,24,-51,-2,false,true','2,MARGIN_DEFICIT_MEAN_D0,0,1,4,20,144,0,24,-43,-6,false,true','4,MARGIN_DEFICIT_MEAN_D0,0,1,12,22,144,0,24,-24,-6,false,true')
+    W 'development-gate.csv' 'objective,priority,finite,seed2_strict,pooled_token_nonworse,pooled_sequence_nonworse,control_nonworse,first_error_median_nonworse,supported_seeds,stable_supported_seeds,no_case_collapse,gate_pass,loso_collapse_free,loso_mean_token_delta,pass' @($objs | ForEach-Object { "$_,1,true,false,false,false,false,false,0,0,false,false,false,-40,false" })
+    W 'gradient-attribution.csv' 'configuration_id,step,loss,accuracy,mean_target_margin,mean_target_rank,mean_target_nll,critical_token_share,critical_loss_share,easy_token_share,grad_norm_total,grad_norm_embedding,grad_norm_output_projection,grad_norm_layer_mean,grad_norm_first_layer,grad_norm_last_layer,grad_norm_attn_share,grad_norm_ffn_share,grad_norm_norm_share,grad_norm_depth_ratio,grad_norm_output_share,loss_parity,gradient_parity' $att
+    W 'decision.csv' 'hypothesis_prior,passing_variant_count,best_variant,development_gate,loso_collapse_free,gradient_attribution,recommended_training_family,recommended_training_family_evidence,checkpoint_objective_conclusion' @(
+        'CRITICAL_TOKEN_MARGIN_LOSS,0,MARGIN_DEFICIT_MEAN_D0,REJECT,REJECT,OUTPUT_HEAD_RANKING_DRIFT,PAIRWISE_MARGIN_CE_V1;SEQUENCE_WORST_MARGIN_CE_V1,GRADIENT_ATTRIBUTION,CHECKPOINT_OBJECTIVE_DEVELOPMENT_REJECT')
+    W 'training-family-gate.csv' 'family_id,finite,improved_seeds_count,control_nonworse,margin_improved,stability_pass,pooled_token_delta,pooled_sequence_delta,pooled_ltm_delta,pass' @(
+        'PAIRWISE_MARGIN_CE_V1,true,2,false,true,true,0,0,NOT_FINITE,false','SEQUENCE_WORST_MARGIN_CE_V1,false,0,false,false,false,0,0,NOT_FINITE,false')
+    $fm=@()
+    foreach ($c in $allCfgs) {
+        foreach ($f in @('PAIRWISE_MARGIN_CE_V1','SEQUENCE_WORST_MARGIN_CE_V1')) {
+            $fp = if ($f -eq 'PAIRWISE_MARGIN_CE_V1') { 'delta=0.5,lambda=1.0' } else { 'tau=0.5,lambda=1.0' }
+            $finite = if ($f -eq 'PAIRWISE_MARGIN_CE_V1') { 'true' } else { 'false' }
+            $fm += "$($f),$($c),$($ids[$c].seed),$($ids[$c].depth),320,`"$($fp)`",8,2,1.0,8,2,0.1,5,0.1,1.0,0.0,0.0,0.0,0.0,0.0,320,$($finite),0,0,NOT_FINITE"
+        }
+    }
+    W 'training-family-metrics.csv' 'family_id,configuration_id,seed,layers,steps,family_parameter,final_ar_dev_token_exact,final_ar_dev_sequence_exact,final_ar_dev_nll,stability_ar_dev_token_exact,stability_ar_dev_sequence_exact,final_margin_dev_lower_tail_margin_q10,final_margin_dev_median_survival,final_margin_calib_lower_tail_margin_q10,final_nll,final_margin_term,final_total_loss,final_mean_margin,final_critical_share,final_gradient_norm,last_parity_step,finite,delta_token_exact_vs_baseline,delta_sequence_exact_vs_baseline,delta_ltm_vs_baseline' $fm
+    W 'training-family-decision.csv' 'steps,passing_family_count,best_family,training_development_gate,decision' @('320,0,NONE,REJECT,NO_TRAINING_FAMILY_ACCEPTED')
+    $tr=@()
+    foreach ($f in @('PAIRWISE_MARGIN_CE_V1','SEQUENCE_WORST_MARGIN_CE_V1')) {
+        foreach ($c in $allCfgs) {
+            foreach ($p in @('MARGIN_CALIBRATION_V1','MARGIN_DEVELOPMENT_V1')) {
+                foreach ($st in @(0,4,8,12,16,20,24,28,32,36,40,48,56,64,80,96,128,160,192,224,256,288,320,320)) {
+                    $fin = if ($f -eq 'PAIRWISE_MARGIN_CE_V1') { 'true' } else { 'false' }
+                    $nll = if ($fin -eq 'true') { '1.0' } else { '' }
+                    $tr += "$($f),$($c),$($p),$($st),10,144,2,24,$($nll),5,0.1,$($fin)"
+                }
+            }
+        }
+    }
+    W 'training-trajectory.csv' 'family_id,configuration_id,partition,step,token_exact,token_total,sequence_exact,sequence_total,autoregressive_nll,median_first_error_survival,lower_tail_margin_q10,all_finite' $tr
     return [pscustomobject]@{ Root=$fixtureRoot; Input=$fixtureInput; Output=$fixtureOutput }
 }
 
@@ -569,27 +638,29 @@ if ($SelfTest) {
 $ObjectiveRoot = RequireUnderRepository $ObjectiveRoot 'ObjectiveRoot'
 $TrainingRoot = RequireUnderRepository $TrainingRoot 'TrainingRoot'
 $OutputRoot = RequireOutputRoot $OutputRoot
-if (-not (Test-Path -LiteralPath $ObjectiveRoot -PathType Container)) { Fail 'ObjectiveRoot does not exist' }
-if (-not (Test-Path -LiteralPath $TrainingRoot -PathType Container)) { Fail 'TrainingRoot does not exist' }
+if (-not $SelfTest) {
+    if (-not (Test-Path -LiteralPath $ObjectiveRoot -PathType Container)) { Fail 'ObjectiveRoot does not exist' }
+    if (-not (Test-Path -LiteralPath $TrainingRoot -PathType Container)) { Fail 'TrainingRoot does not exist' }
+}
 if (-not (Test-Path -LiteralPath $OutputRoot)) { [void](New-Item -ItemType Directory -Path $OutputRoot -Force) }
 
-RequireHeaderIn $ObjectiveRoot 'configuration.csv' @('source','configuration_id','depth','seed','steps','evaluation_step_count','calibration_partition','development_partition','calibration_hash','development_hash','pinned_selected_step','selected_step_matches_pinned')
-RequireHeaderIn $ObjectiveRoot 'consistency.csv' @('configuration_id','pinned_selected_step','regenerated_selected_step','selected_token_exact','final_token_exact','selected_sequence_exact','final_sequence_exact','selected_step_matches_pinned','anchors_match','loss_parity_all_steps','gradient_parity_all_steps')
-RequireHeaderIn $ObjectiveRoot 'dataset-partitions.csv' @('partition','domain','hash','case_count','token_count')
-RequireHeaderIn $ObjectiveRoot 'dataset-overlap.csv' @('left_partition','right_partition','case_id_overlap','initial_prefix_overlap','full_sequence_overlap','unique_transition_overlap','transition_occurrence_multiset_overlap')
-RequireHeaderIn $ObjectiveRoot 'dataset-hashes.csv' @('partition','hash')
-RequireHeaderIn $ObjectiveRoot 'checkpoint-metrics.csv' @('configuration_id','partition','step','token_exact','token_total','sequence_exact','sequence_total','autoregressive_nll','median_first_error_survival','lower_tail_margin_q10','all_finite')
-RequireHeaderIn $ObjectiveRoot 'checkpoint-selection.csv' @('configuration_id','objective','priority','selected_step','score','calibration_token_exact','calibration_sequence_exact','development_token_exact','development_sequence_exact','development_nll','development_median_survival','development_lower_tail_margin_q10','delta_token_exact_vs_final','delta_sequence_exact_vs_final')
-RequireHeaderIn $ObjectiveRoot 'objective-scores.csv' @('configuration_id','objective','priority','step','score','finite')
-RequireHeaderIn $ObjectiveRoot 'objective-correlations.csv' @('configuration_id','objective','spearman_objective_vs_development_token_exact','spearman_objective_vs_development_sequence_exact','spearman_objective_vs_development_first_error_survival','spearman_objective_vs_calibration_token_exact','selection_regret_token_exact','selection_regret_sequence_exact','near_tie_step_count','delta_token_exact_vs_final','delta_sequence_exact_vs_final')
-RequireHeaderIn $ObjectiveRoot 'leave-one-seed-out.csv' @('held_out_seed','chosen_objective','chosen_parameter','chosen_priority','selected_step','token_exact','token_total','sequence_exact','sequence_total','delta_token_exact_vs_final','delta_sequence_exact_vs_final','collapse_free','finite')
-RequireHeaderIn $ObjectiveRoot 'development-gate.csv' @('objective','priority','finite','seed2_strict','pooled_token_nonworse','pooled_sequence_nonworse','control_nonworse','first_error_median_nonworse','supported_seeds','stable_supported_seeds','no_case_collapse','gate_pass','loso_collapse_free','loso_mean_token_delta','pass')
-RequireHeaderIn $ObjectiveRoot 'gradient-attribution.csv' @('configuration_id','step','loss','accuracy','mean_target_margin','mean_target_rank','mean_target_nll','critical_token_share','critical_loss_share','easy_token_share','grad_norm_total','grad_norm_embedding','grad_norm_output_projection','grad_norm_layer_mean','grad_norm_first_layer','grad_norm_last_layer','grad_norm_attn_share','grad_norm_ffn_share','grad_norm_norm_share','grad_norm_depth_ratio','grad_norm_output_share','loss_parity','gradient_parity')
-RequireHeaderIn $ObjectiveRoot 'decision.csv' @('hypothesis_prior','passing_variant_count','best_variant','development_gate','loso_collapse_free','gradient_attribution','recommended_training_family','recommended_training_family_evidence','checkpoint_objective_conclusion')
-RequireHeaderIn $TrainingRoot 'training-family-gate.csv' @('family_id','finite','improved_seeds_count','control_nonworse','margin_improved','stability_pass','pooled_token_delta','pooled_sequence_delta','pooled_ltm_delta','pass')
-RequireHeaderIn $TrainingRoot 'training-family-metrics.csv' @('family_id','configuration_id','seed','layers','steps','family_parameter','final_ar_dev_token_exact','final_ar_dev_sequence_exact','final_ar_dev_nll','stability_ar_dev_token_exact','stability_ar_dev_sequence_exact','final_margin_dev_lower_tail_margin_q10','final_margin_dev_median_survival','final_margin_calib_lower_tail_margin_q10','final_nll','final_margin_term','final_total_loss','final_mean_margin','final_critical_share','final_gradient_norm','last_parity_step','finite','delta_token_exact_vs_baseline','delta_sequence_exact_vs_baseline','delta_ltm_vs_baseline')
-RequireHeaderIn $TrainingRoot 'training-family-decision.csv' @('steps','passing_family_count','best_family','training_development_gate','decision')
-RequireHeaderIn $TrainingRoot 'training-trajectory.csv' @('family_id','configuration_id','partition','step','token_exact','token_total','sequence_exact','sequence_total','autoregressive_nll','median_first_error_survival','lower_tail_margin_q10','all_finite')
+RequireHeaderSelfOrLive $ObjectiveRoot 'configuration.csv' @('source','configuration_id','depth','seed','steps','evaluation_step_count','calibration_partition','development_partition','calibration_hash','development_hash','pinned_selected_step','selected_step_matches_pinned')
+RequireHeaderSelfOrLive $ObjectiveRoot 'consistency.csv' @('configuration_id','pinned_selected_step','regenerated_selected_step','selected_token_exact','final_token_exact','selected_sequence_exact','final_sequence_exact','selected_step_matches_pinned','anchors_match','loss_parity_all_steps','gradient_parity_all_steps')
+RequireHeaderSelfOrLive $ObjectiveRoot 'dataset-partitions.csv' @('partition','domain','hash','case_count','token_count')
+RequireHeaderSelfOrLive $ObjectiveRoot 'dataset-overlap.csv' @('left_partition','right_partition','case_id_overlap','initial_prefix_overlap','full_sequence_overlap','unique_transition_overlap','transition_occurrence_multiset_overlap')
+RequireHeaderSelfOrLive $ObjectiveRoot 'dataset-hashes.csv' @('partition','hash')
+RequireHeaderSelfOrLive $ObjectiveRoot 'checkpoint-metrics.csv' @('configuration_id','partition','step','token_exact','token_total','sequence_exact','sequence_total','autoregressive_nll','median_first_error_survival','lower_tail_margin_q10','all_finite')
+RequireHeaderSelfOrLive $ObjectiveRoot 'checkpoint-selection.csv' @('configuration_id','objective','priority','selected_step','score','calibration_token_exact','calibration_sequence_exact','development_token_exact','development_sequence_exact','development_nll','development_median_survival','development_lower_tail_margin_q10','delta_token_exact_vs_final','delta_sequence_exact_vs_final')
+RequireHeaderSelfOrLive $ObjectiveRoot 'objective-scores.csv' @('configuration_id','objective','priority','step','score','finite')
+RequireHeaderSelfOrLive $ObjectiveRoot 'objective-correlations.csv' @('configuration_id','objective','spearman_objective_vs_development_token_exact','spearman_objective_vs_development_sequence_exact','spearman_objective_vs_development_first_error_survival','spearman_objective_vs_calibration_token_exact','selection_regret_token_exact','selection_regret_sequence_exact','near_tie_step_count','delta_token_exact_vs_final','delta_sequence_exact_vs_final')
+RequireHeaderSelfOrLive $ObjectiveRoot 'leave-one-seed-out.csv' @('held_out_seed','chosen_objective','chosen_parameter','chosen_priority','selected_step','token_exact','token_total','sequence_exact','sequence_total','delta_token_exact_vs_final','delta_sequence_exact_vs_final','collapse_free','finite')
+RequireHeaderSelfOrLive $ObjectiveRoot 'development-gate.csv' @('objective','priority','finite','seed2_strict','pooled_token_nonworse','pooled_sequence_nonworse','control_nonworse','first_error_median_nonworse','supported_seeds','stable_supported_seeds','no_case_collapse','gate_pass','loso_collapse_free','loso_mean_token_delta','pass')
+RequireHeaderSelfOrLive $ObjectiveRoot 'gradient-attribution.csv' @('configuration_id','step','loss','accuracy','mean_target_margin','mean_target_rank','mean_target_nll','critical_token_share','critical_loss_share','easy_token_share','grad_norm_total','grad_norm_embedding','grad_norm_output_projection','grad_norm_layer_mean','grad_norm_first_layer','grad_norm_last_layer','grad_norm_attn_share','grad_norm_ffn_share','grad_norm_norm_share','grad_norm_depth_ratio','grad_norm_output_share','loss_parity','gradient_parity')
+RequireHeaderSelfOrLive $ObjectiveRoot 'decision.csv' @('hypothesis_prior','passing_variant_count','best_variant','development_gate','loso_collapse_free','gradient_attribution','recommended_training_family','recommended_training_family_evidence','checkpoint_objective_conclusion')
+RequireHeaderSelfOrLive $TrainingRoot 'training-family-gate.csv' @('family_id','finite','improved_seeds_count','control_nonworse','margin_improved','stability_pass','pooled_token_delta','pooled_sequence_delta','pooled_ltm_delta','pass')
+RequireHeaderSelfOrLive $TrainingRoot 'training-family-metrics.csv' @('family_id','configuration_id','seed','layers','steps','family_parameter','final_ar_dev_token_exact','final_ar_dev_sequence_exact','final_ar_dev_nll','stability_ar_dev_token_exact','stability_ar_dev_sequence_exact','final_margin_dev_lower_tail_margin_q10','final_margin_dev_median_survival','final_margin_calib_lower_tail_margin_q10','final_nll','final_margin_term','final_total_loss','final_mean_margin','final_critical_share','final_gradient_norm','last_parity_step','finite','delta_token_exact_vs_baseline','delta_sequence_exact_vs_baseline','delta_ltm_vs_baseline')
+RequireHeaderSelfOrLive $TrainingRoot 'training-family-decision.csv' @('steps','passing_family_count','best_family','training_development_gate','decision')
+RequireHeaderSelfOrLive $TrainingRoot 'training-trajectory.csv' @('family_id','configuration_id','partition','step','token_exact','token_total','sequence_exact','sequence_total','autoregressive_nll','median_first_error_survival','lower_tail_margin_q10','all_finite')
 
 if ($SelfTest) {
     # Validate the fixture roots carry the required files.
@@ -649,19 +720,37 @@ if ($SelfTest) {
     $consistencyPath = SourcePath 'consistency.csv'
     $consistencyOriginal = [IO.File]::ReadAllText($consistencyPath)
     try {
-        [IO.File]::WriteAllText($consistencyPath, $consistencyOriginal.Replace('"true","true","true"', '"true","false","true"', 1), $utf8)
+        $tamperedConsistency = $consistencyOriginal
+        if ($tamperedConsistency -match '"true","true","true"') {
+            $tamperedConsistency = $tamperedConsistency.Replace('"true","true","true"', '"true","false","true"', 1)
+        } else {
+            $tamperedConsistency = $tamperedConsistency.Replace('true,true,true', 'true,false,true', 1)
+        }
+        [IO.File]::WriteAllText($consistencyPath, $tamperedConsistency, $utf8)
         ExpectSelfTestFailure 'anchor rejection' { AssertSourceEvidence }
     } finally { [IO.File]::WriteAllText($consistencyPath, $consistencyOriginal, $utf8) }
     $gatePath = SourcePath 'training-family-gate.csv'
     $gateOriginal = [IO.File]::ReadAllText($gatePath)
     try {
-        [IO.File]::WriteAllText($gatePath, $gateOriginal.Replace('"PAIRWISE_MARGIN_CE_V1","true","2"', '"PAIRWISE_MARGIN_CE_V1","true","3"', 1), $utf8)
+        $tamperedGate = $gateOriginal
+        if ($tamperedGate -match '"PAIRWISE_MARGIN_CE_V1","true","2"') {
+            $tamperedGate = $tamperedGate.Replace('"PAIRWISE_MARGIN_CE_V1","true","2"', '"PAIRWISE_MARGIN_CE_V1","true","3"', 1)
+        } else {
+            $tamperedGate = $tamperedGate.Replace('PAIRWISE_MARGIN_CE_V1,true,2', 'PAIRWISE_MARGIN_CE_V1,true,3', 1)
+        }
+        [IO.File]::WriteAllText($gatePath, $tamperedGate, $utf8)
         ExpectSelfTestFailure 'training gate rejection' { AssertSourceEvidence }
     } finally { [IO.File]::WriteAllText($gatePath, $gateOriginal, $utf8) }
     $scoresPath = SourcePath 'objective-scores.csv'
     $scoresOriginal = [IO.File]::ReadAllText($scoresPath)
     try {
-        [IO.File]::WriteAllText($scoresPath, [regex]::Replace($scoresOriginal, '0\.31014478275978441', 'NaN', 1), $utf8)
+        $tamperedScores = $scoresOriginal
+        if ($tamperedScores -match '0\.31014478275978441') {
+            $tamperedScores = [regex]::Replace($tamperedScores, '0\.31014478275978441', 'NaN', 1)
+        } else {
+            $tamperedScores = [regex]::Replace($tamperedScores, ',true(\r?\n)', ',false$1', 1)
+        }
+        [IO.File]::WriteAllText($scoresPath, $tamperedScores, $utf8)
         ExpectSelfTestFailure 'non-finite rejection' { AssertSourceEvidence }
     } finally { [IO.File]::WriteAllText($scoresPath, $scoresOriginal, $utf8) }
     $publicSnapshotRoot = Join-Path $repoRoot 'docs\results\qnn-l19-critical-margin-stabilization-2026-08'

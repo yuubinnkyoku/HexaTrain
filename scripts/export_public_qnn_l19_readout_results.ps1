@@ -412,42 +412,177 @@ parity, and head interventions are independent of that row builder.
 }
 
 $selfTestContext = $null
+
+function Write-FixtureCsv([string]$Path, [string]$Header, [string[]]$Rows) {
+    [IO.File]::WriteAllLines($Path, (@($Header) + $Rows), $utf8)
+}
+function ExpectSelfTestRejects([string]$Label, [scriptblock]$Action) {
+    $failed = $false
+    try { & $Action } catch { $failed = $true }
+    if (-not $failed) { Fail "self-test negative case did not fail: $Label" }
+}
+function New-SyntheticSelfTestRoot() {
+    $root = [IO.Path]::GetFullPath((Join-Path $repoRoot ("build\exporter-selftest-fixture-" + [Guid]::NewGuid().ToString('N'))))
+    $buildPrefix = [IO.Path]::GetFullPath((Join-Path $repoRoot 'build')) + '\'
+    if (-not $root.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) { Fail 'self-test fixture escaped build' }
+    $input = Join-Path $root 'input'
+    $output = Join-Path $root 'output'
+    [void](New-Item -ItemType Directory -Path $input -Force)
+    [void](New-Item -ItemType Directory -Path $output -Force)
+    return [pscustomobject]@{ Root = $root; Input = $input; Output = $output }
+}
+function Write-DatasetUsageFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-usage.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-ConfigurationFixture([string]$Dir, [string]$Header) {
+    Write-FixtureCsv (Join-Path $Dir 'configuration.csv') $Header @(
+        'L19_SEED_1,1,19,320,2,16',
+        'L19_SEED_2,2,19,320,1,4',
+        'L19_SEED_4,4,19,320,0,12',
+        'L18_SEED_2_CONTROL,2,18,320,2,4')
+}
+function Write-DatasetAnchorFixture([string]$Dir) {
+    Write-FixtureCsv (Join-Path $Dir 'dataset-anchors.csv') 'dataset,role,hash,rows' @(
+        "TRAIN,probe,$kTrainHash,32",
+        "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+        "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+        "AR_FINAL_HOLDOUT_V3,unopened,$kFinalHash,0")
+}
+function Write-TrajectoryAnchorFixture([string]$Dir) {
+    $rows = @()
+    foreach ($cfg in $allConfigs) {
+        $p = $kPinned[$cfg]
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),token_exact,$($p.arSelTok),true"
+        $rows += "$($cfg),AR_DEV_SELECTED,$($p.arSelected),sequence_exact,$($p.arSelSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,token_exact,$($p.arFinalTok),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,sequence_exact,$($p.arFinalSeq),true"
+        $rows += "$($cfg),AR_DEV_FINAL,320,autoregressive_nll,$($p.arFinalNll),true"
+    }
+    Write-FixtureCsv (Join-Path $Dir 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' $rows
+}
 if ($SelfTest) {
-    $script:FixtureInput = $null
-    # Pre-fly over the live private root, then run negative cases on a
-    # disposable fixture so the live reports are never modified.
-    AssertSourceEvidence
-    $fixture = NewSelfTestFixture
-    $script:FixtureInput = $fixture.Input
-    $savedOutput = $OutputRoot
-    $OutputRoot = $fixture.Output
-    $negative = {
-        $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'decision.csv'))
-        $tampered = $text -replace 'thresholds_fixed_before_results', 'thresholds_fixed_after_results'
-        [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'decision.csv'), $tampered)
+    $fixture = New-SyntheticSelfTestRoot
+    try {
+        $in = $fixture.Input
+        Write-DatasetAnchorFixture $in
+        Write-TrajectoryAnchorFixture $in
+        $ckptSteps = @{ AR_DEV_SELECTED = 0; AR_DEV_FINAL = 320 }
+        $baseline = @()
+        foreach ($cfg in $allConfigs) {
+            foreach ($cp in @('AR_DEV_SELECTED','AR_DEV_FINAL','BEST_TOKEN_EXACT')) {
+                $baseline += "$($cfg),$cp,1,1,1,1,1,1,0.5,0.5,1.0,2.0,0.5,2.0"
+            }
+        }
+        Write-FixtureCsv (Join-Path $in 'baseline-current-head.csv') 'configuration_id,checkpoint,head_train_tf_token_exact,head_cal_tf_token_exact,head_dev_tf_token_exact,head_cal_fr_token_exact,head_cal_fr_sequence_exact,head_dev_fr_token_exact,head_dev_fr_sequence_exact,head_dev_fr_nll,head_dev_fr_median_survival,head_dev_fr_margin_q10,head_dev_tf_mean_rank,head_dev_tf_mean_nll' $baseline
+        $expectedProbes = (22 * 3) + 21 + (8 * 8)
+        $probes = @()
+        # L19 seeds: 22 reps x 3 checkpoints = 66 each -> 198; formula is 151 total
+        # Use formula counts: 22*3 + 21 + 8*8
+        $seq = 0
+        $probeRows = @()
+        $curveRows = @()
+        $gridRows = @()
+        $repRows = @()
+        for ($i = 0; $i -lt $expectedProbes; $i++) {
+            $cfg = $allConfigs[$i % 4]
+            $step = 0
+            $rep = "rep$($i)"
+            $probeRows += "$($cfg),$step,$($rep),true,0,1.0,0.5,2.0,0.5,0.4"
+            $curveRows += "$($cfg),$step,$($rep),10,20,-10,12,12,8"
+            for ($g = 0; $g -lt 81; $g++) {
+                $sel = if ($g -eq 0) { 'true' } else { 'false' }
+                $gridRows += "$($cfg),$step,$($rep),$($g*25),$sel,1.0,0.5"
+            }
+            foreach ($ds in @('TRAIN','MARGIN_DEVELOPMENT_V1')) {
+                $repRows += "$($cfg),$step,$($rep),$($ds),0.1,2.0,1.0,0.5,0.8,0.1"
+            }
+        }
+        Write-FixtureCsv (Join-Path $in 'probe-selection.csv') 'configuration_id,checkpoint_step,rep,finite,selected_step,train_ce,cal_ce,dev_tf_mean_rank,dev_tf_mean_nll,dev_fr_nll' $probeRows
+        Write-FixtureCsv (Join-Path $in 'probe-layer-curve.csv') 'configuration_id,checkpoint_step,rep,probe_dev_fr_token_exact,head_dev_fr_token_exact,probe_minus_head_fr,probe_dev_tf_token_exact,probe_train_tf_token_exact,probe_cal_fr_token_exact' $curveRows
+        Write-FixtureCsv (Join-Path $in 'probe-training-grid.csv') 'configuration_id,checkpoint_step,rep,grid_step,is_selected,train_ce,cal_ce' $gridRows
+        $head = @()
+        foreach ($cfg in $allConfigs) {
+            foreach ($cand in @('A_WARM_START','B_REINIT','C_BIAS_ONLY')) {
+                $head += "$($cfg),$($cand),true,true,1.0,0.5,2.0,0.5,0.5,0.1"
+            }
+        }
+        Write-FixtureCsv (Join-Path $in 'head-retraining.csv') 'configuration_id,candidate,finite,frozen_unchanged,train_ce,cal_ce,dev_tf_mean_nll,dev_fr_nll,dev_fr_median_survival,dev_fr_margin_q10' $head
+        Write-FixtureCsv (Join-Path $in 'representation-metrics.csv') 'configuration_id,checkpoint_step,rep,dataset,eta2,effective_rank,norm_ratio,hidden_margin_midmedian,sign_agreement,alignment_cosine' $repRows
+        $geom = @()
+        foreach ($cfg in $allConfigs) {
+            for ($j = 0; $j -lt 32; $j++) { $geom += "$($cfg),class_row_norm,$($j),1.0" }
+            for ($j = 0; $j -lt 16; $j++) { $geom += "$($cfg),singular_value,$($j),1.0" }
+            $geom += "$($cfg),effective_rank,0,8.0"
+        }
+        Write-FixtureCsv (Join-Path $in 'head-geometry.csv') 'configuration_id,item,index,value' $geom
+        Write-FixtureCsv (Join-Path $in 'decision.csv') 'verdict,thresholds_fixed_before_results,reasons' @(
+            'UNDETERMINED,true,synthetic-fixture-contract-check')
+        $summary = @()
+        foreach ($cfg in $allConfigs) {
+            foreach ($cp in @('AR_DEV_SELECTED','AR_DEV_FINAL','BEST_TOKEN_EXACT')) {
+                foreach ($sc in @('head_tf','head_fr')) {
+                    foreach ($m in @('token_exact','sequence_exact','nll','median_survival','margin_q10','mean_rank','mean_nll')) {
+                        $summary += "$($cfg),$($cp),$($sc),$($m),0.5"
+                    }
+                }
+            }
+        }
+        # 4*3*2*7 = 168; need 84 -> use 2 metrics * 3 ckpt * 2 scope * 7? 4 configs * 3 * 7 = 84 with one scope? Use 4*3*2*3.5 no.
+        # 84 = 12 * 7: 4 configs * 3 checkpoints * 7 metrics, scope only head_tf or head_fr mixed
+        $summary = @()
+        $scopes = @('head_tf','head_fr')
+        $metrics = @('token_exact','sequence_exact','nll','median_survival','margin_q10','mean_rank','mean_nll')
+        $si = 0
+        foreach ($cfg in $allConfigs) {
+            foreach ($cp in @('AR_DEV_SELECTED','AR_DEV_FINAL','BEST_TOKEN_EXACT')) {
+                foreach ($m in $metrics) {
+                    $summary += "$($cfg),$($cp),$($scopes[$si % 2]),$($m),0.5"
+                    $si++
+                }
+            }
+        }
+        Write-FixtureCsv (Join-Path $in 'summary.csv') 'configuration_id,checkpoint,scope,metric,value' $summary
+        $script:FixtureInput = $in
         AssertSourceEvidence
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'tampered decision thresholds' {
+            Write-FixtureCsv (Join-Path $in 'decision.csv') 'verdict,thresholds_fixed_before_results,reasons' @(
+                'UNDETERMINED,false,synthetic-fixture-contract-check')
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'trajectory match false' {
+            Write-FixtureCsv (Join-Path $in 'trajectory-anchors.csv') 'configuration_id,checkpoint,step,metric,value,match' @(
+                "$($allConfigs[0]),AR_DEV_SELECTED,$($kPinned[$allConfigs[0]].arSelected),token_exact,$($kPinned[$allConfigs[0]].arSelTok),false",
+                "$($allConfigs[0]),AR_DEV_SELECTED,$($kPinned[$allConfigs[0]].arSelected),sequence_exact,$($kPinned[$allConfigs[0]].arSelSeq),true",
+                "$($allConfigs[0]),AR_DEV_FINAL,320,token_exact,$($kPinned[$allConfigs[0]].arFinalTok),true",
+                "$($allConfigs[0]),AR_DEV_FINAL,320,sequence_exact,$($kPinned[$allConfigs[0]].arFinalSeq),true",
+                "$($allConfigs[0]),AR_DEV_FINAL,320,autoregressive_nll,$($kPinned[$allConfigs[0]].arFinalNll),true")
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'tampered final hash' {
+            Write-FixtureCsv (Join-Path $in 'dataset-anchors.csv') 'dataset,role,hash,rows' @(
+                "TRAIN,probe,$kTrainHash,32",
+                "MARGIN_CALIBRATION_V1,step_select,$kCalibrationHash,144",
+                "MARGIN_DEVELOPMENT_V1,eval,$kDevelopmentHash,144",
+                "AR_FINAL_HOLDOUT_V3,unopened,fnv1a64:0000000000000000,0")
+            AssertSourceEvidence
+        }
+        $script:FixtureInput = $in
+        ExpectSelfTestRejects 'missing required file' {
+            Remove-Item -LiteralPath (Join-Path $in 'dataset-anchors.csv') -Force
+            AssertSourceEvidence
+        }
+        Write-Host 'readout diagnosis public exporter self-test PASS (fixture-contained)'
+    } finally {
+        $script:FixtureInput = $null
+        if (Test-Path -LiteralPath $fixture.Root) { [IO.Directory]::Delete($fixture.Root, $true) }
     }
-    ExpectSelfTestFailure 'tampered decision header' $negative
-    $script:FixtureInput = $fixture.Input
-    $negative2 = {
-        $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'trajectory-anchors.csv'))
-        $tampered = $text -replace '"true"', '"false"'
-        [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'trajectory-anchors.csv'), $tampered)
-        AssertSourceEvidence
-    }
-    ExpectSelfTestFailure 'tampered trajectory match' $negative2
-    $script:FixtureInput = $fixture.Input
-    $negative3 = {
-        $text = [IO.File]::ReadAllText((Join-Path $script:FixtureInput 'dataset-anchors.csv'))
-        $tampered = $text.Replace($kFinalHash, 'fnv1a64:0000000000000000')
-        [IO.File]::WriteAllText((Join-Path $script:FixtureInput 'dataset-anchors.csv'), $tampered)
-        AssertSourceEvidence
-    }
-    ExpectSelfTestFailure 'tampered final hash' $negative3
-    $OutputRoot = $savedOutput
-    $script:FixtureInput = $null
-    [IO.Directory]::Delete($fixture.Root, $true)
-    Write-Host "readout diagnosis public exporter self-test PASS"
     exit 0
 }
 

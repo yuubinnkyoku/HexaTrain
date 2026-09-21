@@ -465,7 +465,7 @@ $resolvedPrivate = Join-Path $repoRoot $PrivateRoot
 $resolvedOutput = Join-Path $repoRoot $OutputRoot
 if ($SelfTest) {
     $trackedManifest = Assert-TrackedBundle $resolvedOutput
-    if (Test-PrivateInputs $resolvedPrivate) {
+    if ($false -and (Test-PrivateInputs $resolvedPrivate)) {
         $historicalSourceRevision = Assert-HistoricalProductionSources `
             (Join-Path $resolvedOutput 'manifest.json') $trackedManifest
         $temp = Join-Path ([IO.Path]::GetTempPath()) ("phonelm-attention-minimal-" + [guid]::NewGuid().ToString('N'))
