@@ -31,8 +31,17 @@ QAIRT固定条件を弱めてはならない。
 [verification.md](docs/agent/verification.md) を読む。
 
 検証は変更範囲と作業段階に応じて
-**Fast / Targeted / Full**
-の3段階で行う。
+**Fast / Targeted / Full / PrGate**
+で行う。
+
+- **Fast**: 開発・反復中の軽量gate
+- **Targeted**: 変更範囲に応じた追加検証
+- **PrGate**: CI / pre-integration向け。cheap correctness層は常時、
+  heavy diagnostic full runsはpath dependencyで選択（fail-closed）
+- **Full**: milestone / formal evidence / 明示的formal validation
+
+`Fast < PrGate < Full` であり、Fullのheavy full runは削除・skipしない。
+詳細は [verification.md](docs/agent/verification.md) を正本とする。
 
 重い全体gateを局所修正や途中commitごとに反復してはならない。
 
@@ -117,6 +126,12 @@ fail fastとする。
 - mainへの統合前
 - release / formal result確定前
 - ユーザーがformal verificationを明示的に要求した場合
+
+PR / pre-integrationでは `verify_local.ps1 -PrGate` を用いてよい。
+ただし、共有production core / shared dataset変更ではPrGateも
+heavy full runs全部へfail-closedする。
+exporter fixture / SelfTestだけの変更では
+live diagnostic regenerationを要求しない。
 
 通常の途中commitや、
 専用 `codex/*` 作業branchへの保存pushでは、
