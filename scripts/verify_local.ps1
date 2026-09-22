@@ -12,12 +12,28 @@ param(
     # Additionally verify the QAIRT SDK and a QNN-enabled build + APK audit.
     [switch]$WithQairt,
     [string]$QairtSdkRoot = "",
-    [string]$ExpectedBuildId = ""
+    [string]$ExpectedBuildId = "",
+    # CI / pre-integration profile: keep cheap correctness layers unconditional
+    # and select heavy diagnostic fulls by fail-closed path policy. Full gate
+    # (no switches) remains unchanged and still runs every heavy full.
+    [switch]$PrGate,
+    # Optional explicit base ref for -PrGate changed-path discovery.
+    [string]$PrGateBaseRef = ""
 )
+
+if ($Fast -and $PrGate) {
+    throw "-Fast and -PrGate are mutually exclusive (Fast is iterative; PrGate is pre-integration)"
+}
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "qairt_version.ps1")
+
+$script:PhoneLmPrGatePlan = $null
+$script:PhoneLmPrGateEnabled = [bool]$PrGate
+if ($PrGate) {
+    . (Join-Path $PSScriptRoot "pr_gate_policy.ps1")
+}
 
 # Match README build instructions: the SDK lives under %LOCALAPPDATA%\Android\Sdk
 # on a fresh shell where ANDROID_HOME is not exported yet. Process-local only;
@@ -55,6 +71,38 @@ function Invoke-Step([string]$Name, [scriptblock]$Action) {
 
 function Add-Skip([string]$Name, [string]$Reason) {
     Add-Result $Name "SKIP" 0 $Reason
+}
+
+# True when a heavy diagnostic full should execute. Full and Fast keep their
+# historical meaning. Only -PrGate consults the dependency policy; failure to
+# plan safely is fail-closed (run the full).
+function Test-HeavyStepSelected([string]$StepName) {
+    if (-not $script:PhoneLmPrGateEnabled) { return $true }
+    $plan = $script:PhoneLmPrGatePlan
+    if ($null -eq $plan -or $plan.RunAllHeavy) { return $true }
+    return [bool]$plan.HeavySteps[$StepName].Run
+}
+
+function Get-HeavyStepSkipReason([string]$StepName) {
+    $plan = $script:PhoneLmPrGatePlan
+    if ($null -ne $plan -and -not $plan.RunAllHeavy -and
+        $null -ne $plan.HeavySteps[$StepName]) {
+        $reason = $plan.HeavySteps[$StepName].Reason
+        if ($reason) { return $reason }
+    }
+    return "pr gate: unaffected"
+}
+
+function Invoke-HeavyOrSkip([string]$Name, [string]$FastSkipReason, [scriptblock]$Action) {
+    if ($Fast) {
+        Add-Skip $Name $FastSkipReason
+        return
+    }
+    if (-not (Test-HeavyStepSelected $Name)) {
+        Add-Skip $Name (Get-HeavyStepSkipReason $Name)
+        return
+    }
+    Invoke-Step $Name $Action
 }
 
 function Invoke-Process([string]$Label, [string]$FilePath, [string[]]$Arguments) {
@@ -112,6 +160,18 @@ Push-Location $Root
 try {
     # Fail-fast: almost every step below relies on PowerShell 7.
     Resolve-PwshExe | Out-Null
+
+    if ($script:PhoneLmPrGateEnabled) {
+        $changeSet = Resolve-PhoneLmPrGateChangeSet -Root $Root -ExplicitBase $PrGateBaseRef
+        $planPaths = @($changeSet.ChangedPaths)
+        $planFailed = -not $changeSet.Ok
+        if ($planFailed) {
+            Write-Host "PR gate change-set resolution failed: $($changeSet.Error)"
+        }
+        $script:PhoneLmPrGatePlan = Get-PhoneLmPrGatePlan `
+            -ChangedPaths $planPaths -ChangeSetFailed $planFailed
+        Write-Host (Format-PhoneLmPrGatePlanLog -Plan $script:PhoneLmPrGatePlan -Base $changeSet.Base)
+    }
 
     Invoke-Step "git-diff-check" {
         git diff --check
@@ -199,27 +259,31 @@ try {
     }
 
     if ($Fast) {
-        Add-Skip "margin-decomposition-probe" "fast mode"
+        Add-Skip "pr-gate-policy-self-test" "fast mode"
     } else {
-        Invoke-Step "margin-decomposition-probe" {
-            Invoke-PwshScript "l19 first-error/margin decomposition probe" `
-                (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
-            "deterministic CPU reports regenerated (private margin-tokens included)"
+        Invoke-Step "pr-gate-policy-self-test" {
+            Invoke-PwshScript "pr gate policy self-test" `
+                (Join-Path $Root "scripts\pr_gate_policy.ps1") @("-SelfTest")
+            "deterministic classifier matrix PASS (fail-closed unknown/shared)"
         }
     }
 
-    if ($Fast) {
-        Add-Skip "critical-margin-objective-probe" "fast mode"
-    } else {
-        Invoke-Step "critical-margin-objective-probe" {
-            Invoke-PwshScript "critical margin objective probe" `
-                (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @()
-            Invoke-PwshScript "critical margin training probe" `
-                (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @(
-                    "-Train", "-BaselineDir", (Join-Path $Root "build\reports\qnn-critical-margin-objective"),
-                    "-ReportRoot", (Join-Path $Root "build\reports\qnn-critical-margin-training"))
-            "deterministic CPU objective/training reports regenerated (private)"
-        }
+    Invoke-HeavyOrSkip "margin-decomposition-probe" "fast mode" {
+        Invoke-PwshScript "l19 first-error/margin decomposition probe" `
+            (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
+        "deterministic CPU reports regenerated (private margin-tokens included)"
+    }
+
+    # Objective + training are one step: training is a hard prerequisite chain
+    # against the objective baseline directory produced immediately above.
+    Invoke-HeavyOrSkip "critical-margin-objective-probe" "fast mode" {
+        Invoke-PwshScript "critical margin objective probe" `
+            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @()
+        Invoke-PwshScript "critical margin training probe" `
+            (Join-Path $Root "scripts\run_critical_margin_objective_benchmark.ps1") @(
+                "-Train", "-BaselineDir", (Join-Path $Root "build\reports\qnn-critical-margin-objective"),
+                "-ReportRoot", (Join-Path $Root "build\reports\qnn-critical-margin-training"))
+        "deterministic CPU objective/training reports regenerated (private)"
     }
 
     if ($Fast) {
@@ -232,14 +296,10 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "readout-representation-probe" "fast mode"
-    } else {
-        Invoke-Step "readout-representation-probe" {
-            Invoke-PwshScript "readout/representation diagnosis run" `
-                (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @()
-            "deterministic CPU readout/representation reports regenerated (private; exporter self-test pre-fly uses them)"
-        }
+    Invoke-HeavyOrSkip "readout-representation-probe" "fast mode" {
+        Invoke-PwshScript "readout/representation diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_readout_probe.ps1") @()
+        "deterministic CPU readout/representation reports regenerated (private evidence; exporter SelfTest is fixture-contained and does not require these live reports)"
     }
 
     if ($Fast) {
@@ -252,14 +312,10 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "intra-block-readability-run" "fast mode"
-    } else {
-        Invoke-Step "intra-block-readability-run" {
-            Invoke-PwshScript "intra-block readability diagnosis run" `
-                (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @()
-            "deterministic CPU intra-block readability reports regenerated (private; exporter self-test pre-fly uses them)"
-        }
+    Invoke-HeavyOrSkip "intra-block-readability-run" "fast mode" {
+        Invoke-PwshScript "intra-block readability diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_intra_block_readability.ps1") @()
+        "deterministic CPU intra-block readability reports regenerated (private evidence; exporter SelfTest is fixture-contained and does not require these live reports)"
     }
 
     if ($Fast) {
@@ -272,14 +328,10 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "attention-internal-run" "fast mode"
-    } else {
-        Invoke-Step "attention-internal-run" {
-            Invoke-PwshScript "attention-internal diagnosis run" `
-                (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @()
-            "deterministic CPU attention-internal diagnosis reports regenerated (private; exporter self-test pre-fly uses them)"
-        }
+    Invoke-HeavyOrSkip "attention-internal-run" "fast mode" {
+        Invoke-PwshScript "attention-internal diagnosis run" `
+            (Join-Path $Root "scripts\run_l19_attention_internal_diagnosis.ps1") @()
+        "deterministic CPU attention-internal diagnosis reports regenerated (private evidence; exporter SelfTest is fixture-contained and does not require these live reports)"
     }
 
     if ($Fast) {
@@ -292,14 +344,12 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "output-projection-run" "fast mode"
-    } else {
-        Invoke-Step "output-projection-run" {
-            Invoke-PwshScript "output-projection audit run" `
-                (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @()
-            "deterministic CPU output-projection audit reports regenerated (private; exporter self-test pre-fly uses them)"
-        }
+    # Soft tap dependency: cache miss extracts features in-process and is not
+    # a hard prerequisite on attention-internal-run.
+    Invoke-HeavyOrSkip "output-projection-run" "fast mode" {
+        Invoke-PwshScript "output-projection audit run" `
+            (Join-Path $Root "scripts\run_l19_output_projection_audit.ps1") @()
+        "deterministic CPU output-projection audit reports regenerated (private evidence; exporter SelfTest is fixture-contained and does not require these live reports)"
     }
 
     if ($Fast) {
@@ -312,14 +362,13 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "probe-optimization-run" "fast mode"
-    } else {
-        Invoke-Step "probe-optimization-run" {
-            Invoke-PwshScript "probe-optimization audit run" `
-                (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @()
-            "deterministic CPU probe-optimization audit reports regenerated (private; exporter self-test pre-fly uses them)"
-        }
+    # Hard prerequisite: loadTaps requires attention-internal and intra-block
+    # private-tap caches (miss/hash mismatch is fatal). Policy expands those
+    # fulls into the same PrGate plan.
+    Invoke-HeavyOrSkip "probe-optimization-run" "fast mode" {
+        Invoke-PwshScript "probe-optimization audit run" `
+            (Join-Path $Root "scripts\run_l19_probe_optimization_audit.ps1") @()
+        "deterministic CPU probe-optimization audit reports regenerated (private evidence; exporter SelfTest is fixture-contained and does not require these live reports)"
     }
 
     if ($Fast) {
