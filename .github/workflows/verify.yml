@@ -86,4 +86,9 @@ jobs:
 
       - name: Run the repository verification gate
         shell: pwsh
-        run: .\scripts\verify_local.ps1
+        run: |
+          if ("${{ github.event_name }}" -eq "push") {
+            .\scripts\verify_local.ps1 -PrGate -PrGateBaseRef 'HEAD^'
+          } else {
+            .\scripts\verify_local.ps1 -PrGate
+          }

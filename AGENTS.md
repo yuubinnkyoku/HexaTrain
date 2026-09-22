@@ -119,19 +119,20 @@ fail fastとする。
 
 ### Full verification
 
-`verify_local.ps1` のfull gateは原則として以下の場合に実行する。
+通常のPR / mainへの統合前は `verify_local.ps1 -PrGate` を正式な
+pre-integration gateとして用いる。PrGateはcheap correctness層を常時実行し、
+共有production core / shared dataset / gate-policy変更や安全に分類できない変更では
+heavy full runs全部へfail-closedする。exporter fixture / SelfTestだけの変更では
+live diagnostic regenerationを要求しない。
+
+引数なし `verify_local.ps1` のFull gateは、PRごとに無条件で追加するgateではなく、
+原則として以下の場合に実行する。
 
 - マイルストーン完了時
-- 統合作業の完了時
-- mainへの統合前
-- release / formal result確定前
+- formal evidence / public result の再生成・確定時
+- release前
 - ユーザーがformal verificationを明示的に要求した場合
-
-PR / pre-integrationでは `verify_local.ps1 -PrGate` を用いてよい。
-ただし、共有production core / shared dataset変更ではPrGateも
-heavy full runs全部へfail-closedする。
-exporter fixture / SelfTestだけの変更では
-live diagnostic regenerationを要求しない。
+- PrGateで安全に代替できない統合作業を行う場合
 
 通常の途中commitや、
 専用 `codex/*` 作業branchへの保存pushでは、

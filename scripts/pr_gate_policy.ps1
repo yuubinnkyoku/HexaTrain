@@ -529,6 +529,37 @@ function Assert-PhoneLmPrGatePlanCase {
     }
 }
 
+function Assert-PhoneLmPrGateHeavyInventoryParity {
+    param(
+        [string]$VerifyLocalPath = (Join-Path $PSScriptRoot "verify_local.ps1")
+    )
+
+    if (-not (Test-Path -LiteralPath $VerifyLocalPath -PathType Leaf)) {
+        $script:PrGateSelfTestFailures.Add("19-heavy-inventory-parity: verify_local.ps1 not found")
+        return
+    }
+
+    $verifyText = Get-Content -LiteralPath $VerifyLocalPath -Raw
+    $actual = @(
+        [regex]::Matches($verifyText, '(?m)^\s*Invoke-HeavyOrSkip\s+"([^"]+)"') |
+            ForEach-Object { $_.Groups[1].Value }
+    )
+    $expected = @($script:PhoneLmPrGateHeavySteps)
+    $actualUnique = @($actual | Sort-Object -Unique)
+
+    if ($actualUnique.Count -ne $actual.Count -or
+        $actual.Count -ne $expected.Count -or
+        (($actual -join "`n") -cne ($expected -join "`n"))) {
+        $script:PrGateSelfTestFailures.Add(
+            "19-heavy-inventory-parity: policy=[" + ($expected -join ',') +
+            "] verify_local=[" + ($actual -join ',') + "]")
+        return
+    }
+
+    $script:PrGateSelfTestPassed++
+    Write-Host "PASS 19-heavy-inventory-parity"
+}
+
 function Invoke-PhoneLmPrGatePolicySelfTest {
     $script:PrGateSelfTestFailures = [System.Collections.Generic.List[string]]::new()
     $script:PrGateSelfTestPassed = 0
@@ -628,6 +659,8 @@ function Invoke-PhoneLmPrGatePolicySelfTest {
     Assert-PhoneLmPrGatePlanCase -Name "18-multi-shared-lib-fanout" -ExpectAll:$true `
         -Paths @("host_tests/readout_probe_lib.h") `
         -ExpectRun $allSteps -ExpectSkip $none
+
+    Assert-PhoneLmPrGateHeavyInventoryParity
 
     if ($script:PrGateSelfTestFailures.Count -gt 0) {
         foreach ($failure in $script:PrGateSelfTestFailures) {
