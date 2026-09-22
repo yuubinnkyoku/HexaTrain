@@ -2,7 +2,9 @@
 
 > **更新基準: 2026-09-22 JST**
 >
-> 現在の実装・実測の基準は [`yuubinnkyoku/HexaTrain`](https://github.com/yuubinnkyoku/HexaTrain) `main`、確認時HEAD **`d5f3c3f`**（2026-09-22確認）。Muonの正式品質baseline、parameter metadata SSOT、headwise gated-attention実験経路まで含む現行状態を基準にする。
+> 現在の実装・実測の基準は [`yuubinnkyoku/HexaTrain`](https://github.com/yuubinnkyoku/HexaTrain) `main`、確認時HEAD **`315d048`**（2026-09-22確認）。Muonの正式品質baseline、parameter metadata SSOT、headwise gated-attention実験経路まで含む現行状態を基準にする。
+>
+> **Limite注記:** 2026-09-22時点ではLimite 1B - Violettoの正式Technical Report本文は未公開。Limite関連の優先順位は、公式release / Hugging Face config・model card / Value Model文書 / 公式vLLM実装 / Paradigma speedrun回顧で確認できる範囲に限定し、未公開のtraining recipeは推測しない。
 >
 
 ## 方針
@@ -77,6 +79,38 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 
 である。
 
+### Limite 1B - Violettoから見えるarchitecture課題
+
+2026-09-22時点でLimite 1B - Violettoの正式Technical Report本文は未公開で、pretraining optimizer / exact data mixture / SFT・RL actor recipe等は確定できない。一方、公式release、Hugging Faceのconfig / model card、Value Modelの`MODEL_DETAILS.md`、公式vLLM実装から、**network structureについてはかなり高い解像度で確認できる**。
+
+Violettoで確認できる主要要素は、
+
+- 48-layer / hidden 1280 / 10 query heads / 2 KV headsのGQA
+- local sliding-window attentionと周期的full/global attention
+- RoPE + QK RMS normalization
+- per-head attention output gate
+- **XSA (Exclusive Self Attention)**
+- token-dependent **Value Embedding**
+- 限定layerでの**MUDD dynamic dense residual mixing**
+- learned residual / branch scales
+- SwiGLU
+- tied input/output embedding
+- 131k context
+
+である。
+
+ただしHexaTrainは現在**T32 / D64 / L19 / H2 / 758k**であり、Violettoの形を縮小コピーするのは目的ではない。重要なのは、Paradigmaが1B級モデルでも採っている「**小さい追加parameterで情報経路を制御する**」「**長文脈コストをlocal/globalで分ける**」「**projection/layoutを融合して実行効率を稼ぐ**」という設計原理である。
+
+HexaTrainへ直近で落とし込む問いは次の5つ。
+
+1. 既存G1 gateの改善がstep 2000以降も残るか。残らない場合、Limite型の`2 * sigmoid` / reduced gate channels / identity initializationで改善するか
+2. XSAをlearnable strengthかつzero-initで加えたとき、T32でもattentionの自己成分依存を減らしてbpbが改善するか
+3. Value Embeddingを直接増設する前に、既存Vを再利用する**Value Residual**で同じ方向の効果を安く得られるか
+4. MUDDのような重いdense residual mixingへ行く前に、learned residual scale / branch scaleで深さ19の情報流を改善できるか
+5. Q/K/Vを別MatMul + selector/scatterで扱う現行graphを、**packed QKV + reshape/slice/concat**へ寄せて品質を変えずにwall timeを削れるか
+
+また、Paradigmaのpretraining speedrun系で使われたsingle-head multi-token supervision、ReLU²、終盤RRE/Anderson extrapolationはVioletto本体の確定仕様と同一視しないが、Limiteの設計系譜としてHexaTrainの低コスト候補へ加える。
+
 ### 推論・Android基盤
 
 - model configの一般化、Material 3 Expressive UI、学習表示、推論GUIは実装済み。
@@ -89,6 +123,8 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 - full評価はone-window-per-graph executionの固定費が大きく、**評価engineのbatch化・persistent graph化**が研究iteration速度を制限している。
 - D64/FFN128は容量増で小さく一貫した改善を示すが、FFN幅だけをさらに増やすより、parameter-matched shape searchの情報量が高い。
 - Muownの第一段階は新規学習ではなく、既存Muon checkpointからの**row geometry診断**で済む。ここは実装費用に対する情報量が非常に高い。
+- 現行generalized HTP graphは各layerでQ/K/Vを**3本の別MatMul**として作り、H2分割でもselector/scatter MatMulを使う。Limite/vLLM系のpacked QKV layoutを参考に、optimizer/checkpoint上のWq/Wk/Wv identityは保ったまま、実行用packed cacheを持つ余地がある。
+- T32では131k context / sliding-global attentionを移植しても固定費を回収しにくい。一方、G1 / XSA / residual scale / ReLU² / dense multi-token supervisionは**短文脈でも追加計算が小さく、現在の研究scaleに合う**。
 
 # 優先順位
 
@@ -112,9 +148,11 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 - **QNN HTP / HVX Backend Placementの計測基盤**
   - op単位に「QNNで可能」ではなくprecision / latency / data movementで配置を決める
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
-- **Gated Attentionの実機A/B**
-  - 既存`headwise_g1_sigmoid`実験経路を使い、controlと同一recipeで比較
+- **Gated Attentionの実機A/B継続**
+  - 既存`headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000でそれぞれ`-0.032712 / -0.036686 / -0.021864 / -0.007113`。早期gainは強いが差が縮小している
+  - まず同一recipeで4000まで延長し、「収束加速だけか / 最終品質差が残るか」を判定
   - gate parameterはAux Adamのまま扱い、Muon packing contractを無理に拡張しない
+  - 次段候補としてLimite型の`2 * sigmoid`、`Wg=0` identity initialization、D64全体ではなく8〜16 channelsだけからgateを作るvariantを短期A/B
 - **実験protocol / metrics固定**
   - bpb / ms/update / original bytes/s / RAM / thermal / parity
   - RPC external / DSP worker imbalance / optimizer geometryも標準telemetryへ
@@ -131,10 +169,26 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
   - physical B8を固定し、gradient accumulation等でeffective batch 8 / 16 / 32 / 64を比較
   - optimizer step数ではなく**同一original-byte / token budget**でAdam / Muon / Muownを比較
   - quality/byteだけでなくwall-time、optimizer invocation数、RAMを記録
+- **Dense Multi-Token Supervision / MTP-lite**
+  - Paradigma speedrun系の「1つのLM headで複数future targetを同時教師化」を、full MTP head追加より先に試す
+  - 現行HTP CE backwardは`(P - Y) / N`なので、`Y`をsoft targetへ変えるだけならlogits/head数とbackward shapeを維持できる
+  - T32で`t+1/t+2/t+3`を使うにはcacheを`T+3`相当へ拡張し、uniform `1/3,1/3,1/3`とdecay `0.5,0.3,0.2`を比較
+  - final metricは通常next-token bpbのまま。追加教師がnext-token性能を損なう場合は採用しない
+- **ReLU² A/B**
+  - 現行`ReLU(W1x)`を`ReLU(W1x)^2`へ変更する低コスト候補
+  - parameter数・Muon matrix shapeは不変。SwiGLUより先に、elementwise squareと単純backwardだけで効果を測る
+- **Learnable XSA**
+  - per-layer/per-head強度`alpha`を0初期化し、初期forwardをbaselineと一致させる
+  - T32では原論文の長文脈gainを前提にせず、6-layer subset → 全19層の順で短期A/B
+  - XSA演算をFP32/HVXへ逃がす必要があるか、QNN HTPのnorm/dot/elementwiseで成立するかも同時に測る
+- **Lightweight Residual / Value Routing**
+  - `x' = λ_resid x + λ_branch f(x)`のlearned scalar residual scaleをidentity初期化
+  - MUDDより先に、既存第1層V等を再利用するValue Residualを比較
+  - token-dependent Value Embeddingは追加tableが大きいため、Value Residualで効果を確認してから
 - **parameter-matched Architecture Search**
   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけて比較
   - shallow/wide vs deep/narrowをwall time・bytes moved込みで評価
-- RMSNorm / Gated FFN / RoPEの独立A/B
+- RMSNorm / RoPEの独立A/B。Gated FFNはReLU²を先に通し、その後SwiGLU/ReGLUへ進む
 - QK Norm / Zero-Centered RMSNorm / norm-weight monitoring
 - Z-Loss diagnostic
 - HTP-Aligned GQA / tied embedding
@@ -143,6 +197,8 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
   - QNN graph boundaryとHVX shared-buffer boundaryを一緒に扱う
 - **Data-Movement / Host Boundary Optimization**
   - pack/unpack、transpose、candidate copy、validation、FastRPC、shared arena
+  - **packed QKV execution cache**: optimizer/checkpoint上はWq/Wk/Wvを分離したまま、Muon更新後にQNN実行用`[Wq|Wk|Wv]`を更新
+  - H2 selector/scatter MatMulをreshape / slice / concatへ置換できるかmicrobenchmarkし、node数と実wall timeで判定
   - direct RPC layout / persistent buffers / double buffering候補
 - **QNN/HVX Superoptimization**
   - 数式rewriteだけでなくbackend placementまで探索
@@ -166,11 +222,15 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 - Quantized Adam / optimizer-state低bit化
 - INT8 / INT4 / balanced INT2 / ternary training baseline
 - Gated DeltaNet + Attention hybrid
+- **MUDD-lite / dynamic dense residual mixing**
+  - Violetto同様に全層へ入れず、まず2箇所程度・3 taps・小内部幅で試す
+  - history activation保持、extra node/tensor、backward固定費がD64では相対的に大きいため、learned residual scale / Value Residualの後
 - Gated Residual / multi-stream residual
 - Hymba型 Hybrid-Head
 - Attention Skip → recurrent operator置換
 - Partial RoPE
-- MTP
+- Full MTP / NEXTN heads
+  - P1のDense Multi-Token Supervisionで学習gainを確認した後、追加headを持つMTPへ進む
   - training auxiliary + speculative decodingを一体評価
 - Meta Token
 - Mixture-of-Depths
@@ -219,8 +279,14 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
   - 実測でDDR scratchより大幅に遅かった
 - **FFN幅だけをさらに増やす探索**
   - FFN128の追加容量は改善するが費用対効果が小さい
-- **T32のまま本格sparse attention**
-  - indexer固定費を回収しにくい。長文脈化後でよい
+- **T32のまま本格sparse attention / Limiteの131k local-global構成を移植**
+  - indexer・mask・layout固定費を回収しにくい。長文脈化後でよい
+  - Violettoの36 local + 12 globalという層配置はT32の根拠にはしない
+- **MUDD / Value EmbeddingをViolettoと同じ規模で一括導入**
+  - D64では追加graph/tensor/tableの固定費が相対的に大きい
+  - residual scale → Value Residual → XSA → 限定MUDDの順で寄与を分離する
+- **Limiteのactor-critic / value-model recipeを現行scratch pretrainingへ持ち込む**
+  - post-training目的と現行next-token pretrainingの目的が違う。RL track開始時まで保留
 - **MiMo-V2.6のRL stackをそのまま移植**
   - 1,568 prompts × 16 rollouts、multi-agent sandbox、grader cluster等はHexaTrainの現スケールと目的が違う
   - 取り込むのはoptimizer / data-mixture / distillation / reward設計の**縮約可能な原理**に限定する
@@ -232,6 +298,7 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 | モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
+| **Limite 1B - Violetto** | 1B Dense、48L/D1280、10Q/2KV GQA、local/global attention、QK RMS norm、head-wise gate、XSA、Value Embedding、限定MUDD、learned residual scale、SwiGLU、tied embedding、131k context | G1継続をP0、XSA / residual scale / Value Residual / packed QKVをP1、MUDD-liteをP2、local/global長文脈をP3。正式Technical Report未公開のためtraining recipeは未確定として扱う |
 | Qwen3.8-Flash-Next | Gated DeltaNet + QSA、4-way Gated Residual、N-gram Embedding、Muon | GDN hybridはP2。Gated ResidualをP2。QSAとN-gram memoryはP3で小型化 |
 | GLM-5.3-Flash | sparse attention + linear attention、mHC | Hybrid Sequence Operatorの根拠を強化。mHCはQNN graph複雑性のためP3据え置き |
 | Hy4-preview | Gated DSA、IndexCache、iHC、MTP | indexed sparse attention + index reuseをP3へ。MTPのtraining/inference両用を強化 |
@@ -241,6 +308,21 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 | K2 Horizon | 0.9B〜375Bのscale family、data/code/method/intermediate checkpoints公開方針 | scale ladderと再現可能な実験protocolのreference |
 | Granite 4.2 | controllable thinking、tool use | architectureではなくinference/evaluation側のbudget制御候補 |
 | Ornith-1.5 / Smaug | self-generated task loop、agent trajectory中心のpost-training | P3以降のpost-training/data generation候補 |
+
+Limiteから特に重要なのは、**1Bモデルの個々の部品をコピーすることではなく、追加parameterや追加MatMulを小さく保ちながらattention / residual / value経路を制御し、実行layoutも同時に最適化すること**である。
+
+HexaTrainでは、
+
+- 既存G1を4000まで延長し、必要ならLimite型`2 * sigmoid` / reduced gate channelsを比較
+- packed QKVとhead split/concatのlayout最適化を品質非変更のspeed trackとして独立評価
+- ReLU² / Dense Multi-Token Supervisionを低コストquality trackとして追加
+- XSAをzero-init learnable strengthで小さく導入
+- learned residual scale / Value ResidualをMUDDより先に比較
+- MUDDは全層ではなく限定2箇所程度から
+- tied embeddingはV1024×D64で65,536 parameters（現行総数の約8.6%）を節約できる候補として、品質とのtrade-offを実測
+- 131k / local-global attentionはT32の間は優先しない
+
+へ落とす。
 
 MiMo-V2.6から特に重要なのは、**Muon系を使ったこと自体ではなく、「大batchへ移る前にmid-trainingでoptimizer状態を作る」「row magnitudeとdirectionを分離する」「複数task/harnessを一つのrunへ混ぜるときsample ratioとgrader signalまで設計する」**という橋渡しの発想である。
 
@@ -284,6 +366,13 @@ HexaTrainではこれをそのまま巨大RLへ拡張せず、
   - Muownが有望ならdirection updateをHVXへ拡張
 - **HTP Training Architecture Search**
   - D / F / L / H / Q-KV / head_dim / attention placement
+  - G1 / XSA / residual scale / Value Residual / ReLU²を独立factorとして扱う
+- **Dense Supervision Planner**
+  - next-token one-hotだけでなく、same-head multi-future soft targetの重み・horizon・cache spanを探索
+  - full MTP headを増やす前に、既存HTP CE graphを再利用できる範囲を最大化
+- **Projection / Head Layout Planner**
+  - Wq/Wk/Wvのoptimizer identityとQNN実行layoutを分離
+  - packed QKV、reshape/slice/concat、selector/scatter除去をdevice latencyで選択
 - **HTP/HVX Gradient Strategy Search**
   - BP / segmented BP / ZO / hybrid BP+ZO
 - **Training Memory Planner**
@@ -411,35 +500,47 @@ D64/FFN64 → D64/FFN128ではparametersが約25.8%増えた一方、256+256 hel
 → **P1**
 
 - [RMSNorm](https://arxiv.org/abs/1910.07467)
+- Violettoはblock normとQ/Kの正規化にRMS系を使う。HexaTrain側にも`QNN_OP_RMS_NORM`の存在確認はあるが、正式baseline経路ではdevice-testedではないため、まずmicrotestを通す
 
 比較:
 
-- 現行Norm
+- 現行LayerNorm
 - RMSNorm
+- weightless RMSNorm
 - Zero-Centered RMSNorm
 
 見るもの:
 
 - Forward / Backward node数
-- Reduce opの数
+- Reduce / centering opの数
 - ms/step
 - parity error
 - gamma / scaleの最大値
 - 深層化時の数値安定性
 
-## Gated FFN
+Limiteを根拠にQK Normまで同時変更せず、**block normだけを先に分離A/B**する。
+
+## FFN Activation / Gating
 
 → **P1**
 
+Violetto本体はSwiGLUだが、Paradigmaのspeedrun系ではReLU²も使われている。HexaTrainでは追加projectionを持つSwiGLUより、**matrix shapeを変えないReLU²を先に試す**。
+
+比較順:
+
+1. 現行ReLU FFN
+2. **ReLU²** = `relu(x)^2`
+3. Gated ReLU / ReGLU
+4. SwiGLU
+
+ReLU²はparameter数とMuon matrix packingを変えず、QNN側にelementwise squareと対応backwardを足すだけで比較できる。
+
+SwiGLU / ReGLUはprojectionが増えるため、品質だけでなくHTP上のMatMul増加・Muon/Aux Adam role・checkpoint payloadを必ず測る。
+
+参考:
+
 - [GLU Variants Improve Transformer](https://arxiv.org/abs/2002.05202)
-
-比較:
-
-- 現行ReLU FFN
-- Gated ReLU / ReGLU
-- SwiGLU
-
-projectionが増えるため、品質だけでなくHTP上のMatMul増加を必ず測る。
+- [Paradigma: A Retrospective on Our World Records](https://paradigma.inc/blog/a-retrospective-on-our-world-records/)
 
 ## RoPE
 
@@ -556,28 +657,38 @@ Qwen3-NextでQK-Normのnorm weightが大きくなる問題への対策として�
 
 ## Gated Attention
 
-→ **P0.5〜P1**
+→ **P0**
 
-Qwen Teamの`Gated Attention for Large Language Models`を参考にする。
+現行HexaTrainにはすでに`headwise_g1_sigmoid`が実装され、HTP Forward/Backward、NPRTCKPTV5、resume、FORWARD_ONLY generationまで通っている。Candidate2000はcontrolに対しBalanced `-0.007113`で、早期500〜1000 stepでは約`-0.03`台のgainがあった。
 
-SDPA出力へhead-wise sigmoid gate:
+現行:
 
-`O' = O * sigmoid(X W_g)`
+`O' = O * sigmoid(LN1(X) W_g)`
 
-追加演算が比較的小さいため、GDN/Sparse Attentionより先に試す。
+Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * sigmoid(...)`を使う。HexaTrainではまず現行G1を4000まで延長し、その後必要なら次を分離比較する。
+
+- scale 1 vs 2
+- random init vs `Wg=0` identity init（scale 2なら初期gate=1）
+- input channels D64全部 vs 8 / 16 channel subset
+- gate trajectoryのsaturation / sparsity
+
+追加演算が比較的小さいため、GDN/Sparse Attentionより先に扱う。
 
 測定:
 
 - Forward / Backward ms
 - gate projectionコスト
-- validation NLL
+- validation / development bpb
 - activation RMS / max
+- gate mean / std / <0.1 / >0.9
 - attention sink指標
 - parity error
 
 参考:
 
-- [https://arxiv.org/abs/2505.06708](https://arxiv.org/abs/2505.06708)
+- [Gated Attention for Large Language Models](https://arxiv.org/abs/2505.06708)
+- [Limite vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
+- [HexaTrain G1 experiment](headwise-g1-gated-attention.md)
 
 ## HTP-Aligned GQA
 
@@ -608,7 +719,7 @@ SDPA出力へhead-wise sigmoid gate:
 
 → **P1**
 
-小型Qwen / Apple AFM / MobileLLM等で使われる。
+小型Qwen / Apple AFM / MobileLLMに加え、Violettoの公開vLLM実装でもLM headはinput embeddingを共有する。
 
 `Embedding[V,D]` と `Output[D,V]` を共有し、
 
@@ -616,7 +727,13 @@ SDPA出力へhead-wise sigmoid gate:
 
 へ近づける。
 
-特にV=1024以上で優先度が上がる。
+現行V1024/D64では**65,536 parameters**を削減でき、758,528 parametersに対して約**8.6%**。ただしModded-NanoGPT系ではuntied headが品質改善に使われた例もあるため、節約量だけで採用せず、
+
+- tied baseline
+- untied baseline
+- 浮いた65,536 paramsをFFN / depthへ再配分したparameter-matched model
+
+を比較する。
 
 ## MatFormer / Elastic Model Search
 
@@ -1135,6 +1252,7 @@ Prismのrewrite / equivalence class / target profilingを参考にする。CUDA�
 - reshape
 - head split/concat
 - selector/scatter
+- Q/K/V projection fusion / packed execution weight
 - KV layout
 - contiguous / non-contiguous representation
 - QNN APP_READ/APP_WRITE
@@ -1143,15 +1261,47 @@ Prismのrewrite / equivalence class / target profilingを参考にする。CUDA�
 
 Muonでpack planeの不要なresize初期化を除いただけでactual optimizer update medianが`126.333 → 104.137 ms`まで短縮したため、layout/data movementは補助最適化ではなくP0/P1の研究対象とする。
 
+Violettoの公開vLLM実装はQKVを1つのprojectionへまとめる。HexaTrainではoptimizer/checkpoint identityを壊さず、更新後にpacked execution cacheを作る方式を優先して検証する。また現行H2経路のhead selector/scatter MatMulがreshape/slice/concatより本当に速いかをV81で直接測る。
+
 ---
 
 # Multi-Token Prediction
 
-## MTP-1
+## Dense Multi-Token Supervision / Same-Head MTP-lite
+
+→ **P1**
+
+Paradigmaのspeedrun系では、**1つのlanguage-model headを複数の連続future targetへ同時に学習させる**方式が使われている。これは追加MTP headを持つ方式と分けて評価する。
+
+現行HexaTrainのHTP cross-entropy gradientは、
+
+`dlogits = (P - Y) / N`
+
+なので、`Y`をone-hotから確率分布へ変えるだけなら、softmax / logits / output projection / backward tensor shapeを増やさずに複数future targetのlossを合成できる。
+
+T32の候補:
+
+- `Y = 1/3 * (onehot(t+1) + onehot(t+2) + onehot(t+3))`
+- `Y = 0.5 * onehot(t+1) + 0.3 * onehot(t+2) + 0.2 * onehot(t+3)`
+
+必要変更:
+
+- cacheを現在の`context+1`から少なくとも`context+3`を表現できる形式へ拡張
+- CPU target builderをsoft-target対応
+- scalar loss/evaluatorは通常next-token bpbとmulti-target training lossを分離記録
+- final quality判定は通常next-token bpbで行う
+
+これでgainが無い場合、full MTP headへ進まない。
+
+参考:
+
+- [Paradigma: A Retrospective on Our World Records](https://paradigma.inc/blog/a-retrospective-on-our-world-records/)
+
+## MTP-1 / NEXTN head
 
 → **P2**
 
-基本block / capacity / tokenizerを先に確定させ、その後独立比較する。
+Dense Multi-Token Supervisionで「未来tokenを補助教師にする」価値を確認した後、追加headを持つMTPを独立比較する。
 
 - [DeepSeek-V3](https://arxiv.org/abs/2412.19437)
 - [DeepSeek-V3 GitHub](https://github.com/deepseek-ai/DeepSeek-V3)
@@ -1536,17 +1686,90 @@ Qwen3-Nextはhead dimensionの一部のみRoPEを使う。
 
 ## Attention Output Gate / Head-wise Gate
 
-→ **P0.5〜P1**
+→ **P0**
 
-Qwen Gated Attentionを標準候補にする。
+詳細は上のGated Attention節と[実験記録](headwise-g1-gated-attention.md)を正とする。Limiteを受けた追加比較は`2 * sigmoid`、identity init、reduced gate channels。
 
-`SDPA → head-wise sigmoid gate → output`
+## Exclusive Self Attention / XSA
 
-既存の「Head-wise Gate」節をこの実装へ寄せる。
+→ **P1**
+
+XSAはattention outputから現在token自身のvalue方向成分を除き、context由来成分を使わせる方向の補正。
+
+HexaTrainでは固定100%除去ではなく、
+
+`Y' = Y - tanh(alpha[l,h]) * proj_vself(Y)`
+
+のlearnable strengthを使い、`alpha=0`初期化でbaselineと同じforwardから開始する。
+
+順序:
+
+1. CPU oracle + gradient check
+2. 6層subset
+3. 全19層
+4. G1との組み合わせは単独効果確認後
+
+T32では長文脈論文のgainを外挿せず、bpb / wall time / parityで採否を決める。
+
+参考:
+
+- [Exclusive Self Attention](https://arxiv.org/abs/2603.09078)
+- [Limite vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
 
 ---
 
 # Residual / 層間接続
+
+## Learned Residual / Branch Scale
+
+→ **P1**
+
+Violettoは単純な`x + branch`ではなく、attention / MLPの各joinにlearned coefficientを持つ。
+
+HexaTrainではまず各layerごとに、
+
+`x' = lambda_resid * x + lambda_branch * branch`
+
+を使い、`lambda_resid=lambda_branch=1`でidentity initializationする。attention側2 scalar + FFN側2 scalarなら19層で76 scalar程度。
+
+MUDDやmulti-stream residualより圧倒的に安いため、深さ19の情報流改善を調べる第一候補とする。
+
+## Value Residual / Value Routing
+
+→ **P1〜P2**
+
+Violettoのtoken-dependent Value EmbeddingをそのままD64へ入れる前に、既存layerのVを再利用する軽量版を試す。
+
+候補:
+
+- `V_l' = V_l + beta_l * V_0`
+- `V_l' = lambda_l * V_l + beta_l * V_0`
+- 3〜4層おきだけvalue residual
+
+V1024/D64で別value embedding tableを全面追加すると相対コストが大きいため、まず追加tableなしで効果を判定する。
+
+参考:
+
+- [Value Residual Learning](https://arxiv.org/abs/2410.17897)
+- [Limite vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
+
+## MUDD-lite / Dynamic Dense Residual Mixing
+
+→ **P2**
+
+ViolettoではMUDDを全48層へ入れず限定layerで使う。HexaTrainでも、
+
+- 2箇所程度
+- 3 taps
+- 小さいinternal width
+
+から始める。
+
+D64ではhistory activation保持とextra graph node/tensorの固定費が相対的に大きいため、**Learned Residual Scale → Value Residual → MUDD-lite**の順で進む。
+
+参考:
+
+- [MUDDFormer](https://arxiv.org/abs/2502.12170)
 
 ## Gated Residual / Multi-Stream Residual
 
@@ -1627,7 +1850,7 @@ Tが大きくなってから。
 
 Gemma 3の`5 local : 1 global`等をbaselineにする。
 
-現在T=64では優先しない。
+現在T=32では優先しない。
 
 ## Shared K=V / MQA系
 
@@ -2726,7 +2949,9 @@ final結果を今後のcandidate tuningへ使い戻さない。
 
 目的は「Muownを実装したい」ではなく、**現行MuonにMuownが解くべき現象が存在するか**を先に判定すること。
 
-## Phase 3 — Evaluation Engine【P0並行】
+## Phase 3 — Evaluation Engine + Low-Cost Architecture Lane【P0並行】
+
+Evaluation:
 
 - persistent evaluator graph
 - multi-window batching
@@ -2734,7 +2959,14 @@ final結果を今後のcandidate tuningへ使い戻さない。
 - original UTF-8 bytes/s
 - full-final相当の推定所要時間
 
-研究iteration速度そのものを改善する。
+並行して、長いimplementation chainを必要としない候補を早期に判定する。
+
+- G1 candidateを4000まで延長
+- ReLU² smoke → 500 / 2000
+- Dense Multi-Token SupervisionのCPU oracle / cache設計 → 500 / 2000
+- packed QKV / selector-scatter除去はquality-neutral microbenchmarkとして別lane
+
+研究iteration速度そのものを改善しながら、低コストarchitecture候補を先に刈り込む。
 
 ## Phase 4 — Muown CPU Reference / Short A/B
 
@@ -2771,15 +3003,20 @@ MiMo-V2.6のlarge-batch observationがtiny on-device trainingでも再現する�
 
 ## Phase 7 — Architecture A/B
 
-一度に一つ変更。
+一度に一つ変更。Phase 3で早期判定した候補は、ここで正式な長期比較へ昇格する。
 
 - Full vs Skip Attention
-- Gated Attention
+- Gated Attention（現行G1 / Limite-style scale2・identity-init）
 - RMSNorm
-- Gated FFN
+- ReLU² → 必要ならSwiGLU / ReGLU
+- Learnable XSA
+- Learned Residual / Branch Scale
+- Value Residual
 - RoPE
 - QK Norm / Zero-Centered RMSNorm
 - tied embedding
+
+MUDD-liteは上記の軽量residual/value候補が不十分な場合のみ追加する。
 
 最初は現行D64/F128/L19/H2を固定する。
 
@@ -2891,6 +3128,18 @@ long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE�
 ---
 
 # 研究機関別に取り込んだ主な技術
+
+## Paradigma
+
+- Limite 1B - Violetto
+- head-wise attention gate / reduced-channel gate
+- Exclusive Self Attention (XSA)
+- Value Embedding
+- MUDD selective placement
+- learned residual / branch scale
+- packed/fused QKV implementation
+- pretraining speedrun系のReLU² / same-head multi-token supervision / RRE
+- 「モデル構造と実行layoutを同時に詰める」設計のreference
 
 ## Qualcomm AI Research
 
@@ -3108,6 +3357,8 @@ HexaTrainの研究主張は、
 
 Muonで得られた結果は、この方向をかなり明確にしている。QNN HTPが得意なForward/Backwardと、数値精度を明示的に制御できるHVXを組み合わせる方が、単一backendへ統一するより実機上の最適解に近い可能性が高い。MiMo-V2.6がMuownで示したように、次はbackendだけでなく**optimizer内部のgeometry（row magnitude / direction / angular step）**まで共同最適化の対象へ広げる。
 
+Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・ReLU²・Dense Multi-Token Supervision・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する。
+
 ---
 
 # 2026-09-22 一次資料
@@ -3115,7 +3366,7 @@ Muonで得られた結果は、この方向をかなり明確にしている。Q
 ## HexaTrain
 
 - [HexaTrain repository](https://github.com/yuubinnkyoku/HexaTrain)
-- [current main HEAD `d5f3c3f`](https://github.com/yuubinnkyoku/HexaTrain/commit/d5f3c3f27153e9718ae384f91cc2805ee686f747)
+- [current main HEAD `315d048`](https://github.com/yuubinnkyoku/HexaTrain/commit/315d0487d98584e9f172dc77972e3fee52ded3d4)
 - [HVX FP32 Muon / formal baseline](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-hvx-muon.md)
 - [Muon quality pilot](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-v1024-d64-ffn128-muon-pilot.md)
 - [HTP-native Muon investigation](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-htp-muon.md)
@@ -3123,6 +3374,18 @@ Muonで得られた結果は、この方向をかなり明確にしている。Q
 - [Transformer parameter metadata SSOT](https://github.com/yuubinnkyoku/HexaTrain/blob/main/metadata/transformer_parameter_metadata.json)
 - [V1024/D64/FFN128 frozen final evaluation](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-v1024-d64-ffn128-final-evaluation.md)
 - [D64/FFN128 capacity experiment](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-byte-bpe-v1024-d64-ffn128.md)
+
+## Limite / Paradigma
+
+- [Limite 1B - Violetto release](https://paradigma.inc/blog/limite-1b-violetto/)
+- [Limite 1B - Violetto model](https://huggingface.co/paradigma-inc/limite-1b-violetto)
+- [Limite Value Model MODEL_DETAILS.md](https://huggingface.co/paradigma-inc/limite-1b-value-model/blob/main/MODEL_DETAILS.md)
+- [Limite Violetto vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
+- [Paradigma: A Retrospective on Our World Records](https://paradigma.inc/blog/a-retrospective-on-our-world-records/)
+- [Exclusive Self Attention](https://arxiv.org/abs/2603.09078)
+- [MUDDFormer](https://arxiv.org/abs/2502.12170)
+- [Gated Attention for Large Language Models](https://arxiv.org/abs/2505.06708)
+- [Value Residual Learning](https://arxiv.org/abs/2410.17897)
 
 ## MiMo / Optimizer
 
