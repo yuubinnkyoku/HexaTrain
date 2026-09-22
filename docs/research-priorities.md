@@ -1,10 +1,9 @@
-# HexaTrain / PhoneLM 技術候補・優先順位
+# HexaTrain 技術候補・優先順位
 
 > **更新基準: 2026-09-22 JST**
 >
 > 現在の実装・実測の基準は [`yuubinnkyoku/HexaTrain`](https://github.com/yuubinnkyoku/HexaTrain) `main`、確認時HEAD **`d5f3c3f`**（2026-09-22確認）。Muonの正式品質baseline、parameter metadata SSOT、headwise gated-attention実験経路まで含む現行状態を基準にする。
 >
-> この文書での **PhoneLM** はモデル・研究構想の呼称として扱う。同名論文「PhoneLM: an Efficient and Capable Small Language Model Family through Principled Pre-training」とは無関係であり、同名論文の構造を互換目標にはしない。
 
 ## 方針
 
@@ -228,9 +227,9 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 
 ## 2026-09-22 直近LLMリリースからの差分
 
-直近1か月の公開モデルをPhoneLMの観点で読み直すと、単発の新奇技術よりも、**同じ方向の技術が複数の大規模モデルで同時に採用され始めたこと**が重要。
+直近1か月の公開モデルをHexaTrainの観点で読み直すと、単発の新奇技術よりも、**同じ方向の技術が複数の大規模モデルで同時に採用され始めたこと**が重要。
 
-| モデル | 確認できた技術 | PhoneLMでの扱い |
+| モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
 | Qwen3.8-Flash-Next | Gated DeltaNet + QSA、4-way Gated Residual、N-gram Embedding、Muon | GDN hybridはP2。Gated ResidualをP2。QSAとN-gram memoryはP3で小型化 |
@@ -238,7 +237,7 @@ HexaTrainはすでにscratchからOriginal Muonを正式baselineとして持つ�
 | Hy4-preview | Gated DSA、IndexCache、iHC、MTP | indexed sparse attention + index reuseをP3へ。MTPのtraining/inference両用を強化 |
 | DeepSeek-V4.1-Flash | sparse attention、compressed indexer、N-gram memory、Hyper-Connection、MTP | QSA/DSA系・N-gram・residual拡張・MTPが別系統でも収束している証拠として扱う |
 | dots3-note Preview | 13 DSA + 33 SWA、shared MTP | sparse/dense混成layoutとMTP speculative decodingの実用例 |
-| MiniCPM5-2B | 2.5B級Dense、on-device志向、学習データ群公開 | PhoneLMの小型モデル比較・data pipeline・再現性のreference |
+| MiniCPM5-2B | 2.5B級Dense、on-device志向、学習データ群公開 | HexaTrainの小型モデル比較・data pipeline・再現性のreference |
 | K2 Horizon | 0.9B〜375Bのscale family、data/code/method/intermediate checkpoints公開方針 | scale ladderと再現可能な実験protocolのreference |
 | Granite 4.2 | controllable thinking、tool use | architectureではなくinference/evaluation側のbudget制御候補 |
 | Ornith-1.5 / Smaug | self-generated task loop、agent trajectory中心のpost-training | P3以降のpost-training/data generation候補 |
@@ -272,7 +271,7 @@ HexaTrainではこれをそのまま巨大RLへ拡張せず、
 - [MiniCPM](https://github.com/OpenBMB/MiniCPM)
 - [IFM K2 Horizon](https://ifm.ai/)
 
-## 最終的なHexaTrain / PhoneLM独自技術候補
+## 最終的なHexaTrain独自技術候補
 
 - **Heterogeneous Training Backend Planner**
   - QNN HTP / HVX / CPUをop・tensor・phase単位で選択
@@ -405,7 +404,7 @@ D64/FFN64 → D64/FFN128ではparametersが約25.8%増えた一方、256+256 hel
 
 # Core Transformer Block Candidates
 
-ここは「同名PhoneLM論文への互換化」ではなく、**現行V1024/D64/F128 baselineから一要素ずつ変え、QNN HTP上の速度・RAM・数値安定性・学習品質を比較する独立候補**として扱う。Forward/Backwardは原則QNN HTPを基準にし、QNN内部精度が要件を満たさない演算だけHVX等へ配置する。
+ここは既存の外部モデルへの互換化を目的とせず、**現行V1024/D64/F128 baselineから一要素ずつ変え、QNN HTP上の速度・RAM・数値安定性・学習品質を比較する独立候補**として扱う。Forward/Backwardは原則QNN HTPを基準にし、QNN内部精度が要件を満たさない演算だけHVX等へ配置する。
 
 ## RMSNorm
 
@@ -650,7 +649,7 @@ NVIDIA Puzzle:
 - 候補ごとのhardware costを実測
 - 全モデルをfull pretrainせず組合せ探索
 
-PhoneLM候補block:
+HexaTrain候補block:
 
 Attention:
 
@@ -788,7 +787,7 @@ MuonClip / QK Clip等はQK-Norm・Gated Attentionで不足した場合に追加�
 
 # Gradient Strategy / On-Device Training Method
 
-PhoneLMではQNNのBackwardを明示実装できる点が強みだが、**全てをExact BPに固定する必要もない**。
+HexaTrainではQNNのBackwardを明示実装できる点が強みだが、**全てをExact BPに固定する必要もない**。
 
 ## A. Exact Backpropagation
 
@@ -814,7 +813,7 @@ PhoneLMではQNNのBackwardを明示実装できる点が強みだが、**全て
 
 という経路を検討する。
 
-PhoneLMでは、
+HexaTrainでは、
 
 `巨大1 graph`
 
@@ -834,7 +833,7 @@ vs
 
 Backwardを使わず、perturbationした2回のForwardからgradient方向を推定。
 
-PhoneLMでは、
+HexaTrainでは、
 
 - Exact BP
 - SPSA
@@ -863,7 +862,7 @@ fine-tuning / personalization用途では特に有力。
 
 First-order gradientとZeroth-order gradientを混ぜる。
 
-PhoneLMでは将来的に、
+HexaTrainでは将来的に、
 
 - sample-wise BP/ZO
 - layer-wise BP/ZO
@@ -952,13 +951,13 @@ RECOMPUTE
 - router freeze / R3系のtrain-inference consistency
 - 7k+ RL task environments / composable harness公開方針
 
-PhoneLMでは特に**Muown・effective batch・MOPD²の縮約**を取り込む。MoE router技術は現行Denseモデルへは適用しない。
+HexaTrainでは特に**Muown・effective batch・MOPD²の縮約**を取り込む。MoE router技術は現行Denseモデルへは適用しない。
 
 ## PFN Transfer-Aware Recomputation
 
 PFN MN-CoreではDRAM転送より再計算した方が速いケースを利用している。
 
-PhoneLMでも、
+HexaTrainでも、
 
 `memory bytes saved / extra HTP recompute time`
 
@@ -972,7 +971,7 @@ PhoneLMでも、
 
 計算graph上の保存/再計算配置を自動探索。
 
-PhoneLMでは最初はheuristic、その後simulated annealing等へ。
+HexaTrainでは最初はheuristic、その後simulated annealing等へ。
 
 参考:
 
@@ -1004,7 +1003,7 @@ tensor lifetime、placement、spill、rematerialization、reduced precisionを�
 
 を比較する。
 
-NVIDIA COATでは非線形/Norm周辺で細粒度group量子化を使うため、PhoneLMでもtensor種類ごとにgranularityを変える。
+NVIDIA COATでは非線形/Norm周辺で細粒度group量子化を使うため、HexaTrainでもtensor種類ごとにgranularityを変える。
 
 参考:
 
@@ -1185,7 +1184,7 @@ Step 3.5 Flashでは大半の学習をMTP-1で行い、後半にMTP-1からMTP-2
 
 dots3-note Previewはshared MTP / NEXTNを投機的生成へ使い、SGLang構成で**TPOTを50%以上削減できる場合がある**と説明している。
 
-PhoneLMでは、
+HexaTrainでは、
 
 1. training中はMTP-1を補助lossとして使う
 2. inferenceでは同じheadをdraft token生成へ流用
@@ -1385,7 +1384,7 @@ MiMo-V2.6はAdamW pretrainingからMuown mid-trainingを挟んでlarge-batch RL�
 
 MiMo-V2.6 Technical Reportは、大batch側でAdamWの最適化効率が落ち、matrix-aware optimizerが有利になる観察をMuown移行の理由にしている。
 
-PhoneLMでは規模が桁違いなので、その結論をコピーしない。physical B8を基準に、
+HexaTrainでは規模が桁違いなので、その結論をコピーしない。physical B8を基準に、
 
 - B8 × accumulation 1
 - B8 × accumulation 2
@@ -1555,7 +1554,7 @@ Qwen Gated Attentionを標準候補にする。
 
 Qwen3.8-Flash-Nextではresidual streamを**4分岐**し、read / writeを動的gateで制御するGated Residualを採用している。
 
-PhoneLMでは4-wayをそのままコピーせず、まず:
+HexaTrainでは4-wayをそのままコピーせず、まず:
 
 - ordinary residual
 - 1-stream + scalar/channel gate
@@ -1600,9 +1599,9 @@ Full / Block AttnResを候補にする。
 
 単一residual streamを複数経路へ拡張し、混合行列に制約を与える。
 
-2026年8月公開のGLM-5.3-FlashでもmHC採用が確認でき、巨大モデル側では実用例が増えた。ただしPhoneLMではGated Residualよりgraphが重くなる可能性が高いため、優先順位は上げない。
+2026年8月公開のGLM-5.3-FlashでもmHC採用が確認でき、巨大モデル側では実用例が増えた。ただしHexaTrainではGated Residualよりgraphが重くなる可能性が高いため、優先順位は上げない。
 
-PhoneLMではAttnResよりさらに後。
+HexaTrainではAttnResよりさらに後。
 
 ---
 
@@ -1701,7 +1700,7 @@ layer単位:
 - DeepSeek-V4.1-Flash: sparse attention + compressed indexer
 - dots3-note Preview: 13 DSA + 33 sliding-window attention
 
-PhoneLMでは長文脈化後、最初から複雑なlearned sparsityを作らず、
+HexaTrainでは長文脈化後、最初から複雑なlearned sparsityを作らず、
 
 1. fixed block size
 2. fixed Top-K budget
@@ -1776,7 +1775,7 @@ SakanaのData Flow Spaceの考え方を転用。
 
 2026年8月のQwen3.8-Flash-Nextは`Gated DeltaNet + QSA`、GLM-5.3-Flashは`sparse + linear attention`を採用した。巨大モデル側でも**Attentionを全layerで同じ形に固定せず、線形/recurrent系と疎Attentionを組み合わせる**方向が強まっている。
 
-PhoneLMではこの事実を「GDNを採用すべき」という結論ではなく、**Hybrid Sequence Operator Searchを優先する根拠**として扱う。
+HexaTrainではこの事実を「GDNを採用すべき」という結論ではなく、**Hybrid Sequence Operator Searchを優先する根拠**として扱う。
 
 ## recurrent memory head
 
@@ -1939,7 +1938,7 @@ ByteDance Seed。
 
 を異なるmemory階層へ置く考え。
 
-PhoneLMではHTP / RAM / 将来UFSの階層へ読み替える。
+HexaTrainではHTP / RAM / 将来UFSの階層へ読み替える。
 
 ## LaCache
 
@@ -2019,7 +2018,7 @@ head groupごとにlow-rank projectionを挟んでからDへ戻し、`Wo`計算�
 
 Qwen3.8-Flash-Next、GLM-5.3/5.3-Flash、Hy4-preview、DeepSeek-V4.1-Flash、dots3-note Previewまで、**sparse/indexed attentionは長文脈の実用系モデルで連続して採用**されている。
 
-ただしPhoneLMの現在の短いTではindexerやGatherの固定費が支配的になりやすい。したがってP3据え置きで、Tを伸ばした段階で**Full / Local / Block Sparse / Indexed Sparse**を同一HTP graph条件で比較する。
+ただしHexaTrainの現在の短いTではindexerやGatherの固定費が支配的になりやすい。したがってP3据え置きで、Tを伸ばした段階で**Full / Local / Block Sparse / Indexed Sparse**を同一HTP graph条件で比較する。
 
 ## Streaming-Aware Attention
 
@@ -2089,7 +2088,7 @@ Tが十分大きくなってから。
 
 Qwen3.8-Flash-Nextは大容量N-gram Embeddingを**計算量をあまり増やさず容量を増やす外部的memory**として使い、host memoryへの退避・prefetchも想定している。DeepSeek-V4.1-FlashでもN-gram系memoryが確認できる。
 
-PhoneLMでは巨大tableをコピーせず、
+HexaTrainでは巨大tableをコピーせず、
 
 `token embedding + small bigram/trigram table`
 
@@ -2311,7 +2310,7 @@ architecture searchで小モデルを先に試し、有望構造を育てる用�
 
 K2 Horizonは0.9B / 3.7B / 7B / 32B / 36B-MoE / 375B-MoEの複数scaleを同時に出し、data / method / code / intermediate checkpointsまで追跡可能にする方針を示した。
 
-PhoneLMでは絶対scaleは桁違いだが、研究方法はそのまま使える。
+HexaTrainでは絶対scaleは桁違いだが、研究方法はそのまま使える。
 
 - `tiny → small → medium`のshape ladderを固定
 - 各scaleで同じA/Bを短く実施
@@ -2373,7 +2372,7 @@ shape互換checkpointを複数短時間学習してmergeし、
 
 有望性評価や学習短縮に使えるか検証。
 
-端末間の疎結合checkpoint mergeはPhoneLM独自応用候補。
+端末間の疎結合checkpoint mergeはHexaTrain独自応用候補。
 
 ## Flextron / LLaMaFlex / MatFormer
 
@@ -2391,7 +2390,7 @@ shape互換checkpointを複数短時間学習してmergeし、
 
 CycleQDは「一番良い1個」ではなく、異なるBehavior Characteristicsを持つ高品質な個体群を維持する。
 
-PhoneLMへの転用:
+HexaTrainへの転用:
 
 Behavior Characteristics例:
 
@@ -2427,7 +2426,7 @@ SakanaのEvolutionary Model Mergeの「Data Flow Space」探索をarchitecture�
 
 # Data / Post-Training Strategy
 
-PhoneLMの中心はHTP上のscratch trainingだが、2026年8〜9月の小型・open modelでは**architectureだけでなくdata / post-trainingの公開度と設計**が性能差として大きい。
+HexaTrainの中心はHTP上のscratch trainingだが、2026年8〜9月の小型・open modelでは**architectureだけでなくdata / post-trainingの公開度と設計**が性能差として大きい。
 
 ## Reproducible Data Pipeline
 
@@ -2435,7 +2434,7 @@ PhoneLMの中心はHTP上のscratch trainingだが、2026年8〜9月の小型・
 
 MiniCPM5-2BはUltra-FineWeb / UltraData-Math / UltraData-Code / SFT-Agent / RLなど、モデルと結び付いたdata群を公開している。K2 Horizonもpretrain / midtrain dataを含む再現性重視の公開方針を採る。
 
-PhoneLMではNicopediaを基準にしつつ、
+HexaTrainではNicopediaを基準にしつつ、
 
 - raw source manifest
 - preprocessing version
@@ -2459,7 +2458,7 @@ PhoneLMではNicopediaを基準にしつつ、
 
 → **P1〜P2 / 複数corpusを混ぜる時点**
 
-MiMo-V2.6はmulti-task RLでtask sample ratioを安定化させる仕組みを明示している。PhoneLMでも日本語本文 / code / math / conversation等を混ぜる場合、単純shuffleだけに依存しない。
+MiMo-V2.6はmulti-task RLでtask sample ratioを安定化させる仕組みを明示している。HexaTrainでも日本語本文 / code / math / conversation等を混ぜる場合、単純shuffleだけに依存しない。
 
 checkpoint identityへ、
 
@@ -2479,7 +2478,7 @@ MOPDはdomain-specific teacherを別々に作り、**student自身のon-policy r
 
 MOPD²ではstudentの通常rolloutだけでなく、Teacher-Prefix / SFT-Prefixの履歴を再利用したsingle-turn rolloutを混ぜ、重要なdecision pointを学習するためにprefix全体を毎回再生成する費用を減らす。
 
-PhoneLMへの縮約候補:
+HexaTrainへの縮約候補:
 
 1. stronger teacherでtrajectoryをオフライン生成
 2. 重要位置の直前T32 prefixを切り出す
@@ -2516,7 +2515,7 @@ MiMo-V2.6ではbinary pass/failだけでなく、同一promptの成功trajectory
 
 MiMo-V2.6は大規模RLでMoE routerをfreezeし、MiMo系R3研究ではinference時routingをtrainingへreplayしてtrain/inference不整合を抑える。
 
-現行PhoneLMはDenseなので実装しない。将来tiny MoEへ進む場合は、expert selectionを離散stateとしてcheckpoint / rollout / backward間で整合させる。
+現行HexaTrainはDenseなので実装しない。将来tiny MoEへ進む場合は、expert selectionを離散stateとしてcheckpoint / rollout / backward間で整合させる。
 
 参考:
 
@@ -2532,11 +2531,11 @@ Ornith-1.5は、
 
 のself-improvement loopを採用する。
 
-PhoneLMでは端末上で全ループを回す必要はなく、将来、
+HexaTrainでは端末上で全ループを回す必要はなく、将来、
 
 - small modelが苦手例を抽出
 - teacher / stronger modelが課題・解答を生成
-- PhoneLMでshort SFT / RL
+- HexaTrainでshort SFT / RL
 - 次のhard-example mining
 
 という外部teacher併用版を比較できる。
@@ -2547,7 +2546,7 @@ PhoneLMでは端末上で全ループを回す必要はなく、将来、
 
 Smaug系は人手選別した実環境agent trajectoryと難例由来のsynthetic dataを重視する。
 
-PhoneLMがtool use / Android操作へ進む場合、
+HexaTrainがtool use / Android操作へ進む場合、
 
 - result token
 - tool call
@@ -2598,7 +2597,7 @@ Google。
 
 推論中にneural memory自体を更新する。
 
-PhoneLMは端末上training pathを持つため、将来的には普通のinference-only frameworkより検証しやすい可能性がある。
+HexaTrainは端末上training pathを持つため、将来的には普通のinference-only frameworkより検証しやすい可能性がある。
 
 ---
 
@@ -2612,7 +2611,7 @@ PhoneLMは端末上training pathを持つため、将来的には普通のinfere
 
 Granite 4.2はthinkingの有無や低い推論量を指定できる形を標準化している。
 
-PhoneLMでは専用architectureを作る前に、
+HexaTrainでは専用architectureを作る前に、
 
 - direct answer
 - short scratchpad / limited reasoning tokens
@@ -3101,7 +3100,7 @@ Presets
 
 ```
 
-HexaTrain / PhoneLMの研究主張は、
+HexaTrainの研究主張は、
 
 > **Android上で学習を成立させるだけでなく、モデル構造・optimizer・数式表現・QNN graph・HVX kernel・backend境界・memory・precisionを、Snapdragon実機の品質とwall timeに基づいて共同最適化する**
 
@@ -3138,4 +3137,3 @@ Muonで得られた結果は、この方向をかなり明確にしている。Q
 - [MOPD: Multi-Teacher On-Policy Distillation](https://arxiv.org/abs/2606.30406)
 - [Stabilizing MoE RL by Aligning Training and Inference Routers / R3](https://arxiv.org/abs/2510.11370)
 
-同名の論文PhoneLMは、この目標・構造・優先順位を決める基準にしない。
