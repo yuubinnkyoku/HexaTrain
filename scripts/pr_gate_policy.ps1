@@ -529,6 +529,113 @@ function Assert-PhoneLmPrGatePlanCase {
     }
 }
 
+function Assert-PhoneLmPrGateHeavyInventoryParity {
+    param(
+        [string]$VerifyLocalPath = (Join-Path $PSScriptRoot "verify_local.ps1")
+    )
+
+    if (-not (Test-Path -LiteralPath $VerifyLocalPath -PathType Leaf)) {
+        $script:PrGateSelfTestFailures.Add("19-heavy-inventory-parity: verify_local.ps1 not found")
+        return
+    }
+
+    $verifyText = Get-Content -LiteralPath $VerifyLocalPath -Raw
+    $actual = @(
+        [regex]::Matches($verifyText, '(?m)^\s*Invoke-HeavyOrSkip\s+"([^"]+)"') |
+            ForEach-Object { $_.Groups[1].Value }
+    )
+    $expected = @($script:PhoneLmPrGateHeavySteps)
+    $actualUnique = @($actual | Sort-Object -Unique)
+
+    if ($actualUnique.Count -ne $actual.Count -or
+        $actual.Count -ne $expected.Count -or
+        (($actual -join "`n") -cne ($expected -join "`n"))) {
+        $script:PrGateSelfTestFailures.Add(
+            "19-heavy-inventory-parity: policy=[" + ($expected -join ',') +
+            "] verify_local=[" + ($actual -join ',') + "]")
+        return
+    }
+
+    $script:PrGateSelfTestPassed++
+    Write-Host "PASS 19-heavy-inventory-parity"
+}
+
+function Assert-PhoneLmPrGateMultiCommitPushBefore {
+    $name = "20-multi-commit-push-before"
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $fixtureRoot = Join-Path $repoRoot "build\pr-gate-policy-selftest\multi-commit-push"
+    $utf8 = [Text.UTF8Encoding]::new($false)
+
+    try {
+        if (Test-Path -LiteralPath $fixtureRoot) {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+        [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+
+        & git -C $fixtureRoot init --quiet
+        if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+
+        [IO.File]::WriteAllText((Join-Path $fixtureRoot "README.md"), "base`n", $utf8)
+        & git -C $fixtureRoot add -- README.md
+        if ($LASTEXITCODE -ne 0) { throw "git add base failed" }
+        & git -C $fixtureRoot -c user.name=pr-gate-self-test -c user.email=pr-gate-self-test@example.invalid commit --quiet --no-gpg-sign -m base
+        if ($LASTEXITCODE -ne 0) { throw "git commit base failed" }
+        $before = (& git -C $fixtureRoot rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $before -notmatch '^[0-9a-f]{40}$') { throw "unable to resolve before SHA" }
+
+        $heavyDir = Join-Path $fixtureRoot "app\src\main\cpp"
+        [IO.Directory]::CreateDirectory($heavyDir) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $heavyDir "tiny_language_model_cpu.cpp"), "heavy-change`n", $utf8)
+        & git -C $fixtureRoot add -- app/src/main/cpp/tiny_language_model_cpu.cpp
+        if ($LASTEXITCODE -ne 0) { throw "git add heavy commit failed" }
+        & git -C $fixtureRoot -c user.name=pr-gate-self-test -c user.email=pr-gate-self-test@example.invalid commit --quiet --no-gpg-sign -m heavy
+        if ($LASTEXITCODE -ne 0) { throw "git commit heavy failed" }
+
+        $docsDir = Join-Path $fixtureRoot "docs"
+        [IO.Directory]::CreateDirectory($docsDir) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $docsDir "notes.md"), "docs-only`n", $utf8)
+        & git -C $fixtureRoot add -- docs/notes.md
+        if ($LASTEXITCODE -ne 0) { throw "git add docs commit failed" }
+        & git -C $fixtureRoot -c user.name=pr-gate-self-test -c user.email=pr-gate-self-test@example.invalid commit --quiet --no-gpg-sign -m docs
+        if ($LASTEXITCODE -ne 0) { throw "git commit docs failed" }
+
+        $pushSet = Resolve-PhoneLmPrGateChangeSet -Root $fixtureRoot -ExplicitBase $before
+        if (-not $pushSet.Ok) { throw "before-SHA change-set resolution failed: $($pushSet.Error)" }
+        $pushPaths = @($pushSet.ChangedPaths)
+        if ($pushPaths -notcontains "app/src/main/cpp/tiny_language_model_cpu.cpp" -or
+            $pushPaths -notcontains "docs/notes.md" -or
+            $pushPaths.Count -ne 2) {
+            throw "before-SHA did not capture the full two-commit push: $($pushPaths -join ',')"
+        }
+        $pushPlan = Get-PhoneLmPrGatePlan -ChangedPaths $pushPaths
+        if (-not $pushPlan.RunAllHeavy) {
+            throw "before-SHA full push did not select heavy-all"
+        }
+
+        # Prove the fixture would regress with the old workflow base: HEAD^ sees only
+        # the final docs-only commit and therefore would not select heavy-all.
+        $lastCommitSet = Resolve-PhoneLmPrGateChangeSet -Root $fixtureRoot -ExplicitBase "HEAD^"
+        if (-not $lastCommitSet.Ok) { throw "HEAD^ control resolution failed: $($lastCommitSet.Error)" }
+        $lastPaths = @($lastCommitSet.ChangedPaths)
+        if ($lastPaths.Count -ne 1 -or $lastPaths[0] -ne "docs/notes.md") {
+            throw "HEAD^ control fixture no longer isolates the final docs-only commit"
+        }
+        $lastPlan = Get-PhoneLmPrGatePlan -ChangedPaths $lastPaths
+        if ($lastPlan.RunAllHeavy) {
+            throw "HEAD^ control unexpectedly selected heavy-all"
+        }
+
+        $script:PrGateSelfTestPassed++
+        Write-Host "PASS $name"
+    } catch {
+        $script:PrGateSelfTestFailures.Add($name + ": " + $_.Exception.Message)
+    } finally {
+        if (Test-Path -LiteralPath $fixtureRoot) {
+            Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        }
+    }
+}
+
 function Invoke-PhoneLmPrGatePolicySelfTest {
     $script:PrGateSelfTestFailures = [System.Collections.Generic.List[string]]::new()
     $script:PrGateSelfTestPassed = 0
@@ -628,6 +735,9 @@ function Invoke-PhoneLmPrGatePolicySelfTest {
     Assert-PhoneLmPrGatePlanCase -Name "18-multi-shared-lib-fanout" -ExpectAll:$true `
         -Paths @("host_tests/readout_probe_lib.h") `
         -ExpectRun $allSteps -ExpectSkip $none
+
+    Assert-PhoneLmPrGateHeavyInventoryParity
+    Assert-PhoneLmPrGateMultiCommitPushBefore
 
     if ($script:PrGateSelfTestFailures.Count -gt 0) {
         foreach ($failure in $script:PrGateSelfTestFailures) {

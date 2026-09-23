@@ -194,10 +194,12 @@ try {
         # Staged, unstaged, and untracked (non-ignored) files, excluding this
         # script itself because it contains the pattern literals.
         $changed = @(
-            git diff --name-only --diff-filter=ACMR
-            git diff --cached --name-only --diff-filter=ACMR
-            git ls-files --others --exclude-standard
-        ) | Sort-Object -Unique | Where-Object { $_ -and $_ -ne "scripts/verify_local.ps1" }
+            @(
+                git diff --name-only --diff-filter=ACMR
+                git diff --cached --name-only --diff-filter=ACMR
+                git ls-files --others --exclude-standard
+            ) | Sort-Object -Unique | Where-Object { $_ -and $_ -ne "scripts/verify_local.ps1" }
+        )
         $patterns = @(
             @{ Name = "adb-endpoint"; Regex = '\b\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}\b' },
             @{ Name = "user-abs-path"; Regex = '[A-Za-z]:[\\/]Users[\\/]' },

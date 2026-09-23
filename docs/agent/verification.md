@@ -47,13 +47,13 @@ baseを安全に決定できない場合やclassifierが安全に分類できな
 
 | 変更 | 最終確認に必要なgate |
 | --- | --- |
-| docs/scripts-only | `verify_local.ps1 -SkipAndroidBuild` を使用可 |
-| Android/Kotlin/JNI/Gradle/CMake/APK packaging | `verify_local.ps1`。`-SkipAndroidBuild` は途中確認だけ |
-| QNN node/tensor/shape | 基礎gateに加え `run_host_tests.ps1`。shape変更はgraph-map exporterとnegative testも更新 |
-| QNN有効build/APK | 固定引数付き `verify_local.ps1 -WithQairt`。`qairt-policy.md` のAPK auditを含む |
-| 実機試験 | 基礎gateとQNN gateに加え `device-test-tiers.md` の該当Tier gate |
-| 公開bundle | 対応するallow-list exporter self-test、source evidence照合、公開物監査 |
-| PR / pre-integration | `verify_local.ps1 -PrGate`。ただしmilestone / formal evidence確定ではFullを維持 |
+| docs/scripts-only | 通常PRは `verify_local.ps1 -PrGate -SkipAndroidBuild` を使用可。milestone / formal evidence確定ではFull |
+| Android/Kotlin/JNI/Gradle/CMake/APK packaging | 通常PRは `verify_local.ps1 -PrGate`。`-SkipAndroidBuild` は途中確認だけ |
+| QNN node/tensor/shape | PrGateに加え `run_host_tests.ps1` のshape validator。shape変更はgraph-map exporterとnegative testも更新 |
+| QNN有効build/APK | PrGateに加え固定引数付き `verify_local.ps1 -WithQairt`。`qairt-policy.md` のAPK auditを含む |
+| 実機試験 | PrGate / QNN gateに加え `device-test-tiers.md` の該当Tier gate |
+| 公開bundle | 対応するallow-list exporter self-test、source evidence照合、公開物監査。formal evidence確定時はFull |
+| PR / pre-integration | `verify_local.ps1 -PrGate`。shared core / gate-policy / unknown relevant pathはheavy-allへfail-closed |
 
 ```powershell
 .\scripts\verify_local.ps1 `
@@ -77,4 +77,6 @@ QNN build、実機試験、公開bundleは基礎gateだけでは完了しない�
 
 ## CI
 
-`.github/workflows/verify.yml` も同じ `verify_local.ps1` を実行する。CI専用の別テスト列は作らない。Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` に取得し、QAIRT SDK、ADB端末、repository secrets、APK artifactを使わない。現行CI invocationはFullのままとし、`-PrGate` への切り替えは別途検討する。
+`.github/workflows/verify.yml` も同じ `verify_local.ps1` を使い、通常のpull requestでは `-PrGate` を実行する。main pushでは push全体のref更新を分類するため、GitHub push eventの `github.event.before`（push直前のmain SHA）を `-PrGateBaseRef` に渡す。これにより複数commit direct pushやmerge後でも、最後の1commitだけでなくpush全体をchanged-path discoveryの対象にし、gate-policy変更・shared production core・unknown relevant pathはheavy-allへfail-closedする。CI専用の別テスト列は作らない。
+
+引数なしFullはCIの通常PRごとに無条件実行せず、milestone / formal evidence / release / explicit formal validationで維持する。Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` に取得し、QAIRT SDK、ADB端末、repository secrets、APK artifactを使わない。
