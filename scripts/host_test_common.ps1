@@ -70,29 +70,55 @@ function Get-PhoneLmHostObjectKey {
 }
 
 function Initialize-PhoneLmHostObjectSession {
-    # Session-scoped only. Fresh cleans the directory so a previous failed run
-    # cannot donate objects to this invocation. Join reuses a directory that a
-    # wrapper already cleaned for this invocation.
+    # Session-scoped only. Fresh creates a new ownership token. Join requires
+    # the caller to present that exact token, so an arbitrary stale directory
+    # from another invocation cannot be reused accidentally.
     param(
         [Parameter(Mandatory = $true)][string]$SessionDirectory,
-        [switch]$Fresh
+        [switch]$Fresh,
+        [string]$SessionToken = "",
+        [string]$ExpectedSessionToken = ""
     )
+    $sessionFull = [System.IO.Path]::GetFullPath($SessionDirectory)
+    $markerPath = Join-Path $sessionFull ".session-token"
+
     if ($Fresh) {
-        if (Test-Path -LiteralPath $SessionDirectory) {
-            Remove-Item -LiteralPath $SessionDirectory -Recurse -Force
+        if (Test-Path -LiteralPath $sessionFull) {
+            Remove-Item -LiteralPath $sessionFull -Recurse -Force
         }
+        New-Item -ItemType Directory -Force -Path $sessionFull | Out-Null
+        if ([string]::IsNullOrWhiteSpace($SessionToken)) {
+            $SessionToken = [Guid]::NewGuid().ToString("N")
+        }
+        [System.IO.File]::WriteAllText(
+            $markerPath,
+            $SessionToken,
+            [System.Text.UTF8Encoding]::new($false))
+    } else {
+        if ([string]::IsNullOrWhiteSpace($ExpectedSessionToken)) {
+            throw "HOST_OBJECT_SESSION_TOKEN_REQUIRED"
+        }
+        if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+            throw "HOST_OBJECT_SESSION_MARKER_MISSING:$sessionFull"
+        }
+        $actualToken = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+        if ($actualToken -cne $ExpectedSessionToken) {
+            throw "HOST_OBJECT_SESSION_TOKEN_MISMATCH"
+        }
+        $SessionToken = $actualToken
     }
-    $objectDir = Join-Path $SessionDirectory "objects"
+
+    $objectDir = Join-Path $sessionFull "objects"
     New-Item -ItemType Directory -Force -Path $objectDir | Out-Null
     $script:PhoneLmHostObjectSession = @{
-        Directory   = [System.IO.Path]::GetFullPath($SessionDirectory)
-        ObjectDir   = [System.IO.Path]::GetFullPath($objectDir)
+        Directory      = $sessionFull
+        ObjectDir      = [System.IO.Path]::GetFullPath($objectDir)
+        SessionToken   = $SessionToken
         ObjectCompiles = 0
         ObjectReuses   = 0
         Links          = 0
     }
 }
-
 function Complete-PhoneLmHostObjectSession {
     if (-not $script:PhoneLmHostObjectSession) {
         return
@@ -198,6 +224,73 @@ function Invoke-PhoneLmHostPwshScript {
     }
 }
 
+function Test-PhoneLmHostObjectKeyIdentity {
+    $root = Split-Path -Parent $PSScriptRoot
+    $source = Join-Path $root "host_tests\object-key-fixture.cpp"
+    $compiler = Join-Path $root "build\fixture-g++.exe"
+    $includeA = Join-Path $root "app\src\main\cpp"
+    $includeB = Join-Path $root "host_tests"
+
+    $base = @("-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-I", $includeA, "-I", $includeB)
+    $same = @("-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-I", $includeA, "-I", $includeB)
+    $std20 = @("-std=c++20", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-I", $includeA, "-I", $includeB)
+    $differentInclude = @("-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-I", $includeA)
+    $reorderedIncludes = @("-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-I", $includeB, "-I", $includeA)
+
+    $baseKey = Get-PhoneLmHostObjectKey -Source $source -CompileArgs $base -CompilerPath $compiler
+    if ($baseKey -cne (Get-PhoneLmHostObjectKey -Source $source -CompileArgs $same -CompilerPath $compiler)) {
+        throw "HOST_OBJECT_KEY_IDENTICAL_ARGS_DIFFER"
+    }
+    if ($baseKey -ceq (Get-PhoneLmHostObjectKey -Source $source -CompileArgs $std20 -CompilerPath $compiler)) {
+        throw "HOST_OBJECT_KEY_STD_NOT_DISTINGUISHED"
+    }
+    if ($baseKey -ceq (Get-PhoneLmHostObjectKey -Source $source -CompileArgs $differentInclude -CompilerPath $compiler)) {
+        throw "HOST_OBJECT_KEY_INCLUDE_SET_NOT_DISTINGUISHED"
+    }
+    if ($baseKey -ceq (Get-PhoneLmHostObjectKey -Source $source -CompileArgs $reorderedIncludes -CompilerPath $compiler)) {
+        throw "HOST_OBJECT_KEY_INCLUDE_ORDER_NOT_DISTINGUISHED"
+    }
+    Write-Host "host_object_key_identity_self_test=PASS"
+}
+
+function Test-PhoneLmHostObjectSessionGuard {
+    $root = Split-Path -Parent $PSScriptRoot
+    $fixture = Join-Path $root ("build\host-test-objects\session-guard-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+    $token = [Guid]::NewGuid().ToString("N")
+    try {
+        Initialize-PhoneLmHostObjectSession -SessionDirectory $fixture -Fresh -SessionToken $token
+        Complete-PhoneLmHostObjectSession
+        Initialize-PhoneLmHostObjectSession -SessionDirectory $fixture -ExpectedSessionToken $token
+        Complete-PhoneLmHostObjectSession
+
+        $missingTokenFailed = $false
+        try {
+            Initialize-PhoneLmHostObjectSession -SessionDirectory $fixture
+        } catch {
+            $missingTokenFailed = $_.Exception.Message -eq "HOST_OBJECT_SESSION_TOKEN_REQUIRED"
+        }
+        if (-not $missingTokenFailed) {
+            throw "HOST_OBJECT_SESSION_MISSING_TOKEN_DID_NOT_FAIL"
+        }
+
+        $wrongTokenFailed = $false
+        try {
+            Initialize-PhoneLmHostObjectSession -SessionDirectory $fixture -ExpectedSessionToken ([Guid]::NewGuid().ToString("N"))
+        } catch {
+            $wrongTokenFailed = $_.Exception.Message -eq "HOST_OBJECT_SESSION_TOKEN_MISMATCH"
+        }
+        if (-not $wrongTokenFailed) {
+            throw "HOST_OBJECT_SESSION_WRONG_TOKEN_DID_NOT_FAIL"
+        }
+        Write-Host "host_object_session_guard_self_test=PASS"
+    } finally {
+        $script:PhoneLmHostObjectSession = $null
+        if (Test-Path -LiteralPath $fixture) {
+            Remove-Item -LiteralPath $fixture -Recurse -Force
+        }
+    }
+}
+
 function Test-PhoneLmHostRunnerSelfCheck {
     # Structural check: a wrapper must not ignore suite failures.
     $wrapper = Join-Path $PSScriptRoot 'run_host_tests.ps1'
@@ -233,6 +326,8 @@ function Test-PhoneLmHostRunnerSelfCheck {
     if ($commonText -notmatch 'object compile MISS' -or $commonText -notmatch 'object reuse HIT') {
         throw 'HOST_RUNNER_SELF_CHECK_MISSING_OBJECT_HIT_MISS_LOG'
     }
+    Test-PhoneLmHostObjectKeyIdentity
+    Test-PhoneLmHostObjectSessionGuard
     # Contract binary must not retain diagnostic ownership symbols.
     $sdkIndependent = Join-Path (Split-Path -Parent $PSScriptRoot) 'host_tests\qnn_sdk_independent_test.cpp'
     $depthQuality = Join-Path (Split-Path -Parent $PSScriptRoot) 'host_tests\depth_quality_test.cpp'

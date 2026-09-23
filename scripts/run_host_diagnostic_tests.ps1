@@ -6,9 +6,10 @@
 # scripts/run_host_tests.ps1 remains the compatibility orchestrator and runs
 # this suite after the contract suite. Coverage is not reduced.
 param(
-    # Optional shared session directory created/cleaned by run_host_tests.ps1.
-    # Empty means this invocation owns a fresh standalone object session.
-    [string]$ObjectSessionDir = ""
+    # Optional shared session created by run_host_tests.ps1. A matching token is
+    # required to join it; empty means this invocation owns a fresh standalone session.
+    [string]$ObjectSessionDir = "",
+    [string]$ObjectSessionToken = ""
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -20,7 +21,7 @@ $CppInclude = Join-Path $Root "app\src\main\cpp"
 $HostInclude = Join-Path $Root "host_tests"
 
 if ($ObjectSessionDir) {
-    Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir
+    Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir -ExpectedSessionToken $ObjectSessionToken
 } else {
     Initialize-PhoneLmHostObjectSession `
         -SessionDirectory (Join-Path $Root "build\host-test-objects\standalone-diagnostic") `

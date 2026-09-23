@@ -9,17 +9,26 @@ $Root = Split-Path -Parent $PSScriptRoot
 $contractScript = Join-Path $Root "scripts\run_host_contract_tests.ps1"
 $diagnosticScript = Join-Path $Root "scripts\run_host_diagnostic_tests.ps1"
 
-# One fresh object session for this wrapper invocation, shared by contract and
-# diagnostic child processes. Cleaned here so a previous failed run cannot donate
-# objects. Not persistent across verify runs or checkouts.
-$ObjectSessionDir = Join-Path $Root "build\host-test-objects\wrapper-session"
-Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir -Fresh
+# One invocation-unique object session, shared by contract and diagnostic child
+# processes. The ownership token prevents arbitrary stale directories from being
+# joined, and finally cleanup handles success and ordinary failure paths.
+$ObjectSessionToken = [Guid]::NewGuid().ToString("N")
+$ObjectSessionDir = Join-Path $Root (
+    "build\host-test-objects\wrapper-{0}-{1}" -f $PID, $ObjectSessionToken)
+Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir -Fresh -SessionToken $ObjectSessionToken
 
 Write-Host "===== run_host_tests.ps1 (contract + diagnostic) ====="
-Invoke-PhoneLmHostPwshScript -Label "run_host_contract_tests.ps1" `
-    -ScriptPath $contractScript `
-    -Arguments @("-ObjectSessionDir", $ObjectSessionDir)
-Invoke-PhoneLmHostPwshScript -Label "run_host_diagnostic_tests.ps1" `
-    -ScriptPath $diagnosticScript `
-    -Arguments @("-ObjectSessionDir", $ObjectSessionDir)
-Write-Host "run_host_tests=PASS (contract+diagnostic)"
+try {
+    Invoke-PhoneLmHostPwshScript -Label "run_host_contract_tests.ps1" -ScriptPath $contractScript -Arguments @(
+        "-ObjectSessionDir", $ObjectSessionDir,
+        "-ObjectSessionToken", $ObjectSessionToken)
+    Invoke-PhoneLmHostPwshScript -Label "run_host_diagnostic_tests.ps1" -ScriptPath $diagnosticScript -Arguments @(
+        "-ObjectSessionDir", $ObjectSessionDir,
+        "-ObjectSessionToken", $ObjectSessionToken)
+    Write-Host "run_host_tests=PASS (contract+diagnostic)"
+} finally {
+    $script:PhoneLmHostObjectSession = $null
+    if (Test-Path -LiteralPath $ObjectSessionDir) {
+        Remove-Item -LiteralPath $ObjectSessionDir -Recurse -Force
+    }
+}
