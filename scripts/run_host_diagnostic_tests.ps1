@@ -5,6 +5,12 @@
 # Production/runtime product contracts live in run_host_contract_tests.ps1.
 # scripts/run_host_tests.ps1 remains the compatibility orchestrator and runs
 # this suite after the contract suite. Coverage is not reduced.
+param(
+    # Optional shared session created by run_host_tests.ps1. A matching token is
+    # required to join it; empty means this invocation owns a fresh standalone session.
+    [string]$ObjectSessionDir = "",
+    [string]$ObjectSessionToken = ""
+)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $OutputDirectory = Join-Path $Root "build\host-tests"
@@ -13,6 +19,14 @@ $OutputDirectory = Join-Path $Root "build\host-tests"
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $CppInclude = Join-Path $Root "app\src\main\cpp"
 $HostInclude = Join-Path $Root "host_tests"
+
+if ($ObjectSessionDir) {
+    Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir -ExpectedSessionToken $ObjectSessionToken
+} else {
+    Initialize-PhoneLmHostObjectSession `
+        -SessionDirectory (Join-Path $Root "build\host-test-objects\standalone-diagnostic") `
+        -Fresh
+}
 
 Write-Host "===== host diagnostic suite ====="
 
@@ -112,5 +126,6 @@ Invoke-PhoneLmHostCppRun -Label "Nicopedia Muon numeric diagnostic" `
     -Arguments @($NicopediaMuonNumericDiagnosticDir)
 Write-Host "nicopedia_muon_numeric_diagnostic=PASS"
 
+Complete-PhoneLmHostObjectSession
 Test-PhoneLmHostRunnerSelfCheck
 Write-Host "run_host_diagnostic_tests=PASS"
