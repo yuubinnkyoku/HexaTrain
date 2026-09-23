@@ -1,6 +1,10 @@
 # Shared compile/run helpers for host test suites.
-# Intentionally minimal: compile, exit-code check, invoke. No mini build system.
+# Session-scoped object reuse only: identical compile-identity objects are
+# compiled once per host-suite invocation and linked into multiple executables.
+# No persistent compiler cache, no header-dependency incremental build system.
 $ErrorActionPreference = "Stop"
+
+$script:PhoneLmHostObjectSession = $null
 
 function Resolve-PhoneLmHostPwsh {
     $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -8,6 +12,106 @@ function Resolve-PhoneLmHostPwsh {
         throw "PWSH_NOT_FOUND: pwsh.exe (PowerShell 7+) is not on PATH"
     }
     return $cmd.Source
+}
+
+function Resolve-PhoneLmHostCompiler {
+    $cmd = Get-Command g++ -ErrorAction SilentlyContinue
+    if (-not $cmd -or -not (Test-Path -LiteralPath $cmd.Source)) {
+        throw "g++ not found on PATH (required for host C++ compile)"
+    }
+    return $cmd.Source
+}
+
+function Get-PhoneLmHostSourceDisplayName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source
+    )
+    $root = Split-Path -Parent $PSScriptRoot
+    $full = [System.IO.Path]::GetFullPath($Source)
+    $rootFull = [System.IO.Path]::GetFullPath($root)
+    if ($full.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rel = $full.Substring($rootFull.Length).TrimStart('\', '/')
+        return ($rel -replace '\\', '/')
+    }
+    return $full
+}
+
+function Get-PhoneLmHostObjectKey {
+    # Object identity is the actual compile argv plus canonical source path.
+    # Label / executable name is intentionally excluded.
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string[]]$CompileArgs,
+        [Parameter(Mandatory = $true)][string]$CompilerPath
+    )
+    $canonicalSource = [System.IO.Path]::GetFullPath($Source)
+    $canonicalArgs = @()
+    foreach ($arg in $CompileArgs) {
+        if ($arg -eq "-I") {
+            $canonicalArgs += $arg
+            continue
+        }
+        if ($canonicalArgs.Count -gt 0 -and $canonicalArgs[-1] -eq "-I") {
+            $canonicalArgs += [System.IO.Path]::GetFullPath($arg)
+            continue
+        }
+        $canonicalArgs += $arg
+    }
+    $parts = @([System.IO.Path]::GetFullPath($CompilerPath)) + $canonicalArgs + @($canonicalSource)
+    $joined = [string]::Join("`n", $parts)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($joined)
+        $hash = $sha.ComputeHash($bytes)
+        return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Initialize-PhoneLmHostObjectSession {
+    # Session-scoped only. Fresh cleans the directory so a previous failed run
+    # cannot donate objects to this invocation. Join reuses a directory that a
+    # wrapper already cleaned for this invocation.
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionDirectory,
+        [switch]$Fresh
+    )
+    if ($Fresh) {
+        if (Test-Path -LiteralPath $SessionDirectory) {
+            Remove-Item -LiteralPath $SessionDirectory -Recurse -Force
+        }
+    }
+    $objectDir = Join-Path $SessionDirectory "objects"
+    New-Item -ItemType Directory -Force -Path $objectDir | Out-Null
+    $script:PhoneLmHostObjectSession = @{
+        Directory   = [System.IO.Path]::GetFullPath($SessionDirectory)
+        ObjectDir   = [System.IO.Path]::GetFullPath($objectDir)
+        ObjectCompiles = 0
+        ObjectReuses   = 0
+        Links          = 0
+    }
+}
+
+function Complete-PhoneLmHostObjectSession {
+    if (-not $script:PhoneLmHostObjectSession) {
+        return
+    }
+    $s = $script:PhoneLmHostObjectSession
+    Write-Host ("object_compiles={0}" -f $s.ObjectCompiles)
+    Write-Host ("object_reuses={0}" -f $s.ObjectReuses)
+    Write-Host ("links={0}" -f $s.Links)
+    $script:PhoneLmHostObjectSession = $null
+}
+
+function Get-PhoneLmHostObjectPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    if (-not $script:PhoneLmHostObjectSession) {
+        throw "HOST_OBJECT_SESSION_NOT_INITIALIZED"
+    }
+    return (Join-Path $script:PhoneLmHostObjectSession.ObjectDir ("{0}.o" -f $Key))
 }
 
 function Invoke-PhoneLmHostCppCompile {
@@ -18,19 +122,42 @@ function Invoke-PhoneLmHostCppCompile {
         [string[]]$IncludeDirs = @(),
         [string]$Std = "-std=c++17"
     )
-    if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-        throw "g++ not found on PATH (required for $Label)"
+    if (-not $script:PhoneLmHostObjectSession) {
+        Initialize-PhoneLmHostObjectSession `
+            -SessionDirectory (Join-Path ([System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))) "build\host-test-objects\auto-$PID") `
+            -Fresh
     }
-    $arguments = @($Std, "-O2", "-Wall", "-Wextra", "-Wpedantic")
+    $compiler = Resolve-PhoneLmHostCompiler
+    # Compile argv is the object-identity basis (not Label / Output).
+    $compileArgs = @($Std, "-O2", "-Wall", "-Wextra", "-Wpedantic")
     foreach ($include in $IncludeDirs) {
-        $arguments += @("-I", $include)
+        $compileArgs += @("-I", $include)
     }
-    $arguments += $Sources
-    $arguments += @("-o", $Output)
-    & g++ @arguments
+    $objects = @()
+    foreach ($source in $Sources) {
+        $displayName = Get-PhoneLmHostSourceDisplayName -Source $source
+        $key = Get-PhoneLmHostObjectKey -Source $source -CompileArgs $compileArgs -CompilerPath $compiler
+        $objPath = Get-PhoneLmHostObjectPath -Key $key
+        if (Test-Path -LiteralPath $objPath) {
+            Write-Host ("object reuse HIT {0}" -f $displayName)
+            $script:PhoneLmHostObjectSession.ObjectReuses++
+        }
+        else {
+            Write-Host ("object compile MISS {0}" -f $displayName)
+            & $compiler @compileArgs -c $source -o $objPath
+            if ($LASTEXITCODE -ne 0) {
+                throw "$Label compilation failed for $displayName"
+            }
+            $script:PhoneLmHostObjectSession.ObjectCompiles++
+        }
+        $objects += $objPath
+    }
+    Write-Host ("link {0}" -f [System.IO.Path]::GetFileName($Output))
+    & $compiler @objects -o $Output
     if ($LASTEXITCODE -ne 0) {
-        throw "$Label compilation failed"
+        throw "$Label link failed"
     }
+    $script:PhoneLmHostObjectSession.Links++
 }
 
 function Invoke-PhoneLmHostCppRun {
@@ -95,6 +222,16 @@ function Test-PhoneLmHostRunnerSelfCheck {
     }
     if ($commonText -notmatch 'LASTEXITCODE') {
         throw 'HOST_RUNNER_SELF_CHECK_WRAPPER_MISSING_EXIT_PROPAGATION'
+    }
+    # Session-scoped object reuse plumbing must remain present.
+    if ($commonText -notmatch 'Initialize-PhoneLmHostObjectSession') {
+        throw 'HOST_RUNNER_SELF_CHECK_MISSING_OBJECT_SESSION_INIT'
+    }
+    if ($commonText -notmatch 'Get-PhoneLmHostObjectKey') {
+        throw 'HOST_RUNNER_SELF_CHECK_MISSING_OBJECT_KEY'
+    }
+    if ($commonText -notmatch 'object compile MISS' -or $commonText -notmatch 'object reuse HIT') {
+        throw 'HOST_RUNNER_SELF_CHECK_MISSING_OBJECT_HIT_MISS_LOG'
     }
     # Contract binary must not retain diagnostic ownership symbols.
     $sdkIndependent = Join-Path (Split-Path -Parent $PSScriptRoot) 'host_tests\qnn_sdk_independent_test.cpp'

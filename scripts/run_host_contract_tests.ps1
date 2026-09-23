@@ -5,6 +5,11 @@
 #
 # Diagnostic/probe tooling self-tests live in run_host_diagnostic_tests.ps1.
 # scripts/run_host_tests.ps1 remains the compatibility orchestrator.
+param(
+    # Optional shared session directory created/cleaned by run_host_tests.ps1.
+    # Empty means this invocation owns a fresh standalone object session.
+    [string]$ObjectSessionDir = ""
+)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $OutputDirectory = Join-Path $Root "build\host-tests"
@@ -13,6 +18,14 @@ $OutputDirectory = Join-Path $Root "build\host-tests"
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $CppInclude = Join-Path $Root "app\src\main\cpp"
 $HostInclude = Join-Path $Root "host_tests"
+
+if ($ObjectSessionDir) {
+    Initialize-PhoneLmHostObjectSession -SessionDirectory $ObjectSessionDir
+} else {
+    Initialize-PhoneLmHostObjectSession `
+        -SessionDirectory (Join-Path $Root "build\host-test-objects\standalone-contract") `
+        -Fresh
+}
 
 Write-Host "===== host contract suite ====="
 
@@ -286,5 +299,6 @@ if (Test-Path -LiteralPath $selfTestCkpt) {
     Write-Host "nicopedia_cpu_generate_self_test=SKIP (checkpoint not present)"
 }
 
+Complete-PhoneLmHostObjectSession
 Test-PhoneLmHostRunnerSelfCheck
 Write-Host "run_host_contract_tests=PASS"
