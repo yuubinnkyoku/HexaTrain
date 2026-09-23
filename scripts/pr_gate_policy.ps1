@@ -581,123 +581,7 @@ function Assert-PhoneLmPrGateMultiCommitPushBefore {
         & git -C $fixtureRoot -c user.name=pr-gate-self-test -c user.email=pr-gate-self-test@example.invalid commit --quiet --no-gpg-sign -m base
         if ($LASTEXITCODE -ne 0) { throw "git commit base failed" }
         $before = (& git -C $fixtureRoot rev-parse HEAD).Trim()
-        if ($LASTEXITCODE -ne 0 -or $before -notmatch '^[0-9a-f]{40}    $script:PrGateSelfTestFailures = [System.Collections.Generic.List[string]]::new()
-    $script:PrGateSelfTestPassed = 0
-
-    $none = @()
-    $allSteps = @($script:PhoneLmPrGateHeavySteps)
-
-    Assert-PhoneLmPrGatePlanCase -Name "1-exporter-only" -ExpectAll:$false `
-        -Paths @("scripts/export_public_qnn_l19_readout_results.ps1") `
-        -ExpectRun $none -ExpectSkip $allSteps
-
-    Assert-PhoneLmPrGatePlanCase -Name "2-docs-only" -ExpectAll:$false `
-        -Paths @("docs/qnn-tiny-language-model-training.md", "docs/agent/numerical-evidence.md") `
-        -ExpectRun $none -ExpectSkip $allSteps
-
-    Assert-PhoneLmPrGatePlanCase -Name "3-android-kotlin-only" -ExpectAll:$false `
-        -Paths @("app/src/main/java/com/yuubinnkyoku/phonelm/TrainingDataset.kt") `
-        -ExpectRun $none -ExpectSkip $allSteps
-
-    Assert-PhoneLmPrGatePlanCase -Name "4-qnn-only" -ExpectAll:$false `
-        -Paths @("app/src/main/cpp/qnn/qnn_graph_shape_validator.cpp") `
-        -ExpectRun $none -ExpectSkip $allSteps
-
-    Assert-PhoneLmPrGatePlanCase -Name "5-shared-cpu-core" -ExpectAll:$true `
-        -Paths @("app/src/main/cpp/tiny_language_model_cpu.cpp") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "6-shared-dataset" -ExpectAll:$true `
-        -Paths @("app/src/main/cpp/autoregressive_validation.h") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "7-readout-specific" -ExpectAll:$false `
-        -Paths @("host_tests/readout_probe.cpp") `
-        -ExpectRun @("readout-representation-probe") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "intra-block-readability-run", "attention-internal-run",
-            "output-projection-run", "probe-optimization-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "8-critical-margin-specific" -ExpectAll:$false `
-        -Paths @("host_tests/critical_margin_objective_probe.cpp") `
-        -ExpectRun @("critical-margin-objective-probe") `
-        -ExpectSkip @("margin-decomposition-probe", "readout-representation-probe",
-            "intra-block-readability-run", "attention-internal-run",
-            "output-projection-run", "probe-optimization-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "9-probe-optimization-with-prereqs" -ExpectAll:$false `
-        -Paths @("host_tests/probe_optimization_audit.cpp") `
-        -ExpectRun @("probe-optimization-run", "intra-block-readability-run", "attention-internal-run") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "readout-representation-probe", "output-projection-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "10-readout-public-evidence" -ExpectAll:$false `
-        -Paths @("docs/results/qnn-l19-readout-representation-diagnosis-2026-08/trajectory-anchors.csv") `
-        -ExpectRun @("readout-representation-probe") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "intra-block-readability-run", "attention-internal-run",
-            "output-projection-run", "probe-optimization-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "11-verify-local-policy" -ExpectAll:$true `
-        -Paths @("scripts/verify_local.ps1", "scripts/pr_gate_policy.ps1") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "12-unknown-host-path" -ExpectAll:$true `
-        -Paths @("host_tests/new_mystery_probe.cpp") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "13-mixed-exporter-readout" -ExpectAll:$false `
-        -Paths @("scripts/export_public_qnn_l19_readout_results.ps1", "host_tests/readout_probe.cpp") `
-        -ExpectRun @("readout-representation-probe") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "intra-block-readability-run", "attention-internal-run",
-            "output-projection-run", "probe-optimization-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "14-mixed-android-shared-core" -ExpectAll:$true `
-        -Paths @("app/src/main/java/com/yuubinnkyoku/phonelm/TrainingDataset.kt",
-            "app/src/main/cpp/tiny_language_model_cpu.cpp") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "15-change-set-failed-fail-closed" -ExpectAll:$true `
-        -Paths @() -ChangeSetFailed:$true `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGatePlanCase -Name "16-output-projection-soft-tap" -ExpectAll:$false `
-        -Paths @("host_tests/output_projection_audit.cpp") `
-        -ExpectRun @("output-projection-run") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "readout-representation-probe", "intra-block-readability-run",
-            "attention-internal-run", "probe-optimization-run")
-
-    Assert-PhoneLmPrGatePlanCase -Name "17-mixed-output-and-probe" -ExpectAll:$false `
-        -Paths @("host_tests/output_projection_audit.cpp", "host_tests/probe_optimization_audit.cpp") `
-        -ExpectRun @("output-projection-run", "probe-optimization-run",
-            "intra-block-readability-run", "attention-internal-run") `
-        -ExpectSkip @("margin-decomposition-probe", "critical-margin-objective-probe",
-            "readout-representation-probe")
-
-    Assert-PhoneLmPrGatePlanCase -Name "18-multi-shared-lib-fanout" -ExpectAll:$true `
-        -Paths @("host_tests/readout_probe_lib.h") `
-        -ExpectRun $allSteps -ExpectSkip $none
-
-    Assert-PhoneLmPrGateHeavyInventoryParity
-    Assert-PhoneLmPrGateMultiCommitPushBefore
-
-    if ($script:PrGateSelfTestFailures.Count -gt 0) {
-        foreach ($failure in $script:PrGateSelfTestFailures) {
-            Write-Host "FAIL $failure"
-        }
-        throw "pr gate policy self-test failed ($($script:PrGateSelfTestFailures.Count) failure(s))"
-    }
-    Write-Host "pr-gate-policy-self-test=PASS ($($script:PrGateSelfTestPassed) cases)"
-    return "deterministic classifier matrix PASS ($($script:PrGateSelfTestPassed) cases)"
-}
-
-if ($SelfTest) {
-    Invoke-PhoneLmPrGatePolicySelfTest | Out-Null
-    exit 0
-}
-) { throw "unable to resolve before SHA" }
+        if ($LASTEXITCODE -ne 0 -or $before -notmatch '^[0-9a-f]{40}$') { throw "unable to resolve before SHA" }
 
         $heavyDir = Join-Path $fixtureRoot "app\src\main\cpp"
         [IO.Directory]::CreateDirectory($heavyDir) | Out-Null
@@ -853,6 +737,7 @@ function Invoke-PhoneLmPrGatePolicySelfTest {
         -ExpectRun $allSteps -ExpectSkip $none
 
     Assert-PhoneLmPrGateHeavyInventoryParity
+    Assert-PhoneLmPrGateMultiCommitPushBefore
 
     if ($script:PrGateSelfTestFailures.Count -gt 0) {
         foreach ($failure in $script:PrGateSelfTestFailures) {
