@@ -77,6 +77,6 @@ QNN build、実機試験、公開bundleは基礎gateだけでは完了しない�
 
 ## CI
 
-`.github/workflows/verify.yml` も同じ `verify_local.ps1` を使い、通常のpull requestでは `-PrGate` を実行する。main pushでは first-parent 側の直前mainとの差分を分類するため `-PrGate -PrGateBaseRef HEAD^` を使う。これによりdirect push / merge後もchanged-path discoveryが空集合にならず、gate-policy変更・shared production core・unknown relevant pathはheavy-allへfail-closedする。CI専用の別テスト列は作らない。
+`.github/workflows/verify.yml` も同じ `verify_local.ps1` を使い、通常のpull requestでは `-PrGate` を実行する。main pushでは push全体のref更新を分類するため、GitHub push eventの `github.event.before`（push直前のmain SHA）を `-PrGateBaseRef` に渡す。これにより複数commit direct pushやmerge後でも、最後の1commitだけでなくpush全体をchanged-path discoveryの対象にし、gate-policy変更・shared production core・unknown relevant pathはheavy-allへfail-closedする。CI専用の別テスト列は作らない。
 
 引数なしFullはCIの通常PRごとに無条件実行せず、milestone / formal evidence / release / explicit formal validationで維持する。Android build依存のpinned MNN sourceはignoredな `third_party/MNN/` に取得し、QAIRT SDK、ADB端末、repository secrets、APK artifactを使わない。

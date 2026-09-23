@@ -88,7 +88,7 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ github.event_name }}" -eq "push") {
-            .\scripts\verify_local.ps1 -PrGate -PrGateBaseRef 'HEAD^'
+            .\scripts\verify_local.ps1 -PrGate -PrGateBaseRef '${{ github.event.before }}'
           } else {
             .\scripts\verify_local.ps1 -PrGate
           }
