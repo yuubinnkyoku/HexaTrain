@@ -1,13 +1,15 @@
 # PhoneLM common local verification base gate.
 # Default: no physical device, no QAIRT SDK, no writes outside build/ and the index.
 # All required steps must PASS; QNN/device/publication changes have extra gates.
-# See AGENTS.md "完了前の検証" and "実行Tier".
+# Prefer scripts/verify.ps1 -Profile ... as the semantic entry; this file remains
+# the shared implementation for Fast / PrGate / Full (Formal).
+# See AGENTS.md and docs/agent/verification.md.
 param(
     # Final gate only for docs/scripts-only changes; otherwise a fast pre-check.
     [switch]$SkipAndroidBuild,
     # Run gradle :app:clean first. Slow (CMake/NDK rebuild). Use only when required.
     [switch]$Clean,
-    # Fast local gate for iterative development: audits, parser check, and unit tests only.
+    # Fast local gate for iterative development (target 1-3 min).
     [switch]$Fast,
     # Additionally verify the QAIRT SDK and a QNN-enabled build + APK audit.
     [switch]$WithQairt,
@@ -27,50 +29,14 @@ if ($Fast -and $PrGate) {
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "verify_common.ps1")
 . (Join-Path $PSScriptRoot "qairt_version.ps1")
+Initialize-PhoneLmVerifySession
 
 $script:PhoneLmPrGatePlan = $null
 $script:PhoneLmPrGateEnabled = [bool]$PrGate
 if ($PrGate) {
     . (Join-Path $PSScriptRoot "pr_gate_policy.ps1")
-}
-
-# Match README build instructions: the SDK lives under %LOCALAPPDATA%\Android\Sdk
-# on a fresh shell where ANDROID_HOME is not exported yet. Process-local only;
-# local.properties is never written by this script.
-if (-not $env:ANDROID_HOME -and -not $env:ANDROID_SDK_ROOT) {
-    $defaultSdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
-    if (Test-Path -LiteralPath (Join-Path $defaultSdk "platform-tools") -PathType Container) {
-        $env:ANDROID_HOME = $defaultSdk
-        $env:ANDROID_SDK_ROOT = $defaultSdk
-    }
-}
-
-$results = [System.Collections.Generic.List[object]]::new()
-
-function Add-Result([string]$Name, [string]$Status, [double]$Seconds, [string]$Detail) {
-    $short = if ($Detail) { ($Detail -replace "[\r\n]+", " ").Trim() } else { "" }
-    if ($short.Length -gt 160) { $short = $short.Substring(0, 157) + "..." }
-    $results.Add([pscustomobject]@{
-        Step    = $Name
-        Status  = $Status
-        Seconds = [math]::Round($Seconds, 1)
-        Detail  = $short
-    })
-}
-
-function Invoke-Step([string]$Name, [scriptblock]$Action) {
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    try {
-        $detail = & $Action
-        Add-Result $Name "PASS" $stopwatch.Elapsed.TotalSeconds ([string]$detail)
-    } catch {
-        Add-Result $Name "FAIL" $stopwatch.Elapsed.TotalSeconds $_.Exception.Message
-    }
-}
-
-function Add-Skip([string]$Name, [string]$Reason) {
-    Add-Result $Name "SKIP" 0 $Reason
 }
 
 # True when a heavy diagnostic full should execute. Full and Fast keep their
@@ -105,36 +71,6 @@ function Invoke-HeavyOrSkip([string]$Name, [string]$FastSkipReason, [scriptblock
     Invoke-Step $Name $Action
 }
 
-function Invoke-Process([string]$Label, [string]$FilePath, [string[]]$Arguments) {
-    # Stream child output to the console so it never lands in the step Detail.
-    & $FilePath @Arguments | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE" }
-}
-
-# Resolve the real PowerShell 7 executable. Windows PowerShell's $PSHOME does
-# not contain pwsh.exe, so never assume Join-Path $PSHOME "pwsh.exe" exists.
-$script:ResolvedPwshExe = $null
-function Resolve-PwshExe() {
-    if ($script:ResolvedPwshExe) { return $script:ResolvedPwshExe }
-    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
-    if (-not $cmd -or -not (Test-Path -LiteralPath $cmd.Source)) {
-        throw "pwsh.exe (PowerShell 7+) not found on PATH; install PowerShell 7 or add it to PATH"
-    }
-    $script:ResolvedPwshExe = $cmd.Source
-    return $script:ResolvedPwshExe
-}
-
-# External scripts may call `exit`, which would terminate this script when run
-# in-process. Always run them in a child pwsh process and check $LASTEXITCODE.
-function Invoke-PwshScript([string]$Label, [string]$ScriptPath, [string[]]$Arguments) {
-    $pwshExe = Resolve-PwshExe
-    Invoke-Process $Label $pwshExe (@("-NoProfile", "-File", $ScriptPath) + $Arguments)
-}
-
-function Test-Command([string]$Name) {
-    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
 function Invoke-PowerShellParserCheck() {
     $scripts = Get-ChildItem (Join-Path $Root "scripts\*.ps1")
     $bad = [System.Collections.Generic.List[string]]::new()
@@ -150,10 +86,6 @@ function Invoke-PowerShellParserCheck() {
         throw ("PowerShell parser errors:`n" + ($bad -join "`n"))
     }
     "$($scripts.Count) PowerShell scripts parsed cleanly"
-}
-
-function Invoke-Gradle([string]$Label, [string[]]$Tasks) {
-    Invoke-Process $Label (Join-Path $Root "gradlew.bat") ($Tasks + "--no-daemon")
 }
 
 Push-Location $Root
@@ -198,7 +130,9 @@ try {
                 git diff --name-only --diff-filter=ACMR
                 git diff --cached --name-only --diff-filter=ACMR
                 git ls-files --others --exclude-standard
-            ) | Sort-Object -Unique | Where-Object { $_ -and $_ -ne "scripts/verify_local.ps1" }
+            ) | Sort-Object -Unique | Where-Object {
+                $_ -and $_ -ne "scripts/verify_local.ps1"
+            }
         )
         $patterns = @(
             @{ Name = "adb-endpoint"; Regex = '\b\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}\b' },
@@ -260,14 +194,11 @@ try {
         }
     }
 
-    if ($Fast) {
-        Add-Skip "pr-gate-policy-self-test" "fast mode"
-    } else {
-        Invoke-Step "pr-gate-policy-self-test" {
-            Invoke-PwshScript "pr gate policy self-test" `
-                (Join-Path $Root "scripts\pr_gate_policy.ps1") @("-SelfTest")
-            "deterministic classifier matrix PASS (fail-closed unknown/shared)"
-        }
+    # Cheap policy self-test: Fast and non-Fast both run it.
+    Invoke-Step "pr-gate-policy-self-test" {
+        Invoke-PwshScript "pr gate policy self-test" `
+            (Join-Path $Root "scripts\pr_gate_policy.ps1") @("-SelfTest")
+        "deterministic classifier matrix PASS (fail-closed unknown/shared)"
     }
 
     Invoke-HeavyOrSkip "margin-decomposition-probe" "fast mode" {
@@ -506,13 +437,17 @@ try {
     }
 
     if ($Fast) {
-        Add-Skip "host-tests" "fast mode"
+        # Metadata staleness + CPU reference only. Full Host suite is
+        # verify.ps1 -Profile Host / non-Fast verify_local.
+        Invoke-Step "host-fast-contract" {
+            Assert-GppAvailable
+            Invoke-PhoneLmHostContractFast
+            "metadata staleness + CPU reference contracts ok"
+        }
     } else {
         Invoke-Step "host-tests" {
-            if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-                throw "g++ not found on PATH (required by scripts/run_host_tests.ps1)"
-            }
-            Invoke-PwshScript "run_host_tests" (Join-Path $Root "scripts\run_host_tests.ps1") @()
+            Assert-GppAvailable
+            Invoke-PhoneLmHostSuite
             "C++ host tests ok (includes qnn_graph_shape_validator and nicopedia parity policy fault battery)"
         }
     }
@@ -558,46 +493,10 @@ try {
             Invoke-Step "qairt-check" {
                 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
                     -ExpectedBuildId $ExpectedBuildId
-                $pwshExe = Resolve-PwshExe
-                $checkOutput = & $pwshExe -NoProfile -File (Join-Path $Root "scripts\check_qairt.ps1") `
-                    -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
-                $checkExit = $LASTEXITCODE
-                $checkOutput | Out-Host
-                function Get-CheckValue([string]$Key) {
-                    $hit = $checkOutput | Select-String -Pattern "^$([regex]::Escape($Key))=(.*)$" |
-                        Select-Object -First 1
-                    if (-not $hit) { return $null }
-                    return $hit.Matches[0].Groups[1].Value
-                }
-                $checkStatus = Get-CheckValue "status"
-                if ($checkExit -eq 2 -or $checkStatus -in @(
-                        "QAIRT_SDK_ROOT_UNAVAILABLE", "QAIRT_SDK_ROOT_MISMATCH")) {
-                    throw "check_qairt: QAIRT SDK not found at $QairtSdkRoot"
-                }
-                if ($checkExit -eq 4 -or $checkStatus -eq "QAIRT_BUILD_ID_MISMATCH") {
-                    throw "check_qairt: expected build ID $ExpectedBuildId not satisfied by $QairtSdkRoot"
-                }
-                if ($checkExit -eq 5 -or $checkStatus -eq "QAIRT_CORE_INCOMPLETE") {
-                    throw "check_qairt: QAIRT core required items are incomplete at $QairtSdkRoot"
-                }
-                if ($checkExit -notin @(0, 3)) {
-                    throw "check_qairt failed with exit code $checkExit ($checkStatus)"
-                }
-                if (-not $checkStatus) { throw "check_qairt failed with exit code $checkExit" }
                 # Inventory completeness is advisory: the following QNN-enabled
                 # build and APK audit perform the strict header/library/ABI/hash
                 # checks. Exit 3 (inventory incomplete) is not fatal here.
-                if ((Get-CheckValue "expected_build_id_match") -ne "true") {
-                    throw "check_qairt did not confirm expected_build_id_match=true"
-                }
-                $resolved = Get-CheckValue "sdk_root"
-                if (-not $resolved) { throw "check_qairt did not report sdk_root" }
-                $requested = [IO.Path]::GetFullPath($QairtSdkRoot)
-                $resolvedFull = [IO.Path]::GetFullPath($resolved)
-                if ($requested -ne $resolvedFull) {
-                    throw "Explicit QAIRT SDK root was not honored: requested=$requested resolved=$resolvedFull"
-                }
-                "QAIRT root honored, build ID match ($checkStatus)"
+                Invoke-PhoneLmQairtCheck -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
             }
             Invoke-Step "assemble-debug-qnn" {
                 Invoke-Gradle "assembleDebug(QNN)" @(
@@ -617,17 +516,7 @@ try {
         }
     }
 
-    Write-Host ""
-    Write-Host "===== verify_local summary ====="
-    foreach ($row in $results) {
-        $line = "{0,-24} {1,-4} {2,8:N1}s  {3}" -f $row.Step, $row.Status, $row.Seconds, $row.Detail
-        Write-Host $line
-    }
-    $passCount = @($results | Where-Object { $_.Status -eq "PASS" }).Count
-    $failCount = @($results | Where-Object { $_.Status -eq "FAIL" }).Count
-    $skipCount = @($results | Where-Object { $_.Status -eq "SKIP" }).Count
-    $totalSeconds = ($results | Measure-Object -Property Seconds -Sum).Sum
-    Write-Host ("total {0:N1}s  PASS={1} FAIL={2} SKIP={3}" -f $totalSeconds, $passCount, $failCount, $skipCount)
+    $failCount = Write-PhoneLmVerifySummary "verify_local summary"
     if ($failCount -gt 0) { exit 1 }
     exit 0
 } finally {

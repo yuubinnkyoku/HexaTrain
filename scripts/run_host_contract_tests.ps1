@@ -9,7 +9,10 @@ param(
     # Optional shared session created by run_host_tests.ps1. A matching token is
     # required to join it; empty means this invocation owns a fresh standalone session.
     [string]$ObjectSessionDir = "",
-    [string]$ObjectSessionToken = ""
+    [string]$ObjectSessionToken = "",
+    # Fast: metadata staleness + CPU reference only (verify.ps1 -Profile Fast).
+    # All: full product/contract suite (default; coverage is not reduced).
+    [ValidateSet("All", "Fast")][string]$Suite = "All"
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -55,6 +58,15 @@ Invoke-PhoneLmHostCppCompile -Label "CPU host test" `
         (Join-Path $Root "host_tests\cpu_reference_training_test.cpp")) `
     -IncludeDirs @($CppInclude)
 Invoke-PhoneLmHostCppRun -Label "CPU host tests" -Executable $CpuExecutable
+
+if ($Suite -eq "Fast") {
+    # Fast profile: generated-artifact staleness + CPU reference only.
+    # Remaining product contracts stay in Suite All (Host / Formal / PrGate).
+    Complete-PhoneLmHostObjectSession
+    Test-PhoneLmHostRunnerSelfCheck
+    Write-Host "run_host_contract_tests=PASS (Fast: metadata+cpu-reference)"
+    return
+}
 
 # Headwise G1 gate capacity / identity contract.
 $HeadwiseGateExecutable = Join-Path $OutputDirectory "headwise_g1_gate_test.exe"
