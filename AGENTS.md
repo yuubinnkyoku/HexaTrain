@@ -15,6 +15,14 @@ PhoneLM / HexaTrain は、実機上の Qualcomm QNN / HTP を使った言語モ�
 
 ---
 
+## 作業の入口
+
+- 研究課題・実験の優先順位: [`docs/research-priorities.md`](docs/research-priorities.md)
+- 開発基盤・構造改善の候補: [`docs/engineering-backlog.md`](docs/engineering-backlog.md)
+- 作業規則・検証・実機安全条件: [`docs/agent/`](docs/agent/)
+
+研究課題と engineering backlog を混同しない。通常は研究を優先し、engineering backlog は実際に研究を妨げた場合に参照する。
+
 ## 絶対規則
 
 これらは詳細文書に書いてあっても、常に守る。
