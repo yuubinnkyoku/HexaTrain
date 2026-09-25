@@ -1,8 +1,10 @@
 # HexaTrain 技術候補・優先順位
 
-> **更新基準: 2026-09-22 JST**
+> **研究内容の最終更新: 2026-09-25 JST**
 >
-> 現在の実装・実測の基準は [`yuubinnkyoku/HexaTrain`](https://github.com/yuubinnkyoku/HexaTrain) `main`、確認時HEAD **`315d048`**（2026-09-22確認）。Muonの正式品質baseline、parameter metadata SSOT、headwise gated-attention実験経路まで含む現行状態を基準にする。
+> この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
+>
+> 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
 > **Limite注記:** 2026-09-22時点ではLimite 1B - Violettoの正式Technical Report本文は未公開。Limite関連の優先順位は、公式release / Hugging Face config・model card / Value Model文書 / 公式vLLM実装 / Paradigma speedrun回顧で確認できる範囲に限定し、未公開のtraining recipeは推測しない。
 >
