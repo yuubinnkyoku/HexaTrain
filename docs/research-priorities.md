@@ -2937,6 +2937,11 @@ final結果を今後のcandidate tuningへ使い戻さない。
 
 ## Phase 2 — Muon Geometry Audit【最優先・低コスト】
 
+**完了（2026-09-22）。** 結果は [muon-row-geometry-audit.md](muon-row-geometry-audit.md)。
+seed1/seed2 とも `max row norm ↑` と `spectral norm ↑` が corr≈0.99 で同期し、
+step 250→8000 で約2.4〜2.7倍に成長。late の angular update も縮む。
+**Muown の優先度は下げない。** Phase 4 へ進んでよい。
+
 既存checkpointだけを使い、
 
 - semantic row norm
