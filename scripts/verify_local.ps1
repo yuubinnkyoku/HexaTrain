@@ -201,6 +201,13 @@ try {
         "deterministic classifier matrix PASS (fail-closed unknown/shared)"
     }
 
+    # Generated .commandcode/skills must match .agents/skills SSOT.
+    Invoke-Step "agent-skills-sync-check" {
+        Invoke-PwshScript "sync_agent_skills" `
+            (Join-Path $Root "scripts\sync_agent_skills.ps1") @("-Check")
+        "agent skill trees in sync"
+    }
+
     Invoke-HeavyOrSkip "margin-decomposition-probe" "fast mode" {
         Invoke-PwshScript "l19 first-error/margin decomposition probe" `
             (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()
