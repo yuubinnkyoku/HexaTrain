@@ -216,6 +216,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 - 現行generalized HTP graphは各layerでQ/K/Vを**3本の別MatMul**として作り、H2分割でもselector/scatter MatMulを使う。optimizer/checkpoint上のWq/Wk/Wv identityは保ったまま、実行用packed cacheを持つ余地がある。
 - current prepared generationはgraph / parameterをwarm reuseする一方、tokenごとのforwardはrolling T32全体を再実行する。**incremental KV cacheが未実装**なので、HySparse2型KV圧縮より前に通常のKV-cache decodeが大きな改善余地を持つ。
 - T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split診断、G1、ReLU²、learned residual scale、horizon-specific MTP-lite、XSA**は短文脈でも比較しやすい。2-stream residual mixingやdifficulty-aware samplingは、より安い候補の結果を見てからでよい。
+- architecture候補は**同じLRで比較するだけでは不十分**。Gated Attentionやoptimizer変更で安定なLR / batch領域そのものが動く可能性があるため、短期stress harnessと`time-to-bpb`を長期品質runの前段へ置く。
 - architecture候補を毎回scratch 8000-stepで比較すること自体が高コスト。**low-disruption architecture migration + short adaptation**を正式な研究手法にし、長期runへ上げる候補を早く刈り込む。
 - Aux Adam 135,936 parametersのうち、token embedding + output projectionだけで131,072 parameters（約96.42%）を占める。**embedding/head optimizer stateが「その他parameter」ではなく独立したmemory・optimizer設計問題**になっている。
 - V4.1のhead-wise Muonにより、現行H2のWq/Wk `64x64`を2本の`64x32`へ分ける実験は、単なるGLM由来仮説ではなく別系統の大規模採用例でも裏付けられた。ただし効果をH2へ直接外挿せずCPU referenceで確認する。
@@ -249,7 +250,10 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 
 2. **Gated Attention: G1をstep 4000まで回収**
    - `headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000で `-0.032712 / -0.036686 / -0.021864 / -0.007113`
-   - 同一recipeで4000まで延長し、収束加速だけか、最終品質差が残るかを判定する
+   - まず同一recipeで4000まで延長し、収束加速だけか、最終品質差が残るかを判定する
+   - **4000で差が縮んでもG1を即棄却しない。** Gated Attention / Qwen3.8系の示唆は最終lossだけでなく高learning-rate側の安定領域拡大にもあるため、control / G1を同じ短期stress gridで再比較する
+   - stress gridは現行formal LRを基準に `1.0x / 1.25x / 1.5x / 2.0x` 程度から始め、`time-to-bpb`、loss spike、gradient/update norm、gate saturation、non-finite、row geometryを記録する
+   - 「同じstepのbpb」だけでなく、**同じ目標bpbへ到達するwall time / original bytes**をG1の正式な価値指標へ加える
    - その結果を見てから `2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む
 
 3. **V4.1 optimizer splitの実装前diagnostic**
@@ -275,11 +279,37 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
    - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
 
+### P0共通基盤 — Training Stability Stress Harness
+
+通常recipeの品質比較とは別に、**候補がどこで壊れるかを見る短期stress test**を共通化する。architectureごとに最適learning rateが変わる可能性があるため、「同一LRで最終bpbが同じ」を理由に候補を早期棄却しない。
+
+最初の対象:
+
+- Gated Attention（none / G1 / 後続gate variant）
+- ReLU²
+- Muown / Original Muon+WD
+- learned residual / branch scale
+- 将来のRMSNorm / QK Norm
+
+共通出力:
+
+- `time-to-bpb` / `time-to-NLL`
+- step / wall-time / original-byte budgetごとのVal/Dev
+- loss spike / non-finite / fallback
+- global / parameter-group gradient norm
+- update norm / update-to-parameter ratio
+- Muon semantic row norm / spectral norm / angular update
+- gate系はmean / saturation fraction
+- thermal / RPC / backend time
+
+stress runは長期品質runの代替ではない。**安定領域と収束速度の候補選別**に限定し、通過候補だけを500 / 2000 / 8000 stepへ昇格する。
+
 ### NOW共通の測定規約
 
 - bpb / ms/update / original UTF-8 bytes/s / RAM / thermal / parity
 - RPC external / DSP worker imbalance / optimizer geometryを必要な実験で標準telemetryへ
 - architecture変更とoptimizer変更とsampling変更を同じA/Bへ混ぜない
+- architecture A/Bでは同一recipe比較に加え、必要ならstress harnessで**最適LR領域が移動していないか**を確認する
 
 ## P1 — NOWのゲート通過後【実行順】
 
@@ -339,13 +369,21 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 
 ## P2 — Muown / architecture基礎実験の後
 
-- **Effective Batch × Optimizer**
+- **Learning Rate × Effective Batch × Optimizer**
   - Muown short A/Bが有望な場合のみ、physical B8固定でaccumulation 1 / 2 / 4 / 8を比較
+  - batchだけを動かさず、各optimizerについて短期proxyでLRの安定領域も同時に探索する
+  - 全組合せを長期runせず、250〜500 step stress/proxy → Pareto frontier候補だけ500 / 2000 → 必要なものだけ8000へ昇格する
   - optimizer step数ではなく同一original-byte / token budgetでAdam / Original Muon / Muownを比べる
+  - qualityだけでなくtime-to-bpb、wall time、optimizer invocation数、RAM、row geometryを保存する
 - **Difficulty-Aware Sampling**
   - architecture / optimizerの主要差分が固まってから別factorとして導入する
   - uniform成分を残し、validation / Dev / final samplingは従来どおり固定する
   - sampler version / bucket threshold / RNG seed / cursorをcheckpoint identityへ含める
+- **Muon Orthogonalization Accuracy / Polar Express**
+  - Muownのrow magnitude / direction分離をNS5固定で評価した後にだけ開始する
+  - current NS5 / Polar Express系係数 / NS8相当を、同一入力・同一iteration budgetまたは同一wall budgetで比較する
+  - CPU high-precision oracleとの差、update cosine、orthogonality defect、HVX wall time、500 / 2000-step bpbを分離記録する
+  - QNN HTP-native Newton–Schulz再試行とは切り離し、HVX FP32専用の数値アルゴリズム探索とする
 - **AngularMuown**
   - Muownのdirection row normが暗黙にangular step-sizeを減衰させるという解析をHexaTrainで検証
   - rowごとの更新角`theta`とbpb改善速度を追い、必要ならangular multiplierを明示制御
@@ -2620,7 +2658,7 @@ Tが十分大きくなってから。
 
 # Memory
 
-## N-gram Embedding / Engram-lite
+## N-gram Embedding / Engram-lite / MicroEngram
 
 → **P2**
 
@@ -2633,28 +2671,35 @@ Qwen3.8-Flash-NextとDeepSeek-V4.1-Flashはいずれも、**計算量を大き�
 
 HexaTrainでは巨大tableをコピーせず、最初は
 
-`token embedding + 2/3-gram hash + small table + early single insertion`
+`TRAIN-only n-gram statistics → top-K explicit entries + hashed tail → small lookup → early single insertion`
 
-だけを試す。
+という**MicroEngram**から始める。validation / Dev / finalをtable構築へ混ぜず、dataset/tokenizer identityとtable build identityをcheckpointへ結び付ける。
 
 初期候補:
 
+- bigram / trigram
 - 4K / 8K / 16K entries
-- memory width 16 / 32
+- memory width 8 / 16 / 32
+- 高頻度n-gramはexplicit slot、低頻度long tailだけhashed bucketへ送るfrequency-aware variant
 - causal convolutionなし
 - 1箇所だけ挿入
 - CPU/host lookup + prefetchを最初のoracleとする
 
+特に比較したいのは、**出力語彙を増やさず入力側memoryだけ増やす案**である。Byte-BPE V1024のままMicroEngramを足す場合、V2048 / V4096のようにoutput projectionとsoftmax/CEまで拡張せずに容量を増やせる。
+
 比較軸:
 
 - table bytes / optimizer-state bytes
-- hit/access pattern
+- hit/access pattern / explicit-hit率 / hashed-tail衝突率
 - APP/HTP transfer bytes
 - mmap / host-backed table
 - prefetch有無
-- NLL / bpb改善 / added latency
+- NLL / ordinary next-token bpb / generation quality / added latency
 - tokenizer方式（byte-BPE）との相互作用
+- **V1024 + MicroEngram vs V2048 / V4096**をparameter / application-visible memory budgetで揃えた比較
 - 同parameter増のFFN / depthとのparameter-matched比較
+
+table sizeを増やしたときはtraining lossだけを見ない。大規模系ではlookup容量増とdownstream gainが単調一致しない可能性があるため、Val/Dev bpbと生成品質を独立に残す。
 
 Engram / N-gramを**静的・連想memory**、recurrent memoryを**動的memory**として別軸に扱う。758k scaleでの効果は大規模モデルから直接外挿せないため、P1へ上げずP2のsmall oracleから始める。
 
@@ -3395,9 +3440,9 @@ geometry auditは肯定済み。NOWの診断laneと競合しない範囲で進�
 
 ここで改善が無ければHVX化しない。
 
-## Phase 5 — Muown HVX Promotion
+## Phase 5 — Muown HVX Promotion + Orthogonalization Accuracy Lane
 
-CPU/reference Muownが有望な場合のみ。
+CPU/reference Muownが有望な場合のみ、まずMuownそのものを現行NS5で昇格する。
 
 - direction Muonの既存HVX primitive再利用可能性を検証
 - row-state updateをCPU/HVXのどこへ置くかprofile
@@ -3405,14 +3450,34 @@ CPU/reference Muownが有望な場合のみ。
 - resume reproducibility
 - 8,000-step seed 1 → seed 2
 
-## Phase 6 — Effective Batch × Optimizer
+**Muownのrow-norm制御効果をNS5固定で分離した後**に、Muonのorthogonalization近似そのものを別laneで比較する。Muownと同時変更しない。
 
-- effective batch 8 / 16 / 32 / 64
+候補:
+
+- current fixed-coefficient NS5
+- [Polar Express](https://arxiv.org/abs/2505.16932) 系の係数 / polynomial scheduleを同じiteration budgetへ縮約したvariant
+- NS8相当の追加反復
+
+比較軸:
+
+- 同一normalized momentum入力に対するCPU high-precision oracleとの差
+- update cosine / maxAbs / relative L2
+- orthogonality / matrix-sign approximation defect
+- HVX kernel time / RPC込みwall time
+- 500 / 2000 stepでのbpb、row norm、angular update
+
+QNN HTP-native Newton–Schulzを再開する意味ではない。**HVX FP32上で精度と反復回数のParetoを探す**laneとして扱う。
+
+## Phase 6 — Learning Rate × Effective Batch × Optimizer
+
+- physical B8を固定し、effective batch 8 / 16 / 32 / 64
 - Adam / Original Muon / Muown
+- optimizerごとにLRを固定せず、短期stress/proxyで安定領域を探す
 - same original-byte budget
-- quality / wall time / RAM / optimizer invocation count
+- quality / `time-to-bpb` / wall time / RAM / optimizer invocation count
+- semantic row norm / spectral norm / angular updateもoptimizer geometryとして併記する
 
-MiMo-V2.6のlarge-batch observationがtiny on-device trainingでも再現するかを見る。
+まず250〜500 stepの安価なgridで不安定領域を落とし、Pareto frontier候補だけ500 / 2000、必要なものだけ8,000 stepへ上げる。MiMo-V2.6 / Qwen3.8系で見える「optimizer / architecture変更に伴って最適batch・LR自体が移る」可能性を、tiny on-device trainingでも分離して測る。
 
 ## Phase 7 — Architecture A/B
 
@@ -3453,7 +3518,7 @@ parameter数/FLOPsではなく、bpb・wall time・original-byte throughput・RA
 - shared arena / double buffering
 - pack/unpack transpose除去
 
-## Phase 10 — Text Representationの再探索
+## Phase 10 — Text Representation / Static Memoryの再探索
 
 現在のByte BPE V1024をcontrolに、必要なら
 
@@ -3461,8 +3526,11 @@ parameter数/FLOPsではなく、bpb・wall time・original-byte throughput・RA
 - BPE V512/2048/4096
 - GBST
 - simplified BLT
+- **V1024 + MicroEngram**
 
 をbpbとoriginal-byte/sで比較する。
+
+特にlarger BPEとMicroEngramは、parameter数だけでなく**output projection / softmax cost、application-visible memory、host lookup traffic**まで含めて比較する。
 
 ## Phase 11 — Gradient / Optimizer alternatives
 
