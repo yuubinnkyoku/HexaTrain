@@ -248,13 +248,13 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - windows/s、original UTF-8 bytes/s、graph prepare amortizationを測る
    - full-final相当を現実的な時間で読める経路を作り、以後の研究iteration自体を短縮する
 
-2. **Gated Attention: G1をstep 4000まで回収**
-   - `headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000で `-0.032712 / -0.036686 / -0.021864 / -0.007113`
-   - まず同一recipeで4000まで延長し、収束加速だけか、最終品質差が残るかを判定する
-   - **4000で差が縮んでもG1を即棄却しない。** Gated Attention / Qwen3.8系の示唆は最終lossだけでなく高learning-rate側の安定領域拡大にもあるため、control / G1を同じ短期stress gridで再比較する
+2. **Gated Attention: G1の高LR安定性 / time-to-bpb stress grid**
+   - `headwise_g1_sigmoid`のseed1 matched runはstep 8000まで完了。ΔBalancedはstep 500 / 1000 / 1500 / 2000 / 2500 / 3000 / 3500 / 4000 / 5000 / 6000 / 7000 / 8000で `-0.032712 / -0.036686 / -0.021864 / -0.007113 / -0.016147 / -0.017483 / -0.007219 / -0.007490 / +0.004985 / +0.008981 / +0.009498 / -0.000367`
+   - 結論は、**早期sample-efficiency gainは強いが、8000ではbaselineと実質tie**。したがって「4000まで延長」は完了済みで、同一LRの長期runを追加しても情報量は低い
+   - 次はcontrol / G1を同じ短期stress gridで比較し、Gated Attentionが高learning-rate側の安定領域や収束速度を広げるかを判定する
    - stress gridは現行formal LRを基準に `1.0x / 1.25x / 1.5x / 2.0x` 程度から始め、`time-to-bpb`、loss spike、gradient/update norm、gate saturation、non-finite、row geometryを記録する
    - 「同じstepのbpb」だけでなく、**同じ目標bpbへ到達するwall time / original bytes**をG1の正式な価値指標へ加える
-   - その結果を見てから `2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む
+   - stress gridでG1の価値が残る場合にだけ、`2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む。残らない場合は新gate variantへ投資せず、別architecture laneへslotを移す
 
 3. **V4.1 optimizer splitの実装前diagnostic**
    - GLM-5のMuon SplitはMLA系up-projection、DeepSeek-V4.1のhead-wise MuonはQ/K head分割であり、同じ「split」でも対象と数学的動機を分けて扱う
@@ -3425,7 +3425,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1 candidateを4000まで延長
+- G1は8000まで回収済み。次はcontrol / G1の高LR stress gridで安定領域とtime-to-bpbを比較
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark
