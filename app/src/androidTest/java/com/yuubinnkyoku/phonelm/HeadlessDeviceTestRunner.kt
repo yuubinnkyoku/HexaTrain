@@ -395,12 +395,20 @@ class HeadlessDeviceTestRunner {
                 require(learningRateSchedule == 1 || learningRateSchedule == 2) {
                     "unsupported learning rate schedule"
                 }
-                require(learningRate.toBits() == 0.0022f.toBits()) {
-                    "decay schedule requires peak LR=.0022"
+                // Formal 1.0x peak is 0.0022. G1 high-LR stress grid scales
+                // Aux Adam and Muon by the same multiplier while keeping the
+                // 0.0022 : 0.0001 ratio, so accept those scaled peaks only.
+                val allowedPeaks = setOf(0.0022f, 0.00275f, 0.0033f, 0.0044f)
+                require(learningRate in allowedPeaks) {
+                    "decay schedule peak LR is outside the formal/stress allow-list"
                 }
                 if (learningRateSchedule == 1) {
-                    require(targetLearningRate in setOf(0.0015f, 0.0010f, 0.0007f, 0.0004f, 0.0002f, 0.0001f, 0f)) {
-                        "linear schedule target LR is outside the HPO allow-list"
+                    val allowedTargets = setOf(
+                        0.0015f, 0.0010f, 0.0007f, 0.0004f, 0.0002f, 0.0001f, 0f,
+                        0.000125f, 0.00015f,
+                    )
+                    require(targetLearningRate in allowedTargets) {
+                        "linear schedule target LR is outside the HPO/stress allow-list"
                     }
                 } else {
                     require(targetLearningRate.toBits() == 0.0001f.toBits()) {
@@ -410,7 +418,12 @@ class HeadlessDeviceTestRunner {
                 require(decayStartStep > 0 && decayStartStep < decayEndStep) { "decay schedule boundaries are invalid" }
                 require(decayEndStep <= scheduleTotalSteps) { "decay schedule end exceeds schedule total" }
                 require(experimentFork) { "decay schedule requires experimentFork=true" }
-                require(parentLearningRate.toBits() == 0.0022f.toBits()) { "decay schedule requires parent LR=.0022" }
+                require(parentLearningRate in allowedPeaks) {
+                    "decay schedule parent LR is outside the formal/stress allow-list"
+                }
+                require(parentLearningRate.toBits() == learningRate.toBits()) {
+                    "decay schedule parent LR must match the experiment peak LR"
+                }
             }
         }
         if (suite == "nicopedia-dffn-probe") {
