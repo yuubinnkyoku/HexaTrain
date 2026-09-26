@@ -173,6 +173,34 @@ HexaTrainへの重要な示唆は、KDA / DSA / mHC / MoEをそのまま縮小�
 
 HySparse2から前倒しするのは**本格sparse attentionではなく、MQAとreuse可能性の診断**である。
 
+### DeepSeek-V4.1-Flashから見えるoptimizer・memory・inference課題
+
+DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bit KVだけでなく、**parameterの意味に応じてoptimizerを分ける設計**まで公開している。HexaTrainにとって重要なのは552B級の構成を縮小コピーすることではなく、既存の758k baselineへ独立factorとして落とせる部分を切り出すことである。
+
+確認できる重要点は、
+
+- 主要なlinear weight matrixはMuon、RMSNorm等の非行列parameterはAdamW
+- token embedding / prediction head / Engram embeddingは**momentum + Sinkhorn-balanced update**
+- Query / Keyには**head-wise Muon**を使い、headごとにpreconditionerを分ける
+- CSA2は**Full / Reindex / Reuse**に分かれ、KV共有とindex共有を分離できる
+- hierarchical sparse indexerでは、浅いFull層の候補集合を後続Reindex層へ渡して全context走査を繰り返さない
+- mHCはSingle-Pass化し、mixing coefficientの依存を1 blockずらしてmemory trafficとkernel passを減らす
+- Engramは条件付きN-gram lookupをearly layerへ挿入し、計算量より静的memory容量を増やす軸を持つ
+- V4.1 backbone pre-trainingではMTPを外し、**DSparkをbackbone事前学習後に別学習**する
+- FP4 KVは「4bitで演算する」ことより、**low-bitで保存してattention前にdequantizeするstorage/compute分離**が重要
+
+という点である。
+
+現行HexaTrainでは、`token_embedding` 65,536 parameters + `output_projection` 65,536 parameters = **131,072 parameters**がAux Adamであり、Aux Adam総数135,936の**約96.42%**を占める。したがってV4.1型Sinkhorn updateは、巨大モデル専用のstate削減ではなく、HexaTrainでもoptimizer-state / memory trafficを直接減らせる候補である。FP32でAdamの`m+v` 2本をmomentum 1本へ置き換えるだけなら、この2行列で約**512 KiB**のstate削減余地がある。
+
+また現行H2ではWq/Wkをsemantic headごとに`64x32`へ分けられるため、V4.1型head-wise Muonの最小実験を作りやすい。GLM-5由来のMuon Split診断とは区別し、**Wq/Wkのみをhead-wise化するV4.1-faithful arm**と、Wq/Wk/Wvを分ける探索armを分離する。
+
+一方でCED / CSA2本実装 / FP4 KV / DSparkは、通常のincremental KV cacheが未実装の現状では順番が逆である。推論系の依存関係は、
+
+`incremental KV cache → MQA / low-bit KV → cross-layer KV/index reuse → CSA2 / CED → DSpark`
+
+とする。
+
 ### 推論・Android基盤
 
 - model configの一般化、Material 3 Expressive UI、学習表示、推論GUIは実装済み。
@@ -189,6 +217,8 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 - current prepared generationはgraph / parameterをwarm reuseする一方、tokenごとのforwardはrolling T32全体を再実行する。**incremental KV cacheが未実装**なので、HySparse2型KV圧縮より前に通常のKV-cache decodeが大きな改善余地を持つ。
 - T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split診断、G1、ReLU²、learned residual scale、horizon-specific MTP-lite、XSA**は短文脈でも比較しやすい。2-stream residual mixingやdifficulty-aware samplingは、より安い候補の結果を見てからでよい。
 - architecture候補を毎回scratch 8000-stepで比較すること自体が高コスト。**low-disruption architecture migration + short adaptation**を正式な研究手法にし、長期runへ上げる候補を早く刈り込む。
+- Aux Adam 135,936 parametersのうち、token embedding + output projectionだけで131,072 parameters（約96.42%）を占める。**embedding/head optimizer stateが「その他parameter」ではなく独立したmemory・optimizer設計問題**になっている。
+- V4.1のhead-wise Muonにより、現行H2のWq/Wk `64x64`を2本の`64x32`へ分ける実験は、単なるGLM由来仮説ではなく別系統の大規模採用例でも裏付けられた。ただし効果をH2へ直接外挿せずCPU referenceで確認する。
 
 # 優先順位
 
@@ -222,19 +252,23 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
    - 同一recipeで4000まで延長し、収束加速だけか、最終品質差が残るかを判定する
    - その結果を見てから `2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む
 
-3. **Muon Splitの実装前diagnostic**
-   - GLM-5のMuon SplitはMLA系up-projectionでの結果であり、H2 MHAへ有効性を直接外挿しない
+3. **V4.1 optimizer splitの実装前diagnostic**
+   - GLM-5のMuon SplitはMLA系up-projection、DeepSeek-V4.1のhead-wise MuonはQ/K head分割であり、同じ「split」でも対象と数学的動機を分けて扱う
    - **checkpointだけで測る項目**: head別weight norm、momentum RMS、checkpoint間angular displacement / update proxy
    - **gradientが必要な項目**: checkpointのDataCursorから同一batchをdeterministicに1-step replayし、head別gradient RMSとfull-matrix / split-Muonのone-step update差を再生成する
+   - Wq/Wkのみをsemantic head単位へ分ける**V4.1-faithful arm**と、Wq/Wk/Wvを分ける探索armを分離する
    - parameter metadata SSOTのorientationを使い、保存layoutや名前からhead軸を推測しない
-   - head間scale差が小さい、またはsplitしたone-step updateが実質的に変わらない場合は実装優先度を下げる
+   - head間scale差が小さくてもpreconditioner分離の効果はRMS差だけでは判定できないため、deterministic 1-step replayまでは実施し、有望なら32-step CPU referenceへ進む
+   - 同時にtoken embedding / output projectionの**semantic vocabulary axis**、Adam state bytes、update normを監査し、Sinkhorn-balanced updateのCPU reference設計を確定する
 
-4. **Cross-Layer Attention Reuse + pooled-index oracle**
+4. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
    - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
+   - CSA2を模して **Full（KV/index自前） / Reindex（source KV共有・index再計算） / Reuse（KV/index共有）** の3 oracleを分け、KV共有とindex共有の誤差を別々に測る
    - 追加でT32を4-token単位にpoolし、mean poolingと単純weighted poolingで**pooled-index oracle**を作る
+   - shallow Full layerの粗いcandidate poolだけを後続Reindex oracleへ渡す**hierarchical candidate-pool**もhost側で評価する
    - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
-   - これはGLM-5.3-Flash IndexPoolの完全再現ではなく、**IndexPool-inspiredな実装前診断**として扱う
+   - これはGLM-5.3-Flash IndexPool / DeepSeek-V4.1 CSA2の完全再現ではなく、**新規QNN graphを作る前の分解診断**として扱う
 
 5. **品質非変更のlayout microbenchmark**
    - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
@@ -256,25 +290,38 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
    - 1 / 8 / 32 step correctness → 500 / 2000 step Val/Dev
    - 改善が無ければHVX化しない
 
-2. **ReLU²**
+2. **Sinkhorn-Balanced Embedding / Prediction Head Update**
+   - `token_embedding` + `output_projection` = 131,072 parametersで、現Aux Adam 135,936の約96.42%を占める
+   - V4.1を参考に、Nesterov momentum + Sinkhorn balancingのCPU referenceを作り、Aux Adam baseline / momentum-only / momentum+Sinkhornを分離比較する
+   - FP32 stateはAdam `m+v` 2本からmomentum 1本へ減るため、この2行列だけで約512 KiBのstate削減余地がある
+   - token embeddingはstored rowがtokenだが、output projectionはstored `[MODEL,VOCAB]`なので、**物理rowではなくsemantic vocabulary axis**をmetadataへ明示する
+   - 1 / 8 / 32 step correctness → 500 / 2000 step Val/Dev。bpbだけでなくoptimizer-state bytes / update norm / wall timeも比較する
+
+3. **Head-wise Muon**
+   - Wq/WkだけをH2のsemantic head単位 `64x32`へ分けるV4.1-faithful armを第一候補にする
+   - Wq/Wk/Wv splitは別のexploratory armとし、同時変更しない
+   - full-matrix Muonとの1 / 8 / 32 step CPU referenceを作り、500 stepで品質差を見る
+   - head別RMS差が弱くても、preconditionerを分ける数学的差が残るため診断だけで棄却しない
+
+4. **ReLU²**
    - 現行`ReLU(W1x)`を`ReLU(W1x)^2`へ変更
    - parameter数・Muon matrix shapeを変えず、elementwise追加costに対するbpb gainを見る
 
-3. **Learned Residual / Branch Scale**
-   - `x' = λ_resid x + λ_branch f(x)`をidentity初期化
-   - まずscalarだけで深さ19の情報流改善を検証し、multi-stream residualへ先回りしない
-
-4. **Hq2/Hkv1 MQA**
+5. **Hq2/Hkv1 MQA**
    - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化
    - Wk/Wv削減そのものと、浮いたparameterをFFN / depthへ戻すparameter-matched案を分離比較
    - config / checkpoint / metadataにquery/KV head数とKV dimensionを明示する
 
-5. **Parameter-Matched Shape Search**
-   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけて比較
-   - shallow/wide vs deep/narrowをbpb・wall time・original-byte throughput・RAMのParetoで見る
-
 ### P1 Candidate Pool【空きslotが出たら昇格】
 
+- **Incremental KV-cache generation【inference speed track】**
+  - prepared generationのgraph / parameter warm reuseを保ったまま、各tokenのT32全再計算をper-layer KV cacheへ置き換える
+  - first-token prefill / 1-token decodeを分離し、KV RAM / ms-token / APP tensor bytes / graph execute時間を測る
+  - MQA / low-bit KV / cross-layer sharing / CSA2 / CED / DSparkの前提baselineとする
+- **Learned Residual / Branch Scale**
+  - `x' = λ_resid x + λ_branch f(x)`をidentity初期化し、multi-stream residualより先に試す
+- **Parameter-Matched Shape Search**
+  - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけ、bpb・wall time・original-byte throughput・RAMのParetoで比較する
 - **Horizon-Specific MTP-lite**
   - t+1 headを維持し、t+2から小さいlow-rank horizon adapterを挟む
   - rank4 adapterはHexaTrain独自の縮約仮説であり、GLM等のMTP実装そのものとは扱わない
@@ -308,13 +355,14 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
   - MiMo-V2.6のようなmid-training bridgeを候補にする
 - **Text Representation Searchの第2段階**
   - 現行byte-BPE V1024を基準にraw byte / larger BPE / GBST / 簡易BLT
-- **Incremental KV-cache generation**
-  - prepared generationがgraph / parameterをwarm reuseしている利点を保ちつつ、各tokenでT32全再計算する現行経路をper-layer KV cacheへ置き換えられるか検証
-  - first-token prefillと1-token decodeを分離して計測し、KV RAM / ms-token / APP tensor bytes / graph execute時間を記録
-  - HySparse2型KV compression / reuseは、この通常KV cacheのbaselineが成立してから比較する
+- **Engram-lite**
+  - 巨大tableをコピーせず、2/3-gram hash + 4K〜16K entry程度のsmall table + early single insertionから始める
+  - 最初はcausal convolutionなし、memory width 16〜32程度とし、table bytes / hit pattern / mmap・host-backed access / prefetch / added latency / bpbを測る
+  - byte-BPEとの相互作用を明示し、同parameter増のFFN/depth追加とparameter-matchedに比較する
 - **Sparse Attention実装前feasibility**
   - Full Attention mapからtoken Top-k / block Top-k / recent-only / recent+globalのoracle sparse outputをhost側で再構成
   - QAIRT 2.48.40でTopK / index selection / gather相当 + small MatMulをmicrobenchmarkし、node固定費とtensor移動を測る
+  - DeepSelectの設計思想を参考に、**indices-only / unsorted / contiguous scan**を明示的な比較条件にし、不要なvalue返却や全sortを避けた場合のwall timeを測る
   - T32でwall timeが悪化する場合は実装を進めず、T拡大後に再評価
 - Exact BP vs Apple MeBP / Qualcomm QZO-FF / Google Addax
 - Quantized Adam / optimizer-state低bit化
@@ -348,10 +396,13 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 
 ## P3 — 長文脈・疎構造・RL / 独自architecture
 
-- Cross-Layer KV Sharing / YOCO / **HySparse2 KV Bridging**
-- **HySparse2型 KV Reuse + Cross-Layer Index Sharing**
+- Cross-Layer KV Sharing / YOCO / **HySparse2 KV Bridging / DeepSeek CED**
+- **HySparse2型 KV Reuse + Cross-Layer Index Sharing / CSA2**
 - token-level sparse selection + forced recent window
-- Local / Global hybrid
+- hierarchical sparse indexer / candidate-pool reuse
+- Local / Global hybrid / Bounded Replay
+- KV low-bit storage（INT8/INT4/FP4相当）+ dequantize-before-attention
+- **DSpark / post-hoc speculative drafter**
 - NAMM / KeyDiff / KVP
 - CommVQ / ShadowKV / LaCache
 - Trellis / Lattice
@@ -359,7 +410,6 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 - QSA / DSA型 indexed sparse attention
 - sparse + linear/recurrent attention hybrid
 - SimpleGDN / Gated DeltaNet詳細化
-- N-gram associative memory
 - HTP/HVX専用Delta / recurrent operator
 - N\:M sparsity / Sparse-BitNet
 - Direct Low-Bit MatMul
@@ -406,7 +456,7 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 | Qwen3.8-Flash-Next | Gated DeltaNet + QSA、4-way Gated Residual、N-gram Embedding、Muon | GDN hybridはP2。Gated ResidualをP2。QSAとN-gram memoryはP3で小型化 |
 | GLM-5.3-Flash | 34 KDA + 11 KPool-DSA、4-stream mHC、MoE、1-layer MTP。Flash固有optimizer recipeは未公開 | KDA/DSAの直接移植はT拡大後。Muon SplitはGLM-5側の独立候補としてP1、mHCは2-stream Hres-only liteから、MTPはhorizon別adapterから試す |
 | Hy4-preview | Gated DSA、IndexCache、iHC、MTP | indexed sparse attention + index reuseをP3へ。MTPのtraining/inference両用を強化 |
-| DeepSeek-V4.1-Flash | sparse attention、compressed indexer、N-gram memory、Hyper-Connection、MTP | QSA/DSA系・N-gram・residual拡張・MTPが別系統でも収束している証拠として扱う |
+| DeepSeek-V4.1-Flash | CED、CSA2 Full/Reindex/Reuse、hierarchical sparse indexer、Engram、Single-Pass mHC、head-wise Muon、embedding/headのSinkhorn-balanced update、low-bit KV、DSpark | **Sinkhorn updateとWq/Wk head-wise MuonをP0/P1へ追加**。Engram-liteをP2へ前倒し。CSA2/CED/low-bit KV/DSparkは通常KV cache成立後のP3。V4.1 backbone pre-trainingはMTPではなくDSparkを別学習するため、MTP採用例として数えない |
 | dots3-note Preview | 13 DSA + 33 SWA、shared MTP | sparse/dense混成layoutとMTP speculative decodingの実用例 |
 | MiniCPM5-2B | 2.5B級Dense、on-device志向、学習データ群公開 | HexaTrainの小型モデル比較・data pipeline・再現性のreference |
 | K2 Horizon | 0.9B〜375Bのscale family、data/code/method/intermediate checkpoints公開方針 | scale ladderと再現可能な実験protocolのreference |
@@ -1584,6 +1634,24 @@ Original Muonの数学を保ったHVX FP32 W8実装。single-updateでは114/114
 
 に分離する。
 
+## Head-wise Muon / V4.1-style QK Split
+
+→ **P1**
+
+DeepSeek-V4.1-FlashではQuery / Keyへhead-wise Muonを適用し、headごとに独立したpreconditionerを持たせる。これはGLM-5のMLA up-projection splitとは対象が異なるため、HexaTrainでも別candidateとして扱う。
+
+現行H2ではWq/Wkのstored `64x64`をsemantic head単位の`64x32 + 64x32`へ分けられる。
+
+比較順:
+
+1. full-matrix Original Muon
+2. Wq/Wkのみhead-wise Muon（V4.1-faithful）
+3. 必要ならWq/Wk/Wv head-wise Muon（exploratory）
+
+最初からHVX packingを変更せず、CPU referenceで1 / 8 / 32 step correctnessとupdate cosine / relative L2を確認する。500 stepでbpb差が確認できた場合だけbackend実装へ進む。
+
+head別gradient RMSやmomentum RMSの差は診断材料にはするが、**scale差が小さいことだけで棄却しない**。matrixを分けることでNewton–Schulz / orthogonalizationのpreconditioner自体が変わるためである。
+
 ## Muown
 
 → **diagnostic完了 / P1 implementation**
@@ -1647,6 +1715,42 @@ Muown Algorithm 1のrow state `g / r / m_g / v_g`をFP32で持つと、
 
 - [Muown: Row-Norm Control for Muon Optimization](https://arxiv.org/abs/2605.10797)
 - [MiMo-V2.6 Technical Report](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL/blob/main/MiMo_V2_6_technical_report.pdf)
+
+## Sinkhorn-Balanced Embedding / Prediction Head Update
+
+→ **P1**
+
+DeepSeek-V4.1-Flashでは、主要matrixをMuon、非行列parameterをAdamWとしつつ、token embedding / prediction head / Engram embeddingをmomentum + Sinkhorn-balanced updateへ分離している。
+
+HexaTrainでは現行metadata上、
+
+- `token_embedding`: 1024 × 64 = 65,536
+- `output_projection`: 64 × 1024 = 65,536
+- 合計: **131,072 parameters**
+- 現Aux Adam総数: 135,936 parameters
+- 対象比率: **約96.42%**
+
+であり、Aux Adamのほぼ全stateを占める。
+
+実装では保存layoutをそのままrow semanticsとみなさない。token embeddingではvocabulary axisがaxis 0だが、output projectionではvocabulary axisがaxis 1である。parameter metadataへ**semantic vocabulary axis / feature axis**を追加し、optimizer側で名前判定しない。
+
+最初の比較:
+
+1. current Auxiliary Adam
+2. Nesterov / momentum only
+3. momentum + Sinkhorn balancing
+
+1 / 8 / 32 stepのCPU reference correctness後、500 / 2000 step Val/Devへ進む。品質だけでなく、
+
+- optimizer-state bytes
+- update norm / row・column norm
+- CPU wall time
+- QNN/HVX boundaryへの転送bytes
+- checkpoint state増減
+
+を測る。
+
+FP32 stateでAdamの`m+v` 2本をmomentum 1本へ置き換える場合、この2行列だけで約**512 KiB**のoptimizer-state削減余地がある。tied embedding候補とは効果を混ぜず、まずuntied baselineのままoptimizer差だけを測る。
 
 ## AngularMuown
 
@@ -1926,8 +2030,11 @@ H = [ a    1-a ]
 1. ordinary residual
 2. learned scalar residual / branch scale
 3. 2-stream constrained residual mixing
-4. read/write gateを含む2-stream
-5. 必要なら4-stream mHC
+4. **Single-Pass-inspired variant**: layer `l`で作ったmixing coefficientをlayer `l+1`で消費し、同一block内のdata dependencyを減らす
+5. read/write gateを含む2-stream
+6. 必要なら4-stream mHC
+
+Single-Pass-inspired variantはV4.1 mHCの完全再現ではなく、**coefficient生成と適用を1 blockずらしてkernel pass / activation memory trafficを減らせるか**だけを切り出す。
 
 見るもの:
 
@@ -2513,36 +2620,43 @@ Tが十分大きくなってから。
 
 # Memory
 
-## N-gram Embedding / Engram
+## N-gram Embedding / Engram-lite
 
-→ **P3**
+→ **P2**
 
 - [Engram](https://arxiv.org/abs/2601.07372)
 - [Engram GitHub](https://github.com/deepseek-ai/Engram)
 - [Qwen3.8-Flash-Next](https://github.com/QwenLM/Qwen3.8-Flash-Next)
 - [DeepSeek-V4.1-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
 
-Qwen3.8-Flash-Nextは大容量N-gram Embeddingを**計算量をあまり増やさず容量を増やす外部的memory**として使い、host memoryへの退避・prefetchも想定している。DeepSeek-V4.1-FlashでもN-gram系memoryが確認できる。
+Qwen3.8-Flash-NextとDeepSeek-V4.1-Flashはいずれも、**計算量を大きく増やさず静的memory容量を増やす**方向としてN-gram lookupを採用している。V4.1ではEngramをearly layerへ置き、lookup可能なmemoryをbackbone計算とは別軸で増やしている。
 
-HexaTrainでは巨大tableをコピーせず、
+HexaTrainでは巨大tableをコピーせず、最初は
 
-`token embedding + small bigram/trigram table`
+`token embedding + 2/3-gram hash + small table + early single insertion`
 
-から始める。
+だけを試す。
+
+初期候補:
+
+- 4K / 8K / 16K entries
+- memory width 16 / 32
+- causal convolutionなし
+- 1箇所だけ挿入
+- CPU/host lookup + prefetchを最初のoracleとする
 
 比較軸:
 
-- table bytes
+- table bytes / optimizer-state bytes
 - hit/access pattern
 - APP/HTP transfer bytes
 - mmap / host-backed table
 - prefetch有無
-- NLL改善 / added latency
-- tokenizer方式（byte/BPE）との相互作用
-- Engram / N-gram → 静的 / 連想memory
-- recurrent memory → 動的memory
+- NLL / bpb改善 / added latency
+- tokenizer方式（byte-BPE）との相互作用
+- 同parameter増のFFN / depthとのparameter-matched比較
 
-として併用可能。
+Engram / N-gramを**静的・連想memory**、recurrent memoryを**動的memory**として別軸に扱う。758k scaleでの効果は大規模モデルから直接外挿せないため、P1へ上げずP2のsmall oracleから始める。
 
 ---
 
@@ -3550,11 +3664,14 @@ long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE�
 
 ## DeepSeek
 
-- Compressed / indexed sparse attention
-- N-gram associative memory / Engram direction
-- Hyper-Connection / mHC
-- MTP
-- V4.1-Flashの`memory + sparse indexer + MTP`統合例
+- CED / CSA2 Full-Reindex-Reuse / hierarchical sparse indexer
+- N-gram associative memory / Engram
+- Single-Pass mHC
+- head-wise Muon
+- embedding / prediction headのSinkhorn-balanced update
+- low-bit KV storage + dequantize-before-attention
+- DSpark
+- V4.1-Flashは**MTPをbackbone pre-trainingから外し、DSparkをpost-hoc drafterとして別学習**する例
 
 ## Tencent
 
@@ -3675,6 +3792,8 @@ Muonで得られた結果は、この方向をかなり明確にしている。Q
 
 Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・ReLU²・learned residual scale・Horizon-Specific MTP-lite・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する。
 
+DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representationを分離する**視点を加える。Wq/Wkはhead単位Muon、embedding/headはSinkhorn-balanced update、KVはlow-bit storageとcompute dtypeを分離し、sparse attentionではKV共有とindex共有をFull/Reindex/Reuseへ分解する。HexaTrainでも「全parameterを同じoptimizerへ入れる」「全tensorを同じprecisionで保持する」「全layerが独立に同じmetadataを作る」という前提を一つずつ外し、品質と実wall timeで採否を決める。
+
 ---
 
 # 2026-09-26 一次資料
@@ -3705,6 +3824,18 @@ Limite 1B - Violettoからは、さらに**attention / value / residualの情報
 - [mHC](https://arxiv.org/abs/2512.24880)
 - [Multi-Token Prediction](https://arxiv.org/abs/2404.19737)
 - [Muon is Scalable for LLM Training](https://arxiv.org/abs/2502.16982)
+
+## DeepSeek V4 / V4.1
+
+- [DeepSeek-V4.1-Flash Technical Report](https://arxiv.org/abs/2609.19969)
+- [DeepSeek-V4 Technical Report](https://arxiv.org/abs/2606.19348)
+- [DeepSeek-V4.1-Flash model](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
+- [Engram](https://arxiv.org/abs/2601.07372)
+- [DSpark](https://arxiv.org/abs/2607.05147)
+- [Muon is Scalable for LLM Training](https://arxiv.org/abs/2502.16982)
+- [Gradient Multi-Normalization](https://arxiv.org/abs/2502.06742)
+- [DeepSelect](https://github.com/deepseek-ai/DeepSelect)
+- [FlashMLA](https://github.com/deepseek-ai/FlashMLA)
 
 ## Limite / Paradigma
 
