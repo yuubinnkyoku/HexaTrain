@@ -1925,7 +1925,7 @@ H = [ a    1-a ]
 
 1. ordinary residual
 2. learned scalar residual / branch scale
-3. 2-stream Hres-only mHC-lite
+3. 2-stream constrained residual mixing
 4. read/write gateを含む2-stream
 5. 必要なら4-stream mHC
 
@@ -1969,7 +1969,7 @@ Qwen3.8-Flash-Nextの4-way Gated Residualを縮小し、
 
 の順で増やす。
 
-mHC-liteとの違いは、mixing制約より**動的read/write gate**を主題にすること。
+2-stream constrained residual mixingとの違いは、mixing制約より**動的read/write gate**を主題にすること。
 
 参考:
 
@@ -3673,7 +3673,7 @@ HexaTrainの研究主張は、
 
 Muonで得られた結果は、この方向をかなり明確にしている。QNN HTPが得意なForward/Backwardと、数値精度を明示的に制御できるHVXを組み合わせる方が、単一backendへ統一するより実機上の最適解に近い可能性が高い。MiMo-V2.6がMuownで示したように、次はbackendだけでなく**optimizer内部のgeometry（row magnitude / direction / angular step）**まで共同最適化の対象へ広げる。
 
-Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・ReLU²・Dense Multi-Token Supervision・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する。
+Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・ReLU²・learned residual scale・Horizon-Specific MTP-lite・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する。
 
 ---
 
