@@ -258,13 +258,15 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - windows/s、original UTF-8 bytes/s、graph prepare amortizationを測る
    - full-final相当を現実的な時間で読める経路を作り、以後の研究iteration自体を短縮する
 
-2. **Gated Attention: G1の高LR安定性 / time-to-bpb stress grid**
+2. **Gated Attention: G1の高LR安定性 / time-to-bpb stress grid — 完了（2026-09-27）**
    - `headwise_g1_sigmoid`のseed1 matched runはstep 8000まで完了。ΔBalancedはstep 500 / 1000 / 1500 / 2000 / 2500 / 3000 / 3500 / 4000 / 5000 / 6000 / 7000 / 8000で `-0.032712 / -0.036686 / -0.021864 / -0.007113 / -0.016147 / -0.017483 / -0.007219 / -0.007490 / +0.004985 / +0.008981 / +0.009498 / -0.000367`
    - 結論は、**早期sample-efficiency gainは強いが、8000ではbaselineと実質tie**。したがって「4000まで延長」は完了済みで、同一LRの長期runを追加しても情報量は低い
-   - 次はcontrol / G1を同じ短期stress gridで比較し、Gated Attentionが高learning-rate側の安定領域や収束速度を広げるかを判定する
-   - stress gridは現行formal LRを基準に `1.0x / 1.25x / 1.5x / 2.0x` 程度から始め、`time-to-bpb`、loss spike、gradient/update norm、gate saturation、non-finite、row geometryを記録する
-   - 「同じstepのbpb」だけでなく、**同じ目標bpbへ到達するwall time / original bytes**をG1の正式な価値指標へ加える
-   - stress gridでG1の価値が残る場合にだけ、`2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む。残らない場合は新gate variantへ投資せず、別architecture laneへslotを移す
+   - **高LR stress grid（1.0x/1.25x/1.5x/2.0x × Control/G1、seed1、500 step、eval 100/200/300/400/500）を完了。** 詳細は [g1-lr-stress.md](g1-lr-stress.md)
+   - 安定領域は **Control=G1=2.0x** で拡大なし（500-step stress region）
+   - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
+   - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。2.95/3.00 でbest-LR比較のtraining wall約12%短縮
+   - **decision = `PROMOTE_G1_GATE_VARIANTS`**。ただし `2 * sigmoid` / `Wg=0` identity init / reduced-channel gate は **未実装**（factor isolationのため別タスク）
+   - 次A/B候補: (1) 現行sigmoid G1 vs `2*sigmoid`+`Wg=0` identity-init (2) identity-init positiveの場合のみreduced-channel gate
 
 3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
@@ -3428,7 +3430,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1は8000まで回収済み。次はcontrol / G1の高LR stress gridで安定領域とtime-to-bpbを比較
+- G1高LR stress gridは完了（decision=`PROMOTE_G1_GATE_VARIANTS`、詳細は [g1-lr-stress.md](g1-lr-stress.md)）。次は `2*sigmoid`+`Wg=0` identity-init A/B（実装は別タスク）
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark

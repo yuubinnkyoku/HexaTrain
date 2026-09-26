@@ -1,0 +1,6 @@
+target_bpb,control_best_lr,control_step,control_training_wall_s,control_original_bytes,g1_best_lr,g1_step,g1_training_wall_s,g1_original_bytes,delta_step,delta_wall_s,delta_bytes
+3.10,1.5,300,770.199,-1,2.0,300,791.450,-1,0,21.251,CENSORED
+3.00,2.0,400,903.928,-1,1.5,400,792.473,-1,0,-111.455,CENSORED
+2.95,2.0,400,903.928,-1,1.5,400,792.473,-1,0,-111.455,CENSORED
+2.90,1.25,500,776.249,-1,1.5,400,792.473,-1,-100,16.224,CENSORED
+2.85,NOT_REACHED,>500,NOT_REACHED,NOT_REACHED,NOT_REACHED,>500,NOT_REACHED,NOT_REACHED,CENSORED,CENSORED,CENSORED
