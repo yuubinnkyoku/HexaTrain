@@ -1,0 +1,22 @@
+{
+  "arm": "candidate",
+  "checkpoint": "build/reports/hvx-promotion/quality-hvx-seed1-step8000/htp-seed1-l19-t32-d64-f128-step2000.ckpt",
+  "seed": 1,
+  "start_step": 2000,
+  "steps": 2000,
+  "end_step": 4000,
+  "dataset_hash": "fnv1a64:0c7b2826f5f26fea",
+  "order_seed": 20260806,
+  "record_index": 16000,
+  "batch_size": 8,
+  "muon_lr": 0.005,
+  "muon_momentum": 0.95,
+  "muon_ns_steps": 5,
+  "aux_adam_lr": 0.0022,
+  "initial_parameter_hash": "e8470da4bfde83ed",
+  "initial_optimizer_state_hash": "874b751d34c38b03",
+  "final_parameter_hash": "ad60a526ae0b9ce0",
+  "eval_chunks": 256,
+  "backend": "cpu_reference",
+  "factor": "wq_wk_headwise"
+}

@@ -1,0 +1,11 @@
+arm,seed,start_step,phase,ms,notes
+control,1,2000,eval_step_2500,45486.5583,val+dev 256 chunks each
+control,1,2000,eval_step_3000,44550.2976,val+dev 256 chunks each
+control,1,2000,eval_step_3500,44507.4295,val+dev 256 chunks each
+control,1,2000,eval_step_4000,45690.1564,val+dev 256 chunks each
+control,1,2000,train_total,2699734.005,cpu_reference_control_steps_2000
+candidate,1,2000,eval_step_2500,46484.2335,val+dev 256 chunks each
+candidate,1,2000,eval_step_3000,46178.6993,val+dev 256 chunks each
+candidate,1,2000,eval_step_3500,47411.8317,val+dev 256 chunks each
+candidate,1,2000,eval_step_4000,47414.9686,val+dev 256 chunks each
+candidate,1,2000,train_total,2714509.28,cpu_reference_candidate_steps_2000

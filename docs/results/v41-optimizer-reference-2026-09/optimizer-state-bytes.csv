@@ -1,0 +1,28 @@
+component,parameters,persistent_state_bytes,temporary_working_bytes,notes,_source_step_dir
+token_embedding_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step500
+output_projection_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step500
+token_embedding_momentum_only,65536,262144,0,momentum FP32,step500
+output_projection_momentum_only,65536,262144,0,momentum FP32,step500
+token_embedding_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step500
+output_projection_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step500
+pair_aux_adam_total,131072,1048576,0,131072 params m+v,step500
+pair_momentum_only_total,131072,524288,0,saving vs adam = half of m+v,step500
+pair_momentum_sinkhorn_total,131072,524288,524288,persistent same as momentum-only,step500
+token_embedding_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step2000
+output_projection_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step2000
+token_embedding_momentum_only,65536,262144,0,momentum FP32,step2000
+output_projection_momentum_only,65536,262144,0,momentum FP32,step2000
+token_embedding_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step2000
+output_projection_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step2000
+pair_aux_adam_total,131072,1048576,0,131072 params m+v,step2000
+pair_momentum_only_total,131072,524288,0,saving vs adam = half of m+v,step2000
+pair_momentum_sinkhorn_total,131072,524288,524288,persistent same as momentum-only,step2000
+token_embedding_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step8000
+output_projection_aux_adam_m_plus_v,65536,524288,0,m+v FP32,step8000
+token_embedding_momentum_only,65536,262144,0,momentum FP32,step8000
+output_projection_momentum_only,65536,262144,0,momentum FP32,step8000
+token_embedding_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step8000
+output_projection_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy,step8000
+pair_aux_adam_total,131072,1048576,0,131072 params m+v,step8000
+pair_momentum_only_total,131072,524288,0,saving vs adam = half of m+v,step8000
+pair_momentum_sinkhorn_total,131072,524288,524288,persistent same as momentum-only,step8000

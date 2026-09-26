@@ -1,0 +1,4 @@
+checkpoint,seed,step,dataset_hash,order_seed,record_index,batch_size,selection_start,mean_loss,mean_loss_replay,gradient_cosine_replay,gradient_rel_l2_replay,gradient_finite,article_hash_0,_source_step_dir
+build/reports/hvx-promotion/quality-hvx-step1000/htp-seed1-l19-t32-d64-f128-step500.ckpt,1,500,fnv1a64:0c7b2826f5f26fea,20260806,4000,8,4000,5.248242378,5.248242378,1,0,true,6723341081763104204,step500
+build/reports/hvx-promotion/quality-hvx-seed1-step8000/htp-seed1-l19-t32-d64-f128-step2000.ckpt,1,2000,fnv1a64:0c7b2826f5f26fea,20260806,16000,8,16000,4.661612034,4.661612034,1,0,true,5375703680247642783,step2000
+build/reports/hvx-promotion/quality-hvx-seed1-step8000/htp-seed1-l19-t32-d64-f128-step8000.ckpt,1,8000,fnv1a64:0c7b2826f5f26fea,20260806,64000,8,64000,4.017778397,4.017778397,1,0,true,9445194466028183655,step8000

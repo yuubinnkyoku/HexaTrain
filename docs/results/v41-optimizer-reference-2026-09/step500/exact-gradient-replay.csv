@@ -1,0 +1,2 @@
+checkpoint,seed,step,dataset_hash,order_seed,record_index,batch_size,selection_start,mean_loss,mean_loss_replay,gradient_cosine_replay,gradient_rel_l2_replay,gradient_finite,article_hash_0
+build/reports/hvx-promotion/quality-hvx-step1000/htp-seed1-l19-t32-d64-f128-step500.ckpt,1,500,fnv1a64:0c7b2826f5f26fea,20260806,4000,8,4000,5.248242378,5.248242378,1,0,true,6723341081763104204

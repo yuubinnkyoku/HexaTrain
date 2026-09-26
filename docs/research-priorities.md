@@ -237,6 +237,16 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
   - [muon-row-geometry-audit.md](muon-row-geometry-audit.md) の2 seed結果を確定evidenceとする
   - `corr(max row norm, spectral norm)` ≈ 0.99、250→8000でrow/spectral normが約2.4〜2.7倍
   - 同じ診断は繰り返さず、Muown / Muon+WD / Muon Splitの原因分解へ進む
+- **V4.1 optimizer split diagnostic【HOLD】**
+  - Wq/Wk Head-wise Muon: exact updateはfull-matrixから大きく分岐（1-step cosine≈0.75–0.83）
+  - 500-step matched A/Bでは一時的改善（canonical ΔBalanced 2500=`-0.0058`）
+  - 2000-step matched A/BではΔBalancedが2500/3000/3500/4000で`-0.0058 / +0.0127 / -0.0107 / +0.0037`と振動
+  - numerically stableだが一貫したquality gainなし。seed2 / 8000 / HVX化は保留
+  - Embedding/head optimizer: semantic vocab axisと512 KiB state削減余地は確認
+  - current momentum/Sinkhorn referenceはscale/LR不整合（cold-start update過小、Sinkhorn scale非保存でloss explosion）
+  - scale-preserving Sinkhorn + LR-matched momentum再設計まで保留
+  - evidence: [v41-optimizer-split-diagnostic.md](v41-optimizer-split-diagnostic.md) / [v41-optimizer-reference.md](v41-optimizer-reference.md) / [wqwk-headwise-muon-500.md](wqwk-headwise-muon-500.md) / [wqwk-headwise-muon-2000.md](wqwk-headwise-muon-2000.md)
+  - quality metric: `bits/UTF-8 byte`をcanonical、`bits/BPE token`はhistorical reference
 - **negative evidenceも固定**
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
   - Muon scratchのVTCM化は現行実測ではDDRより遅いため再試行しない
@@ -256,16 +266,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - 「同じstepのbpb」だけでなく、**同じ目標bpbへ到達するwall time / original bytes**をG1の正式な価値指標へ加える
    - stress gridでG1の価値が残る場合にだけ、`2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む。残らない場合は新gate variantへ投資せず、別architecture laneへslotを移す
 
-3. **V4.1 optimizer splitの実装前diagnostic**
-   - GLM-5のMuon SplitはMLA系up-projection、DeepSeek-V4.1のhead-wise MuonはQ/K head分割であり、同じ「split」でも対象と数学的動機を分けて扱う
-   - **checkpointだけで測る項目**: head別weight norm、momentum RMS、checkpoint間angular displacement / update proxy
-   - **gradientが必要な項目**: checkpointのDataCursorから同一batchをdeterministicに1-step replayし、head別gradient RMSとfull-matrix / split-Muonのone-step update差を再生成する
-   - Wq/Wkのみをsemantic head単位へ分ける**V4.1-faithful arm**と、Wq/Wk/Wvを分ける探索armを分離する
-   - parameter metadata SSOTのorientationを使い、保存layoutや名前からhead軸を推測しない
-   - head間scale差が小さくてもpreconditioner分離の効果はRMS差だけでは判定できないため、deterministic 1-step replayまでは実施し、有望なら32-step CPU referenceへ進む
-   - 同時にtoken embedding / output projectionの**semantic vocabulary axis**、Adam state bytes、update normを監査し、Sinkhorn-balanced updateのCPU reference設計を確定する
-
-4. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
+3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
    - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
    - CSA2を模して **Full（KV/index自前） / Reindex（source KV共有・index再計算） / Reuse（KV/index共有）** の3 oracleを分け、KV共有とindex共有の誤差を別々に測る
@@ -274,7 +275,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
    - これはGLM-5.3-Flash IndexPool / DeepSeek-V4.1 CSA2の完全再現ではなく、**新規QNN graphを作る前の分解診断**として扱う
 
-5. **品質非変更のlayout microbenchmark**
+4. **品質非変更のlayout microbenchmark**
    - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
    - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
    - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
@@ -319,18 +320,20 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
    - 1 / 8 / 32 step correctness → 500 / 2000 step Val/Dev
    - 改善が無ければHVX化しない
 
-2. **Sinkhorn-Balanced Embedding / Prediction Head Update**
+2. **Sinkhorn-Balanced Embedding / Prediction Head Update**【HOLD】
    - `token_embedding` + `output_projection` = 131,072 parametersで、現Aux Adam 135,936の約96.42%を占める
-   - V4.1を参考に、Nesterov momentum + Sinkhorn balancingのCPU referenceを作り、Aux Adam baseline / momentum-only / momentum+Sinkhornを分離比較する
    - FP32 stateはAdam `m+v` 2本からmomentum 1本へ減るため、この2行列だけで約512 KiBのstate削減余地がある
-   - token embeddingはstored rowがtokenだが、output projectionはstored `[MODEL,VOCAB]`なので、**物理rowではなくsemantic vocabulary axis**をmetadataへ明示する
-   - 1 / 8 / 32 step correctness → 500 / 2000 step Val/Dev。bpbだけでなくoptimizer-state bytes / update norm / wall timeも比較する
+   - semantic vocabulary axisはSSOTから一意（embedding=axis0, output_projection=axis1）
+   - **現referenceではHOLD**: momentum-onlyはcold-start updateがAdamより極端に小さい / momentum+Sinkhornはscale非保存でloss explosion（output_projection norm 33.6→555.8）
+   - 再開条件: **scale-preserving Sinkhorn**（balancing後に元updateのRMS/Frobenius scaleを復元）と **LR-matched momentum-only**（Adam→momentum変更時のeffective step sizeを合わせる）を新しいreferenceとして設計してから
+   - 現referenceをそのまま再試行しない
 
-3. **Head-wise Muon**
+3. **Head-wise Muon**【HOLD】
    - Wq/WkだけをH2のsemantic head単位 `64x32`へ分けるV4.1-faithful armを第一候補にする
-   - Wq/Wk/Wv splitは別のexploratory armとし、同時変更しない
-   - full-matrix Muonとの1 / 8 / 32 step CPU referenceを作り、500 stepで品質差を見る
-   - head別RMS差が弱くても、preconditionerを分ける数学的差が残るため診断だけで棄却しない
+   - exact updateはfull-matrixから大きく分岐するが、2000-step matched A/Bで一貫したquality gainは確認できず
+   - **現行H2 / current LR / current shapeではbaseline変更しない**
+   - 再評価条件: H2→H4以上のshape searchでhead構造が変わった / head間geometry差が増えた / Muown等と組み合わせる明確な仮説が出た / 高LR stressでfull-matrix Muonより安定領域が広い証拠が出た
+   - formal baselineは引き続き現行Original Muon + Aux Adam
 
 4. **ReLU²**【Rejected】
    - matched seed1 A/B（500/1000/1500/2000）でΔBalancedが一貫せず2000でも実質tie

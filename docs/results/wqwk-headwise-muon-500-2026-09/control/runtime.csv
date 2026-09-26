@@ -1,0 +1,6 @@
+arm,seed,start_step,phase,ms,notes
+control,1,2000,eval_step_2050,41049.7296,val+dev 256 chunks each
+control,1,2000,eval_step_2100,46624.2789,val+dev 256 chunks each
+control,1,2000,eval_step_2250,46146.083,val+dev 256 chunks each
+control,1,2000,eval_step_2500,45159.85,val+dev 256 chunks each
+control,1,2000,train_total,806783.243,cpu_reference_control_steps_500

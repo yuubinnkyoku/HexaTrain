@@ -1,0 +1,30 @@
+{
+  "checkpoints": 6,
+  "seeds": [
+    1,
+    2
+  ],
+  "steps": [
+    500,
+    2000,
+    8000
+  ],
+  "head_suffixes": [
+    "wq",
+    "wk",
+    "wv"
+  ],
+  "input_mode": "momentum_proxy",
+  "output_dir": "D:/ghq/github.com/yuubinnkyoku/PhoneLM/docs/results/v41-optimizer-split-diagnostic-2026-09",
+  "files": [
+    "checkpoint-inventory.csv",
+    "embedding-head-optimizer.csv",
+    "headwise-muon-checkpoint-aggregate.csv",
+    "headwise-muon-checkpoint-summary.csv",
+    "headwise-muon-checkpoint.csv",
+    "headwise-muon-displacement.csv",
+    "headwise-muon-replay-aggregate.csv",
+    "headwise-muon-replay.csv",
+    "sinkhorn-feasibility.csv"
+  ]
+}

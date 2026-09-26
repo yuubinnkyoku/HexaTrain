@@ -1,0 +1,10 @@
+component,parameters,persistent_state_bytes,temporary_working_bytes,notes
+token_embedding_aux_adam_m_plus_v,65536,524288,0,m+v FP32
+output_projection_aux_adam_m_plus_v,65536,524288,0,m+v FP32
+token_embedding_momentum_only,65536,262144,0,momentum FP32
+output_projection_momentum_only,65536,262144,0,momentum FP32
+token_embedding_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy
+output_projection_momentum_plus_sinkhorn,65536,262144,262144,persistent momentum + temporary working copy
+pair_aux_adam_total,131072,1048576,0,131072 params m+v
+pair_momentum_only_total,131072,524288,0,saving vs adam = half of m+v
+pair_momentum_sinkhorn_total,131072,524288,524288,persistent same as momentum-only

@@ -1,0 +1,6 @@
+arm,seed,start_step,phase,ms,notes
+candidate,1,2000,eval_step_2050,40583.1909,val+dev 256 chunks each
+candidate,1,2000,eval_step_2100,40703.1029,val+dev 256 chunks each
+candidate,1,2000,eval_step_2250,40717.6316,val+dev 256 chunks each
+candidate,1,2000,eval_step_2500,43544.0894,val+dev 256 chunks each
+candidate,1,2000,train_total,703780.8065,cpu_reference_candidate_steps_500

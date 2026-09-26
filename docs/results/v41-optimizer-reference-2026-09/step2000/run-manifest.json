@@ -1,0 +1,19 @@
+{
+  "checkpoint": "build/reports/hvx-promotion/quality-hvx-seed1-step8000/htp-seed1-l19-t32-d64-f128-step2000.ckpt",
+  "cache": "build/private-data/nicopedia-real-text-bpe-v1024/caches/train_pilot.bin",
+  "bpe": "build/private-data/nicopedia-real-text-bpe-v1024/tokenizer/byte-bpe-v1024.model",
+  "seed": 1,
+  "step": 2000,
+  "dataset_hash": "fnv1a64:0c7b2826f5f26fea",
+  "order_seed": 20260806,
+  "record_index": 16000,
+  "batch_size": 8,
+  "muon_lr": 0.005,
+  "muon_momentum": 0.95,
+  "muon_nesterov": true,
+  "muon_ns_steps": 5,
+  "aux_adam_lr": 0.0022,
+  "mean_loss_next_step": 4.66161,
+  "gradient_replay_cosine": 1,
+  "gradient_replay_rel_l2": 0
+}
