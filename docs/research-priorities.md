@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-09-25 JST**
+> **研究内容の最終更新: 2026-09-26 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -49,7 +49,7 @@ Forward / Loss / Backward / Adamは引き続きQNN opを明示的に構築する
    - QNN/HVX failure / non-finite / fallback
    - CPU oracleとの差
 
-## 2026-09-22 現在地
+## 2026-09-26 現在地
 
 ### 学習baseline
 
@@ -113,6 +113,36 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 
 また、Paradigmaのpretraining speedrun系で使われたsingle-head multi-token supervision、ReLU²、終盤RRE/Anderson extrapolationはVioletto本体の確定仕様と同一視しないが、Limiteの設計系譜としてHexaTrainの低コスト候補へ加える。
 
+### HySparse2から見えるKV共有 / Sparse Attention課題
+
+2026-09-22公開の[HySparse2](https://arxiv.org/abs/2609.26368)は、long-horizon / multi-turn agent workloadを主対象に、**二段のKV共有**を導入している。
+
+- **KV Bridging**: YOCO型self-decoder / cross-decoder構造で、cross-decoderのfull-attention K/Vをself-decoder側hidden stateから構成し、prefillをself-decoder完了時点でexitできるようにする
+- **KV Reuse**: 1つのfull-attention layerが作ったK/Vとselection indexを、後続sparse layerが共有する
+- **token-level selection**: block単位ではなくtoken単位でglobal tokenを選ぶ
+- **forced local window**: 別SWA branchを持たず、recent tokenをsparse selectionへ強制的に含めてlocal/globalを同一KV cacheへ載せる
+
+80B-A3B設定では1M token時のprefill FLOPsをHybrid SWA比5.02x、HySparse比2.92x削減し、KV cacheは2.69 GBと報告されている。ただし比較ではHybrid SWA / HySparseがQ/KV=64/4のGQA、HySparse2が64/1のMQAでhead dimensionも異なる。したがって、**KV cache削減量をcross-layer sharing単独の効果とはみなさない**。HexaTrainではMQA、layer sharing、token sparsityを分離して測る。
+
+現行HexaTrainとの距離は大きい。
+
+- training / FORWARD_ONLY graphは各layerが独立したWq/Wk/Wvを持ち、attention score / probabilityは[T,T]
+- current prepared generationはruntime / finalized graph / parameterを再利用するが、**per-layer KV cacheは保持せず、生成tokenごとにrolling T32全体を19層再計算**する
+- cross-layer KV reuseをtrainingへ入れると、複数の下流layerから同じsource K/Vへgradientが戻るため、現行の手書きbackwardにはcross-layer gradient accumulationが必要になる
+- T32ではsparse indexer / mask / gather / layoutの固定費を回収しにくい
+
+したがって、HySparse2を一括移植しない。順序を分ける。
+
+1. **Hq2/Hkv1 MQA**を独立A/Bし、K/V projectionとparameter readを削れるか確認
+2. 現行のhead-wise attention probability出力を使い、**Cross-Layer Top-k Reuse診断**を実装前に行う
+3. Full AttentionのTを段階的に増やし、T^2 costが実ボトルネックになる地点をV81で測る
+4. token / block / recent+global selectionをhost-side oracle simulatorで比較
+5. QAIRT 2.48.40上でTopK / index selection / gather相当 + small MatMulのmicrobenchmarkを行い、演算可能性ではなく実wall timeで判定
+6. generationではHySparse2型圧縮より先に**標準的なincremental KV-cache decode**を成立させる
+7. その後に1 full + 1 sparseの最小blockでKV/index reuseを試し、複数sparse layer / KV Bridgingへ拡張する
+
+HySparse2から前倒しするのは**本格sparse attentionではなく、MQAとreuse可能性の診断**である。
+
 ### 推論・Android基盤
 
 - model configの一般化、Material 3 Expressive UI、学習表示、推論GUIは実装済み。
@@ -126,7 +156,8 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 - D64/FFN128は容量増で小さく一貫した改善を示すが、FFN幅だけをさらに増やすより、parameter-matched shape searchの情報量が高い。
 - Muownの第一段階は新規学習ではなく、既存Muon checkpointからの**row geometry診断**で済む。ここは実装費用に対する情報量が非常に高い。
 - 現行generalized HTP graphは各layerでQ/K/Vを**3本の別MatMul**として作り、H2分割でもselector/scatter MatMulを使う。Limite/vLLM系のpacked QKV layoutを参考に、optimizer/checkpoint上のWq/Wk/Wv identityは保ったまま、実行用packed cacheを持つ余地がある。
-- T32では131k context / sliding-global attentionを移植しても固定費を回収しにくい。一方、G1 / XSA / residual scale / ReLU² / dense multi-token supervisionは**短文脈でも追加計算が小さく、現在の研究scaleに合う**。
+- current prepared generationはgraph / parameterをwarm reuseする一方、tokenごとのforwardはrolling T32全体を再実行する。**incremental KV cacheが未実装**なので、HySparse2型KV圧縮より前に通常のKV-cache decodeが大きな改善余地を持つ。
+- T32では131k context / full sparse attentionを移植しても固定費を回収しにくい。ただし、**MQAとcross-layer attention-index reuse診断はT32でも独立に情報量が高い**。G1 / XSA / residual scale / ReLU² / dense multi-token supervisionも短文脈で追加計算が小さく、現在の研究scaleに合う。
 
 # 優先順位
 
@@ -150,6 +181,11 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 - **QNN HTP / HVX Backend Placementの計測基盤**
   - op単位に「QNNで可能」ではなくprecision / latency / data movementで配置を決める
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
+- **Cross-Layer Attention Reuse診断（実装前）**
+  - 現行L19/H2で既に観測可能な38個のhead-wise attention probability mapを使い、新しいsparse graphを作る前にreuse可能性を測る
+  - source layerのTop-kと後続layerのTop-k Jaccard、target attention mass capture、Full出力に対するsparse近似誤差を測定
+  - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
+  - reuse相関が弱い場合はCross-Layer KV / Index Sharingの優先度を下げる。新規学習なしで判定できる範囲を先に使う
 - **Gated Attentionの実機A/B継続**
   - 既存`headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000でそれぞれ`-0.032712 / -0.036686 / -0.021864 / -0.007113`。早期gainは強いが差が縮小している
   - まず同一recipeで4000まで延長し、「収束加速だけか / 最終品質差が残るか」を判定
@@ -187,13 +223,18 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
   - `x' = λ_resid x + λ_branch f(x)`のlearned scalar residual scaleをidentity初期化
   - MUDDより先に、既存第1層V等を再利用するValue Residualを比較
   - token-dependent Value Embeddingは追加tableが大きいため、Value Residualで効果を確認してから
+- **Hq2/Hkv1 MQA A/B**
+  - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化し、GQAより先に最小のKV共有を測る
+  - D64ではWk/Wvが各layer 64x64 → 64x32になり、L19全体で**77,824 parameters（現行758,528の約10.3%）**を削減できる
+  - まずそのまま小型化したmodelを測り、次に浮いたparameterをFFN / depthへ再配分したparameter-matched modelを比較
+  - config / checkpoint identity / parameter metadataにKV_DIMとquery/KV head数を明示し、Muon role / fan-in/out semanticsを曖昧にしない
 - **parameter-matched Architecture Search**
   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけて比較
   - shallow/wide vs deep/narrowをwall time・bytes moved込みで評価
 - RMSNorm / RoPEの独立A/B。Gated FFNはReLU²を先に通し、その後SwiGLU/ReGLUへ進む
 - QK Norm / Zero-Centered RMSNorm / norm-weight monitoring
 - Z-Loss diagnostic
-- HTP-Aligned GQA / tied embedding
+- tied embedding
 - **Training Memory Planner**
   - FP KEEP / low-bit KEEP / spill / RECOMPUTE
   - QNN graph boundaryとHVX shared-buffer boundaryを一緒に扱う
@@ -220,6 +261,14 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
   - MiMo-V2.6のようなmid-training bridgeを候補にする
 - **Text Representation Searchの第2段階**
   - 現行byte-BPE V1024を基準にraw byte / larger BPE / GBST / 簡易BLT
+- **Incremental KV-cache generation**
+  - prepared generationがgraph / parameterをwarm reuseしている利点を保ちつつ、各tokenでT32全再計算する現行経路をper-layer KV cacheへ置き換えられるか検証
+  - first-token prefillと1-token decodeを分離して計測し、KV RAM / ms-token / APP tensor bytes / graph execute時間を記録
+  - HySparse2型KV compression / reuseは、この通常KV cacheのbaselineが成立してから比較する
+- **Sparse Attention実装前feasibility**
+  - Full Attention mapからtoken Top-k / block Top-k / recent-only / recent+globalのoracle sparse outputをhost側で再構成
+  - QAIRT 2.48.40でTopK / index selection / gather相当 + small MatMulをmicrobenchmarkし、node固定費とtensor移動を測る
+  - T32でwall timeが悪化する場合は実装を進めず、T拡大後に再評価
 - Exact BP vs Apple MeBP / Qualcomm QZO-FF / Google Addax
 - Quantized Adam / optimizer-state低bit化
 - INT8 / INT4 / balanced INT2 / ternary training baseline
@@ -252,12 +301,14 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 
 ## P3 — 長文脈・疎構造・RL / 独自architecture
 
-- Cross-Layer KV Sharing / YOCO
+- Cross-Layer KV Sharing / YOCO / **HySparse2 KV Bridging**
+- **HySparse2型 KV Reuse + Cross-Layer Index Sharing**
+- token-level sparse selection + forced recent window
 - Local / Global hybrid
 - NAMM / KeyDiff / KVP
 - CommVQ / ShadowKV / LaCache
 - Trellis / Lattice
-- Block Sparse / FlexPrefill / Cross-Layer Index Sharing
+- Block Sparse / FlexPrefill
 - QSA / DSA型 indexed sparse attention
 - sparse + linear/recurrent attention hybrid
 - SimpleGDN / Gated DeltaNet詳細化
@@ -281,9 +332,12 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
   - 実測でDDR scratchより大幅に遅かった
 - **FFN幅だけをさらに増やす探索**
   - FFN128の追加容量は改善するが費用対効果が小さい
-- **T32のまま本格sparse attention / Limiteの131k local-global構成を移植**
+- **T32のまま本格sparse attention / HySparse2 / Limiteの長文脈構成を一括移植**
   - indexer・mask・layout固定費を回収しにくい。長文脈化後でよい
-  - Violettoの36 local + 12 globalという層配置はT32の根拠にはしない
+  - HySparse2の主要結果は80B-A3B・32k pretrain → 256k post-trainの条件で、HexaTrainのT32/D64へ直接外挿しない
+  - HySparse2のKV-cache比較にはGQA 64/4 → MQA 64/1のhead構成差も含まれるため、KV Bridging / KV Reuse単独の倍率として扱わない
+  - ただし**MQAとCross-Layer Top-k Reuse診断だけは前倒し**する
+  - Violettoの36 local + 12 globalという層配置もT32の根拠にはしない
 - **MUDD / Value EmbeddingをViolettoと同じ規模で一括導入**
   - D64では追加graph/tensor/tableの固定費が相対的に大きい
   - residual scale → Value Residual → XSA → 限定MUDDの順で寄与を分離する
@@ -293,13 +347,14 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
   - 1,568 prompts × 16 rollouts、multi-agent sandbox、grader cluster等はHexaTrainの現スケールと目的が違う
   - 取り込むのはoptimizer / data-mixture / distillation / reward設計の**縮約可能な原理**に限定する
 
-## 2026-09-22 直近LLMリリースからの差分
+## 2026-09-26 直近LLMリリースからの差分
 
 直近1か月の公開モデルをHexaTrainの観点で読み直すと、単発の新奇技術よりも、**同じ方向の技術が複数の大規模モデルで同時に採用され始めたこと**が重要。
 
 | モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
+| **HySparse2** | two-level KV sharing（KV Bridging + KV Reuse）、token-level sparse selection、forced local window、MQA、self/cross-decoder early-exit prefill | **本格sparseはP3据え置き**。ただしHq2/Hkv1 MQAとCross-Layer Top-k Reuse診断をP0/P1へ前倒し。generationは通常KV cacheを先に成立させる |
 | **Limite 1B - Violetto** | 1B Dense、48L/D1280、10Q/2KV GQA、local/global attention、QK RMS norm、head-wise gate、XSA、Value Embedding、限定MUDD、learned residual scale、SwiGLU、tied embedding、131k context | G1継続をP0、XSA / residual scale / Value Residual / packed QKVをP1、MUDD-liteをP2、local/global長文脈をP3。正式Technical Report未公開のためtraining recipeは未確定として扱う |
 | Qwen3.8-Flash-Next | Gated DeltaNet + QSA、4-way Gated Residual、N-gram Embedding、Muon | GDN hybridはP2。Gated ResidualをP2。QSAとN-gram memoryはP3で小型化 |
 | GLM-5.3-Flash | sparse attention + linear attention、mHC | Hybrid Sequence Operatorの根拠を強化。mHCはQNN graph複雑性のためP3据え置き |
@@ -310,6 +365,8 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 | K2 Horizon | 0.9B〜375Bのscale family、data/code/method/intermediate checkpoints公開方針 | scale ladderと再現可能な実験protocolのreference |
 | Granite 4.2 | controllable thinking、tool use | architectureではなくinference/evaluation側のbudget制御候補 |
 | Ornith-1.5 / Smaug | self-generated task loop、agent trajectory中心のpost-training | P3以降のpost-training/data generation候補 |
+
+HySparse2から特に重要なのは、**Sparse Attentionそのものより先に、KV head・KV生成元・selection indexをlayer間でどこまで共有できるかを分解して測る**ことである。HexaTrainではT32のままTop-k sparse graphを先に作らず、MQA → reuse診断 → incremental KV cache → long-context Full baseline → sparse/KV-sharingの順に進める。
 
 Limiteから特に重要なのは、**1Bモデルの個々の部品をコピーすることではなく、追加parameterや追加MatMulを小さく保ちながらattention / residual / value経路を制御し、実行layoutも同時に最適化すること**である。
 
@@ -692,30 +749,61 @@ Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * 
 - [Limite vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
 - [HexaTrain G1 experiment](headwise-g1-gated-attention.md)
 
-## HTP-Aligned GQA
+## HTP-Aligned GQA / MQA
 
 → **P1**
 
-既存LLMのhead比率をコピーせず、V81実測で決める。
+既存LLMのhead比率をコピーせず、V81実測で決める。HySparse2が64Q/1KVのMQAを採り、KV容量とtoken-sparse kernel効率を狙っていることから、HexaTrainでは**Hq2/Hkv1を最初の具体的A/B**にする。
 
-候補:
+現行D64/H2ではhead_dim=32。Hq2/Hkv1ならWq/Woは維持し、Wk/WvだけをD64→KV_DIM32へ縮められるため、L19全体で77,824 parametersを削減できる。
 
-- MHA
-- GQA
-- MQA
+比較:
+
+1. 現行MHA: Hq2 / Hkv2
+2. **MQA: Hq2 / Hkv1**
+3. 必要なら中間のGQA比率を、head数を増やすshape searchと一緒に評価
+4. MQAで浮いたparameterをFFN / depthへ戻したparameter-matched model
 
 探索:
 
-- Q heads
-- KV heads
-- head dimension
+- Q heads / KV heads / head dimension
+- Wk/Wv projection時間とgradient時間
 - selector/scatter/reshapeコスト
-- KV RAM
+- parameter bytes / activation bytes / 将来KV RAM
 - Forward / Backward双方
+- validation / development bpb
+- QNN/CPU parity
+
+実装時はnumHeads一個で済ませず、`numQueryHeads / numKvHeads / KV_DIM`をconfig・parameter metadata・resource estimator・checkpoint identityへ通す。
 
 参考:
 
-- [https://arxiv.org/abs/2305.13245](https://arxiv.org/abs/2305.13245)
+- [GQA](https://arxiv.org/abs/2305.13245)
+- [HySparse2](https://arxiv.org/abs/2609.26368)
+
+## Cross-Layer KV / Index Reuse Diagnostics
+
+→ **P0〜P1（実装前診断）**
+
+HySparse / HySparse2の「full-attention layerをoracle indexerとして使い、後続layerがK/Vとselection indexを再利用する」という部分だけを、まず現行modelの観測で検証する。
+
+L19/H2の現行graphはhead-wise attention probabilityを観測できるため、38 head mapから次を計算する。
+
+- adjacent / 2-layer / 3-layer distanceでのTop-k Jaccard
+- source Top-kがtarget layerのattention massを何%回収するか
+- token Top-k vs block Top-k
+- recent window + global Top-k
+- sparse再正規化後のattention contextとfull contextのL2 / cosine
+- layer/headごとのlocalityとattention distance分布
+
+k=4/8/16、recent window=4/8/16を最初の小さいsweepとする。T32でreuse相関が弱ければ本格Cross-Layer KV / Index SharingはP3据え置きにし、T拡大後まで実装しない。
+
+この診断は**新しいtraining runより先に行える**ことを重視する。
+
+参考:
+
+- [HySparse](https://arxiv.org/abs/2602.03560)
+- [HySparse2](https://arxiv.org/abs/2609.26368)
 
 ## Tied Input / Output Embedding
 
@@ -1062,6 +1150,11 @@ RECOMPUTE
 ## Xiaomi MiMo
 
 - MiMo-V2.6
+- **HySparse / HySparse2**
+  - Full Attentionをoracle indexerとして使うKV / index reuse
+  - KV Bridgingによるself/cross-decoder間共有
+  - token-level sparse selection + forced recent window
+  - MQAをKV圧縮軸として分離評価
 - AdamW → Muown mid-training bridge
 - large-batch fully asynchronous RL
 - Groupwise Reward Synthesis / Advantage Redistribution
@@ -1070,7 +1163,7 @@ RECOMPUTE
 - router freeze / R3系のtrain-inference consistency
 - 7k+ RL task environments / composable harness公開方針
 
-HexaTrainでは特に**Muown・effective batch・MOPD²の縮約**を取り込む。MoE router技術は現行Denseモデルへは適用しない。
+HexaTrainでは特に**Muown・effective batch・MOPD²の縮約**に加え、HySparse2から**MQAとcross-layer reuse診断**を取り込む。本格Sparse / KV Bridgingは長文脈化後とし、MoE router技術は現行Denseモデルへは適用しない。
 
 ## PFN Transfer-Aware Recomputation
 
@@ -3102,16 +3195,22 @@ scratch-training trackと結果を混同しない。
 
 ## Phase 15 — Long Context / Sparse / RL
 
-Tを十分増やして固定費を回収できる段階で、
+MQAとCross-Layer Attention Reuse診断はP0/P1で先行する。本格Sparse実装は、Tを増やしてT^2 costが実ボトルネックになり、QAIRT microbenchmarkでも固定費を回収できる段階まで待つ。
+
+generation側は、まず通常のincremental KV-cache decodeをbaselineとして成立させる。その上で、
 
 - Local / Global
-- Cross-Layer KV / YOCO
+- token-level / block-level sparse selection
+- forced recent window + global Top-k
+- Cross-Layer KV Reuse / Cross-Layer Index Sharing
+- YOCO / HySparse2 KV Bridging
 - QSA / DSA
 - FlexPrefill
-- Cross-Layer Index Sharing
 - KV compression / eviction
 
 へ進む。
+
+実装順は**oracle sparse simulator → QNN microbenchmark → 1 Full + 1 Sparse最小block → 複数Sparse layer reuse → KV Bridging**とし、training backwardのcross-layer gradient accumulationを最初から大規模に導入しない。
 
 long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE化する場合のみR3/router consistencyを追加する。
 
@@ -3368,12 +3467,11 @@ Limite 1B - Violettoからは、さらに**attention / value / residualの情報
 
 ---
 
-# 2026-09-22 一次資料
+# 2026-09-26 一次資料
 
 ## HexaTrain
 
 - [HexaTrain repository](https://github.com/yuubinnkyoku/HexaTrain)
-- [current main HEAD `315d048`](https://github.com/yuubinnkyoku/HexaTrain/commit/315d0487d98584e9f172dc77972e3fee52ded3d4)
 - [HVX FP32 Muon / formal baseline](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-hvx-muon.md)
 - [Muon quality pilot](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-v1024-d64-ffn128-muon-pilot.md)
 - [HTP-native Muon investigation](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-htp-muon.md)
@@ -3394,8 +3492,10 @@ Limite 1B - Violettoからは、さらに**attention / value / residualの情報
 - [Gated Attention for Large Language Models](https://arxiv.org/abs/2505.06708)
 - [Value Residual Learning](https://arxiv.org/abs/2410.17897)
 
-## MiMo / Optimizer
+## MiMo / Optimizer / Sparse Attention
 
+- [HySparse2: Hybrid Sparse Attention with Two-Level KV Sharing](https://arxiv.org/abs/2609.26368)
+- [HySparse: A Hybrid Sparse Attention Architecture with Oracle Token Selection and KV Cache Sharing](https://arxiv.org/abs/2602.03560)
 - [MiMo-V2.6 Official Release](https://mimo.mi.com/docs/en-US/news/latest/v2-6)
 - [MiMo-V2.6 Technical Report](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL/blob/main/MiMo_V2_6_technical_report.pdf)
 - [MiMo-V2.6-Pro-RL](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL)
