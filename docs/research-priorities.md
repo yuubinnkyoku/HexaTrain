@@ -133,11 +133,11 @@ HexaTrainへの重要な示唆は、KDA / DSA / mHC / MoEをそのまま縮小�
 
 - KDA / Gated DeltaNetは、まずFull/Skip Attentionで不要layerを特定した後に**SimpleGDN型のweight-preserving変換**として試す
 - KDA本体はT64/T128/T256へcontextを伸ばし、recurrent stateの利点を測れる段階で昇格
-- DSA / KPool / IndexCacheはT32では実装せず、Cross-Layer Attention Reuse診断を先行
-- 4-stream mHCは後回しにし、**learned residual scale → 2-stream Hres-only mHC-lite → full mHC**の順で寄与を分離
-- GLM-5のMuon Splitは現行H2 Q/K/Vと相性がよいため、**head別update-scale診断 → CPU reference → 500-step A/B**へ落とす
-- MTPはfuture tokenを同じsoft targetへ混ぜるだけでなく、**horizonを区別する小さいadapter/head**を先に試す
-- Dense checkpointから新sequence operatorへ移るときは、既存weightを最大限再利用する**identity-preserving architecture migration**を標準protocolにする
+- DSA / KPool / IndexCacheはT32では実装しない。代わりに既存attention mapから**4-token pooled-index oracle**を作り、poolingで重要領域を失わないかを実装前に測る
+- 4-stream mHCは後回しにし、**learned residual scale → Value Residual → 2-stream constrained residual mixing → full mHC**の順で寄与を分離
+- GLM-5のMuon SplitはMLA系up-projectionでの結果であり、現行H2 MHAへ効果を直接外挿しない。まず**checkpoint-only head診断 + deterministic 1-step replay → CPU reference**で分割する意味があるか判定する
+- MTPはfuture tokenを同じsoft targetへ混ぜるだけでなく、**horizonを区別する小さいadapter/head**を先に試す。ただしlow-rank horizon adapterはGLMの既存手法そのものではなく、HexaTrain独自の縮約仮説として扱う
+- Dense checkpointから新sequence operatorへ移るときは、既存weightを最大限再利用する**low-disruption architecture migration**を標準protocolにする。初期forwardが数学的に同一な移行と、weightは再利用するが関数が変わる移行を区別する
 
 という順序が妥当。
 
@@ -187,118 +187,118 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 - Muon row-geometry診断は**完了済み**で、2 seedともrow norm / spectral norm driftが強く同期した。ここは「診断待ち」ではなく、**Muown CPU reference・Muon+WD control・Muon Split診断へ進む段階**。
 - 現行generalized HTP graphは各layerでQ/K/Vを**3本の別MatMul**として作り、H2分割でもselector/scatter MatMulを使う。optimizer/checkpoint上のWq/Wk/Wv identityは保ったまま、実行用packed cacheを持つ余地がある。
 - current prepared generationはgraph / parameterをwarm reuseする一方、tokenごとのforwardはrolling T32全体を再実行する。**incremental KV cacheが未実装**なので、HySparse2型KV圧縮より前に通常のKV-cache decodeが大きな改善余地を持つ。
-- T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split、horizon-specific MTP-lite、G1、XSA、residual scale、mHC-lite、ReLU²、difficulty-aware sampling**は短文脈でも独立に検証できる。
-- architecture候補を毎回scratch 8000-stepで比較すること自体が高コスト。**identity-preserving architecture migration + short adaptation**を正式な研究手法にし、長期runへ上げる候補を早く刈り込む。
+- T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split診断、G1、ReLU²、learned residual scale、horizon-specific MTP-lite、XSA**は短文脈でも比較しやすい。2-stream residual mixingやdifficulty-aware samplingは、より安い候補の結果を見てからでよい。
+- architecture候補を毎回scratch 8000-stepで比較すること自体が高コスト。**low-disruption architecture migration + short adaptation**を正式な研究手法にし、長期runへ上げる候補を早く刈り込む。
 
 # 優先順位
 
-## P0 — 現在最優先
+この節は技術カタログではなく、**次に何へ手を付けるかを決める実行キュー**として扱う。NOWは同時に最大5件とし、新しい候補を追加するときは既存NOWのどれを完了・降格・保留へ移すかも決める。
 
-- **現行formal baselineを回帰基準として凍結**
+## 固定済み / 完了した研究ゲート
+
+- **formal quality baseline**
   - V1024/T32/D64/FFN128/L19/H2
   - QNN HTP Forward/Backward + HVX W8 Original Muon + CPU Aux Adam
   - Adam S4000を独立controlとして保持
   - tokenizer / dataset / order / checkpoint / QAIRT identityを固定
   - final splitは既存read-once結果をcandidate tuningへ逆流させない
-- **Muon row-geometry audit【済】→ optimizer geometry follow-up**
+- **Muon row-geometry audit【済】**
   - [muon-row-geometry-audit.md](muon-row-geometry-audit.md) の2 seed結果を確定evidenceとする
   - `corr(max row norm, spectral norm)` ≈ 0.99、250→8000でrow/spectral normが約2.4〜2.7倍
-  - 以後は同じ診断を繰り返さず、Muown / Muon+WD / Muon Splitの原因分解へ進む
-- **Muon Splitの実装前diagnostic**
-  - Wq/Wk/WvをH2のsemantic head単位で分け、head別のweight norm / gradient RMS / momentum RMS / update RMS / angular updateを既存runから計測
-  - head間update scale差が小さい場合は実装優先度を下げる
-  - 分割orientationはparameter metadata SSOTを使い、保存layoutや名前から推測しない
-- **評価engine高速化**
-  - one-window-per-graphをbatch / persistent executionへ寄せる
-  - windows/s、original UTF-8 bytes/s、graph prepare amortizationを測る
-  - full-final相当を現実的な時間で読める経路を目標にする
-- **QNN HTP / HVX Backend Placementの計測基盤**
-  - op単位に「QNNで可能」ではなくprecision / latency / data movementで配置を決める
+  - 同じ診断は繰り返さず、Muown / Muon+WD / Muon Splitの原因分解へ進む
+- **negative evidenceも固定**
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
-- **Cross-Layer Attention Reuse診断（実装前）**
-  - 現行L19/H2で既に観測可能な38個のhead-wise attention probability mapを使い、新しいsparse graphを作る前にreuse可能性を測る
-  - source layerのTop-kと後続layerのTop-k Jaccard、target attention mass capture、Full出力に対するsparse近似誤差を測定
-  - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
-  - reuse相関が弱い場合はCross-Layer KV / Index Sharingの優先度を下げる
-- **Gated Attentionの実機A/B継続**
-  - 既存`headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000でそれぞれ`-0.032712 / -0.036686 / -0.021864 / -0.007113`
-  - まず同一recipeで4000まで延長し、「収束加速だけか / 最終品質差が残るか」を判定
-  - gate parameterはAux Adamのまま扱い、Muon packing contractを無理に拡張しない
-  - 次段候補としてLimite型`2 * sigmoid`、`Wg=0` identity initialization、8〜16 channel reduced gateを短期A/B
-- **実験protocol / metrics固定**
-  - bpb / ms/update / original bytes/s / RAM / thermal / parity
-  - RPC external / DSP worker imbalance / optimizer geometryも標準telemetryへ
+  - Muon scratchのVTCM化は現行実測ではDDRより遅いため再試行しない
 
-## P1 — P0の直後
+## NOW — Active Queue【最大5件】
 
-- **Muown reference実装と短期A/B**
-  - row-geometry gateは肯定済み。CPU oracleを論文Algorithm 1に忠実に実装
-  - `g / r / m_g / v_g`のrow stateとdirection Muonを分離
-  - 現行Original Muon identityを変更せず、新optimizer identity / checkpoint schemaでfail-closed
-  - 最初はNS5固定
-  - 1 / 8 / 32 step correctness → 500 / 2000 step qualityへ段階昇格
-- **Original Muon + Weight Decay control**
-  - Muownの比較対照として、現行Original Muonへdecoupled weight decayを加えた短期armを置く
-  - checkpoint schemaに既にある`muonWeightDecay`をidentityへ含め、0.0 baselineと混同しない
-  - 500 / 2000 stepでbpbだけでなくsemantic row norm / spectral norm / angular updateも比較
-  - Muownが勝つ場合、「単なるnorm抑制」ではなくrow magnitude / direction分離の寄与を確認できる
-- **Muon Split / Per-Head Orthogonalization**
-  - P0 diagnosticでhead間scale差が確認できた場合、Wq/Wk/WvをH2の`64x32` semantic head単位へ分けてMuonを適用
-  - まずCPU referenceで1 / 8 / 32 step correctness → 500 step quality
-  - 既存HVX W8 packingは変えず、CPU結果が有望な場合のみ64x32 backend pathを設計
-  - W1/W2/Woまで同時変更せず、Q/K/Vだけで寄与を分離
-- **Effective Batch Search**
-  - physical B8を固定し、gradient accumulation等でeffective batch 8 / 16 / 32 / 64を比較
-  - optimizer step数ではなく**同一original-byte / token budget**でAdam / Muon / Muownを比較
-  - quality/byteだけでなくwall-time、optimizer invocation数、RAMを記録
+1. **評価engine高速化**
+   - one-window-per-graphをbatch / persistent executionへ寄せる
+   - windows/s、original UTF-8 bytes/s、graph prepare amortizationを測る
+   - full-final相当を現実的な時間で読める経路を作り、以後の研究iteration自体を短縮する
+
+2. **Gated Attention: G1をstep 4000まで回収**
+   - `headwise_g1_sigmoid`はCandidate2000まで完了し、Balanced差はstep 500 / 1000 / 1500 / 2000で `-0.032712 / -0.036686 / -0.021864 / -0.007113`
+   - 同一recipeで4000まで延長し、収束加速だけか、最終品質差が残るかを判定する
+   - その結果を見てから `2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む
+
+3. **Muon Splitの実装前diagnostic**
+   - GLM-5のMuon SplitはMLA系up-projectionでの結果であり、H2 MHAへ有効性を直接外挿しない
+   - **checkpointだけで測る項目**: head別weight norm、momentum RMS、checkpoint間angular displacement / update proxy
+   - **gradientが必要な項目**: checkpointのDataCursorから同一batchをdeterministicに1-step replayし、head別gradient RMSとfull-matrix / split-Muonのone-step update差を再生成する
+   - parameter metadata SSOTのorientationを使い、保存layoutや名前からhead軸を推測しない
+   - head間scale差が小さい、またはsplitしたone-step updateが実質的に変わらない場合は実装優先度を下げる
+
+4. **Cross-Layer Attention Reuse + pooled-index oracle**
+   - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
+   - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
+   - 追加でT32を4-token単位にpoolし、mean poolingと単純weighted poolingで**pooled-index oracle**を作る
+   - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
+   - これはGLM-5.3-Flash IndexPoolの完全再現ではなく、**IndexPool-inspiredな実装前診断**として扱う
+
+5. **品質非変更のlayout microbenchmark**
+   - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
+   - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
+   - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
+
+### NOW共通の測定規約
+
+- bpb / ms/update / original UTF-8 bytes/s / RAM / thermal / parity
+- RPC external / DSP worker imbalance / optimizer geometryを必要な実験で標準telemetryへ
+- architecture変更とoptimizer変更とsampling変更を同じA/Bへ混ぜない
+
+## P1 — NOWのゲート通過後【実行順】
+
+1. **Muown reference + Original Muon+WD control**
+   - row-geometry gateは肯定済み
+   - Muown CPU oracleをAlgorithm 1に忠実に実装し、`g/r/m_g/v_g` stateを明示する
+   - Original Muon / Original Muon+WD / MuownをNS5固定・同一budgetで比較
+   - 1 / 8 / 32 step correctness → 500 / 2000 step Val/Dev
+   - 改善が無ければHVX化しない
+
+2. **ReLU²**
+   - 現行`ReLU(W1x)`を`ReLU(W1x)^2`へ変更
+   - parameter数・Muon matrix shapeを変えず、elementwise追加costに対するbpb gainを見る
+
+3. **Learned Residual / Branch Scale**
+   - `x' = λ_resid x + λ_branch f(x)`をidentity初期化
+   - まずscalarだけで深さ19の情報流改善を検証し、multi-stream residualへ先回りしない
+
+4. **Hq2/Hkv1 MQA**
+   - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化
+   - Wk/Wv削減そのものと、浮いたparameterをFFN / depthへ戻すparameter-matched案を分離比較
+   - config / checkpoint / metadataにquery/KV head数とKV dimensionを明示する
+
+5. **Parameter-Matched Shape Search**
+   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけて比較
+   - shallow/wide vs deep/narrowをbpb・wall time・original-byte throughput・RAMのParetoで見る
+
+### P1 Candidate Pool【空きslotが出たら昇格】
+
 - **Horizon-Specific MTP-lite**
-  - 同一softmax分布へ`t+1/t+2/t+3`を混ぜるfuture-mixture lossは、MTPとは分けて扱う
-  - baseline `t+1` headはそのまま共有し、`t+2`から**小さいlow-rank horizon adapter**を挟んで同じoutput projectionへ流す
-  - 最初はMTP-2（next-token + t+2）のみ。D64 / rank4ならadapterは約512 parametersで、現行総parameterに対してごく小さい
-  - ordinary next-token bpbを最終判定に使い、aux loss改善だけでは採用しない
-  - 有望ならshared recurrent MTP / NEXTN、speculative decodingへ進む
-- **ReLU² A/B**
-  - 現行`ReLU(W1x)`を`ReLU(W1x)^2`へ変更する低コスト候補
-  - parameter数・Muon matrix shapeは不変
+  - t+1 headを維持し、t+2から小さいlow-rank horizon adapterを挟む
+  - rank4 adapterはHexaTrain独自の縮約仮説であり、GLM等のMTP実装そのものとは扱わない
 - **Learnable XSA**
-  - per-layer/per-head強度`alpha`を0初期化し、初期forwardをbaselineと一致させる
-  - 6-layer subset → 全19層の順で短期A/B
-- **Lightweight Residual / Value Routing**
-  - `x' = λ_resid x + λ_branch f(x)`のlearned scalar residual scaleをidentity初期化
-  - 既存Vを再利用するValue ResidualをMUDDより先に比較
-  - 次段として**2-stream Hres-only mHC-lite**を置き、full 4-stream mHCへ直行しない
-- **Hq2/Hkv1 MQA A/B**
-  - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化し、GQAより先に最小のKV共有を測る
-  - D64ではWk/Wvが各layer 64x64 → 64x32になり、L19全体で**77,824 parameters（現行758,528の約10.3%）**を削減できる
-  - まずそのまま小型化したmodelを測り、次に浮いたparameterをFFN / depthへ再配分したparameter-matched modelを比較
-- **Difficulty-Aware Sampling**
-  - 同じNicopedia dataset内でwindow lossのEMA等を使い、easy / medium / hardのsampling比を調整
-  - 完全hard miningにはせずuniform成分を残す
-  - validation/evaluation分布はuniformのまま固定し、sampler state / seedをcheckpoint identityへ含める
-- **parameter-matched Architecture Search**
-  - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけて比較
-  - shallow/wide vs deep/narrowをwall time・bytes moved込みで評価
-- RMSNorm / RoPEの独立A/B。Gated FFNはReLU²を先に通し、その後SwiGLU/ReGLUへ進む
-- QK Norm / Zero-Centered RMSNorm / norm-weight monitoring
-- Z-Loss diagnostic
+  - `alpha=0`でzero-effect初期化し、6-layer subset → 全19層
+- **Value Residual**
+  - 別Value Embedding tableより先に既存Vを再利用する
+- RMSNorm / RoPE / QK Norm / Zero-Centered RMSNorm / Z-Loss diagnostic
 - tied embedding
-- **Training Memory Planner**
-  - FP KEEP / low-bit KEEP / spill / RECOMPUTE
-  - QNN graph boundaryとHVX shared-buffer boundaryを一緒に扱う
-- **Data-Movement / Host Boundary Optimization**
-  - pack/unpack、transpose、candidate copy、validation、FastRPC、shared arena
-  - **packed QKV execution cache**: optimizer/checkpoint上はWq/Wk/Wvを分離したまま、Muon更新後にQNN実行用`[Wq|Wk|Wv]`を更新
-  - H2 selector/scatter MatMulをreshape / slice / concatへ置換できるかmicrobenchmark
-  - direct RPC layout / persistent buffers / double buffering候補
-- **QNN/HVX Superoptimization**
-  - 数式rewriteだけでなくbackend placementまで探索
-- NASの効率化
-  - direct sweep → MatFormer / Puzzle型候補評価
-- Attention normalizer比較
-  - Softmax / Sigmoid / ReLU系
+- Training Memory Planner（KEEP / low-bit KEEP / spill / RECOMPUTE）
+- QNN/HVX Superoptimization
+- Effective Batch SearchはMuown short A/Bが成立した後に昇格する
+- Attention normalizer（Softmax / Sigmoid / ReLU系）は上記低コスト候補より後
+
 
 ## P2 — Muown / architecture基礎実験の後
 
+- **Effective Batch × Optimizer**
+  - Muown short A/Bが有望な場合のみ、physical B8固定でaccumulation 1 / 2 / 4 / 8を比較
+  - optimizer step数ではなく同一original-byte / token budgetでAdam / Original Muon / Muownを比べる
+- **Difficulty-Aware Sampling**
+  - architecture / optimizerの主要差分が固まってから別factorとして導入する
+  - uniform成分を残し、validation / Dev / final samplingは従来どおり固定する
+  - sampler version / bucket threshold / RNG seed / cursorをcheckpoint identityへ含める
 - **AngularMuown**
   - Muownのdirection row normが暗黙にangular step-sizeを減衰させるという解析をHexaTrainで検証
   - rowごとの更新角`theta`とbpb改善速度を追い、必要ならangular multiplierを明示制御
@@ -328,7 +328,7 @@ HySparse2から前倒しするのは**本格sparse attentionではなく、MQA�
 - Attention Skip → recurrent operator置換
 - Partial RoPE
 - Full MTP / NEXTN heads
-  - P1のDense Multi-Token Supervisionで学習gainを確認した後、追加headを持つMTPへ進む
+  - P1 Candidate PoolのHorizon-Specific MTP-liteでfuture-horizon補助予測の価値を確認した後、追加headを持つMTPへ進む
   - training auxiliary + speculative decodingを一体評価
 - Meta Token
 - Mixture-of-Depths
@@ -421,7 +421,7 @@ HexaTrainでは、
 
 - 既存G1を4000まで延長し、必要ならLimite型`2 * sigmoid` / reduced gate channelsを比較
 - packed QKVとhead split/concatのlayout最適化を品質非変更のspeed trackとして独立評価
-- ReLU² / Dense Multi-Token Supervisionを低コストquality trackとして追加
+- ReLU² / learned residual scale / Horizon-Specific MTP-liteを低コストquality trackとして追加
 - XSAをzero-init learnable strengthで小さく導入
 - learned residual scale / Value ResidualをMUDDより先に比較
 - MUDDは全層ではなく限定2箇所程度から
@@ -1906,11 +1906,11 @@ MUDDやmulti-stream residualより圧倒的に安いため、深さ19の情報�
 - [Value Residual Learning](https://arxiv.org/abs/2410.17897)
 - [Limite vLLM implementation](https://github.com/paradigma-inc/limite-violetto)
 
-## 2-Stream Hres-only mHC-lite
+## 2-Stream Constrained Residual Mixing
 
-→ **P1後半〜P2**
+→ **P2**
 
-GLM-5.3-Flashの4-stream mHCをそのまま移植しない。まずmHCのうち**residual stream mixingの効果だけ**を小さく切り出す。
+GLM-5.3-Flashの4-stream mHCをそのまま移植しない。まず**residual stream mixingの効果だけ**を小さく切り出す。これはfull mHCの実装・再現とは区別する。
 
 最小候補は2 streamで、mixingを
 
@@ -1950,7 +1950,7 @@ Violetto同様に全層へ入れず、
 
 から始める。
 
-順序は**Learned Residual Scale → Value Residual / mHC-lite → MUDD-lite**。
+順序は**Learned Residual Scale → Value Residual → 2-stream constrained residual mixing → MUDD-lite**。
 
 参考:
 
@@ -1994,7 +1994,7 @@ mHC-liteとの違いは、mixing制約より**動的read/write gate**を主題�
 
 単一residual streamを複数経路へ拡張し、混合行列へmanifold制約を掛ける。巨大モデル側で実用例は増えたが、HexaTrainではgraph/tensor/data-movement固定費が相対的に大きい。
 
-**mHC-liteでresidual mixing自体のgainを確認できた場合のみfull mHCへ進む。**
+**2-stream constrained residual mixingでresidual mixing自体のgainを確認できた場合のみfull mHCへ進む。**
 
 ---
 
@@ -2728,31 +2728,42 @@ QNN HTPで対応primitiveが確認できる場合のみ優先度を上げる。
 
 # Model Scaling / Weight Transfer
 
-## Identity-Preserving Architecture Migration
+## Low-Disruption Architecture Migration
 
 → **P1〜P2 / research protocol**
 
-新architecture候補を毎回scratch 8,000-stepで比較せず、既存formal checkpointから**数学的に同一またはidentityに近い初期forward**を作って短いcontinued trainingへ移す。
+新architecture候補を毎回scratch 8,000-stepで比較せず、既存formal checkpointからweight / stateを可能な限り継承して短いcontinued trainingへ移す。ただし、**初期forwardを数学的に同一にできる移行**と、**weightは再利用できるが関数が変わる移行**を混同しない。
 
-対象:
+### A. Exact / Identity-Preserving
 
-- G1 / residual gateのzero/identity initialization
-- learned residual scale
-- mHC-lite
-- MTP horizon adapter
+初期forwardをbaselineと一致させられる候補。
+
+- `2 * sigmoid` gate + `Wg=0`
+- learned residual / branch scaleのidentity initialization
+- XSAの`alpha=0`
+- ordinary next-token pathを変えないauxiliary adapter
+
+### B. Weight-Preserving / Non-Identity
+
+既存weightは再利用するが、演算自体が変わる候補。
+
 - Dense Attention → SimpleGDN
-- 将来のSparse Attention / recurrent operator
+- 将来のDense → Sparse / recurrent operator
+- operator置換を伴うarchitecture surgery
 
 protocol:
 
 1. parent checkpoint identityを固定
-2. 新parameterはidentity / zero-effect initialization
-3. 変換直後のCPU oracleでoutput deltaを測る
-4. 1 / 8 / 32 update correctness
-5. 500 / 2000 step adaptation
-6. 有望な候補だけscratch long-runと比較
+2. migration classを`exact_identity` / `weight_preserving_non_identity`で明示
+3. 新parameterは可能な限りzero-effect / identity寄りで初期化
+4. 変換直後のCPU oracleでoutput deltaを測る
+   - exact classは規定tolerance内の一致をgateにする
+   - non-identity classはdeltaを記録するが、0であることを要求しない
+5. 1 / 8 / 32 update correctness
+6. 500 / 2000 step adaptation
+7. 有望な候補だけscratch long-runと比較
 
-architecture surgery用checkpointは通常resumeと区別し、**明示的migration record**へparent hash / source architecture / target architecture / initializer versionを保存する。
+architecture surgery用checkpointは通常resumeと区別し、**明示的migration record**へparent hash / source architecture / target architecture / migration class / initializer versionを保存する。
 
 ## Context-Length Curriculum / Explicit Migration
 
@@ -3234,7 +3245,7 @@ step 250→8000 で約2.4〜2.7倍に成長。late の angular update も縮む�
 
 監査は終了したため、ここでは新規runを行わない。今後はこの結果を固定evidenceとして、Muown / Muon+WD / Muon Splitの原因分解へ進む。
 
-## Phase 3 — Evaluation Engine + Low-Cost Architecture Lane【P0並行】
+## Phase 3 — Evaluation Engine + Active Diagnostic Lane【P0並行】
 
 Evaluation:
 
@@ -3244,18 +3255,20 @@ Evaluation:
 - original UTF-8 bytes/s
 - full-final相当の推定所要時間
 
-並行して、長いimplementation chainを必要としない候補を早期に判定する。
+NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
 - G1 candidateを4000まで延長
-- ReLU² smoke → 500 / 2000
-- Horizon-Specific MTP-2のCPU oracle / cache設計 → 500 / 2000（future-mixture supervisionは別diagnostic）
-- packed QKV / selector-scatter除去はquality-neutral microbenchmarkとして別lane
+- Muon Split checkpoint-only診断 + deterministic 1-step replay
+- Cross-Layer Attention Reuse + 4-token pooled-index oracle
+- packed QKV / selector-scatter除去のquality-neutral microbenchmark
 
-研究iteration速度そのものを改善しながら、低コストarchitecture候補を先に刈り込む。
+上記のslotが空いたら、NEXTからReLU²、learned residual scale、Horizon-Specific MTP-liteの順に昇格する。
+
+研究iteration速度そのものを改善しながら、実装費用の大きい候補へ進む前に情報量の高い診断を回収する。
 
 ## Phase 4 — Muown CPU Reference / Short A/B
 
-geometry auditが肯定的なら進む。
+geometry auditは肯定済み。NOWの診断laneと競合しない範囲で進める。
 
 - semantic fan-out row orientation
 - `g/r/m_g/v_g` state
@@ -3298,7 +3311,7 @@ MiMo-V2.6のlarge-batch observationがtiny on-device trainingでも再現する�
 - Learnable XSA
 - Learned Residual / Branch Scale
 - Value Residual
-- 2-stream Hres-only mHC-lite
+- 2-stream constrained residual mixing（scalar residual / Value Residualでgainを確認した場合）
 - RoPE
 - QK Norm / Zero-Centered RMSNorm
 - tied embedding
@@ -3379,7 +3392,7 @@ scratch-training trackと結果を混同しない。
 ## Phase 14 — Hybrid Sequence Operators
 
 - Full/Skip Attentionで置換候補layerを特定
-- **Dense checkpoint → SimpleGDN identity-preserving migration**
+- **Dense checkpoint → SimpleGDN weight-preserving / low-disruption migration**
 - Gated DeltaNet
 - Attention/GDN hybrid
 - context拡大後にKDA
