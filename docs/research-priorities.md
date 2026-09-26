@@ -363,7 +363,7 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - tied embedding
 - Training Memory Planner（KEEP / low-bit KEEP / spill / RECOMPUTE）
 - QNN/HVX Superoptimization
-- Effective Batch SearchはMuown short A/Bが成立した後に昇格する
+- Learning Rate × Effective Batch × OptimizerはMuown short A/Bが成立した後に昇格する
 - Attention normalizer（Softmax / Sigmoid / ReLU系）は上記低コスト候補より後
 
 
@@ -393,10 +393,12 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
   - MiMo-V2.6のようなmid-training bridgeを候補にする
 - **Text Representation Searchの第2段階**
   - 現行byte-BPE V1024を基準にraw byte / larger BPE / GBST / 簡易BLT
-- **Engram-lite**
-  - 巨大tableをコピーせず、2/3-gram hash + 4K〜16K entry程度のsmall table + early single insertionから始める
-  - 最初はcausal convolutionなし、memory width 16〜32程度とし、table bytes / hit pattern / mmap・host-backed access / prefetch / added latency / bpbを測る
-  - byte-BPEとの相互作用を明示し、同parameter増のFFN/depth追加とparameter-matchedに比較する
+- **MicroEngram / Engram-lite**
+  - TRAIN-only n-gram統計から、頻出top-K explicit entry + hashed long tailのsmall tableを作る
+  - 4K〜16K entries、memory width 8 / 16 / 32、early single insertionから始める
+  - table build identityをdataset / tokenizer / checkpoint identityへ結び、Val / Dev / finalをtable構築へ使わない
+  - V1024 + MicroEngramをV2048 / V4096とparameter / application-visible memory budgetで揃え、output projection / softmax costまで含めて比較する
+  - table bytes / explicit-hit率 / hash collision / mmap・host-backed access / prefetch / added latency / ordinary next-token bpbを測る
 - **Sparse Attention実装前feasibility**
   - Full Attention mapからtoken Top-k / block Top-k / recent-only / recent+globalのoracle sparse outputをhost側で再構成
   - QAIRT 2.48.40でTopK / index selection / gather相当 + small MatMulをmicrobenchmarkし、node固定費とtensor移動を測る
