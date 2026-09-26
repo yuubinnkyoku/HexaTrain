@@ -123,7 +123,7 @@ HexaTrainへ直近で落とし込む問いは次の5つ。
 4. MUDDのような重いdense residual mixingへ行く前に、learned residual scale / branch scaleで深さ19の情報流を改善できるか
 5. Q/K/Vを別MatMul + selector/scatterで扱う現行graphを、**packed QKV + reshape/slice/concat**へ寄せて品質を変えずにwall timeを削れるか
 
-また、Paradigmaのpretraining speedrun系で使われたsingle-head multi-token supervision、ReLU²、終盤RRE/Anderson extrapolationはVioletto本体の確定仕様と同一視しないが、Limiteの設計系譜としてHexaTrainの低コスト候補へ加える。
+また、Paradigmaのpretraining speedrun系で使われたsingle-head multi-token supervision、終盤RRE/Anderson extrapolationはVioletto本体の確定仕様と同一視しないが、Limiteの設計系譜としてHexaTrainの低コスト候補へ加える。ReLU²はmatched A/Bで否定済みのため候補から除外する（`docs/relu2-experiment.md`）。
 
 ### GLM-5 / GLM-5.3-Flashから見えるsequence・residual・optimizer課題
 
@@ -215,7 +215,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 - Muon row-geometry診断は**完了済み**で、2 seedともrow norm / spectral norm driftが強く同期した。ここは「診断待ち」ではなく、**Muown CPU reference・Muon+WD control・Muon Split診断へ進む段階**。
 - 現行generalized HTP graphは各layerでQ/K/Vを**3本の別MatMul**として作り、H2分割でもselector/scatter MatMulを使う。optimizer/checkpoint上のWq/Wk/Wv identityは保ったまま、実行用packed cacheを持つ余地がある。
 - current prepared generationはgraph / parameterをwarm reuseする一方、tokenごとのforwardはrolling T32全体を再実行する。**incremental KV cacheが未実装**なので、HySparse2型KV圧縮より前に通常のKV-cache decodeが大きな改善余地を持つ。
-- T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split診断、G1、ReLU²、learned residual scale、horizon-specific MTP-lite、XSA**は短文脈でも比較しやすい。2-stream residual mixingやdifficulty-aware samplingは、より安い候補の結果を見てからでよい。
+- T32ではKDA / DSA / 131k context / full sparse attentionの固定費を回収しにくい。一方、**Muon Split診断、G1、learned residual scale、horizon-specific MTP-lite、XSA**は短文脈でも比較しやすい。2-stream residual mixingやdifficulty-aware samplingは、より安い候補の結果を見てからでよい。
 - architecture候補は**同じLRで比較するだけでは不十分**。Gated Attentionやoptimizer変更で安定なLR / batch領域そのものが動く可能性があるため、短期stress harnessと`time-to-bpb`を長期品質runの前段へ置く。
 - architecture候補を毎回scratch 8000-stepで比較すること自体が高コスト。**low-disruption architecture migration + short adaptation**を正式な研究手法にし、長期runへ上げる候補を早く刈り込む。
 - Aux Adam 135,936 parametersのうち、token embedding + output projectionだけで131,072 parameters（約96.42%）を占める。**embedding/head optimizer stateが「その他parameter」ではなく独立したmemory・optimizer設計問題**になっている。
@@ -286,7 +286,6 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 最初の対象:
 
 - Gated Attention（none / G1 / 後続gate variant）
-- ReLU²
 - Muown / Original Muon+WD
 - learned residual / branch scale
 - 将来のRMSNorm / QK Norm
@@ -333,9 +332,10 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
    - full-matrix Muonとの1 / 8 / 32 step CPU referenceを作り、500 stepで品質差を見る
    - head別RMS差が弱くても、preconditionerを分ける数学的差が残るため診断だけで棄却しない
 
-4. **ReLU²**
-   - 現行`ReLU(W1x)`を`ReLU(W1x)^2`へ変更
-   - parameter数・Muon matrix shapeを変えず、elementwise追加costに対するbpb gainを見る
+4. **ReLU²**【Rejected】
+   - matched seed1 A/B（500/1000/1500/2000）でΔBalancedが一貫せず2000でも実質tie
+   - QNN pathで大きなruntime regressionも観測。4000/8000へは昇格しない
+   - 詳細は `docs/relu2-experiment.md`。runtime penaltyはReLU²固有算術コストとは断定しない
 
 5. **Hq2/Hkv1 MQA**
    - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化
@@ -463,6 +463,13 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 ## 今はやらない / 優先度を落とすもの
 
+- **ReLU²**【Rejected】
+  - V1024/T32/D64/FFN128/L19/H2 + Headwise G1、Original Muon条件のmatched seed1 A/Bで500/1000/1500/2000 stepを比較
+  - ΔBalanced: -0.0007 / +0.0196 / -0.0005 / -0.0027
+  - 品質改善・sample-efficiency改善は一貫せず、2000 stepでも実質tie
+  - 現行QNN pathでは大きなruntime regressionも観測されたため、4000/8000へ昇格せず終了
+  - runtime penaltyはReLU²固有算術コストとは断定しない（詳細: `docs/relu2-experiment.md`）
+
 - **同じQNN HTP MatMul経路でのNewton–Schulz再挑戦**
   - precision failureの原因が十分に局在しているため、新しいbackend/precision機構なしの再試行は情報量が低い
 - **Muon scratchのVTCM化**
@@ -511,7 +518,7 @@ HexaTrainでは、
 
 - 既存G1を4000まで延長し、必要ならLimite型`2 * sigmoid` / reduced gate channelsを比較
 - packed QKVとhead split/concatのlayout最適化を品質非変更のspeed trackとして独立評価
-- ReLU² / learned residual scale / Horizon-Specific MTP-liteを低コストquality trackとして追加
+- learned residual scale / Horizon-Specific MTP-liteを低コストquality trackとして追加（ReLU²は終了）
 - XSAをzero-init learnable strengthで小さく導入
 - learned residual scale / Value ResidualをMUDDより先に比較
 - MUDDは全層ではなく限定2箇所程度から
@@ -562,7 +569,7 @@ HexaTrainではこれをそのまま巨大RLへ拡張せず、
   - Muownが有望ならdirection updateをHVXへ拡張
 - **HTP Training Architecture Search**
   - D / F / L / H / Q-KV / head_dim / attention placement
-  - G1 / XSA / residual scale / Value Residual / ReLU²を独立factorとして扱う
+  - G1 / XSA / residual scale / Value Residualを独立factorとして扱う（ReLU²は終了）
 - **Dense Supervision Planner**
   - next-token one-hotだけでなく、same-head multi-future soft targetの重み・horizon・cache spanを探索
   - full MTP headを増やす前に、既存HTP CE graphを再利用できる範囲を最大化
@@ -720,16 +727,16 @@ Limiteを根拠にQK Normまで同時変更せず、**block normだけを先に�
 
 → **P1**
 
-Violetto本体はSwiGLUだが、Paradigmaのspeedrun系ではReLU²も使われている。HexaTrainでは追加projectionを持つSwiGLUより、**matrix shapeを変えないReLU²を先に試す**。
+Violetto本体はSwiGLUだが、Paradigmaのspeedrun系ではReLU²も使われている。HexaTrainでは matrix shape を変えない ReLU² を先に試したが、matched seed1 A/B で否定された（`docs/relu2-experiment.md`）。
 
-比較順:
+比較順（ReLU² は negative evidence として終了）:
 
-1. 現行ReLU FFN
-2. **ReLU²** = `relu(x)^2`
-3. Gated ReLU / ReGLU
-4. SwiGLU
+1. 現行ReLU FFN（control）
+2. ~~ReLU²~~【Rejected】500/1000/1500/2000 で改善が一貫せず、2000 でも実質tie
+3. Gated ReLU / ReGLU（独立candidate）
+4. SwiGLU（独立candidate）
 
-ReLU²はparameter数とMuon matrix packingを変えず、QNN側にelementwise squareと対応backwardを足すだけで比較できる。
+FFN activation 系を再開する場合は SwiGLU / ReGLU を独立 candidate として扱う。
 
 SwiGLU / ReGLUはprojectionが増えるため、品質だけでなくHTP上のMatMul増加・Muon/Aux Adam role・checkpoint payloadを必ず測る。
 
@@ -3423,7 +3430,7 @@ NOWのactive queueとして、長いimplementation chainを必要としない項
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark
 
-上記のslotが空いたら、NEXTからReLU²、learned residual scale、Horizon-Specific MTP-liteの順に昇格する。
+上記のslotが空いたら、NEXTからlearned residual scale、Horizon-Specific MTP-liteの順に昇格する（ReLU²は終了）。
 
 研究iteration速度そのものを改善しながら、実装費用の大きい候補へ進む前に情報量の高い診断を回収する。
 
@@ -3488,7 +3495,7 @@ QNN HTP-native Newton–Schulzを再開する意味ではない。**HVX FP32上�
 - Full vs Skip Attention
 - Gated Attention（現行G1 / Limite-style scale2・identity-init）
 - RMSNorm
-- ReLU² → 必要ならSwiGLU / ReGLU
+- ReLU²はnegative evidenceとして終了。FFN activation系を再開する場合はSwiGLU/ReGLUを独立candidateとして扱う
 - Learnable XSA
 - Learned Residual / Branch Scale
 - Value Residual
@@ -3860,7 +3867,7 @@ HexaTrainの研究主張は、
 
 Muonで得られた結果は、この方向をかなり明確にしている。QNN HTPが得意なForward/Backwardと、数値精度を明示的に制御できるHVXを組み合わせる方が、単一backendへ統一するより実機上の最適解に近い可能性が高い。MiMo-V2.6がMuownで示したように、次はbackendだけでなく**optimizer内部のgeometry（row magnitude / direction / angular step）**まで共同最適化の対象へ広げる。
 
-Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・ReLU²・learned residual scale・Horizon-Specific MTP-lite・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する。
+Limite 1B - Violettoからは、さらに**attention / value / residualの情報経路と、QKV・head layoutの実行形を別々に最適化する**視点を加える。HexaTrainでは巨大モデルの構成を縮小コピーせず、G1・learned residual scale・Horizon-Specific MTP-lite・XSA・Residual/Value routingの順に、追加costの小さい候補からV81実機で選別する（ReLU²は終了）。
 
 DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representationを分離する**視点を加える。Wq/Wkはhead単位Muon、embedding/headはSinkhorn-balanced update、KVはlow-bit storageとcompute dtypeを分離し、sparse attentionではKV共有とindex共有をFull/Reindex/Reuseへ分解する。HexaTrainでも「全parameterを同じoptimizerへ入れる」「全tensorを同じprecisionで保持する」「全layerが独立に同じmetadataを作る」という前提を一つずつ外し、品質と実wall timeで採否を決める。
 

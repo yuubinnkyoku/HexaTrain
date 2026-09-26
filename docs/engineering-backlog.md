@@ -41,6 +41,35 @@
 
 # 優先候補
 
+## E0: cross-phase runtime anomaly の原因確認（低優先度）
+
+### 現状
+
+ReLU² experiment の matched A/B で、ReLU² の elementwise square では説明しにくい
+cross-phase の runtime regression を観測した。
+
+- training total: 818 s → 2571 s
+- fwd/bwd: 30.1 → 45.1 ms/update
+- gradient accumulation: 82 → 299 ms
+- Muon update wall: 93 → 177 ms
+- eval: 102 → 352 ms/chunk
+
+ReLU² 自体の救済は目的ではない。generic な benchmark / runtime regression
+detection の観点から、二次要因（graph layout、host wrapper、device state、
+評価器再 build 等）が混入していないかを低優先度で確認する。
+
+### 着手条件
+
+- 他 experiment の runtime 比較でも同様の cross-phase 劣化が再現した
+- quality A/B の runtime 欄が意思決定を歪めていると判断した
+
+### 進め方
+
+大規模調査はしない。既存の training telemetry と eval 計測の突き合わせで
+局所化できる範囲に留める。
+
+---
+
 ## E1: host test の標準ビルド化
 
 ### 現状
