@@ -1,0 +1,3 @@
+arm,first_loss,last_loss,parameter_count,muon_parameter_count,aux_adam_parameter_count,checkpoint_format,attention_gate
+current,7.334944725,4.699152946,760960,622592,138368,NPRTCKPTV5,headwise_g1_sigmoid
+fixedhalf,7.324333668,4.742794991,758528,622592,135936,NPRTCKPTV5,fixed_half
