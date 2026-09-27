@@ -78,9 +78,20 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   }
   const size_t registryCapacity =
       size_t(resourceEstimate.tensorCount - kAdamTensorSlots);
-  g.tensors.reserve(registryCapacity);
-  g.names.reserve(registryCapacity);
-  g.dimensions.reserve(registryCapacity);
+  const bool isForwardOnly =
+      variant == TinyTransformerTrainingVariant::FORWARD_ONLY;
+  // scale!=1 G1 inserts per-layer sigmoid intermediates (and FULL-only
+  // scaled-inv intermediates) plus two static scale tensors beyond the
+  // resource estimator's gated baseline.
+  const size_t gateScaleExtraTensors =
+      (headwiseG1Gate && attentionGateOutputScale != 1.0f)
+          ? size_t(numLayers) * (isForwardOnly ? 1u : 2u) + 2
+          : 0;
+  const size_t registryCapacityWithGateScale =
+      registryCapacity + gateScaleExtraTensors;
+  g.tensors.reserve(registryCapacityWithGateScale);
+  g.names.reserve(registryCapacityWithGateScale);
+  g.dimensions.reserve(registryCapacityWithGateScale);
   g.tokens = tokens;
   g.dimension = dimension;
   g.feedForwardDimension = feedForwardDimension;
@@ -821,13 +832,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   if (g.forwardOnly) {
     // FORWARD_ONLY registers fewer tensors than the FULL-sized capacity
     // reserved above; require only that it did not exceed that bound.
-    if (g.tensors.size() > registryCapacity || g.names.size() > registryCapacity ||
-        g.dimensions.size() > registryCapacity) {
+    if (g.tensors.size() > registryCapacityWithGateScale ||
+        g.names.size() > registryCapacityWithGateScale ||
+        g.dimensions.size() > registryCapacityWithGateScale) {
       return fail("generalized tiny training forward-only registry capacity exceeded");
     }
-  } else if (g.tensors.size() != registryCapacity ||
-             g.names.size() != registryCapacity ||
-             g.dimensions.size() != registryCapacity) {
+  } else if (g.tensors.size() != registryCapacityWithGateScale ||
+             g.names.size() != registryCapacityWithGateScale ||
+             g.dimensions.size() != registryCapacityWithGateScale) {
     return fail("generalized tiny training registry capacity mismatch");
   }
   size_t maskElements = 0, positionElements = 0, zeroFfElements = 0;
@@ -1635,10 +1647,18 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // records the per-layer forward budget explicitly, so both expectations
   // derive from it without duplicating arithmetic.
   constexpr std::uint64_t kAdamNodeCount = 20;
-  const std::uint64_t expectedNodes = g.forwardOnly
-      ? numLayers * resourceEstimate.perLayerForwardNodes + 3u +
-            (g.minimalOutputs ? 1u : 0u)
-      : resourceEstimate.nodeCount - kAdamNodeCount;
+  // scale!=1 G1 adds one forward scale-multiply per layer and (FULL only) one
+  // backward inv-scale multiply per layer beyond the estimator's baseline.
+  const std::uint64_t gateScaleExtraNodes =
+      (headwiseG1Gate && attentionGateOutputScale != 1.0f)
+          ? std::uint64_t(numLayers) * (isForwardOnly ? 1u : 2u)
+          : 0u;
+  const std::uint64_t expectedNodes =
+      (g.forwardOnly
+           ? numLayers * resourceEstimate.perLayerForwardNodes + 3u +
+                 (g.minimalOutputs ? 1u : 0u)
+           : resourceEstimate.nodeCount - kAdamNodeCount) +
+      gateScaleExtraNodes;
   if (g.graphAddNodeSuccessCount != expectedNodes ||
       nodeNames.size() != g.graphAddNodeSuccessCount) {
     return fail("APP_RESOURCE_ESTIMATOR: emitted node count mismatch");

@@ -54,7 +54,15 @@ def balanced(val: float, dev: float) -> float:
 def load_eval(arm_path: Path, step: int) -> Optional[Dict[str, str]]:
     path = arm_path / f"eval256-step{step}-htp.txt"
     if not path.is_file():
-        return None
+        eval_dir = arm_path / f"eval256-step{step}"
+        if eval_dir.is_dir():
+            hits = list(eval_dir.glob("*-htp.txt"))
+            if hits:
+                path = hits[0]
+            else:
+                return None
+        else:
+            return None
     return parse_kv(path)
 
 

@@ -441,8 +441,8 @@ $reportMap = if ($OneUpdateProbe) {
   # requires regenerating the artifact.
   $muonDerived = Get-PhoneLmParameterMetadataDerivation `
       -Vocabulary 1024 -Dimension 64 -FeedForwardDimension 128 -Layers 19 -Heads 2 `
-      -HeadwiseG1 ($AttentionGate -eq 'headwise_g1_sigmoid')
-  $expectedCheckpointFormat = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
+      -HeadwiseG1 ($AttentionGate -like 'headwise_g1_*')
+  $expectedCheckpointFormat = if ($AttentionGate -like 'headwise_g1_*') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
   $expectedAuxAdamParameters = $muonDerived.aux_adam_parameter_count
   $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
@@ -550,7 +550,7 @@ foreach ($name in $checkpointNames) {
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   if ($Optimizer -eq 'Muon') {
     $magic = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($local), 0, 11)
-    $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
+    $expectedMagic = if ($AttentionGate -like 'headwise_g1_*') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
     if ($magic -ne $expectedMagic) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
   } else {
     $header = Get-PhoneLmCheckpointHeaders -Path $local

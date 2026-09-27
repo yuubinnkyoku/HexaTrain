@@ -4025,7 +4025,7 @@ std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
   const tiny_lm::ParameterDimensions dimensions{
       config.vocabularySize, config.dimension, config.feedForwardDimension,
       config.numLayers, config.numHeads,
-      tiny_lm::attentionGateOutputScale(config.attentionGate)};
+      tiny_lm::hasHeadwiseG1Gate(config.attentionGate)};
   std::vector<first_nonfinite::RegistryEntry> registry;
   for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
     const tiny_lm::ParameterDefinition *definition =

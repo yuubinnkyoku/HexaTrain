@@ -129,7 +129,7 @@ function Assert-PhoneLmHtpSmokeCheckpointHeader {
         [Parameter(Mandatory = $true)][int]$Step,
         [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none'
     )
-    $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') {
+    $expectedMagic = if ($AttentionGate -like 'headwise_g1_*') {
         'NPRTCKPTV5'
     } elseif ($Vocabulary -eq 1024) {
         'NPRTCKPTV4'
@@ -728,7 +728,7 @@ if ($GatePolicy -eq 'htp-native' -or $GatePolicy -eq 'htp-smoke') {
     if ($GatePolicy -eq 'htp-smoke') {
         $smokeOnlyReported = [regex]::Match($result, '(?m)^smoke_only=(true|false)$').Groups[1].Value
         if ($smokeOnlyReported -ne 'true') { throw 'HTP_SMOKE_REPORT_NOT_MARKED_SMOKE_ONLY' }
-        $expectedSmokeMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') {
+        $expectedSmokeMagic = if ($AttentionGate -like 'headwise_g1_*') {
             'NPRTCKPTV5'
         } elseif ($Vocabulary -eq 1024) {
             'NPRTCKPTV4'

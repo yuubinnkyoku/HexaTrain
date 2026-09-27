@@ -160,11 +160,13 @@ function Release-IdentityDeviceLock {
 
 function Enable-IdentityDeviceAwake {
   $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
-  & $adb shell input keyevent KEYCODE_WAKEUP | Out-Null
-  & $adb shell wm dismiss-keyguard | Out-Null
-  & $adb shell svc power stayon true | Out-Null
-  & $adb shell dumpsys deviceidle disable | Out-Null
-  Write-Host 'device_awake_and_idle_disabled=true'
+  $devInfo = Resolve-PhoneLmDevice -Adb $adb
+  $dev = $devInfo.Endpoint
+  & $adb -s $dev shell input keyevent KEYCODE_WAKEUP | Out-Null
+  & $adb -s $dev shell wm dismiss-keyguard | Out-Null
+  & $adb -s $dev shell svc power stayon true | Out-Null
+  & $adb -s $dev shell dumpsys deviceidle disable | Out-Null
+  Write-Host "device_awake_and_idle_disabled=true endpoint=$dev"
 }
 
 function Invoke-IdentityArm {
@@ -355,8 +357,9 @@ if ($Mode -eq 'Smoke') {
   if (-not (Test-IdentityDeviceLock)) { Acquire-IdentityDeviceLock }
   Enable-IdentityDeviceAwake
   $outcome = Invoke-IdentityArm -ArmName $Arm -ArmMode Smoke
-  Write-IdentityJson (Join-Path $ReportRoot ('smoke-{0}.json' -f $Arm.ToLowerInvariant())) $outcome
-  if ($outcome.status -ne 'COMPLETED' -and $outcome.status -ne 'REUSED') { throw 'SMOKE_FAILED' }
+  $armOutcome = @($outcome) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['arm'] } | Select-Object -Last 1
+  Write-IdentityJson (Join-Path $ReportRoot ('smoke-{0}.json' -f $Arm.ToLowerInvariant())) $armOutcome
+  if (-not $armOutcome -or $armOutcome.status -notin @('COMPLETED', 'REUSED')) { throw 'SMOKE_FAILED' }
   Write-Host "PASS IDENTITY_SMOKE arm=$Arm"
   exit 0
 }
@@ -376,7 +379,8 @@ if ($Mode -eq 'Ab') {
   try {
     foreach ($armName in @('Current','Identity')) {
       $outcome = Invoke-IdentityArm -ArmName $armName -ArmMode Run
-      $outcomes += $outcome
+      $armOutcome = @($outcome) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['arm'] } | Select-Object -Last 1
+      $outcomes += $armOutcome
       Write-IdentityJson (Join-Path $ReportRoot 'ab-outcomes.json') $outcomes
       Write-IdentityJson (Join-Path $ResultsRoot 'ab-outcomes.json') $outcomes
     }
