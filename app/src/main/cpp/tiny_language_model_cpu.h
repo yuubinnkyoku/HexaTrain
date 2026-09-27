@@ -12,13 +12,20 @@ enum class AttentionGate : std::uint32_t {
   HEADWISE_G1_SIGMOID = 1,
   // G = 2 * sigmoid(N @ Wg) with Wg = 0 at step 0 so G = 1 (identity).
   HEADWISE_G1_SCALE2_IDENTITY = 2,
+  // Yh = 0.5 * Ah. Constant branch scale, no Wg parameters.
+  FIXED_HALF = 3,
 };
 
 const char* attentionGateName(AttentionGate gate);
 // True for any headwise G1 family gate that owns Wg parameters.
 bool hasHeadwiseG1Gate(AttentionGate gate);
+// True when the checkpoint must serialize an attention_gate architecture id
+// (anything other than NONE).
+bool hasAttentionGateIdentity(AttentionGate gate);
 // Output scale applied after sigmoid: 1 for current G1, 2 for identity-init.
 float attentionGateOutputScale(AttentionGate gate);
+// Constant attention-branch scale (FIXED_HALF = 0.5, otherwise 1).
+float attentionBranchConstantScale(AttentionGate gate);
 
 struct Config {
   uint32_t vocabularySize=32,tokens=8,dimension=16,feedForwardDimension=32;

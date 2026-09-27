@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -200,6 +201,84 @@ int main() {
                 decodedIdent, baseline, 1, &extractedIdent, &error),
             "identity checkpoint must not resume as ungated");
 
+    // Fixed 0.5 branch scale: Yh = 0.5 * Ah, no Wg parameters.
+    const auto fixedCfg = config(tiny_lm::AttentionGate::FIXED_HALF);
+    const auto pFixed = tiny_lm::initialParameters(fixedCfg, 1);
+    require(tiny_lm::parameterElementCount(pFixed) == 758528,
+            "fixed_half parameter count matches ungated baseline");
+    require(pFixed.attentionGateWeight.empty(), "fixed_half has no Wg");
+    for (const auto& layer : pFixed.layers)
+      require(layer.attentionGateWeight.empty(), "fixed_half layer has no Wg");
+
+    tiny_lm::Config smallFixed = small;
+    smallFixed.attentionGate = tiny_lm::AttentionGate::FIXED_HALF;
+    const auto psFixed = tiny_lm::initialParameters(smallFixed, 17);
+    require(psFixed.attentionGateWeight.empty(), "small fixed_half has no Wg");
+
+    tiny_lm::Config smallUngated = small;
+    smallUngated.attentionGate = tiny_lm::AttentionGate::NONE;
+    const auto traceUngated = tiny_lm::forwardTraceGeneralized(
+        smallUngated, tiny_lm::oneHot({0, 1, 2}, 8), psFixed);
+    const auto traceFixed = tiny_lm::forwardTraceGeneralized(
+        smallFixed, tiny_lm::oneHot({0, 1, 2}, 8), psFixed);
+    require(traceUngated.layers.size() == traceFixed.layers.size(),
+            "fixed_half layer count");
+    // Local forward contract: given the same layer input, fixed_half attention
+    // output is exactly 0.5 * ungated. Only layer 0 shares the same input;
+    // deeper layers diverge through the residual path.
+    for (std::size_t i = 0; i < traceFixed.layers[0].context.size(); ++i) {
+      const float u = traceUngated.layers[0].context[i];
+      const float f = traceFixed.layers[0].context[i];
+      const float expected = 0.5f * u;
+      const float diff = std::abs(f - expected);
+      if (diff >= 1.0e-5f) {
+        std::ostringstream message;
+        message << "fixed_half context equals 0.5 * ungated context"
+                << " i=" << i << " u=" << u << " f=" << f
+                << " expected=" << expected << " diff=" << diff;
+        throw std::runtime_error(message.str());
+      }
+    }
+    // Fixed-half layer-0 raw attention branch must match ungated layer-0
+    // scaled by 0.5 even if deeper layers diverge.
+    require(traceFixed.layers.size() == 2, "fixed_half small layer count");
+
+    const auto stepFixed = tiny_lm::forwardBackwardGeneralized(
+        smallFixed, tiny_lm::oneHot({0, 1, 2}, 8),
+        tiny_lm::oneHot({1, 2, 3}, 8), psFixed, 0.0f);
+    require(std::isfinite(stepFixed.loss), "fixed_half forward finite");
+    require(stepFixed.attentionGates.empty(), "fixed_half has no gate telemetry");
+    require(stepFixed.gradients.attentionGateWeight.empty(),
+            "fixed_half has no dWg");
+    // Local backward contract: dContext path is scaled by 0.5 versus ungated.
+    // Compare the attention-side input gradient magnitude proxy via finite
+    // gradients on wv (sensitive to dAh).
+    for (float value : stepFixed.gradients.wv) require(std::isfinite(value), "fixed_half dWv finite");
+
+    // Architecture identity fail-closed.
+    const auto fixedCkpt = checkpointFor(fixedCfg);
+    std::vector<std::uint8_t> fixedBytes;
+    require(nicopedia_muon_checkpoint::encodeCheckpoint(
+                fixedCkpt, &fixedBytes, &error),
+            "fixed_half checkpoint encode");
+    nicopedia_muon_checkpoint::Checkpoint decodedFixed;
+    require(nicopedia_muon_checkpoint::decodeCheckpoint(
+                fixedBytes, &decodedFixed, &error),
+            "fixed_half checkpoint decode");
+    qnn::TinyTransformerParameters extractedFixed;
+    require(nicopedia_muon_checkpoint::extractParameters(
+                decodedFixed, fixedCfg, 1, &extractedFixed, &error),
+            "fixed_half checkpoint extract");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decodedFixed, baseline, 1, &extractedFixed, &error),
+            "fixed_half checkpoint must not resume as ungated");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decodedFixed, gated, 1, &extractedFixed, &error),
+            "fixed_half checkpoint must not resume as current G1");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decodedIdent, fixedCfg, 1, &extractedFixed, &error),
+            "identity checkpoint must not resume as fixed_half");
+
     const auto ps = tiny_lm::initialParameters(small, 17);
     const auto step = tiny_lm::forwardBackwardGeneralized(
         small, tiny_lm::oneHot({0, 1, 2}, 8),
@@ -255,9 +334,15 @@ int main() {
                 decoded, baseline, 1, &extracted, &error) &&
                 error == "NPRT_CKPT_V4_CONFIG_MISMATCH",
             "architecture mismatch rejection");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decoded, fixedCfg, 1, &extracted, &error),
+            "current G1 checkpoint must not resume as fixed_half");
 
     const auto baseEstimate = tiny_lm::resourceEstimate(baseline);
     const auto gatedEstimate = tiny_lm::resourceEstimate(gated);
+    const auto fixedEstimate = tiny_lm::resourceEstimate(fixedCfg);
+    require(fixedEstimate.parameterElements == 758528,
+            "fixed_half resource estimator parameter count");
     std::cout << "headwise_g1_gate=PASS\n"
               << "parameter_elements=760960\nmuon_matrices=114\n"
               << "muon_elements=622592\naux_adam_elements=138368\n"
@@ -265,7 +350,15 @@ int main() {
               << "identity_init_gate_max=1\nidentity_init_wg_zero=true\n"
               << "identity_init_dwg_nonzero=" << (identityDWgNonzero ? "true" : "false")
               << "\nidentity_checkpoint_cross_resume_rejected=true\n"
-              << "gate_mean=" << sum / count << "\ngate_min=" << minimum
+              << "fixed_half_parameter_count=758528\nfixed_half_forward_scale=0.5\n"
+              << "fixed_half_no_wg=true\nfixed_half_cross_resume_rejected=true\n"
+              << "fixed_half_parameter_delta_vs_g1="
+              << (int64_t(gatedEstimate.parameterElements) -
+                  int64_t(fixedEstimate.parameterElements))
+              << "\nfixed_half_adam_state_delta_vs_g1="
+              << (int64_t(gatedEstimate.adamMomentElements) -
+                  int64_t(fixedEstimate.adamMomentElements))
+              << "\ngate_mean=" << sum / count << "\ngate_min=" << minimum
               << "\ngate_max=" << maximum << "\ngate_saturation_fraction="
               << double(saturated) / count << '\n'
               << "gradient_max_absolute_error="

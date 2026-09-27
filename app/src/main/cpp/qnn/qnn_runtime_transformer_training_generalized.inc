@@ -6,8 +6,13 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads, float attentionGateOutputScale, bool minimalGenerationOutputs) {
-  const bool headwiseG1Gate = attentionGateOutputScale > 0.0f;
+    uint32_t numHeads, uint32_t attentionGateKind, bool minimalGenerationOutputs) {
+  // attentionGateKind matches tiny_lm::AttentionGate raw values:
+  // 0=none, 1=headwise_g1_sigmoid, 2=headwise_g1_scale2_identity, 3=fixed_half.
+  const bool headwiseG1Gate = attentionGateKind == 1u || attentionGateKind == 2u;
+  const float attentionGateOutputScale =
+      attentionGateKind == 2u ? 2.0f : (headwiseG1Gate ? 1.0f : 0.0f);
+  const bool fixedHalfGate = attentionGateKind == 3u;
   if (!impl_) {
     error = "generalized tiny training runtime unavailable";
     return false;
@@ -38,6 +43,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       numLayers == 0 || numHeads == 0 ||
       dimension % numHeads != 0 || vocabularySize == 0 ||
       (headwiseG1Gate && numHeads < 2) ||
+      (fixedHalfGate && numHeads < 2) ||
       (variant != TinyTransformerTrainingVariant::FULL &&
        variant != TinyTransformerTrainingVariant::FORWARD_ONLY) ||
       (tapSet != TinyTransformerTrainingTapSet::NONE &&
@@ -82,11 +88,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       variant == TinyTransformerTrainingVariant::FORWARD_ONLY;
   // scale!=1 G1 inserts per-layer sigmoid intermediates (and FULL-only
   // scaled-inv intermediates) plus two static scale tensors beyond the
-  // resource estimator's gated baseline.
+  // resource estimator's gated baseline. fixed_half inserts per-layer
+  // gated-context tensors and one static half tensor beyond ungated.
   const size_t gateScaleExtraTensors =
       (headwiseG1Gate && attentionGateOutputScale != 1.0f)
           ? size_t(numLayers) * (isForwardOnly ? 1u : 2u) + 2
-          : 0;
+          : (fixedHalfGate
+                 ? size_t(numLayers) * size_t(numHeads) *
+                       (isForwardOnly ? 1u : 2u) +
+                       1
+                 : 0);
   const size_t registryCapacityWithGateScale =
       registryCapacity + gateScaleExtraTensors;
   g.tensors.reserve(registryCapacityWithGateScale);
@@ -221,6 +232,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto gateOne = headwiseG1Gate
       ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
+  const auto branchHalf = fixedHalfGate
+      ? add("attention_branch_half", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
   // Identity-init G1 uses G = 2*sigmoid(z). Keep the scale-1 graph unchanged
   // and add a static scale / inverse-scale tensor only for the scale-2 path.
   const auto gateScaleTensor =
@@ -629,11 +642,13 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             {tokens, tokens});
         headRecord.context = add(headPrefix + "context", QNN_TENSOR_TYPE_NATIVE,
                                  {tokens, headDimension});
-        if (headwiseG1Gate) {
-          headRecord.gateSelector = add(headPrefix + "gate_selector",
-              QNN_TENSOR_TYPE_STATIC, {numHeads, 1});
-          headRecord.gate = add(headPrefix + "gate", QNN_TENSOR_TYPE_NATIVE,
-                                {tokens, 1});
+        if (headwiseG1Gate || fixedHalfGate) {
+          if (headwiseG1Gate) {
+            headRecord.gateSelector = add(headPrefix + "gate_selector",
+                QNN_TENSOR_TYPE_STATIC, {numHeads, 1});
+            headRecord.gate = add(headPrefix + "gate", QNN_TENSOR_TYPE_NATIVE,
+                                  {tokens, 1});
+          }
           headRecord.gatedContext = add(headPrefix + "gated_context",
               QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
         }
@@ -641,9 +656,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             QNN_TENSOR_TYPE_NATIVE, {tokens, dimension});
         headRecord.dContext = add(headPrefix + "dcontext", QNN_TENSOR_TYPE_NATIVE,
                                   {tokens, headDimension});
-        if (headwiseG1Gate && !g.forwardOnly) {
+        if ((headwiseG1Gate || fixedHalfGate) && !g.forwardOnly) {
           headRecord.dGatedContext = add(headPrefix + "dgated_context",
               QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
+        }
+        if (headwiseG1Gate && !g.forwardOnly) {
           headRecord.dGateProduct = add(headPrefix + "dgate_product",
               QNN_TENSOR_TYPE_NATIVE, {tokens, headDimension});
           headRecord.dGate = add(headPrefix + "dgate", QNN_TENSOR_TYPE_NATIVE,
@@ -926,6 +943,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
   if (headwiseG1Gate)
     g.tensors[gateOne].v1.clientBuf = {&g.gateOne, sizeof(float)};
+  if (fixedHalfGate) {
+    g.branchHalf = 0.5f;
+    g.tensors[branchHalf].v1.clientBuf = {&g.branchHalf, sizeof(float)};
+  }
   if (gateScaleTensor) {
     g.gateInvOutputScale = 1.0f / g.gateOutputScale;
     g.tensors[gateScaleTensor].v1.clientBuf = {
@@ -1309,8 +1330,14 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
               !binary(headPrefix + "gate_multiply", QNN_OP_ELEMENT_WISE_MULTIPLY,
                       headRecord.context, headRecord.gate,
                       headRecord.gatedContext, "head gate multiply"))) ||
+            (fixedHalfGate &&
+             !binary(headPrefix + "branch_half", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                     headRecord.context, branchHalf, headRecord.gatedContext,
+                     "head branch half")) ||
             !matmul(headPrefix + "context_scatter",
-                     headwiseG1Gate ? headRecord.gatedContext : headRecord.context,
+                     (headwiseG1Gate || fixedHalfGate)
+                         ? headRecord.gatedContext
+                         : headRecord.context,
                      headRecord.selector, headRecord.contextScatter,
                      "head context scatter", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))
           return fail(error);
@@ -1462,7 +1489,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             prefix + "head_" + zeroPadded(head) + '_';
         if (!matmul(headPrefix + "dcontext", backward(DCONTEXT),
                      headRecord.selector,
-                     headwiseG1Gate ? headRecord.dGatedContext : headRecord.dContext,
+                     (headwiseG1Gate || fixedHalfGate)
+                         ? headRecord.dGatedContext
+                         : headRecord.dContext,
                      "head dcontext") ||
             (headwiseG1Gate &&
              (!binary(headPrefix + "dcontext_gate", QNN_OP_ELEMENT_WISE_MULTIPLY,
@@ -1476,6 +1505,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
               !matmul(headPrefix + "dgate_scatter", headRecord.dGate,
                       headRecord.gateSelector, headRecord.dGateScatter,
                       "head dgate scatter", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))) ||
+            (fixedHalfGate &&
+             !binary(headPrefix + "dcontext_half", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                     headRecord.dGatedContext, branchHalf, headRecord.dContext,
+                     "head dcontext half")) ||
             !matmul(headPrefix + "dprobabilities", headRecord.dContext,
                      headRecord.value, headRecord.dProbabilities,
                      "head dprobabilities", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
@@ -1652,7 +1685,10 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const std::uint64_t gateScaleExtraNodes =
       (headwiseG1Gate && attentionGateOutputScale != 1.0f)
           ? std::uint64_t(numLayers) * (isForwardOnly ? 1u : 2u)
-          : 0u;
+          : (fixedHalfGate
+                 ? std::uint64_t(numLayers) * std::uint64_t(numHeads) *
+                       (isForwardOnly ? 1u : 2u)
+                 : 0u);
   const std::uint64_t expectedNodes =
       (g.forwardOnly
            ? numLayers * resourceEstimate.perLayerForwardNodes + 3u +

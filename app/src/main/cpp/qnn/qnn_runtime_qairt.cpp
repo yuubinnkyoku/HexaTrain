@@ -600,7 +600,7 @@ struct Runtime::Impl {
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f,
               gateOne = 1.0f, gateOutputScale = 1.0f,
-              gateInvOutputScale = 1.0f;
+              gateInvOutputScale = 1.0f, branchHalf = 0.5f;
         std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
         std::int32_t lastLogitsRanges[6]{};
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;

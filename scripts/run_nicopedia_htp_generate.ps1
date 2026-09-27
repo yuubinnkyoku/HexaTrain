@@ -23,7 +23,7 @@ param(
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
     [string]$TokenizerModelPath = '',
     [int]$MaxNewBytes = 64,              # 1..1024
-    [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none',
+    [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none',
     [string]$CheckpointPath = '',
     [string]$Mode = 'Greedy',            # Greedy | Sample
     [double]$Temperature = 1.0,
@@ -127,9 +127,9 @@ function Assert-PhoneLmHtpSmokeCheckpointHeader {
         [Parameter(Mandatory = $true)][int]$Dimension,
         [Parameter(Mandatory = $true)][int]$FeedForwardDimension,
         [Parameter(Mandatory = $true)][int]$Step,
-        [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none'
+        [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none'
     )
-    $expectedMagic = if ($AttentionGate -like 'headwise_g1_*') {
+    $expectedMagic = if ($AttentionGate -ne 'none') {
         'NPRTCKPTV5'
     } elseif ($Vocabulary -eq 1024) {
         'NPRTCKPTV4'
@@ -728,7 +728,7 @@ if ($GatePolicy -eq 'htp-native' -or $GatePolicy -eq 'htp-smoke') {
     if ($GatePolicy -eq 'htp-smoke') {
         $smokeOnlyReported = [regex]::Match($result, '(?m)^smoke_only=(true|false)$').Groups[1].Value
         if ($smokeOnlyReported -ne 'true') { throw 'HTP_SMOKE_REPORT_NOT_MARKED_SMOKE_ONLY' }
-        $expectedSmokeMagic = if ($AttentionGate -like 'headwise_g1_*') {
+        $expectedSmokeMagic = if ($AttentionGate -ne 'none') {
             'NPRTCKPTV5'
         } elseif ($Vocabulary -eq 1024) {
             'NPRTCKPTV4'

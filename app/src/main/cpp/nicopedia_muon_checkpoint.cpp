@@ -375,7 +375,7 @@ bool encodeCheckpoint(const Checkpoint& checkpoint,
   if (!validateCheckpoint(checkpoint, error)) return false;
 
   std::vector<std::uint8_t> encoded;
-  const bool gated = tiny_lm::hasHeadwiseG1Gate(
+  const bool gated = tiny_lm::hasAttentionGateIdentity(
       checkpoint.identity.config.attentionGate);
   const char* magic = gated ? kGatedMagic : kMagic;
   encoded.insert(encoded.end(), magic, magic + kMagicBytes);
@@ -464,7 +464,9 @@ bool decodeCheckpoint(const std::vector<std::uint8_t>& bytes,
       if (gate != static_cast<std::uint32_t>(
                       tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID) &&
           gate != static_cast<std::uint32_t>(
-                      tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY))
+                      tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY) &&
+          gate != static_cast<std::uint32_t>(
+                      tiny_lm::AttentionGate::FIXED_HALF))
         throw std::runtime_error("NPRT_CKPT_V5_ATTENTION_GATE");
       config.attentionGate = static_cast<tiny_lm::AttentionGate>(gate);
     }

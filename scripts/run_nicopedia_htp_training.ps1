@@ -31,7 +31,7 @@ param(
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
   [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
-  [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none',
+  [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none',
   [ValidateSet('CPU','HVX')][string]$MuonBackend = 'CPU',
   [string]$HexagonSdkRoot = '',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',
@@ -442,7 +442,8 @@ $reportMap = if ($OneUpdateProbe) {
   $muonDerived = Get-PhoneLmParameterMetadataDerivation `
       -Vocabulary 1024 -Dimension 64 -FeedForwardDimension 128 -Layers 19 -Heads 2 `
       -HeadwiseG1 ($AttentionGate -like 'headwise_g1_*')
-  $expectedCheckpointFormat = if ($AttentionGate -like 'headwise_g1_*') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
+  $hasGateIdentity = ($AttentionGate -ne 'none')
+  $expectedCheckpointFormat = if ($hasGateIdentity) { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
   $expectedAuxAdamParameters = $muonDerived.aux_adam_parameter_count
   $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
@@ -550,7 +551,7 @@ foreach ($name in $checkpointNames) {
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   if ($Optimizer -eq 'Muon') {
     $magic = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($local), 0, 11)
-    $expectedMagic = if ($AttentionGate -like 'headwise_g1_*') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
+    $expectedMagic = if ($AttentionGate -ne 'none') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
     if ($magic -ne $expectedMagic) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
   } else {
     $header = Get-PhoneLmCheckpointHeaders -Path $local
