@@ -25,6 +25,11 @@ import numpy as np
 TARGETS = [3.10, 3.00, 2.95, 2.90, 2.85]
 MULTS = ["1.0", "1.25", "1.5", "2.0"]
 ARMS = ["Control", "G1"]
+# Canonical 8000-step original UTF-8 exposure. Muon-hybrid reports do not
+# emit a per-step byte counter, so time-to-target bytes are step-proportional
+# estimates only (same DataCursor / batch / step across arms at equal step).
+CANONICAL_8000_STEP_UTF8_BYTES = 5_491_256
+CANONICAL_8000_STEPS = 8000
 MAGIC_V4 = b"NPRTCKPTV4\n"
 MAGIC_V5 = b"NPRTCKPTV5\n"
 ROLE_MUON = 1
@@ -410,6 +415,7 @@ def main() -> int:
             training_seconds = fnum(result.get("training_total_seconds", ""))
             step_ms = fnum(result.get("training_step_ms", ""))
             run_bytes = inum(result.get("run_target_utf8_bytes_seen", ""))
+            completed_steps = inum(result.get("completed_steps", ""))
             runtime_rows.append(
                 {
                     "lr_multiplier": mult,
@@ -513,6 +519,7 @@ def main() -> int:
                 "eval": eval_meta,
                 "training_seconds": training_seconds,
                 "run_bytes": run_bytes,
+                "completed_steps": completed_steps,
                 "stability": stability,
                 "result": result,
             }
@@ -560,6 +567,18 @@ def main() -> int:
             )
 
     # time-to-bpb (primary = first observed eval checkpoint at or below target)
+    # Wall semantics: Muon-hybrid reports emit only full-run training totals.
+    # Checkpoint-file mtimes are not distributed across training, so cumulative
+    # training wall at an intermediate checkpoint cannot be recovered. Use the
+    # measured full-run wall only when the first-hit step equals completed
+    # steps; otherwise emit NOT_MEASURED. Never reuse the 500-step total as a
+    # step-400 target wall.
+    def estimated_original_bytes_to_target(step: int) -> str:
+        if step <= 0 or CANONICAL_8000_STEPS <= 0:
+            return "NOT_MEASURED"
+        est = CANONICAL_8000_STEP_UTF8_BYTES * step / CANONICAL_8000_STEPS
+        return f"{est:.1f}"
+
     t2b_rows: List[dict] = []
     for target in TARGETS:
         best: Dict[str, dict] = {}
@@ -569,15 +588,21 @@ def main() -> int:
                 summary = arm_summaries.get((mult, arm))
                 if not summary:
                     continue
+                completed = summary.get("completed_steps", -1)
                 for step, val, dev, bal, _ev in summary["eval"]:
                     if math.isfinite(bal) and bal <= target:
+                        wall = (
+                            summary["training_seconds"]
+                            if completed == step and math.isfinite(summary["training_seconds"])
+                            else float("nan")
+                        )
                         candidates.append(
                             {
                                 "multiplier": mult,
                                 "step": step,
                                 "balanced": bal,
-                                "training_wall_s": summary["training_seconds"],
-                                "original_bytes": summary["run_bytes"],
+                                "checkpoint_training_wall_s": wall,
+                                "estimated_original_bytes_to_target": estimated_original_bytes_to_target(step),
                             }
                         )
             if candidates:
@@ -585,26 +610,36 @@ def main() -> int:
                 best[arm] = candidates[0]
         ctrl = best.get("Control")
         g1 = best.get("G1")
+        ctrl_wall = ctrl["checkpoint_training_wall_s"] if ctrl else float("nan")
+        g1_wall = g1["checkpoint_training_wall_s"] if g1 else float("nan")
         t2b_rows.append(
             {
                 "target_bpb": f"{target:.2f}",
                 "control_best_lr": ctrl["multiplier"] if ctrl else "NOT_REACHED",
                 "control_step": ctrl["step"] if ctrl else ">500",
-                "control_training_wall_s": f"{ctrl['training_wall_s']:.3f}" if ctrl and math.isfinite(ctrl["training_wall_s"]) else "NOT_REACHED",
-                "control_original_bytes": ctrl["original_bytes"] if ctrl else "NOT_REACHED",
+                "control_checkpoint_training_wall_s": (
+                    f"{ctrl_wall:.3f}" if ctrl and math.isfinite(ctrl_wall) else "NOT_MEASURED"
+                ) if ctrl else "NOT_REACHED",
+                "control_estimated_original_bytes_to_target": (
+                    ctrl["estimated_original_bytes_to_target"] if ctrl else "NOT_REACHED"
+                ),
                 "g1_best_lr": g1["multiplier"] if g1 else "NOT_REACHED",
                 "g1_step": g1["step"] if g1 else ">500",
-                "g1_training_wall_s": f"{g1['training_wall_s']:.3f}" if g1 and math.isfinite(g1["training_wall_s"]) else "NOT_REACHED",
-                "g1_original_bytes": g1["original_bytes"] if g1 else "NOT_REACHED",
+                "g1_checkpoint_training_wall_s": (
+                    f"{g1_wall:.3f}" if g1 and math.isfinite(g1_wall) else "NOT_MEASURED"
+                ) if g1 else "NOT_REACHED",
+                "g1_estimated_original_bytes_to_target": (
+                    g1["estimated_original_bytes_to_target"] if g1 else "NOT_REACHED"
+                ),
                 "delta_step": (g1["step"] - ctrl["step"]) if ctrl and g1 else "CENSORED",
-                "delta_wall_s": (
-                    f"{g1['training_wall_s'] - ctrl['training_wall_s']:.3f}"
-                    if ctrl and g1 and math.isfinite(ctrl["training_wall_s"]) and math.isfinite(g1["training_wall_s"])
+                "delta_checkpoint_training_wall_s": (
+                    f"{g1_wall - ctrl_wall:.3f}"
+                    if ctrl and g1 and math.isfinite(ctrl_wall) and math.isfinite(g1_wall)
                     else "CENSORED"
                 ),
-                "delta_bytes": (
-                    (g1["original_bytes"] - ctrl["original_bytes"])
-                    if ctrl and g1 and ctrl["original_bytes"] >= 0 and g1["original_bytes"] >= 0
+                "delta_estimated_bytes": (
+                    f"{float(g1['estimated_original_bytes_to_target']) - float(ctrl['estimated_original_bytes_to_target']):.1f}"
+                    if ctrl and g1
                     else "CENSORED"
                 ),
             }
@@ -638,9 +673,11 @@ def main() -> int:
         "delta_dev", "control_balanced", "g1_balanced", "delta_balanced",
     ])
     write_csv(results_root / "time-to-bpb.csv", t2b_rows, [
-        "target_bpb", "control_best_lr", "control_step", "control_training_wall_s", "control_original_bytes",
-        "g1_best_lr", "g1_step", "g1_training_wall_s", "g1_original_bytes",
-        "delta_step", "delta_wall_s", "delta_bytes",
+        "target_bpb", "control_best_lr", "control_step",
+        "control_checkpoint_training_wall_s", "control_estimated_original_bytes_to_target",
+        "g1_best_lr", "g1_step",
+        "g1_checkpoint_training_wall_s", "g1_estimated_original_bytes_to_target",
+        "delta_step", "delta_checkpoint_training_wall_s", "delta_estimated_bytes",
     ])
     write_csv(results_root / "runtime.csv", runtime_rows, [
         "lr_multiplier", "arm", "training_wall_s", "training_step_ms", "fwd_backward_ms_per_update",

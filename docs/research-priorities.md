@@ -264,7 +264,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **高LR stress grid（1.0x/1.25x/1.5x/2.0x × Control/G1、seed1、500 step、eval 100/200/300/400/500）を完了。** 詳細は [g1-lr-stress.md](g1-lr-stress.md)
    - 安定領域は **Control=G1=2.0x** で拡大なし（500-step stress region）
    - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
-   - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。2.95/3.00 でbest-LR比較のtraining wall約12%短縮
+   - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。checkpoint cumulative training wallはstep500 endpoint以外 `NOT_MEASURED` のため wall 改善は主張しない
    - **decision = `PROMOTE_G1_GATE_VARIANTS`**。ただし `2 * sigmoid` / `Wg=0` identity init / reduced-channel gate は **未実装**（factor isolationのため別タスク）
    - 次A/B候補: (1) 現行sigmoid G1 vs `2*sigmoid`+`Wg=0` identity-init (2) identity-init positiveの場合のみreduced-channel gate
 

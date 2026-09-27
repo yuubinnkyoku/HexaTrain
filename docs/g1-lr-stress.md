@@ -3,8 +3,9 @@
 ## Purpose
 
 Determine whether current `headwise_g1_sigmoid` (G1) can use a higher learning
-rate than the ungated control more stably, and whether that reduces steps /
-original UTF-8 bytes / training wall time to fixed canonical bpb targets.
+rate than the ungated control more stably, and whether that reduces optimizer
+steps (and, when measurable, training wall / estimated original UTF-8 bytes)
+to fixed canonical bpb targets.
 
 This is **not** a final-quality claim at the baseline LR. Prior seed-1 8000-step
 evidence already showed early sample-efficiency gains that faded to a tie by
@@ -121,6 +122,9 @@ advantage remains ~0.016–0.033 ΔBalanced.
 No arm hit a hard stop (non-finite / fallback / QNN-HVX fatal / loss explosion).
 Both max stable multipliers = **2.0x** (500-step stress region only).
 
+**Stability claim:** No observed 500-step stability-region expansion up to 2.0x.
+G1 does **not** expand the stability region in this grid.
+
 Soft flags: G1 gate mean falls with LR (see Gate behavior). Control 2.0x wall
 time was elevated (~904 s vs ~770 s); thermal status stayed ≤2.
 
@@ -128,21 +132,48 @@ time was elevated (~904 s vs ~770 s); thermal status stayed ≤2.
 
 Targets fixed a priori: 3.10 / 3.00 / 2.95 / 2.90 / 2.85.
 
-| target | Ctrl best LR | Ctrl step | Ctrl wall s | G1 best LR | G1 step | G1 wall s | Δstep | Δwall s |
-|-------:|-------------:|----------:|------------:|-----------:|--------:|----------:|------:|--------:|
-| 3.10 | 1.50 | 300 | 770.2 | 2.00 | 300 | 791.5 | 0 | +21.3 |
-| 3.00 | 2.00 | 400 | 903.9 | 1.50 | 400 | 792.5 | 0 | **-111.5** |
-| 2.95 | 2.00 | 400 | 903.9 | 1.50 | 400 | 792.5 | 0 | **-111.5** |
-| 2.90 | 1.25 | 500 | 776.2 | 1.50 | 400 | 792.5 | **-100** | +16.2 |
+**Wall semantics (corrected):** Muon-hybrid reports emit only full-run
+`training_total_seconds`. Checkpoint mtimes are clustered at end-of-run and do
+not recover cumulative training wall at intermediate steps. Therefore
+`*_checkpoint_training_wall_s` is the **measured cumulative training wall**
+only when the first-hit step equals `completed_steps` (here 500). Otherwise it
+is `NOT_MEASURED`. A 500-step full-run wall is never reused as a step-300/400
+target wall. Runtime full-run totals remain in `runtime.csv`.
+
+| target | Ctrl best LR | Ctrl step | Ctrl ckpt wall | G1 best LR | G1 step | G1 ckpt wall | Δstep | Δwall |
+|-------:|-------------:|----------:|---------------:|-----------:|--------:|-------------:|------:|------:|
+| 3.10 | 1.50 | 300 | NOT_MEASURED | 2.00 | 300 | NOT_MEASURED | 0 | CENSORED |
+| 3.00 | 2.00 | 400 | NOT_MEASURED | 1.50 | 400 | NOT_MEASURED | 0 | CENSORED |
+| 2.95 | 2.00 | 400 | NOT_MEASURED | 1.50 | 400 | NOT_MEASURED | 0 | CENSORED |
+| 2.90 | 1.25 | 500 | 776.2 | 1.50 | 400 | NOT_MEASURED | **-100** | CENSORED |
 | 2.85 | — | >500 | — | — | >500 | — | — | — |
 
-At matched 1.5x, G1 hits 2.90 at step 400 (Balanced 2.892) while control needs
-step 500 (2.892) — **20% fewer steps**.
+### Primary time-to-target conclusion (step-based)
 
-Original UTF-8 bytes: Muon-hybrid reports in this harness do not emit
-`target_utf8_bytes_seen`; bytes are identical across arms at equal step under
-the shared DataCursor. Estimated 500-step exposure ≈ 343k original bytes
-(proportional to the 8000-step canonical 5,491,256). Marked estimated in CSV.
+At matched 1.5x, G1 first observes Balanced ≤ 2.90 at **step 400**
+(Balanced 2.892) while best control first observes it at **step 500**
+(Control 1.25x Balanced 2.888).
+
+```text
+observed step-to-target 2.90:
+Control best = 500 steps
+G1 best      = 400 steps
+= 20% fewer optimizer steps
+```
+
+Wall-time improvement is **not claimed**: checkpoint cumulative training wall
+was not measured at step 400. Only the Control 1.25x step-500 wall (776.2 s)
+is a measured cumulative figure.
+
+### Original UTF-8 bytes (estimated only)
+
+Muon-hybrid reports in this harness do not emit a per-step
+`target_utf8_bytes_seen`. Columns are therefore
+`*_estimated_original_bytes_to_target`, computed step-proportional to the
+8000-step canonical exposure 5,491,256 (e.g. 500-step ≈ 343,203.5). These are
+**estimates**, not measured counters. Equal-step exposure is identical across
+Control/G1 under the shared DataCursor / batch / order, so equal-step
+comparisons remain valid.
 
 ## Gate behavior (checkpoint-static, Val 256 windows)
 
@@ -153,8 +184,13 @@ the shared DataCursor. Estimated 500-step exposure ≈ 343k original bytes
 | 1.50 | (see gate-static.csv) | | |
 | 2.00 | 0.078 | 0.016 | 0.300 |
 
-At 2.0x several deep-layer heads show `g<0.1` fractions near 0.8–1.0 (gate
-collapse toward closed). No arm was hard-stopped on gate saturation alone.
+At 2.0x several deep-layer heads show `g<0.1` fractions near 1.0
+(e.g. L4–L12 multiple heads). This is **soft saturation / strong branch
+suppression**, not a hard failure. It is **not** evidence that the gate
+collapsed globally or that training diverged: all 2.0x arms completed 500
+finite steps with QNN/HVX clean health. No arm was hard-stopped on gate
+saturation alone.
+
 Wg weight norm rises slightly with LR (mean 1.03→1.12, max 1.51→1.83).
 
 ## Muon geometry
@@ -166,9 +202,11 @@ no new pathology unique to high LR.
 
 ## Runtime caveat
 
-Training wall is the primary time metric (excludes eval). G1 overhead is ~3%
-ms/update vs control (extra Wg projection). Control 2.0x wall was inflated
-(~1808 ms/update vs ~1540); do not treat that single arm as a G1 speedup.
+Full-run training wall is recorded in `runtime.csv` (excludes eval). G1
+overhead is ~3% ms/update vs control (extra Wg projection). Control 2.0x wall
+was inflated (~1808 ms/update vs ~1540); do not treat that single arm as a G1
+speedup. Full-run walls must not be read as intermediate checkpoint
+time-to-target (see Time-to-bpb).
 
 ReLU²-adjacent cross-phase runtime anomalies were not observed; E0 backlog
 item unchanged.
@@ -182,25 +220,50 @@ item unchanged.
 - checkpoint decode: all interval checkpoints verified
 - historical 1.0x sanity: exact match
 
+## Runner audit (committed tree)
+
+`scripts/run_headwise_g1_lr_stress.ps1` and
+`scripts/run_nicopedia_htp_training.ps1` were audited at HEAD.
+
+- `Get-StressHardStopFlags` requires `status=SUCCESS`, `all_steps_finite`,
+  `final_finite`, `output_tensors_finite`, `qnn_return_code_success`, and
+  forbids `cpu_fallback` / `fallback` / `nan_detected` / `inf_detected`, plus
+  zero `api_trace_graph_execute_failure_count` / `hvx_rpc_failure_count` /
+  `hvx_fallback_count` / `hvx_nonfinite_count`. This contract correctly
+  classifies the 8-arm grid as SUCCESS/STABLE.
+- `linear_decay` allow-list accepts scaled peaks `0.0022 / 0.00275 / 0.0033 /
+  0.0044` and targets including `0.000125 / 0.00015`, with parent LR equal to
+  peak LR. Matches the resolved stress grid.
+- A prior session edit failure (`String to replace not found` /
+  `ChildProcess.kill`) did **not** leave gaps in the committed tree; the
+  required hard-stop and schedule logic are present. No runner code change was
+  required for this closure.
+
 ## Decision
 
 **PROMOTE_G1_GATE_VARIANTS**
 
 Reason:
-1. Stability region was **not** expanded (both max stable = 2.0x).
-2. But G1 is consistently better on canonical Balanced bpb at every matched
-   LR and every eval step.
-3. Time-to-bpb improves at fixed targets (notably 2.90: 400 vs 500 steps at
-   1.5x; 2.95/3.00: ~12% training-wall reduction on best-LR comparison).
-4. 500-step quality is better, not worse.
+1. 20/20 matched LR/checkpoint points: G1 canonical Balanced bpb is better.
+2. Historical 1.0x step500 result reproduced exactly on the fresh rerun.
+3. All arms finite / no fallback / no QNN-HVX error (8/8 SUCCESS, STABLE).
+4. Target 2.90: G1 1.5x first observes ≤2.90 at step 400; best Control first
+   observes it at step 500 → **20% fewer optimizer steps**.
+5. Observed 500-step stability region is the same as control (both 2.0x). No
+   stability-region expansion is claimed.
+
+Wall-time improvement is **not** a required PROMOTE condition and is **not**
+claimed (checkpoint cumulative training wall was not measured at intermediate
+steps).
 
 Correct combined claim with historical 8000 evidence:
 
 > G1 does not establish a final-quality gain at the baseline LR on seed1 at
 > step 8000, but it improves short-horizon canonical bpb at matched LR and
-> reduces time-to-bpb under the tested LR grid. Observed 500-step stability
-> region is the same as control (2.0x). This promotes gate-variant exploration
-> (`2*sigmoid` / `Wg=0` identity-init), which are **not** implemented tonight.
+> reduces observed step-to-bpb under the tested LR grid. Observed 500-step
+> stability region is the same as control (2.0x). This promotes gate-variant
+> exploration (`2*sigmoid` / `Wg=0` identity-init), which are **not**
+> implemented in this change.
 
 ## Next gate (proposed only — not executed)
 
@@ -218,6 +281,13 @@ Correct combined claim with historical 8000 evidence:
 
 - seed 1 only (candidate selection / stability diagnostic)
 - 500-step stress, not long-horizon stability
-- original-byte time-to-target uses step-proportional estimate (no per-step
-  byte counter in Muon-hybrid report)
+- original-byte time-to-target uses step-proportional estimate
+  (`estimated_original_bytes_to_target`); no per-step byte counter in
+  Muon-hybrid report
+- checkpoint cumulative training wall is only measured at the full-run
+  endpoint (step 500); intermediate target walls are `NOT_MEASURED`
 - single device night; Control 2.0x wall outlier
+- lr2.0 Grid mode was interrupted (`HOST_KILLED` / multi-device adb); Control
+  2.0x was completed via a separate `Run`. Aggregate CSVs cover all 8 arms;
+  compact lr2.0 raw artifacts were copied from `build/g1-lr-stress` into this
+  tree for the evidence record.
