@@ -106,6 +106,21 @@ int main() {
     require(p1.attentionGateWeight == p1Again.attentionGateWeight,
             "deterministic Wg initialization");
 
+    // Identity-init G1: G = 2*sigmoid(N@Wg) with Wg = 0 => G = 1 at step 0.
+    const auto identityCfg = config(
+        tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY);
+    const auto pIdent = tiny_lm::initialParameters(identityCfg, 1);
+    require(tiny_lm::parameterElementCount(pIdent) == 760960,
+            "identity-init parameter count");
+    require(pIdent.attentionGateWeight.size() ==
+                size_t(identityCfg.dimension) * identityCfg.numHeads,
+            "identity-init Wg shape");
+    for (float value : pIdent.attentionGateWeight)
+      require(value == 0.0f, "identity-init Wg is exactly zero");
+    for (const auto& layer : pIdent.layers)
+      for (float value : layer.attentionGateWeight)
+        require(value == 0.0f, "identity-init layer Wg is exactly zero");
+
     tiny_lm::Config small;
     small.vocabularySize = 8;
     small.tokens = 3;
@@ -114,6 +129,77 @@ int main() {
     small.numLayers = 2;
     small.numHeads = 2;
     small.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+
+    tiny_lm::Config smallIdent = small;
+    smallIdent.attentionGate =
+        tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
+    const auto psIdent = tiny_lm::initialParameters(smallIdent, 17);
+    for (float value : psIdent.attentionGateWeight)
+      require(value == 0.0f, "small identity Wg zero");
+    const auto stepIdent = tiny_lm::forwardBackwardGeneralized(
+        smallIdent, tiny_lm::oneHot({0, 1, 2}, 8),
+        tiny_lm::oneHot({1, 2, 3}, 8), psIdent, 0.0f);
+    require(std::isfinite(stepIdent.loss), "identity forward finite");
+    require(stepIdent.attentionGates.size() == 2, "identity gate layers");
+    for (const auto& gates : stepIdent.attentionGates) {
+      require(gates.size() == size_t(smallIdent.tokens) * smallIdent.numHeads,
+              "identity gate shape");
+      for (float value : gates)
+        require(std::abs(value - 1.0f) < 1.0e-6f, "step0 identity G == 1");
+    }
+    require(stepIdent.gradients.attentionGateWeight.size() ==
+                size_t(smallIdent.dimension) * smallIdent.numHeads,
+            "identity dWg shape");
+    bool identityDWgNonzero = false;
+    for (float value : stepIdent.gradients.attentionGateWeight)
+      if (value != 0.0f) identityDWgNonzero = true;
+    require(identityDWgNonzero, "identity dWg nonzero after real backward");
+    for (float value : stepIdent.gradients.attentionGateWeight)
+      require(std::isfinite(value), "identity dWg finite");
+
+    // Ungated parity at Wg=0 / scale=2: gated attention output equals ungated.
+    tiny_lm::Config parityCfg = smallIdent;
+    parityCfg.attentionGate = tiny_lm::AttentionGate::NONE;
+    qnn::TinyTransformerParameters ungatedFromIdent = psIdent;
+    ungatedFromIdent.attentionGateWeight.clear();
+    for (auto& layer : ungatedFromIdent.layers)
+      layer.attentionGateWeight.clear();
+    const auto ungatedTrace = tiny_lm::forwardTraceGeneralized(
+        parityCfg, tiny_lm::oneHot({0, 1, 2}, 8), ungatedFromIdent);
+    const auto gatedTrace = tiny_lm::forwardTraceGeneralized(
+        smallIdent, tiny_lm::oneHot({0, 1, 2}, 8), psIdent);
+    require(ungatedTrace.layers.size() == gatedTrace.layers.size(),
+            "parity layer count");
+    for (std::size_t li = 0; li < gatedTrace.layers.size(); ++li) {
+      const auto& ungatedCtx = ungatedTrace.layers[li].context;
+      const auto& gatedCtx = gatedTrace.layers[li].context;
+      require(ungatedCtx.size() == gatedCtx.size(), "parity context size");
+      for (std::size_t i = 0; i < gatedCtx.size(); ++i)
+        require(std::abs(ungatedCtx[i] - gatedCtx[i]) < 1.0e-5f,
+                "Wg=0 scale2 context equals ungated");
+    }
+
+    // Architecture identity: V5 with gate=2 must not resume as gate=1.
+    const auto originalIdent = checkpointFor(identityCfg);
+    std::vector<std::uint8_t> identBytes;
+    require(nicopedia_muon_checkpoint::encodeCheckpoint(
+                originalIdent, &identBytes, &error),
+            "identity checkpoint encode");
+    nicopedia_muon_checkpoint::Checkpoint decodedIdent;
+    require(nicopedia_muon_checkpoint::decodeCheckpoint(
+                identBytes, &decodedIdent, &error),
+            "identity checkpoint decode");
+    qnn::TinyTransformerParameters extractedIdent;
+    require(nicopedia_muon_checkpoint::extractParameters(
+                decodedIdent, identityCfg, 1, &extractedIdent, &error),
+            "identity checkpoint extract");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decodedIdent, gated, 1, &extractedIdent, &error),
+            "identity checkpoint must not resume as current G1");
+    require(!nicopedia_muon_checkpoint::extractParameters(
+                decodedIdent, baseline, 1, &extractedIdent, &error),
+            "identity checkpoint must not resume as ungated");
+
     const auto ps = tiny_lm::initialParameters(small, 17);
     const auto step = tiny_lm::forwardBackwardGeneralized(
         small, tiny_lm::oneHot({0, 1, 2}, 8),
@@ -175,6 +261,10 @@ int main() {
     std::cout << "headwise_g1_gate=PASS\n"
               << "parameter_elements=760960\nmuon_matrices=114\n"
               << "muon_elements=622592\naux_adam_elements=138368\n"
+              << "identity_init_gate_mean=1\nidentity_init_gate_min=1\n"
+              << "identity_init_gate_max=1\nidentity_init_wg_zero=true\n"
+              << "identity_init_dwg_nonzero=" << (identityDWgNonzero ? "true" : "false")
+              << "\nidentity_checkpoint_cross_resume_rejected=true\n"
               << "gate_mean=" << sum / count << "\ngate_min=" << minimum
               << "\ngate_max=" << maximum << "\ngate_saturation_fraction="
               << double(saturated) / count << '\n'

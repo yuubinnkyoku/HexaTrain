@@ -4025,7 +4025,7 @@ std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
   const tiny_lm::ParameterDimensions dimensions{
       config.vocabularySize, config.dimension, config.feedForwardDimension,
       config.numLayers, config.numHeads,
-      config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID};
+      tiny_lm::attentionGateOutputScale(config.attentionGate)};
   std::vector<first_nonfinite::RegistryEntry> registry;
   for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
     const tiny_lm::ParameterDefinition *definition =
@@ -5913,7 +5913,7 @@ std::string nicopediaHtpGeneration(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, layers, heads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return failure("nicopedia_generate_prepare", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -6783,7 +6783,7 @@ std::string nicopediaHtpDivergenceLocalization(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL, tapSet, layers, heads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
            "failure_classification=QNN_PREPARE\n" +
            failure("localization_prepare", error, runtime);
@@ -7309,7 +7309,7 @@ std::string nicopediaMuonHybridTraining(
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return failure("nicopedia_muon_prepare", error, runtime);
   std::ofstream telemetry(cachePath + "/learning-rate-telemetry.csv",
                           std::ios::trunc);
@@ -7336,8 +7336,7 @@ std::string nicopediaMuonHybridTraining(
     float minimum = std::numeric_limits<float>::infinity();
     float maximum = -std::numeric_limits<float>::infinity();
   };
-  const bool gated = config.attentionGate ==
-      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+  const bool gated = tiny_lm::hasHeadwiseG1Gate(config.attentionGate);
   std::vector<GateAggregate> gateAggregates(
       gated ? size_t(config.numLayers) * config.numHeads : 0);
   float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
@@ -7706,7 +7705,7 @@ std::string nicopediaMuonHybridTraining(
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\ncheckpoint_written=" << (checkpointCount > 0 ? "true" : "false")
          << "\ncheckpoint_count=" << checkpointCount << "\ncheckpoint_format="
-         << (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID
+         << (tiny_lm::hasHeadwiseG1Gate(config.attentionGate)
                  ? "NPRTCKPTV5" : "NPRTCKPTV4")
          << "\nfinal_parameter_hash=" << nprtParameterHash(current)
          << "\ncpu_fallback=false\nfallback=false\nnan_detected=" << (allFinite ? "false" : "true")
@@ -7934,7 +7933,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return failure("nicopedia_prepare_training", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -8813,7 +8812,7 @@ std::string runNicopediaHtpOneUpdateProbe(
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return emit("FAILED", "prepare_begin", error, 0.0,
                 runtime.metrics().graphExecuteCount);
   trainingPrepared = true;
@@ -9040,7 +9039,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          tiny_lm::attentionGateOutputScale(config.attentionGate)))
     return failure("nicopedia_eval_prepare", error, runtime);
 
   struct SplitResult {
@@ -9863,6 +9862,8 @@ std::string runTinyTransformerTrainingExperiment(
       config.attentionGate = tiny_lm::AttentionGate::NONE;
     } else if (trainingConfig.attentionGate == 1) {
       config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (trainingConfig.attentionGate == 2) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
     } else {
       return "NICOPEDIA_HTP\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -9952,6 +9953,8 @@ std::string runTinyTransformerTrainingExperiment(
       config.attentionGate = tiny_lm::AttentionGate::NONE;
     } else if (trainingConfig.attentionGate == 1) {
       config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (trainingConfig.attentionGate == 2) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
     } else {
       return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -10339,7 +10342,7 @@ std::string replayFirstNonfiniteCheckpoint(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL, tapSet, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID) ||
+          tiny_lm::hasHeadwiseG1Gate(config.attentionGate)) ||
       elementCount > std::numeric_limits<uint32_t>::max() ||
       !runtime.prepareAdamOptimizer(static_cast<uint32_t>(elementCount), error)) {
     report << "htp_prepare_success=false\nhtp_prepare_error=" << error << '\n'

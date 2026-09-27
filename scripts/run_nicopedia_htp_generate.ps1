@@ -23,7 +23,7 @@ param(
     [string]$PromptFile = '',            # alternative: raw UTF-8 bytes file
     [string]$TokenizerModelPath = '',
     [int]$MaxNewBytes = 64,              # 1..1024
-    [ValidateSet('none', 'headwise_g1_sigmoid')][string]$AttentionGate = 'none',
+    [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none',
     [string]$CheckpointPath = '',
     [string]$Mode = 'Greedy',            # Greedy | Sample
     [double]$Temperature = 1.0,
@@ -127,7 +127,7 @@ function Assert-PhoneLmHtpSmokeCheckpointHeader {
         [Parameter(Mandatory = $true)][int]$Dimension,
         [Parameter(Mandatory = $true)][int]$FeedForwardDimension,
         [Parameter(Mandatory = $true)][int]$Step,
-        [ValidateSet('none', 'headwise_g1_sigmoid')][string]$AttentionGate = 'none'
+        [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none'
     )
     $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') {
         'NPRTCKPTV5'

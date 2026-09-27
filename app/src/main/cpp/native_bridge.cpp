@@ -653,6 +653,9 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaGenerate(
         config.attentionGate = phonelm::tiny_lm::AttentionGate::NONE;
     } else if (attentionGate == 1) {
         config.attentionGate = phonelm::tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (attentionGate == 2) {
+        config.attentionGate =
+            phonelm::tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
     } else {
         return toJavaString(env, "NICOPEDIA_HTP_GENERATION\nstatus=FAILED\n"
                                  "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -996,7 +999,7 @@ Java_com_yuubinnkyoku_phonelm_NativeBridge_nativeRunNicopediaEvaluate(
                                  "error=vocabulary_must_be_256_or_1024\n");
     }
     config.outputDimension = vocabulary;
-    if (attentionGate != 0 && attentionGate != 1) {
+    if (attentionGate != 0 && attentionGate != 1 && attentionGate != 2) {
         return toJavaString(env, "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
                                  "failure_classification=APP_CONFIGURATION_VALIDATION\n"
                                  "error=attention_gate_identity_invalid\n");

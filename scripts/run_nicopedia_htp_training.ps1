@@ -31,7 +31,7 @@ param(
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
   [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
-  [ValidateSet('none','headwise_g1_sigmoid')][string]$AttentionGate = 'none',
+  [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity')][string]$AttentionGate = 'none',
   [ValidateSet('CPU','HVX')][string]$MuonBackend = 'CPU',
   [string]$HexagonSdkRoot = '',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',

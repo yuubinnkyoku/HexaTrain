@@ -555,7 +555,8 @@ struct Runtime::Impl {
             std::uint32_t input = 0, output = 0;
             std::uint32_t gateLogits = 0, gates = 0, dGates = 0,
                           oneMinusGates = 0, gateDerivative = 0,
-                          dGateSigmoid = 0,
+                          dGateSigmoid = 0, gateSigmoid = 0,
+                          gateScaledInv = 0,
                           dLn1Gate = 0, dLn1Qkv = 0;
             // Both vectors use the per-layer ParameterDefinition order.
             // Tensor creation order remains controlled by the builder.
@@ -598,7 +599,8 @@ struct Runtime::Impl {
         float attentionScale = 1.0f, centeredScale = 8.0f,
               epsilonScaled = 1.0e-5f, gradientScale = 1.0f,
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f,
-              gateOne = 1.0f;
+              gateOne = 1.0f, gateOutputScale = 1.0f,
+              gateInvOutputScale = 1.0f;
         std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
         std::int32_t lastLogitsRanges[6]{};
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;

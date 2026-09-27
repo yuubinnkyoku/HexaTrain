@@ -506,7 +506,7 @@ public:
                                             TinyTransformerTrainingTapSet::NONE,
                                         uint32_t numLayers = 1,
                                         uint32_t numHeads = 1,
-                                        bool headwiseG1Gate = false,
+                                        float attentionGateOutputScale = 0.0f,
                                         bool minimalGenerationOutputs = false);
     bool executeTinyTransformerTraining(
         const std::vector<float>& input, const std::vector<float>& target,
@@ -543,7 +543,7 @@ private:
         float epsilon, bool diagnosticOutputs, std::string& error,
         uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
         TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-        uint32_t numHeads, bool headwiseG1Gate,
+        uint32_t numHeads, float attentionGateOutputScale,
         bool minimalGenerationOutputs = false);
     bool executeTinyTransformerTrainingGeneralized(
         const std::vector<float>& input, const std::vector<float>& target,

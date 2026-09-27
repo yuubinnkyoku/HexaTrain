@@ -10,9 +10,15 @@ namespace phonelm::tiny_lm {
 enum class AttentionGate : std::uint32_t {
   NONE = 0,
   HEADWISE_G1_SIGMOID = 1,
+  // G = 2 * sigmoid(N @ Wg) with Wg = 0 at step 0 so G = 1 (identity).
+  HEADWISE_G1_SCALE2_IDENTITY = 2,
 };
 
 const char* attentionGateName(AttentionGate gate);
+// True for any headwise G1 family gate that owns Wg parameters.
+bool hasHeadwiseG1Gate(AttentionGate gate);
+// Output scale applied after sigmoid: 1 for current G1, 2 for identity-init.
+float attentionGateOutputScale(AttentionGate gate);
 
 struct Config {
   uint32_t vocabularySize=32,tokens=8,dimension=16,feedForwardDimension=32;

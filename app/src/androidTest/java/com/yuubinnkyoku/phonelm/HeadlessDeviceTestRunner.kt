@@ -345,8 +345,9 @@ class HeadlessDeviceTestRunner {
         val attentionGate = when (attentionGateName) {
             "none" -> 0
             "headwise_g1_sigmoid" -> 1
+            "headwise_g1_scale2_identity" -> 2
             else -> throw IllegalArgumentException(
-                "attentionGate must be none or headwise_g1_sigmoid",
+                "attentionGate must be none, headwise_g1_sigmoid, or headwise_g1_scale2_identity",
             )
         }
         val muonLearningRate = floatArgument(arguments, "muonLearningRate", 0.01f, 0.000001f..1f)

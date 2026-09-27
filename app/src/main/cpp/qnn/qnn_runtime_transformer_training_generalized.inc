@@ -6,7 +6,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     float epsilon, bool diagnosticOutputs, std::string &error,
     uint32_t vocabularySize, TinyTransformerTrainingVariant variant,
     TinyTransformerTrainingTapSet tapSet, uint32_t numLayers,
-    uint32_t numHeads, bool headwiseG1Gate, bool minimalGenerationOutputs) {
+    uint32_t numHeads, float attentionGateOutputScale, bool minimalGenerationOutputs) {
+  const bool headwiseG1Gate = attentionGateOutputScale > 0.0f;
   if (!impl_) {
     error = "generalized tiny training runtime unavailable";
     return false;
@@ -92,6 +93,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   // Minimal outputs is only meaningful for FORWARD_ONLY production generation.
   g.minimalOutputs = g.forwardOnly && minimalGenerationOutputs;
   g.headwiseG1Gate = headwiseG1Gate;
+  g.gateOutputScale = attentionGateOutputScale;
   g.tapSet = tapSet;
   g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
@@ -208,6 +210,16 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto gateOne = headwiseG1Gate
       ? add("attention_gate_one", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0u;
+  // Identity-init G1 uses G = 2*sigmoid(z). Keep the scale-1 graph unchanged
+  // and add a static scale / inverse-scale tensor only for the scale-2 path.
+  const auto gateScaleTensor =
+      (headwiseG1Gate && attentionGateOutputScale != 1.0f)
+          ? add("attention_gate_output_scale", QNN_TENSOR_TYPE_STATIC, {1, 1})
+          : 0u;
+  const auto gateInvScaleTensor =
+      (headwiseG1Gate && attentionGateOutputScale != 1.0f)
+          ? add("attention_gate_inv_output_scale", QNN_TENSOR_TYPE_STATIC, {1, 1})
+          : 0u;
   uint32_t outputProjection = std::numeric_limits<uint32_t>::max();
   if (!createGlobalParameters(tiny_lm::ParameterPlacement::GLOBAL_SUFFIX,
                               &Parameters::outputProjection,
@@ -410,6 +422,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       record.gates = add(prefix + "attention_gates",
           g.minimalOutputs ? QNN_TENSOR_TYPE_NATIVE : QNN_TENSOR_TYPE_APP_READ,
           {tokens, numHeads});
+      if (attentionGateOutputScale != 1.0f)
+        record.gateSigmoid = add(prefix + "attention_gate_sigmoid",
+            QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
       if (!g.forwardOnly) {
         record.dGates = add(prefix + "attention_gate_gradient",
             QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
@@ -419,6 +434,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
         record.dGateSigmoid = add(prefix + "attention_gate_dlogits",
             QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
+        if (attentionGateOutputScale != 1.0f)
+          record.gateScaledInv = add(prefix + "attention_gate_scaled_inv",
+              QNN_TENSOR_TYPE_NATIVE, {tokens, numHeads});
         record.gradients[slot] = add(prefix + "dattention_gate_weight",
             QNN_TENSOR_TYPE_APP_READ, shape);
         record.dLn1Gate = add(prefix + "dln1_gate", QNN_TENSOR_TYPE_NATIVE,
@@ -896,6 +914,13 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
   if (headwiseG1Gate)
     g.tensors[gateOne].v1.clientBuf = {&g.gateOne, sizeof(float)};
+  if (gateScaleTensor) {
+    g.gateInvOutputScale = 1.0f / g.gateOutputScale;
+    g.tensors[gateScaleTensor].v1.clientBuf = {
+        &g.gateOutputScale, sizeof(float)};
+    g.tensors[gateInvScaleTensor].v1.clientBuf = {
+        &g.gateInvOutputScale, sizeof(float)};
+  }
   if (!g.forwardOnly) {
     g.tensors[gradientScale].v1.clientBuf = {&g.gradientScale, sizeof(float)};
     g.tensors[zeroFf].v1.clientBuf = {
@@ -1210,13 +1235,26 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         !matmul(prefix + "v", cache(LN1),
                 parameterTensor(record, &LayerParameters::wv), cache(V), "v"))
       return fail(error);
-    if (headwiseG1Gate &&
-        (!matmul(prefix + "gate_logits", cache(LN1),
-                 parameterTensor(record, &LayerParameters::attentionGateWeight),
-                 record.gateLogits, "gate logits") ||
-         !unary(prefix + "gate_sigmoid", QNN_OP_SIGMOID, record.gateLogits,
-                record.gates, "gate sigmoid")))
-      return fail(error);
+    if (headwiseG1Gate) {
+      if (!matmul(prefix + "gate_logits", cache(LN1),
+                  parameterTensor(record, &LayerParameters::attentionGateWeight),
+                  record.gateLogits, "gate logits"))
+        return fail(error);
+      // scale=1 keeps the historical sigmoid->gates edge. scale!=1 inserts
+      // sigmoid->tmp and tmp*scale->gates so Current G1 graph is unchanged.
+      if (attentionGateOutputScale == 1.0f) {
+        if (!unary(prefix + "gate_sigmoid", QNN_OP_SIGMOID, record.gateLogits,
+                   record.gates, "gate sigmoid"))
+          return fail(error);
+      } else {
+        if (!unary(prefix + "gate_sigmoid_op", QNN_OP_SIGMOID, record.gateLogits,
+                   record.gateSigmoid, "gate sigmoid") ||
+            !binary(prefix + "gate_output_scale", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                    record.gateSigmoid, gateScaleTensor, record.gates,
+                    "gate output scale"))
+          return fail(error);
+      }
+    }
     if (numHeads == 1) {
       if (!matmul(prefix + "scores", cache(Q), cache(K), cache(ATTENTION_SCORES),
                    "scores", QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1) ||
@@ -1500,13 +1538,28 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
             return fail(error);
           accumulated = out;
         }
-        if (!binary(prefix + "gate_one_minus", QNN_OP_ELEMENT_WISE_SUBTRACT,
-                    gateOne, record.gates, record.oneMinusGates,
-                    "gate one minus") ||
-            !binary(prefix + "gate_derivative", QNN_OP_ELEMENT_WISE_MULTIPLY,
-                    record.gates, record.oneMinusGates,
-                    record.gateDerivative, "gate derivative") ||
-            !binary(prefix + "gate_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY,
+        if (attentionGateOutputScale == 1.0f) {
+          if (!binary(prefix + "gate_one_minus", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                      gateOne, record.gates, record.oneMinusGates,
+                      "gate one minus") ||
+              !binary(prefix + "gate_derivative", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      record.gates, record.oneMinusGates,
+                      record.gateDerivative, "gate derivative"))
+            return fail(error);
+        } else {
+          // G = scale*sigmoid(z) => dG/dz = G*(1 - G/scale)
+          if (!binary(prefix + "gate_scaled", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      record.gates, gateInvScaleTensor, record.gateScaledInv,
+                      "gate scaled inv") ||
+              !binary(prefix + "gate_one_minus", QNN_OP_ELEMENT_WISE_SUBTRACT,
+                      gateOne, record.gateScaledInv, record.oneMinusGates,
+                      "gate one minus") ||
+              !binary(prefix + "gate_derivative", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                      record.gates, record.oneMinusGates,
+                      record.gateDerivative, "gate derivative"))
+            return fail(error);
+        }
+        if (!binary(prefix + "gate_dlogits", QNN_OP_ELEMENT_WISE_MULTIPLY,
                     record.dGates, record.gateDerivative,
                     record.dGateSigmoid, "gate dlogits") ||
             !matmul(prefix + "gate_dweight", cache(LN1), record.dGateSigmoid,
