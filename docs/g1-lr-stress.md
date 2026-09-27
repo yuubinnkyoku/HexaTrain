@@ -261,14 +261,17 @@ Correct combined claim with historical 8000 evidence:
 > G1 does not establish a final-quality gain at the baseline LR on seed1 at
 > step 8000, but it improves short-horizon canonical bpb at matched LR and
 > reduces observed step-to-bpb under the tested LR grid. Observed 500-step
-> stability region is the same as control (2.0x). This promotes gate-variant
-> exploration (`2*sigmoid` / `Wg=0` identity-init), which are **not**
-> implemented in this change.
+> stability region is the same as control (2.0x). This promoted gate-variant
+> exploration.
 
-## Next gate (proposed only — not executed)
+## Follow-up status (updated after this stress grid)
 
-- A/B #1: current sigmoid G1 vs `2*sigmoid` + `Wg=0` identity-init
-- A/B #2: identity-init positive only → reduced-channel gate
+- A/B #1 (identity-init `2*sigmoid` + `Wg=0`): **done**, decision
+  `KEEP_CURRENT_G1` — see [g1-identity-init-500.md](g1-identity-init-500.md).
+  Identity lane closed.
+- Next: Current G1 vs Fixed 0.5 branch scale (this document's stress grid
+  remains the LR/stability evidence base).
+- reduced-channel gate: still unimplemented / out of scope.
 
 ## Artifacts
 

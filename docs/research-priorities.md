@@ -265,7 +265,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - 安定領域は **Control=G1=2.0x** で拡大なし（500-step stress region）
    - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
    - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。checkpoint cumulative training wallはstep500 endpoint以外 `NOT_MEASURED` のため wall 改善は主張しない
-   - **decision = `PROMOTE_G1_GATE_VARIANTS`**。ただし `2 * sigmoid` / `Wg=0` identity init / reduced-channel gate は **未実装**（factor isolationのため別タスク）
+   - **decision = `PROMOTE_G1_GATE_VARIANTS`**（learned gate variants の探索を継続）
    - **identity-init A/B 完了（2026-09-27）**: Current G1 vs `2*sigmoid`+`Wg=0` を LR1.5x / seed1 / 500 step で比較。ΔBalanced = Identity−Current は step100/200/300/400/500 で `+0.100 / +0.035 / +0.019 / +0.038 / +0.005`。早期 gain を失い target 2.90 は 400→500 step。**decision = `KEEP_CURRENT_G1`**（identity lane は閉じる）。詳細は [g1-identity-init-500.md](g1-identity-init-500.md)
    - reduced-channel gate は未実装（本 task 対象外）
 
