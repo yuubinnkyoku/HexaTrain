@@ -266,7 +266,8 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
    - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。checkpoint cumulative training wallはstep500 endpoint以外 `NOT_MEASURED` のため wall 改善は主張しない
    - **decision = `PROMOTE_G1_GATE_VARIANTS`**。ただし `2 * sigmoid` / `Wg=0` identity init / reduced-channel gate は **未実装**（factor isolationのため別タスク）
-   - 次A/B候補: (1) 現行sigmoid G1 vs `2*sigmoid`+`Wg=0` identity-init (2) identity-init positiveの場合のみreduced-channel gate
+   - **identity-init A/B 完了（2026-09-27）**: Current G1 vs `2*sigmoid`+`Wg=0` を LR1.5x / seed1 / 500 step で比較。ΔBalanced = Identity−Current は step100/200/300/400/500 で `+0.100 / +0.035 / +0.019 / +0.038 / +0.005`。早期 gain を失い target 2.90 は 400→500 step。**decision = `KEEP_CURRENT_G1`**（identity lane は閉じる）。詳細は [g1-identity-init-500.md](g1-identity-init-500.md)
+   - reduced-channel gate は未実装（本 task 対象外）
 
 3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
@@ -3430,7 +3431,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1高LR stress gridは完了（decision=`PROMOTE_G1_GATE_VARIANTS`、詳細は [g1-lr-stress.md](g1-lr-stress.md)）。次は `2*sigmoid`+`Wg=0` identity-init A/B（実装は別タスク）
+- G1高LR stress gridは完了（decision=`PROMOTE_G1_GATE_VARIANTS`、詳細は [g1-lr-stress.md](g1-lr-stress.md)）。identity-init A/B も完了（decision=`KEEP_CURRENT_G1`、詳細は [g1-identity-init-500.md](g1-identity-init-500.md)）。`2*sigmoid`+`Wg=0` lane は閉じる
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark

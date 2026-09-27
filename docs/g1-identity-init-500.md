@@ -2,10 +2,8 @@
 
 ## Status
 
-**DEVICE A/B BLOCKED** at authoring time: no physical HTP device is attached
-(`adb devices` shows only an offline emulator). Implementation and host
-identity proof are complete and committed. The 500-step Current vs Identity
-run must be executed when the NX741J-class device is available.
+**COMPLETE.** Device A/B executed 2026-09-27 on NX741J (HTP / HVX Muon).
+Decision: **KEEP_CURRENT_G1**.
 
 ## Hypothesis
 
@@ -31,103 +29,119 @@ Only two factors differ. Everything else is identical.
 | checkpoint | NPRTCKPTV5 | NPRTCKPTV5 |
 | attention_gate id | `headwise_g1_sigmoid` (=1) | `headwise_g1_scale2_identity` (=2) |
 
-Forbidden (unchanged): reduced channel, shared Wg, bias, Wv, head count,
-residual, RMSNorm, optimizer partition, LR, batch, Muon, gate position.
-
 ## Math
 
 ```text
 G = scale * sigmoid(z),  scale = 1 (current) or 2 (identity)
 dG/dz = G * (1 - G/scale)
-
-scale=1: dG/dz = G*(1-G) = s*(1-s)          max 0.25
-scale=2: dG/dz = G*(1-G/2) = 2s(1-s)        at z=0: 0.5
 ```
 
-Wg LR is **not** halved. Same optimizer/LR for both arms (user B4).
+Wg LR was **not** halved. Same optimizer/LR for both arms.
 
 ## Step-0 identity proof (host)
 
-`host_tests/headwise_g1_gate_test.cpp` (PASS):
+`host_tests/headwise_g1_gate_test.cpp` PASS:
 
 ```text
-identity_init_gate_mean=1
-identity_init_gate_min=1
-identity_init_gate_max=1
-identity_init_wg_zero=true
-identity_init_dwg_nonzero=true
-identity_checkpoint_cross_resume_rejected=true
+identity_init_gate_mean/min/max = 1
+identity_init_wg_zero = true
+identity_init_dwg_nonzero = true
+identity_checkpoint_cross_resume_rejected = true
+ungated context parity at Wg=0 / scale=2
 ```
 
-Also verified: ungated context parity at Wg=0 / scale=2, finite backward,
-correct dWg shape, V5 encode/decode roundtrip, and fail-closed resume when
-checkpoint `attention_gate=2` is extracted as gate=1 or ungated.
-
-## Architecture identity
-
-NPRTCKPTV5 stores `attention_gate` as u32. Decode accepts only 1 or 2.
-`sameConfig` compares the enum, so a Current-G1 checkpoint cannot be resumed
-as Identity-init and vice versa.
-
-## Run recipe (pending device)
-
-```powershell
-# smoke (Identity, 8 updates)
-.\scripts\run_g1_identity_ab.ps1 -Mode Smoke -Arm Identity `
-  -QairtSdkRoot 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702' `
-  -ExpectedBuildId '2.48.40.260702151143'
-
-# fresh matched A/B at 1.5x, 500 steps
-.\scripts\run_g1_identity_ab.ps1 -Mode Ab `
-  -QairtSdkRoot 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702' `
-  -ExpectedBuildId '2.48.40.260702151143'
-```
-
-LR (fixed 1.5x):
-
-| | |
-|---|---:|
-| Muon | 0.00750 |
-| Aux Adam | 0.00330 |
-| target | 0.000150 |
-
-Eval: Val/Dev first 256 chunks, canonical original UTF-8 byte bpb at
-100/200/300/400/500. Final split forbidden. Seed 1, step-0 fresh.
-
-## Scale-aware gate telemetry
-
-Identity-init gates live in `(0, 2)` with identity at 1. Keep legacy
-`g<0.1` / `g>0.9` fields, and record `mean_abs(g-1)`. Do not treat
-`g>0.9=1` at step-0 identity as pathology.
-
-## Decision logic (pending results)
-
-- `PROMOTE_IDENTITY_G1` / `PROMOTE_IDENTITY_G1_GRID`
-- `KEEP_CURRENT_G1`
-- `HOLD_IDENTITY_G1`
-
-See task brief B15. Wall-time is secondary; step-to-bpb is primary when
-checkpoint cumulative timing is unavailable (same rule as stress closure).
-
-## Artifacts (after device run)
-
-`docs/results/g1-identity-init-500-2026-09/` — quality, time-to-bpb, gate,
-Wg telemetry, runtime, health, `current/`, `identity/`.
-
-## Verification performed tonight
+## Run recipe
 
 ```text
-Fast:  PASS
-Host:  PASS (including identity-init gate tests)
-runner self-test: PASS
-device smoke / 500-step A/B: BLOCKED (no physical device)
+seed 1, step-0 fresh
+LR 1.5x: Muon 0.00750 / Aux Adam 0.00330 / target 0.000150
+linear_decay 4000→8000 (500-step region is pre-decay, constant peak)
+batch 8, V1024 / T32 / D64 / FFN128 / L19 / H2
+eval: Val/Dev first 256 chunks, canonical original UTF-8 byte bpb
+steps 500, checkpoints 100/200/300/400/500
+QAIRT 2.48.40.260702151143
+device NX741J, HTP forward/backward, HVX Muon, CPU Aux Adam
 ```
+
+## Quality (Balanced bpb; Δ = Identity − Current)
+
+Historical stress-grid Current G1 1.5x is reproduced **exactly**.
+
+| step | Current Val | Identity Val | ΔVal | Current Dev | Identity Dev | ΔDev | ΔBalanced |
+|-----:|------------:|-------------:|-----:|------------:|-------------:|-----:|----------:|
+| 100 | 3.241628 | 3.340035 | +0.098407 | 3.464354 | 3.566327 | +0.101974 | **+0.100190** |
+| 200 | 3.047356 | 3.084760 | +0.037405 | 3.253588 | 3.285475 | +0.031887 | **+0.034646** |
+| 300 | 2.904970 | 2.921797 | +0.016827 | 3.136970 | 3.158149 | +0.021179 | **+0.019003** |
+| 400 | 2.774821 | 2.820489 | +0.045668 | 3.010131 | 3.039870 | +0.029739 | **+0.037704** |
+| 500 | 2.735525 | 2.749066 | +0.013542 | 2.988763 | 2.985007 | -0.003756 | **+0.004893** |
+
+Negative Δ would favor Identity. All ΔBalanced are **positive**.
+
+## Time-to-bpb (step-based; wall NOT_MEASURED)
+
+| target | Current first step | Identity first step | Δstep |
+|-------:|-------------------:|--------------------:|------:|
+| 3.10 | 300 | 300 | 0 |
+| 3.00 | 400 | 400 | 0 |
+| 2.95 | 400 | 400 | 0 |
+| 2.90 | **400** | **500** | **+100** |
+| 2.85 | >500 | >500 | — |
+
+Identity is **slower** to 2.90 by 100 steps.
+
+## Gate trajectory (training aggregate)
+
+Current G1 stays in `(0,1)` with means ~0.08–0.35 (soft shrink throughout).
+Identity-init starts at 1.0 and moves: layer-0 means ~0.54–0.57, max observed
+~1.81, so it does **not** stay at identity. Deep-layer means settle ~0.14–0.44
+(below 1). Scale semantics: Identity gates live in `(0,2)`; legacy
+`g>0.9` fractions are not comparable to Current G1.
+
+## Runtime / health
+
+| arm | training wall | ms/update |
+|---|---:|---:|
+| Current | 213.6 s | 427.2 |
+| Identity | 208.3 s | 416.6 |
+
+Difference is small; no performance claim. Both arms: QNN success, HVX
+0/0/0, no fallback, all finite, thermal ≤0 after, NPRTCKPTV5.
+
+Note: checkpoint-static gate diagnostics failed for Identity (host diag tool
+emitted `headwise_g1_gate_diagnostics=FAIL`); trajectory aggregates above come
+from the device training report and are sufficient for interpretation.
+
+## Interpretation
+
+Identity-init **loses the early sample-efficiency gain** that Current G1
+showed against ungated control (ΔBalanced at step100 is +0.10 worse). By
+step500 the two are nearly tied (ΔBalanced +0.005), with Identity slightly
+worse and slower to target 2.90.
+
+This implies the Current G1 early gain depends on **starting near a 0.5 gate**
+(attention-branch suppression prior), not merely on having a learnable
+head-wise gate. The `2*sigmoid` / `Wg=0` identity lane does not reproduce the
+early benefit.
+
+## Decision
+
+**KEEP_CURRENT_G1**
+
+Close the `2*sigmoid` / `Wg=0` identity-init lane. Do **not** promote
+Identity-init to a broader LR grid. reduced-channel gate remains unimplemented
+and is out of scope for this task.
+
+## Artifacts
+
+- `docs/results/g1-identity-init-500-2026-09/`
+- `scripts/run_g1_identity_ab.ps1`
+- `scripts/g1_identity_ab_analyze.py`
 
 ## Commits
 
 ```text
 feat(research): add identity-init headwise G1 variant
-docs(research): correct G1 stress time-to-target metrics
+docs(research): record identity-init G1 500-step A/B
 ```
 
 push: NOT PERFORMED.
