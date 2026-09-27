@@ -1,0 +1,3 @@
+arm,first_loss,last_loss,parameter_count,checkpoint_format,attention_gate
+control,5.295057297,4.281202316,758528,NPRTCKPTV4,none
+g1,5.160907269,4.304770947,760960,NPRTCKPTV5,headwise_g1_sigmoid

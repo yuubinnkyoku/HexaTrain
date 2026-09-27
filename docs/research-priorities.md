@@ -268,6 +268,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **decision = `PROMOTE_G1_GATE_VARIANTS`**（learned gate variants の探索を継続）
    - **identity-init A/B 完了（2026-09-27）**: Current G1 vs `2*sigmoid`+`Wg=0` を LR1.5x / seed1 / 500 step で比較。ΔBalanced = Identity−Current は step100/200/300/400/500 で `+0.100 / +0.035 / +0.019 / +0.038 / +0.005`。早期 gain を失い target 2.90 は 400→500 step。**decision = `KEEP_CURRENT_G1`**（identity lane は閉じる）。詳細は [g1-identity-init-500.md](g1-identity-init-500.md)
    - **fixed 0.5 A/B 完了（2026-09-27）**: Current G1 vs `Yh=0.5*Ah`（Wg なし / 758,528 params）を同条件で比較。ΔBalanced = Fixed−Current は `+0.024 / +0.006 / +0.002 / +0.028 / +0.006`。0.5 suppression prior が早期 gain の大半を説明するが、learned adaptation が残余の優位を説明。target 2.90 は Current 400 vs Fixed 500。**decision = `KEEP_CURRENT_G1_LEARNED_GATE`**（fixed-scale lane は replacement として閉じる）。詳細は [g1-fixed-half-500.md](g1-fixed-half-500.md)
+   - **1.5x long-horizon 2000 完了（2026-09-27）**: stress-grid step500 から continuation。ΔBalanced = G1−Control は 500/750/1000/1250/1500/1750/2000 で `-0.030 / -0.033 / -0.042 / -0.046 / -0.033 / -0.003 / -0.025`。**全7点でG1優位**、mean ΔBalanced ≈ `-0.030`。target 2.80 は G1 が 250 step 早い。**decision = `PROMOTE_G1_1P5X_4000STEP`**。詳細は [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md)
    - reduced-channel gate は未実装（本 task 対象外）
 
 3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
@@ -3432,7 +3433,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1高LR stress gridは完了（decision=`PROMOTE_G1_GATE_VARIANTS`、詳細は [g1-lr-stress.md](g1-lr-stress.md)）。identity-init A/B 完了（`KEEP_CURRENT_G1`、[g1-identity-init-500.md](g1-identity-init-500.md)）。fixed 0.5 A/B 完了（`KEEP_CURRENT_G1_LEARNED_GATE`、[g1-fixed-half-500.md](g1-fixed-half-500.md)）。learned G1 を維持し、identity / fixed-scale の置換 lane は閉じる
+- G1: stress grid（`PROMOTE_G1_GATE_VARIANTS`）→ identity-init（`KEEP_CURRENT_G1`、lane閉）→ fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`、replacement閉）→ **1.5x long-horizon 2000（`PROMOTE_G1_1P5X_4000STEP`）**。次は G1 1.5x を 4000 step へ延長。詳細は [g1-lr-stress.md](g1-lr-stress.md) / [g1-identity-init-500.md](g1-identity-init-500.md) / [g1-fixed-half-500.md](g1-fixed-half-500.md) / [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md)
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark
