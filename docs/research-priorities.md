@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-09-26 JST**
+> **研究内容の最終更新: 2026-09-28 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -271,6 +271,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **identity-init A/B 完了（2026-09-27）**: Current G1 vs `2*sigmoid`+`Wg=0` を LR1.5x / seed1 / 500 step で比較。ΔBalanced = Identity−Current は step100/200/300/400/500 で `+0.100 / +0.035 / +0.019 / +0.038 / +0.005`。早期 gain を失い target 2.90 は 400→500 step。**decision = `KEEP_CURRENT_G1`**（identity lane は閉じる）。詳細は [g1-identity-init-500.md](g1-identity-init-500.md)
    - **fixed 0.5 A/B 完了（2026-09-27）**: Current G1 vs `Yh=0.5*Ah`（Wg なし / 758,528 params）を同条件で比較。ΔBalanced = Fixed−Current は `+0.024 / +0.006 / +0.002 / +0.028 / +0.006`。0.5 suppression prior が早期 gain の大半を説明するが、learned adaptation が残余の優位を説明。target 2.90 は Current 400 vs Fixed 500。**decision = `KEEP_CURRENT_G1_LEARNED_GATE`**（fixed-scale lane は replacement として閉じる）。詳細は [g1-fixed-half-500.md](g1-fixed-half-500.md)
    - **1.5x long-horizon 2000 完了（2026-09-27）**: stress-grid step500 から continuation。ΔBalanced = G1−Control は 500/750/1000/1250/1500/1750/2000 で `-0.030 / -0.033 / -0.042 / -0.046 / -0.033 / -0.003 / -0.025`。**全7点でG1優位**、mean ΔBalanced ≈ `-0.030`。target 2.80 は G1 が 250 step 早い。**decision = `PROMOTE_G1_1P5X_4000STEP`**。詳細は [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md)
+   - **multi-seed replication 設計（2026-09-28、PLANNED / 未実行）**: best arm を一次データから **1.5x** に確定（mean ΔBalanced `−0.065756`、late-step mean `−0.046563`、step500 ΔVal `−0.036408` / ΔDev `−0.023564`、time-to-bpb target 2.90 の Δstep `−100` は 1.5x のみ。2.0x は gate 完全飽和が 18/38 head まで進み本質的な利得を隠すため、1.25x は step500 の Dev 利得が `−0.002972` まで消える局所現象を追う設計になるため除外）。seed 2 / 4 を fresh step-0 / 3000 step / eval 1750・3000 を含む 250 cadence で走らせ、**split-level trajectory を主判定**（R1 初期の両 split 改善、R2 1500–3000 の Dev 反転、R3 反転時期のずれ、R4 top-1 の同所性、R5 gate saturation との対応）にする。data order は `kNprtCanonicalTrainingOrderSeed` 固定で horizon に対して prefix 安定なため、fresh run は seed 1 と同一の batch 列を見る。長時間 training は Tier 3 なので未承認・未実行。詳細は [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md)
    - reduced-channel gate は未実装（本 task 対象外）
 
 3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
@@ -3435,7 +3436,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1: stress grid（`PROMOTE_G1_GATE_VARIANTS`）→ identity-init（`KEEP_CURRENT_G1`、lane閉）→ fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`、replacement閉）→ **1.5x long-horizon 2000（`PROMOTE_G1_1P5X_4000STEP`）**。次は G1 1.5x を 4000 step へ延長。詳細は [g1-lr-stress.md](g1-lr-stress.md) / [g1-identity-init-500.md](g1-identity-init-500.md) / [g1-fixed-half-500.md](g1-fixed-half-500.md) / [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md)
+- G1: stress grid（`PROMOTE_G1_GATE_VARIANTS`）→ identity-init（`KEEP_CURRENT_G1`、lane閉）→ fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`、replacement閉）→ **1.5x long-horizon 2000（`PROMOTE_G1_1P5X_4000STEP`）**。1.5x は 8000 step まで完了済みで、split-level の留保（step 1750 / 3000 の Dev 反転）だけが残っている。次は 4000 step 延長ではなく **seed 2 / 4 の multi-seed 3000 step replication（設計のみ確定、Tier 3 未承認）**。詳細は [g1-lr-stress.md](g1-lr-stress.md) / [g1-identity-init-500.md](g1-identity-init-500.md) / [g1-fixed-half-500.md](g1-fixed-half-500.md) / [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md) / [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md)
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark

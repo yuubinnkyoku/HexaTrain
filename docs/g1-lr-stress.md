@@ -315,6 +315,13 @@ advantage is Val-dominant and Val top-1 regresses in 3 cells. See
   1750 / 3000 is unresolved —
   see [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md) and
   [g1-1p5x-full-8000-2026-09](results/g1-1p5x-full-8000-2026-09/README.md).
+- **Next lane = multi-seed replication of the 1.5x arm (design only, not run)**:
+  seed 2 / 4, fresh step-0, 3000 steps, split-level trajectory as the primary
+  judgment. 1.5x was selected from primary results (best mean and late-step
+  ΔBalanced, and the only arm with a step-based time-to-bpb gain); 2.0x is
+  excluded because gate saturation reaches 18/38 heads. Long training is Tier 3,
+  so nothing has been started — see
+  [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md).
 - reduced-channel gate: still unimplemented / out of scope.
 
 ## Artifacts
