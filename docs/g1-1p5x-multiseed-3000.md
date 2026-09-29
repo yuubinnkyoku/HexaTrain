@@ -242,12 +242,16 @@ $qa = @{ QairtSdkRoot = 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 2 -Arm G1 @qa
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 4 -Arm Control @qa
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 4 -Arm G1 @qa
-# 全 arm の一次レポートが揃ったら解析のみ実行（-*-Mode All-*-* は 4 arm を続けて走らせる）
+# 全 arm の一次レポートが揃ったら解析のみ実行。Mode All は Seeds x arm の全 run を続けて走らせる
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Analyze @qa
 
 # 生成物: docs/results/g1-1p5x-multiseed-3000-2026-09/{seed2,seed4}/{control,g1}/ と
 #        その root の CSV + analysis.md
 ```
+
+`-Seeds` / `-EvalSteps` は配列リテラル（`-Seeds 2,4`）でもカンマ文字列（`-Seeds '2,4'`）でも
+受け付ける。`powershell -File` 経由では配列リテラルを渡せないため文字列形式を使う。
+`-Mode Smoke` は 8 update で eval を走らせないので R1 / R2 band チェックを省略する。
 
 runner は次に該当すれば fail closed で止まる: `SEED_NOT_FRESH`（seed ≤ 1）、
 `STEPS_EXCEED_DECAY_START`（peak LR 区間が崩れる）、`EVAL_STEPS_MISSING_R1_BAND` /

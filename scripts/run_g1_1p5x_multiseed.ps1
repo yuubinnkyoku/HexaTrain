@@ -7,7 +7,7 @@
 [CmdletBinding()]
 param(
   [ValidateSet('Plan','Smoke','Seed','All','Analyze')][string]$Mode = 'Plan',
-  [int[]]$Seeds = @(2,4),
+  [object[]]$Seeds = @(2,4),
   [ValidateSet('Control','G1')][string]$Arm = 'Control',
   [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
   [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
@@ -20,7 +20,7 @@ param(
   [string]$HexagonSdkRoot = 'C:\Qualcomm\Hexagon_SDK\6.6.0.0',
   [int]$Steps = 3000,
   [int]$CheckpointInterval = 250,
-  [int[]]$EvalSteps = @(500,1000,1500,1750,2000,2500,3000),
+  [object[]]$EvalSteps = @(500,1000,1500,1750,2000,2500,3000),
   [int]$SmokeSteps = 8,
   [switch]$SkipBuild,
   [switch]$SkipInstall,
@@ -31,6 +31,23 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
+function ConvertTo-MultiseedIntList([object]$Value) {
+  # A `-File` invocation cannot carry array literals, so "-Seeds 2,4" arrives as a
+  # single string. Both an int array and a comma / space separated string are valid.
+  if ($null -eq $Value) { return @() }
+  if ($Value -is [string]) {
+    return @($Value -split '[,\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+  }
+  if ($Value -is [int] -or $Value -is [long]) { return @([int]$Value) }
+  $values = @()
+  foreach ($item in $Value) { $values += ConvertTo-MultiseedIntList $item }
+  return $values
+}
+$Seeds = ConvertTo-MultiseedIntList $Seeds
+$EvalSteps = ConvertTo-MultiseedIntList $EvalSteps
+if ($Seeds.Count -eq 0) { throw 'SEEDS_EMPTY: pass at least one seed greater than 1' }
+if ($EvalSteps.Count -eq 0) { throw 'EVAL_STEPS_EMPTY: pass at least one evaluation step' }
+
 
 $root = Split-Path -Parent $PSScriptRoot
 $training = Join-Path $PSScriptRoot 'run_nicopedia_htp_training.ps1'
@@ -538,11 +555,13 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
   Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ReportRoot) 'run-order.json') $runOrder
   Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ResultsRoot) 'run-order.json') $runOrder
 
-  Start-MultiseedDeviceGuard
   $outcomes = @()
   $adbPath = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
-  $devEndpoint = (Resolve-PhoneLmDevice -Adb $adbPath).Endpoint
   try {
+    # The lock is taken before any device query so a failed device resolution
+    # cannot leave the guard half-held.
+    Start-MultiseedDeviceGuard
+    $devEndpoint = (Resolve-PhoneLmDevice -Adb $adbPath).Endpoint
     foreach ($entry in $runOrder) {
       try {
         $state = Get-PhoneLmThermalBatteryState -Adb $adbPath -Device $devEndpoint -Phase 'multiseed-pre'
