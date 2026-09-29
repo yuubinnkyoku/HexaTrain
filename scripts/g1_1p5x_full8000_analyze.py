@@ -157,6 +157,7 @@ def main() -> int:
             val = fnum(ev.get("validation_bits_per_utf8_byte"))
             dev = fnum(ev.get("development_bits_per_utf8_byte"))
             bal = balanced(val, dev)
+            arm_evals[arm] = arm_evals.get(arm, {})
             arm_evals[arm][step] = (val, dev, bal)
             quality_rows.append(
                 {
@@ -361,6 +362,22 @@ def main() -> int:
                 "g1_checkpoint_training_wall_s": "NOT_MEASURED",
             }
         )
+
+    # Fail closed before writing anything. Every aggregate table here is a
+    # paired G1-vs-Control comparison, so a one-arm tree must never be
+    # published as a completed analysis. The guard is deliberately keyed on
+    # this experiment's own eval steps, not on "any data": merging the parent
+    # 500-1750 history would otherwise let a half-finished 8000-step run emit
+    # a plausible-looking delta computed only from historical steps. The
+    # single-arm per-step evidence is already published per arm by
+    # Copy-LongArtifacts, so nothing is lost by refusing to aggregate.
+    incomplete = []
+    for arm in ARMS:
+        absent = [step for step in eval_steps if step not in arm_evals.get(arm, {})]
+        if absent:
+            incomplete.append(f"{arm}(missing {','.join(str(s) for s in absent)})")
+    if incomplete:
+        raise SystemExit("ANALYZE_REQUIRES_BOTH_ARMS_AT_EVAL_STEPS: " + "; ".join(incomplete))
 
     write_csv(results_root / "quality.csv", quality_rows,
               ["arm", "step", "validation_bpb", "development_bpb", "balanced_bpb",

@@ -337,12 +337,16 @@ function Pull-LongMissingCheckpoints([string]$ArmName) {
     if (Test-Path -LiteralPath $local -PathType Leaf) { continue }
     $missing += [pscustomobject]@{ step = $step; name = $name; local = $local }
   }
-  $curveName = "training-curve-$Steps.csv"
-  $curveLocal = Join-Path $armDir $curveName
-  $curveMissing = -not (Test-Path -LiteralPath $curveLocal -PathType Leaf)
-  if ($missing.Count -eq 0 -and -not $curveMissing) {
+  $artifactNames = @("training-curve-$Steps.csv", 'learning-rate-telemetry.csv')
+  $missingArtifacts = @()
+  foreach ($artifactName in $artifactNames) {
+    $artifactLocal = Join-Path $armDir $artifactName
+    if (Test-Path -LiteralPath $artifactLocal -PathType Leaf) { continue }
+    $missingArtifacts += [pscustomobject]@{ name = $artifactName; local = $artifactLocal }
+  }
+  if ($missing.Count -eq 0 -and $missingArtifacts.Count -eq 0) {
     Write-Host "checkpoint_pull_noop arm=$ArmName run_id=$runId expected=$($expectedSteps.Count)"
-    return [pscustomobject]@{ arm = $ArmName; run_id = $runId; pulled_checkpoints = 0; pulled_curve = $false }
+    return [pscustomobject]@{ arm = $ArmName; run_id = $runId; pulled_checkpoints = 0; pulled_artifacts = @() }
   }
   $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
   $device = (Resolve-PhoneLmDevice -Adb $adb).Endpoint
@@ -351,7 +355,11 @@ function Pull-LongMissingCheckpoints([string]$ArmName) {
   # directory contents ambiguous, so fail closed instead of pulling from it.
   Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $longPackage
   Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $longPackage
-  $remoteNames = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $longPackage -RemoteDir $remoteDir)
+  # Raw listing, not Get-PhoneLmCheckpointNames: the curve and the LR
+  # telemetry live in the same directory but are not checkpoint files.
+  $remoteNames = @((Invoke-PhoneLmAdb -Adb $adb -Device $device `
+    -Arguments @('shell', 'run-as', $longPackage, 'ls', '-1', $remoteDir)).Text -split "`r?`n" |
+    Where-Object { $_ } | Sort-Object -Unique)
   if ($remoteNames.Count -eq 0) { throw "REMOTE_RUN_DIR_EMPTY: $remoteDir" }
   $pulledCheckpoints = 0
   foreach ($item in $missing) {
@@ -362,16 +370,16 @@ function Pull-LongMissingCheckpoints([string]$ArmName) {
     $pulledCheckpoints++
     Write-Host "checkpoint_pulled arm=$ArmName step=$($item.step) size=$($pulled.Size) sha256=$($pulled.Sha256) parameter_hash=$($identity.parameter_hash)"
   }
-  $pulledCurve = $false
-  if ($curveMissing) {
-    if ($remoteNames -notcontains $curveName) { throw "REMOTE_CURVE_MISSING: $curveName dir=$remoteDir" }
+  $pulledArtifacts = @()
+  foreach ($artifact in $missingArtifacts) {
+    if ($remoteNames -notcontains $artifact.name) { throw "REMOTE_ARTIFACT_MISSING: $($artifact.name) dir=$remoteDir" }
     Receive-PhoneLmBinary -Adb $adb -Device $device -Package $longPackage `
-      -RemotePath "$remoteDir/$curveName" -LocalPath $curveLocal -MinimumBytes 1 | Out-Null
-    $pulledCurve = $true
-    Write-Host "training_curve_pulled arm=$ArmName name=$curveName"
+      -RemotePath "$remoteDir/$($artifact.name)" -LocalPath $artifact.local -MinimumBytes 1 | Out-Null
+    $pulledArtifacts += $artifact.name
+    Write-Host "artifact_pulled arm=$ArmName name=$($artifact.name)"
   }
-  Write-Host "checkpoint_pull_complete arm=$ArmName run_id=$runId pulled=$pulledCheckpoints expected=$($expectedSteps.Count)"
-  return [pscustomobject]@{ arm = $ArmName; run_id = $runId; pulled_checkpoints = $pulledCheckpoints; pulled_curve = $pulledCurve }
+  Write-Host "checkpoint_pull_complete arm=$ArmName run_id=$runId pulled=$pulledCheckpoints expected=$($expectedSteps.Count) artifacts=$($pulledArtifacts -join ',')"
+  return [pscustomobject]@{ arm = $ArmName; run_id = $runId; pulled_checkpoints = $pulledCheckpoints; pulled_artifacts = $pulledArtifacts }
 }
 
 function Invoke-LongArm([string]$ArmName) {
@@ -551,7 +559,7 @@ if ($Mode -eq 'Finish') {
       result_dir = (Get-LongResultsArmDirectory $Arm)
       run_id = $pullOutcome.run_id
       pulled_checkpoints = $pullOutcome.pulled_checkpoints
-      pulled_training_curve = $pullOutcome.pulled_curve
+      pulled_artifacts = @($pullOutcome.pulled_artifacts)
       final_parameter_hash = $map.final_parameter_hash
       published = [bool]$publishOutcome
     }
