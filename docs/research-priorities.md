@@ -261,6 +261,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 2. **Gated Attention: G1の高LR安定性 / time-to-bpb stress grid — 完了（2026-09-27）**
    - `headwise_g1_sigmoid`のseed1 matched runはstep 8000まで完了。ΔBalancedはstep 500 / 1000 / 1500 / 2000 / 2500 / 3000 / 3500 / 4000 / 5000 / 6000 / 7000 / 8000で `-0.032712 / -0.036686 / -0.021864 / -0.007113 / -0.016147 / -0.017483 / -0.007219 / -0.007490 / +0.004985 / +0.008981 / +0.009498 / -0.000367`
    - 結論は、**早期sample-efficiency gainは強いが、8000ではbaselineと実質tie**。したがって「4000まで延長」は完了済みで、同一LRの長期runを追加しても情報量は低い
+    - ただし「強い早期gain」を一貫した汎化品質改善とは扱わない。**balanced bpb上では早期gainが確認される一方、step 1750 / 3000ではVal/Dev間でNLL差の符号が反転し、val/dev top-1も悪化している**（step 1750: Δval NLL −0.030889 に対し Δdev NLL +0.018780、top-1 は val 0.1340→0.1248・dev 0.1052→0.0988 がいずれもG1で低下。step 3000: Δval NLL −0.053659 に対し Δdev NLL +0.025505、top-1 は val 0.1598→0.1543・dev 0.1274→0.1255 がいずれもG1で低下。一次レポートはいずれも `status=SUCCESS`、両splitの `nonfinite_chunks=0`）。いずれもseed 1単独であり、seed noise / split-specific interaction / 一時的なtrajectory差のいずれかは未同定。したがってG1を一貫した汎化品質改善とは扱わず、高LR stress gridで安定領域・time-to-bpb・split間挙動を追加検証する。詳細は [1.5x full-run の split-level 留保](results/g1-1p5x-full-8000-2026-09/README.md)
    - **高LR stress grid（1.0x/1.25x/1.5x/2.0x × Control/G1、seed1、500 step、eval 100/200/300/400/500）を完了。** 詳細は [g1-lr-stress.md](g1-lr-stress.md)
    - 安定領域は **Control=G1=2.0x** で拡大なし（500-step stress region）
    - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
