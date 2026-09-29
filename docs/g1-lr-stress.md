@@ -110,6 +110,33 @@ Historical 1.0x sanity (step500): Control `2.896905`, G1 `2.864193`. Fresh
 G1 wins every matched cell. Early-step advantage is largest; 500-step
 advantage remains ~0.016–0.033 ΔBalanced.
 
+## Split-level audit of the same 20 cells (recomputed from primary reports)
+
+`quality-paired.csv` only carries bpb. Recomputing NLL, top-k, and mean rank
+from the 40 primary eval reports (full table in
+[results/g1-lr-stress-2026-09/README.md](results/g1-lr-stress-2026-09/README.md))
+gives a more precise claim than "G1 wins every cell":
+
+| metric | Val | Dev |
+|---|---|---|
+| bpb better (G1) | 20 / 20 | 20 / 20 |
+| NLL better (G1) | 20 / 20 | 20 / 20 |
+| mean rank better | 20 / 20 | 19 / 20 |
+| top-5 better | 19 / 20 | 20 / 20 |
+| top-1 better | 17 / 20 | 20 / 20 |
+
+- **No cell shows the Val/Dev sign inversion** seen at steps 1750 / 3000 of the
+  1.5x full-8000 run: bpb and NLL move down on both splits in all 20 cells.
+  That is a property of this 500-step horizon, not a resolution of the longer
+  run's split disagreement.
+- The late-step advantage is **Val-dominant**. At 1.25x step 500 the Dev gain
+  shrinks to Δbpb `−0.002972` / ΔNLL `−0.004908`, Dev mean rank gets
+  `+0.904` worse, and Val top-1 drops 29 tokens. Val top-1 also regresses at
+  1.5x step 500 (−22 tokens) and 2.0x step 200 (−3 tokens).
+- Consequence for wording: report "canonical bpb and NLL improve on both
+  splits", not "every metric on every split improves", and do not read any of
+  this as a calibration or robustness result (seed 1, 256/256 windows, no ECE).
+
 ## Stability
 
 | LR | Control | G1 |
@@ -126,7 +153,7 @@ Both max stable multipliers = **2.0x** (500-step stress region only).
 G1 does **not** expand the stability region in this grid.
 
 Soft flags: G1 gate mean falls with LR (see Gate behavior). Control 2.0x wall
-time was elevated (~904 s vs ~770 s); thermal status stayed ≤2.
+time was elevated (~904 s vs ~770 s); thermal status stayed `0` in every arm.
 
 ## Time-to-bpb (primary = first observed eval checkpoint at or below target)
 
@@ -177,12 +204,12 @@ comparisons remain valid.
 
 ## Gate behavior (checkpoint-static, Val 256 windows)
 
-| LR | mean of head means | min head mean | max head mean |
-|---:|-------------------:|--------------:|--------------:|
-| 1.00 | 0.154 | 0.029 | 0.529 |
-| 1.25 | (see gate-static.csv) | | |
-| 1.50 | (see gate-static.csv) | | |
-| 2.00 | 0.078 | 0.016 | 0.300 |
+| LR | step100 mean | step500 mean | step500 min head | step500 max head | step500 mean `g<0.1` | heads with `g<0.1` ≥ 0.999 |
+|---:|-------------:|-------------:|-----------------:|-----------------:|----------------------:|---------------------------:|
+| 1.00 | 0.2276 | 0.1541 | 0.0291 | 0.5290 | 0.4655 | 0 |
+| 1.25 | 0.1955 | 0.1311 | 0.0322 | 0.4759 | 0.5626 | 1 (L8h0) |
+| 1.50 | 0.1623 | 0.1064 | 0.0201 | 0.3256 | 0.6576 | 12 (L5–L9, L12) |
+| 2.00 | 0.1221 | 0.0776 | 0.0162 | 0.2997 | 0.7532 | 18 (L4–L12 partial, L15, L16) |
 
 At 2.0x several deep-layer heads show `g<0.1` fractions near 1.0
 (e.g. L4–L12 multiple heads). This is **soft saturation / strong branch
@@ -215,10 +242,15 @@ item unchanged.
 
 - QNN return success: 8/8
 - HVX failures / fallback / non-finite: 0 / 0 / 0
-- thermal status after: ≤2 all arms
+- eval reports: 40 / 40 `status=SUCCESS` with
+  `validation_nonfinite_chunks=0` and `development_nonfinite_chunks=0`
+- thermal status `0` before and after all 8 arms (battery temperature 29–31 °C;
+  battery level 83 % → 66 % over the single-device night)
 - focus takeover: 0
 - checkpoint decode: all interval checkpoints verified
 - historical 1.0x sanity: exact match
+- Val NLL decreases monotonically across the 5 checkpoints in all 8 arms
+  (endpoint-level evidence only; see Limitations)
 
 ## Runner audit (committed tree)
 
@@ -264,19 +296,35 @@ Correct combined claim with historical 8000 evidence:
 > stability region is the same as control (2.0x). This promoted gate-variant
 > exploration.
 
+Split-level qualifier for that claim: within the grid Val and Dev bpb / NLL
+move down together in all 20 cells (no split sign inversion), but the late-step
+advantage is Val-dominant and Val top-1 regresses in 3 cells. See
+[Split-level audit](#split-level-audit-of-the-same-20-cells-recomputed-from-primary-reports).
+
 ## Follow-up status (updated after this stress grid)
 
 - A/B #1 (identity-init `2*sigmoid` + `Wg=0`): **done**, decision
   `KEEP_CURRENT_G1` — see [g1-identity-init-500.md](g1-identity-init-500.md).
   Identity lane closed.
-- Next: Current G1 vs Fixed 0.5 branch scale (this document's stress grid
-  remains the LR/stability evidence base).
+- A/B #2 (Fixed 0.5 branch scale, no `Wg`): **done**, decision
+  `KEEP_CURRENT_G1_LEARNED_GATE` —
+  see [g1-fixed-half-500.md](g1-fixed-half-500.md). Fixed-scale lane closed as a
+  replacement; the 0.5 suppression prior explains most of the early gain.
+- 1.5x long-horizon continuation (2000, then 8000): **done**. G1 keeps a small
+  Balanced-bpb edge at 2000 but the split-level disagreement at steps
+  1750 / 3000 is unresolved —
+  see [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md) and
+  [g1-1p5x-full-8000-2026-09](results/g1-1p5x-full-8000-2026-09/README.md).
 - reduced-channel gate: still unimplemented / out of scope.
 
 ## Artifacts
 
-- `docs/results/g1-lr-stress-2026-09/` — CSVs / manifests (this tree)
-- `build/g1-lr-stress/` — raw checkpoints, evals, telemetry (not committed)
+- `docs/results/g1-lr-stress-2026-09/` — committed compact evidence tree
+  (primary `eval256-step*-htp.txt` / `*-result.txt` per arm + analyzer CSVs).
+  Its [README](results/g1-lr-stress-2026-09/README.md) holds the split-level
+  audit tables recomputed from the primary reports.
+- `build/g1-lr-stress/` — raw checkpoints, gate-diagnostic inputs, telemetry
+  (not committed)
 - runner: `scripts/run_headwise_g1_lr_stress.ps1`
 - analyzer: `scripts/g1_lr_stress_analyze.py`
 
@@ -290,6 +338,14 @@ Correct combined claim with historical 8000 evidence:
 - checkpoint cumulative training wall is only measured at the full-run
   endpoint (step 500); intermediate target walls are `NOT_MEASURED`
 - single device night; Control 2.0x wall outlier
+- **no per-update loss, gradient-norm, or update-norm series is emitted by the
+  Muon-hybrid report**, so a transient loss spike between eval checkpoints is
+  unobservable here. Stability is asserted only at endpoint level
+  (finiteness + hard-stop flags + monotone 5-point Val NLL), and the absence of
+  a spike is **not** claimed
+- the 20-cell split-level audit is single-seed: 3 / 20 cells regress on Val
+  top-1 and 1 / 20 on Dev mean rank, so "G1 improves every metric on every
+  split" is not a supported statement
 - lr2.0 Grid mode was interrupted (`HOST_KILLED` / multi-device adb); Control
   2.0x was completed via a separate `Run`. Aggregate CSVs cover all 8 arms;
   compact lr2.0 raw artifacts were copied from `build/g1-lr-stress` into this
