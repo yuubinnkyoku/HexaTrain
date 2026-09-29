@@ -1,0 +1,72 @@
+{
+  "mean_delta_balanced": -0.025469305968749967,
+  "normalized_area_delta_balanced": -0.023407752141666613,
+  "eval_steps": [
+    2000,
+    2500,
+    3000,
+    3500,
+    4000,
+    4500,
+    5000,
+    6000,
+    7000,
+    8000
+  ],
+  "all_steps": [
+    500,
+    750,
+    1000,
+    1250,
+    1500,
+    1750,
+    2000,
+    2500,
+    3000,
+    3500,
+    4000,
+    4500,
+    5000,
+    6000,
+    7000,
+    8000
+  ],
+  "phases": {
+    "500-2000": {
+      "phase": "500-2000",
+      "n": 7,
+      "mean_delta_balanced": "-0.030317810",
+      "normalized_area_delta_balanced": "-0.030776910",
+      "g1_wins": 7,
+      "ties": 0,
+      "control_wins": 0
+    },
+    "2000-4000": {
+      "phase": "2000-4000",
+      "n": 5,
+      "mean_delta_balanced": "-0.019064283",
+      "normalized_area_delta_balanced": "-0.018803491",
+      "g1_wins": 5,
+      "ties": 0,
+      "control_wins": 0
+    },
+    "4000-8000": {
+      "phase": "4000-8000",
+      "n": 6,
+      "mean_delta_balanced": "-0.023362952",
+      "normalized_area_delta_balanced": "-0.022946449",
+      "g1_wins": 6,
+      "ties": 0,
+      "control_wins": 0
+    },
+    "500-8000": {
+      "phase": "500-8000",
+      "n": 16,
+      "mean_delta_balanced": "-0.025469306",
+      "normalized_area_delta_balanced": "-0.023407752",
+      "g1_wins": 16,
+      "ties": 0,
+      "control_wins": 0
+    }
+  }
+}

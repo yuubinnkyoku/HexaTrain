@@ -1,0 +1,3 @@
+arm,training_wall_s,training_step_ms,fwd_backward_ms_per_update,muon_ms_per_update,aux_adam_ms_per_update,completed_steps,status
+control,2405.799915,400.9666525,27.85478055,92.64923463,0.867166375,8000,SUCCESS
+g1,2731.705738,455.2842896,31.92445045,105.2174879,0.9939464655,8000,SUCCESS
