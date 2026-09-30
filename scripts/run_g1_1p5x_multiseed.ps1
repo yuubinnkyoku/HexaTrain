@@ -3,12 +3,15 @@
 # G1 1.5x multi-seed replication: fresh step-0 starts on seeds outside seed 1.
 # Protocol: docs/g1-1p5x-multiseed-3000.md (criteria R1-R5 are pre-registered).
 # Control (ungated) vs headwise_g1_sigmoid only; no architecture or LR variants.
+# Seeds 2 and 4 are pre-registered; another seed needs -AllowExploratorySeed and
+# is never mixed into the pre-registered R1-R5 decision by the analyzer.
 # Modes: Plan | Smoke | Seed | All | Analyze
 [CmdletBinding()]
 param(
   [ValidateSet('Plan','Smoke','Seed','All','Analyze')][string]$Mode = 'Plan',
   [object[]]$Seeds = @(2,4),
-  [ValidateSet('Control','G1')][string]$Arm = 'Control',
+  [ValidateSet('All','Control','G1')][string]$Arm = 'All',
+  [switch]$AllowExploratorySeed,
   [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
   [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
   [string]$CachePath = 'build/private-data/nicopedia-real-text-bpe-v1024/caches/train_pilot.bin',
@@ -56,6 +59,12 @@ $analysisPy = Join-Path $PSScriptRoot 'g1_multiseed_analyze.py'
 $epochTag = 'g1-1p5x-multiseed-3000-2026-09'
 $lockOwner = 'g1-multiseed-agent'
 
+# Pre-registered in docs/g1-1p5x-multiseed-3000.md.  Adding a seed after seeing
+# results is a protocol event: it needs -AllowExploratorySeed, it is recorded in
+# seed-registry.json, and the analyzer keeps it out of the pre-registered
+# decision.  If this list changes, the document has to change first.
+$preregisteredSeeds = @(2, 4)
+
 # Fixed 1.5x identity. Exact decimal strings keep the LR fields free of binary
 # float drift; they are the same values committed in g1-lr-stress and the
 # 2000 / 8000 step trees.
@@ -96,6 +105,12 @@ $base = [ordered]@{
   g1_parameter_count = 760960
 }
 
+function Get-MultiseedSeedRole([int]$Seed) {
+  if ($preregisteredSeeds -contains $Seed) { return 'preregistered' }
+  if ($Seed -eq $base.seed_reference) { return 'reference' }
+  return 'exploratory'
+}
+
 function Get-MultiseedArmIdentity([string]$ArmName) {
   $isG1 = $ArmName -eq 'G1'
   return [ordered]@{
@@ -129,6 +144,48 @@ function Test-MultiseedProtocol {
     if ($seed -le $base.seed_reference) {
       throw "SEED_NOT_FRESH: seed=$seed, fresh replication needs seed > $($base.seed_reference)"
     }
+    if ((Get-MultiseedSeedRole $seed) -ne 'preregistered' -and -not $AllowExploratorySeed) {
+      throw ("SEED_NOT_PREREGISTERED: seed={0} preregistered={1}; pass -AllowExploratorySeed to " +
+        "run it as an exploratory sample (excluded from the R1-R5 decision)") -f `
+        $seed, ($preregisteredSeeds -join ',')
+    }
+  }
+  if ($Mode -eq 'Seed' -and $Arm -eq 'All') {
+    throw 'ARM_REQUIRED: -Mode Seed runs one arm per session, pass -Arm Control or -Arm G1'
+  }
+}
+
+function Get-MultiseedSeedRegistry {
+  # Cumulative on purpose: seed 2 and seed 4 are separate sessions, and the
+  # registry of the second session must not drop the first one's provenance.
+  $registry = [ordered]@{}
+  foreach ($path in @((Join-Path (Resolve-MultiseedPath $ReportRoot) 'seed-registry.json'),
+                      (Join-Path (Resolve-MultiseedPath $ResultsRoot) 'seed-registry.json'))) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+    try {
+      $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+      foreach ($entry in @($data.seeds)) {
+        if ($null -eq $entry) { continue }
+        $registry[[int]$entry.seed] = [string]$entry.role
+      }
+    } catch {
+      Write-Host "seed_registry_read_soft_fail=$path"
+    }
+  }
+  foreach ($seed in $preregisteredSeeds) { $registry[$seed] = 'preregistered' }
+  foreach ($seed in $Seeds) {
+    if (-not $registry.Contains([int]$seed)) { $registry[[int]$seed] = 'exploratory' }
+  }
+  $exploratory = @($registry.Keys | Where-Object { $registry[$_] -eq 'exploratory' } | Sort-Object)
+  return [ordered]@{
+    version = 1
+    protocol = 'docs/g1-1p5x-multiseed-3000.md'
+    preregistered_seeds = @($preregisteredSeeds)
+    allow_exploratory_seed = [bool]$AllowExploratorySeed
+    exploratory_seeds = @($exploratory)
+    seeds = @($registry.Keys | Sort-Object | ForEach-Object {
+        [ordered]@{ seed = [int]$_; role = $registry[$_] }
+      })
   }
 }
 
@@ -147,9 +204,15 @@ function New-MultiseedDirectory([string]$Path) {
   [IO.Directory]::CreateDirectory($Path) | Out-Null
 }
 
-function Write-MultiseedJson([string]$Path, $Payload) {
+function Write-MultiseedText([string]$Path, [string]$Text) {
+  # BOM-less UTF-8: the analyzer (python) and git both read these files directly,
+  # and a UTF-8 BOM is not valid JSON for strict readers.
   New-MultiseedDirectory (Split-Path -Parent $Path)
-  $Payload | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding utf8
+  [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding($false)))
+}
+
+function Write-MultiseedJson([string]$Path, $Payload) {
+  Write-MultiseedText $Path ($Payload | ConvertTo-Json -Depth 12)
 }
 
 function Get-MultiseedKeyValue([string]$Path) {
@@ -303,6 +366,7 @@ function Invoke-MultiseedArm {
   Write-Host ("resolved muon_lr={0} aux_adam_lr={1} target_lr={2}" -f $lr15.muon, $lr15.aux_adam, $lr15.target)
   Write-MultiseedJson (Join-Path $resultDir 'arm-identity.json') ([ordered]@{
     seed = $Seed
+    seed_role = (Get-MultiseedSeedRole $Seed)
     epoch_tag = $epochTag
     protocol = 'docs/g1-1p5x-multiseed-3000.md'
     base = $base
@@ -511,7 +575,7 @@ function Invoke-MultiseedAnalysis {
   $output = & $python $analysisPy --tree $tree --out $tree 2>&1 | Out-String
   $analysisExit = $LASTEXITCODE
   $logPath = Join-Path $tree 'analysis.md'
-  $output | Set-Content -LiteralPath $logPath -Encoding utf8
+  Write-MultiseedText $logPath $output
   Write-Host $output
   if ($analysisExit -ne 0) {
     throw "MULTISEED_ANALYSIS_FAILED exit=$analysisExit tree=$ResultsRoot log=$logPath"
@@ -529,9 +593,10 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
     $arms = @('Control','G1')
     if (($index % 2) -eq 1) { $arms = @('G1','Control') }
     foreach ($armName in $arms) {
-      if ($Mode -in @('Seed','Smoke') -and $armName -ne $Arm) { continue }
+      if ($Arm -ne 'All' -and $armName -ne $Arm) { continue }
       $runOrder += [pscustomobject]@{
         order = ($runOrder.Count + 1); seed = $seed; arm = $armName; mode = $ArmMode
+        role = (Get-MultiseedSeedRole $seed)
       }
     }
     $index += 1
@@ -539,9 +604,12 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
   if ($runOrder.Count -eq 0) { throw 'EMPTY_RUN_PLAN' }
   Write-Host ("plan entries={0} seeds={1} steps={2} eval_steps={3}" -f `
     $runOrder.Count, ($Seeds -join '+'), $Steps, ($EvalSteps -join ','))
+  foreach ($seed in $Seeds) {
+    Write-Host ("seed_role seed={0} role={1}" -f $seed, (Get-MultiseedSeedRole $seed))
+  }
   foreach ($entry in $runOrder) {
-    Write-Host ("plan order={0} seed={1} arm={2} mode={3}" -f `
-      $entry.order, $entry.seed, $entry.arm, $entry.mode)
+    Write-Host ("plan order={0} seed={1} arm={2} mode={3} role={4}" -f `
+      $entry.order, $entry.seed, $entry.arm, $entry.mode, $entry.role)
     Write-Host ("plan dir seed={0} arm={1} report={2}\seed{0}\{3} results={4}\seed{0}\{3}" -f `
       $entry.seed, $entry.arm, $ReportRoot, $entry.arm.ToLowerInvariant(), $ResultsRoot)
   }
@@ -554,6 +622,11 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
   }
   Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ReportRoot) 'run-order.json') $runOrder
   Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ResultsRoot) 'run-order.json') $runOrder
+  $seedRegistry = Get-MultiseedSeedRegistry
+  Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ReportRoot) 'seed-registry.json') $seedRegistry
+  Write-MultiseedJson (Join-Path (Resolve-MultiseedPath $ResultsRoot) 'seed-registry.json') $seedRegistry
+  Write-Host ("seed_registry preregistered={0} exploratory={1} allow_exploratory={2}" -f `
+    ($preregisteredSeeds -join ','), (@($seedRegistry.exploratory_seeds) -join ','), $seedRegistry.allow_exploratory_seed)
 
   $outcomes = @()
   $adbPath = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'

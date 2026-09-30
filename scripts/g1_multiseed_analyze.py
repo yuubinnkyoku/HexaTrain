@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -254,6 +256,64 @@ EVAL_FILE_RE = re.compile(r"^eval256-step\d+-htp\.txt$")
 RESULT_FILE_RE = re.compile(r"^seed\d+-l\d+-.*-result\.txt$")
 GATE_FILE_RE = re.compile(r"^gate-static-step(\d+)\.txt$")
 
+# Pre-registered fresh seeds of docs/g1-1p5x-multiseed-3000.md.  Seed 1 is the
+# committed reference trajectory, not a replication sample.  Any other seed is
+# exploratory and must never reach the pre-registered decision.
+REFERENCE_SEED = 1
+PREREGISTERED_SEEDS = (2, 4)
+SEED_REGISTRY_FILE = "seed-registry.json"
+SEED_ROLES = ("preregistered", "exploratory", "reference")
+
+
+def default_seed_role(seed: int) -> str:
+    if seed == REFERENCE_SEED:
+        return "reference"
+    return "preregistered" if seed in PREREGISTERED_SEEDS else "exploratory"
+
+
+def load_seed_roles(tree: Path) -> tuple[dict[int, dict[str, str]], str]:
+    """Classify every seed directory as pre-registered / exploratory / reference.
+
+    The run registry written by scripts/run_g1_1p5x_multiseed.ps1 is the source
+    of truth once it exists.  A seed directory that the registry does not list is
+    treated as exploratory (fail closed on provenance): adding a seed is a
+    protocol event, so it has to be recorded, not inferred.  Without a registry
+    only the pre-registered pair 2 / 4 is trusted.
+    """
+    registry_path = tree / SEED_REGISTRY_FILE
+    roles: dict[int, dict[str, str]] = {}
+    source = "default"
+    if registry_path.is_file():
+        source = "registry"
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise EvidenceError(
+                f"SEED_REGISTRY_INVALID: {registry_path}: {error}") from error
+        entries = data.get("seeds") if isinstance(data, dict) else None
+        if not isinstance(entries, list) or not entries:
+            raise EvidenceError(
+                f"SEED_REGISTRY_INVALID: {registry_path} has no seeds list")
+        for entry in entries:
+            if not isinstance(entry, dict) or "seed" not in entry or "role" not in entry:
+                raise EvidenceError(
+                    f"SEED_REGISTRY_INVALID: {registry_path} entry {entry!r}")
+            role = str(entry["role"])
+            if role not in SEED_ROLES:
+                raise EvidenceError(
+                    f"SEED_REGISTRY_INVALID: {registry_path} role {role!r}")
+            seed = int(entry["seed"])
+            roles[seed] = {"role": role, "source": source}
+    for seed in discover_seeds(tree):
+        if seed in roles:
+            continue
+        if source == "registry":
+            role = "reference" if seed == REFERENCE_SEED else "exploratory"
+            roles[seed] = {"role": role, "source": "unlisted"}
+        else:
+            roles[seed] = {"role": default_seed_role(seed), "source": source}
+    return roles, source
+
 
 def discover_seeds(tree: Path) -> list[int]:
     seeds: list[int] = []
@@ -452,10 +512,16 @@ REVERSAL_MAX_STEP = 3000
 
 
 def verdicts_for_seed(rows: list[dict], gate: dict[int, dict]) -> list[dict[str, object]]:
-    """Apply the pre-registered criteria of docs/g1-1p5x-multiseed-3000.md."""
+    """Apply the pre-registered criteria of docs/g1-1p5x-multiseed-3000.md.
+
+    The criteria are computed for every seed so that an exploratory seed is still
+    fully readable, but each row carries the seed role and decision() consumes the
+    pre-registered rows only.
+    """
     if not rows:
         raise EvidenceError("NO_PAIRED_ROWS")
     seed = rows[0]["seed"]
+    role = str(rows[0].get("seed_role", "unknown"))
     early = [row for row in rows if row["step"] <= EARLY_MAX_STEP]
     late = [row for row in rows
             if REVERSAL_MIN_STEP <= row["step"] <= REVERSAL_MAX_STEP]
@@ -535,31 +601,48 @@ def verdicts_for_seed(rows: list[dict], gate: dict[int, dict]) -> list[dict[str,
                       f"nearest gate checkpoints {sorted(neighbour_steps)} "
                       "(descriptive, never causal)",
         })
+    for row in out:
+        row["seed_role"] = role
     return out
 
 
 def decision(verdict_rows: list[dict]) -> tuple[str, str]:
-    """R2 replication over the fresh seeds drives the lane decision."""
-    seeds = sorted({row["seed"] for row in verdict_rows})
-    hits = sorted({row["seed"] for row in verdict_rows
+    """R2 replication over the pre-registered fresh seeds drives the lane decision.
+
+    Verdict rows carry the seed role.  Exploratory seeds (anything outside the
+    pre-registered 2 / 4 pair) and the seed-1 reference are reported but never
+    enter this decision: adding a seed after seeing results must not be able to
+    move the pre-registered conclusion.
+    """
+    usable = [row for row in verdict_rows
+              if row.get("seed_role") == "preregistered"]
+    if not usable:
+        return ("preregistered_incomplete",
+                "no pre-registered seed in this tree, so the R1-R5 decision is "
+                f"withheld; the pre-registered seeds are {PREREGISTERED_SEEDS}. "
+                "Exploratory seeds are reported separately and are not evidence "
+                "for the pre-registered criteria.")
+    seeds = sorted({row["seed"] for row in usable})
+    hits = sorted({row["seed"] for row in usable
                    if row["criterion"] == "R2" and row["verdict"] == "reproduced"})
     total = len(seeds)
-    if total == 0:
-        raise EvidenceError("NO_SEED_VERDICTS")
     if len(hits) == total:
         return ("close_high_lr_quality_lane",
-                f"R2 reproduced in {len(hits)}/{total} fresh seeds: G1 at 1.5x is an "
-                "early sample-efficiency component inside this split pair; the "
-                "high-LR quality lane closes and the Val/Dev disagreement becomes a "
-                "documented selection hazard.")
+                f"R2 reproduced in {len(hits)}/{total} pre-registered fresh seeds: "
+                "G1 at 1.5x is an early sample-efficiency component inside this "
+                "split pair; the high-LR quality lane closes and the Val/Dev "
+                "disagreement becomes a documented selection hazard.")
     if not hits:
         return ("close_split_lane",
-                f"R2 reproduced in 0/{total} fresh seeds: the seed-1 reversal was a "
-                "single-seed trajectory; the committed G1 1.5x gains stand and the "
-                "split-disagreement lane closes.")
+                f"R2 reproduced in 0/{total} pre-registered fresh seeds: the seed-1 "
+                "reversal was a single-seed trajectory; the committed G1 1.5x gains "
+                "stand and the split-disagreement lane closes.")
     return ("ambiguous_tie_breaker",
-            f"R2 reproduced in {len(hits)}/{total} fresh seeds (seeds {hits}): "
-            "ambiguous; one tie-breaker seed (3) is allowed before deciding.")
+            f"R2 reproduced in {len(hits)}/{total} pre-registered fresh seeds "
+            f"(seeds {hits}): ambiguous.  The documented tie-breaker is one seed 3 "
+            "run via -AllowExploratorySeed; the analyzer reports it as exploratory "
+            "and keeps it outside this decision, so the tie is broken by an "
+            "explicit human call, not by an automatic merge.")
 
 
 
@@ -569,7 +652,7 @@ def decision(verdict_rows: list[dict]) -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 
 QUALITY_FIELDS = (
-    "seed", "step", "val_bpb_control", "val_bpb_g1", "val_bpb_delta",
+    "seed", "seed_role", "step", "val_bpb_control", "val_bpb_g1", "val_bpb_delta",
     "dev_bpb_control", "dev_bpb_g1", "dev_bpb_delta", "balanced_bpb_delta",
     "val_nll_control", "val_nll_g1", "val_nll_delta",
     "dev_nll_control", "dev_nll_g1", "dev_nll_delta",
@@ -578,11 +661,11 @@ QUALITY_FIELDS = (
     "val_mean_rank_delta", "dev_mean_rank_delta",
 )
 GATE_FIELDS = (
-    "seed", "step", "heads", "mean_of_head_means", "min_head_mean",
+    "seed", "seed_role", "step", "heads", "mean_of_head_means", "min_head_mean",
     "max_head_mean", "mean_below_0_1", "max_above_0_9", "heads_fully_suppressed",
 )
 HEALTH_FIELDS = (
-    "kind", "seed", "arm", "step", "status", "qnn_return_code_success",
+    "kind", "seed", "seed_role", "arm", "step", "status", "qnn_return_code_success",
     "output_tensors_finite", "checkpoint_finite", "all_steps_finite", "final_finite",
     "cpu_fallback", "nan_detected", "inf_detected", "graph_execute_failures",
     "hvx_rpc_failure_count", "hvx_fallback_count", "hvx_nonfinite_count",
@@ -590,7 +673,7 @@ HEALTH_FIELDS = (
     "battery_before", "battery_after", "total_seconds",
 )
 IDENTITY_FIELDS = (
-    "seed", "arm", "steps", "completed_steps", "run_completed_steps", "batch_size",
+    "seed", "seed_role", "arm", "steps", "completed_steps", "run_completed_steps", "batch_size",
     "dataset_hash", "training_order_seed", "training_order_hash",
     "muon_lr", "aux_adam_lr", "learning_rate_peak", "learning_rate_target",
     "learning_rate_schedule", "learning_rate_decay_start_step",
@@ -599,7 +682,7 @@ IDENTITY_FIELDS = (
     "attention_gate", "parameter_count", "checkpoint_format",
     "initial_parameter_hash", "final_parameter_hash",
 )
-VERDICT_FIELDS = ("seed", "criterion", "verdict", "value", "detail")
+VERDICT_FIELDS = ("seed", "seed_role", "criterion", "verdict", "value", "detail")
 
 
 def write_csv(path: Path, rows: list[dict], fields: tuple[str, ...]) -> None:
@@ -611,14 +694,17 @@ def write_csv(path: Path, rows: list[dict], fields: tuple[str, ...]) -> None:
             writer.writerow({key: row.get(key, "") for key in fields})
 
 
-def load_runs(tree: Path) -> list[dict[str, object]]:
+def load_runs(tree: Path, roles: dict[int, dict[str, str]]) -> list[dict[str, object]]:
     runs: list[dict[str, object]] = []
     for seed in discover_seeds(tree):
+        role = roles[seed]
         for arm in ("control", "g1"):
             arm_dir = tree / f"seed{seed}" / arm
             runs.append({
                 "seed_dir": seed,
                 "arm": arm,
+                "role": role["role"],
+                "role_source": role["source"],
                 "evals": load_arm_evals(arm_dir),
                 "result": load_result(arm_dir),
                 "gate": load_gate_series(arm_dir) if arm == "g1" else {},
@@ -635,10 +721,12 @@ def health_rows(runs: list[dict]) -> list[dict]:
         training = dict(result["health"])
         training["total_seconds"] = training.pop("training_total_seconds")
         rows.append({"kind": "training", "seed": run["seed_dir"],
-                     "arm": run["arm"], "step": result["completed_steps"],
+                     "seed_role": run["role"], "arm": run["arm"],
+                     "step": result["completed_steps"],
                      "status": result["status"], **training})
         for step, record in sorted(run["evals"].items()):
-            rows.append({"kind": "eval", "seed": run["seed_dir"], "arm": run["arm"],
+            rows.append({"kind": "eval", "seed": run["seed_dir"],
+                         "seed_role": run["role"], "arm": run["arm"],
                          "step": step, "status": record["status"],
                          **record["health"]})
     return rows
@@ -650,53 +738,105 @@ def identity_rows(runs: list[dict]) -> list[dict]:
         row = {key: value for key, value in run["result"].items()
                if key not in ("path", "health")}
         row["seed"] = run["seed_dir"]
+        row["seed_role"] = run["role"]
         row["arm"] = run["arm"]
         rows.append(row)
     return rows
 
 
 
-def print_markdown(rows: list[dict], gate: dict[int, dict],
-                   verdicts: list[dict], code: str, text: str) -> None:
-    print("| seed | step | d Val bpb | d Dev bpb | d Val NLL | d Dev NLL | "
+def print_paired_table(rows: list[dict], gates: dict[int, dict[int, dict]],
+                       with_role: bool) -> None:
+    role_head = " | role" if with_role else ""
+    role_sep = " | :---" if with_role else ""
+    print(f"| seed{role_head} | step | d Val bpb | d Dev bpb | d Val NLL | d Dev NLL | "
           "d Val top-1 | d Dev top-1 | sup. heads |")
-    print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    print(f"| ---:{role_sep} | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for row in rows:
+        gate = gates.get(row["seed"], {})
         suppressed = gate.get(row["step"], {}).get("heads_fully_suppressed", "")
-        print(f"| {row['seed']} | {row['step']} | {row['val_bpb_delta']:+.6f} | "
+        role_cell = f" {row['seed_role']} |" if with_role else ""
+        print(f"| {row['seed']}{role_cell} {row['step']} | {row['val_bpb_delta']:+.6f} | "
               f"{row['dev_bpb_delta']:+.6f} | {row['val_nll_delta']:+.6f} | "
               f"{row['dev_nll_delta']:+.6f} | {row['val_top1_token_delta']:+d} | "
               f"{row['dev_top1_token_delta']:+d} | {suppressed} |")
+
+
+def print_markdown(rows: list[dict], gates: dict[int, dict[int, dict]],
+                   verdicts: list[dict], code: str, text: str,
+                   roles: dict[int, dict[str, str]]) -> None:
+    preregistered = [row for row in rows if row["seed_role"] == "preregistered"]
+    other = [row for row in rows if row["seed_role"] != "preregistered"]
+    covered = sorted({row["seed"] for row in preregistered})
+    if preregistered:
+        print("### pre-registered fresh seeds")
+        print_paired_table(preregistered, gates, with_role=False)
+        print()
+        print(f"pre-registered coverage: seeds {covered} of {list(PREREGISTERED_SEEDS)}")
+    else:
+        print("### pre-registered fresh seeds")
+        print(f"none present; the pre-registered seeds are {list(PREREGISTERED_SEEDS)}")
+        print("R1-R5 decision withheld: a replication claim needs a pre-registered seed.")
+    if other:
+        described = ", ".join(
+            f"seed {seed} ({roles[seed]['role']}, source={roles[seed]['source']})"
+            for seed in sorted({row["seed"] for row in other}))
+        print()
+        print("### exploratory / reference seeds (excluded from the R1-R5 decision)")
+        print(described)
+        print_paired_table(other, gates, with_role=True)
     print()
-    print("| seed | criterion | verdict | value |")
-    print("| ---: | :--- | :--- | :--- |")
+    print("| seed | role | criterion | verdict | value |")
+    print("| ---: | :--- | :--- | :--- | :--- |")
     for row in verdicts:
-        print(f"| {row['seed']} | {row['criterion']} | {row['verdict']} | {row['value']} |")
+        print(f"| {row['seed']} | {row['seed_role']} | {row['criterion']} | "
+              f"{row['verdict']} | {row['value']} |")
     print()
-    print(f"decision: {code}")
+    print(f"decision: {code} (pre-registered seeds only)")
     print(text)
 
 
 def analyze_tree(tree: Path, out: Path, strict: bool) -> int:
-    runs = load_runs(tree)
+    roles, role_source = load_seed_roles(tree)
+    runs = load_runs(tree, roles)
     problems = identity_problems(runs) + health_problems(runs)
 
     all_rows: list[dict] = []
     gate_rows: list[dict] = []
     verdict_rows: list[dict] = []
-    last_gate: dict[int, dict] = {}
+    gates: dict[int, dict[int, dict]] = {}
     for seed in sorted({run["seed_dir"] for run in runs}):
+        role = roles[seed]["role"]
         control = next(run for run in runs
                        if run["seed_dir"] == seed and run["arm"] == "control")
         g1 = next(run for run in runs
                   if run["seed_dir"] == seed and run["arm"] == "g1")
         rows = paired_series(seed, control["evals"], g1["evals"])  # type: ignore[arg-type]
+        for row in rows:
+            row["seed_role"] = role
         all_rows += rows
         gate = g1["gate"]  # type: ignore[assignment]
-        last_gate = gate
+        gates[seed] = gate
         for step, aggregate in sorted(gate.items()):
-            gate_rows.append({"seed": seed, "step": step, **aggregate})
+            gate_rows.append({"seed": seed, "seed_role": role, "step": step,
+                              **aggregate})
         verdict_rows += verdicts_for_seed(rows, gate)
+
+    preregistered = sorted({row["seed"] for row in verdict_rows
+                            if row["seed_role"] == "preregistered"})
+    exploratory = sorted({row["seed"] for row in verdict_rows
+                          if row["seed_role"] == "exploratory"})
+    notes = [f"seed_role_source={role_source}",
+             f"preregistered_seeds={list(PREREGISTERED_SEEDS)}",
+             f"preregistered_coverage={preregistered}"]
+    if exploratory:
+        notes.append(
+            f"EXPLORATORY_SEED_EXCLUDED seeds={exploratory} — outside the "
+            "pre-registered R1-R5 decision")
+    missing = [seed for seed in PREREGISTERED_SEEDS if seed not in preregistered]
+    if missing:
+        notes.append(f"PREREGISTERED_SEED_MISSING seeds={missing} — decision is "
+                     "based on the pre-registered seeds present above")
 
     code, text = decision(verdict_rows)
     write_csv(out / "quality-split-level.csv", all_rows, QUALITY_FIELDS)
@@ -704,11 +844,13 @@ def analyze_tree(tree: Path, out: Path, strict: bool) -> int:
     write_csv(out / "run-health.csv", health_rows(runs), HEALTH_FIELDS)
     write_csv(out / "run-identity.csv", identity_rows(runs), IDENTITY_FIELDS)
     write_csv(out / "verdicts.csv", verdict_rows + [{
-        "seed": "", "criterion": "decision", "verdict": code, "value": "",
-        "detail": text}], VERDICT_FIELDS)
-    print_markdown(all_rows, last_gate, verdict_rows, code, text)
+        "seed": "", "seed_role": "", "criterion": "decision", "verdict": code,
+        "value": "", "detail": text}], VERDICT_FIELDS)
+    print_markdown(all_rows, gates, verdict_rows, code, text, roles)
     print(f"\nrows={len(all_rows)} gate={len(gate_rows)} "
           f"verdicts={len(verdict_rows)} problems={len(problems)}")
+    for note in notes:
+        print(f"NOTE: {note}")
     for problem in problems:
         print(f"PROBLEM: {problem}")
     if problems and strict:
@@ -801,9 +943,85 @@ NLL_TOP1_ANCHORS = {
 }
 
 
+def seed_contract_checks() -> list[str]:
+    """Pin the seed-role contract that the runner and this analyzer share.
+
+    Only the pre-registered pair 2 / 4 may drive R1-R5.  A seed directory the
+    registry does not list is exploratory (fail closed on provenance), and a
+    malformed registry is an evidence error rather than a silent downgrade.
+    """
+    problems: list[str] = []
+    expected = {1: "reference", 2: "preregistered", 3: "exploratory",
+                4: "preregistered", 5: "exploratory"}
+    for seed, role in expected.items():
+        got = default_seed_role(seed)
+        if got != role:
+            problems.append(f"SEED_ROLE {seed}: {got} != {role}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp)
+        for seed in (2, 4, 5):
+            (tree / f"seed{seed}").mkdir()
+        registry = {
+            "protocol": "docs/g1-1p5x-multiseed-3000.md",
+            "preregistered_seeds": [2, 4],
+            "seeds": [{"seed": 2, "role": "preregistered"},
+                      {"seed": 5, "role": "exploratory"}],
+        }
+        (tree / SEED_REGISTRY_FILE).write_text(json.dumps(registry),
+                                              encoding="utf-8")
+        roles, source = load_seed_roles(tree)
+        if source != "registry":
+            problems.append(f"SEED_REGISTRY source={source} != registry")
+        for seed, role, role_source in ((2, "preregistered", "registry"),
+                                        (4, "exploratory", "unlisted"),
+                                        (5, "exploratory", "registry")):
+            got = roles.get(seed, {})
+            if got.get("role") != role or got.get("source") != role_source:
+                problems.append(f"SEED_REGISTRY seed {seed}: {got} != "
+                                f"{role}/{role_source}")
+
+        (tree / SEED_REGISTRY_FILE).write_text(
+            json.dumps({"seeds": [{"seed": 2, "role": "convenient"}]}),
+            encoding="utf-8")
+        try:
+            load_seed_roles(tree)
+            problems.append("SEED_REGISTRY accepted an unknown role")
+        except EvidenceError:
+            pass
+
+    def rows(*seed_verdicts: tuple[int, str]) -> list[dict]:
+        return [{"seed": seed, "seed_role": default_seed_role(seed),
+                 "criterion": "R2", "verdict": verdict, "value": "", "detail": ""}
+                for seed, verdict in seed_verdicts]
+
+    for label, built, want in (
+            ("exploratory only", rows((3, "reproduced")), "preregistered_incomplete"),
+            ("reference only", rows((1, "reproduced")), "preregistered_incomplete"),
+            ("2/2 with exploratory miss",
+             rows((2, "reproduced"), (4, "reproduced"), (3, "none")),
+             "close_high_lr_quality_lane"),
+            ("1/2 with exploratory hit",
+             rows((2, "reproduced"), (4, "none"), (3, "reproduced")),
+             "ambiguous_tie_breaker"),
+            ("0/2 with exploratory hit",
+             rows((2, "none"), (4, "none"), (3, "reproduced")),
+             "close_split_lane")):
+        code, _ = decision(built)
+        if code != want:
+            problems.append(f"DECISION {label}: {code} != {want}")
+    return problems
+
+
 def selftest() -> int:
     """Recompute committed seed-1 evidence; a failure means this analyzer drifted."""
     problems: list[str] = order_prefix_checks()
+    contract_problems = seed_contract_checks()
+    problems += contract_problems
+    if not contract_problems:
+        print("seed-role contract verified: pre-registered 2/4 only, an unlisted "
+              "seed fails closed as exploratory, exploratory / reference verdicts "
+              "cannot move the R1-R5 decision")
 
     grid = REPO_ROOT / "docs/results/g1-lr-stress-2026-09"
     committed_grid = load_committed_pairs(grid / "quality-paired.csv", use_lr=True)
@@ -868,8 +1086,8 @@ def selftest() -> int:
         print(f"SELFTEST FAIL: {problem}")
     if problems:
         return 1
-    print("SELFTEST PASS: order prefix stability, grid and full-8000 paired "
-          "deltas, NLL / top-1 anchors, gate aggregates")
+    print("SELFTEST PASS: order prefix stability, seed-role contract, grid and "
+          "full-8000 paired deltas, NLL / top-1 anchors, gate aggregates")
     return 0
 
 
