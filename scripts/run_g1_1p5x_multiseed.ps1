@@ -166,24 +166,26 @@ function Get-MultiseedSeedRegistry {
       $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
       foreach ($entry in @($data.seeds)) {
         if ($null -eq $entry) { continue }
-        $registry[[int]$entry.seed] = [string]$entry.role
+        # String keys on purpose: [ordered]@{} resolves an integer indexer as
+        # a position, not a key, so an int seed key throws 'index out of range'.
+        $registry[[string]$entry.seed] = [string]$entry.role
       }
     } catch {
       Write-Host "seed_registry_read_soft_fail=$path"
     }
   }
-  foreach ($seed in $preregisteredSeeds) { $registry[$seed] = 'preregistered' }
+  foreach ($seed in $preregisteredSeeds) { $registry[[string]$seed] = 'preregistered' }
   foreach ($seed in $Seeds) {
-    if (-not $registry.Contains([int]$seed)) { $registry[[int]$seed] = 'exploratory' }
+    if (-not $registry.Contains([string]$seed)) { $registry[[string]$seed] = 'exploratory' }
   }
-  $exploratory = @($registry.Keys | Where-Object { $registry[$_] -eq 'exploratory' } | Sort-Object)
+  $exploratory = @($registry.Keys | Where-Object { $registry[$_] -eq 'exploratory' } | Sort-Object { [int]$_ })
   return [ordered]@{
     version = 1
     protocol = 'docs/g1-1p5x-multiseed-3000.md'
     preregistered_seeds = @($preregisteredSeeds)
     allow_exploratory_seed = [bool]$AllowExploratorySeed
-    exploratory_seeds = @($exploratory)
-    seeds = @($registry.Keys | Sort-Object | ForEach-Object {
+    exploratory_seeds = @($exploratory | ForEach-Object { [int]$_ })
+    seeds = @($registry.Keys | Sort-Object { [int]$_ } | ForEach-Object {
         [ordered]@{ seed = [int]$_; role = $registry[$_] }
       })
   }
