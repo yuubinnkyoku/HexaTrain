@@ -73,7 +73,7 @@ gate 側は 500–2000 の完全飽和 head 数が `12 / 6 / 4 / 5 / 2 / 4 / 2` 
 | 項目 | 値 | seed 1 との関係 |
 |---|---|---|
 | arms | Control `attention_gate=none` / NPRTCKPTV4 / 758,528 params<br>G1 `headwise_g1_sigmoid` / NPRTCKPTV5 / 760,960 params | 同一 |
-| seeds | **2, 4**（任意で fresh seed 1 を追加） | 新規 |
+| seeds | **2, 4**（事前登録。通常実行で許可されるのはこの 2 つだけ） | 新規 |
 | LR 1.5x triple | Muon `0.0075` / Aux Adam `0.0033` / target `0.00015` | 同一 |
 | schedule | `linear_decay`、decay_start 4000 / decay_end 8000 / schedule_total 8000 | 同一 → **step ≤ 3000 は peak 一定** |
 | model | V1024 / T32 / D64 / FFN128 / L19 / H2、batch 8 | 同一 |
@@ -84,11 +84,18 @@ gate 側は 500–2000 の完全飽和 head 数が `12 / 6 / 4 / 5 / 2 / 4 / 2` 
 | eval | Val first 256 + Dev first 256 chunk、HTP native、canonical original UTF-8 byte bpb | 同一 |
 | data | `train_pilot.bin`（dataset `fnv1a64:0c7b2826f5f26fea`）、tokenizer `byte-bpe-v1024` | 同一 |
 | device / QAIRT | NX741J 1 台、QAIRT `2.48.40.260702151143`（pinned、fallback 禁止） | 同一 |
-| arm order | seed2 Control → seed2 G1 → seed4 G1 → seed4 Control | 交互配置で thermal / battery drift を分散 |
+| arm order | seed2 Control → seed2 G1 → seed4 G1 → seed4 Control（1 session = 1 arm） | 交互配置で thermal / battery drift を分散。Mode All / Smoke は seed ごとに開始 arm を入れ替える |
 
 **3000 step にする理由:** seed 1 の反転は 1750 と 3000 の 2 点。2000 で切ると 1 点しか
 再現できず「反転時期がずれるのか」を測れない。4000 超は LR decay が効き始めるので
 split 挙動の原因分離が難しく、まず constant-peak 域で決着をつける。
+
+**seed 契約（事前登録の強制）:** 結果を見た後に seed を足すのは protocol event なので、
+runner は 2 / 4 以外を `-AllowExploratorySeed` なしで拒否し（`SEED_NOT_PREREGISTERED`）、
+`seed-registry.json` に role を累積記録する。analyzer はその registry を根拠に
+`preregistered` / `exploratory` / `reference`（seed 1）を区別し、exploratory と reference は
+R1–R5 の主判定に自動では混ざらない。registry に無い seed ディレクトリは exploratory として
+fail closed に扱う（provenance 不明を preregistered と推測しない）。
 
 ## データオーダーについての前提（実装前に確認済み）
 
@@ -129,20 +136,22 @@ Control と within-seed で pair する。
 - **R5 gate 対応:** R2 step 前後の `g<0.1` 完全飽和 head 数と mean-of-means を並べ、
   反転と saturation が対応するか記述する（因果の主張はしない）
 
-**fresh seed 1 run（1 arm pair、任意だが推奨）**
+**fresh seed 1 run（本 runner の対象外）**
 
-seed 1 を同一 protocol（fresh、steps=3000）で 1 本走らせ、既存 continuation 軌道と
-突き合わせる。step 1750 / 3000 の checkpoint が決定論的に一致すれば
-「fresh == continuation」「反転は horizon 依存の data order 差分では説明できない」が
-同時に確定し、以降の比較土台が固まる。一致しない場合は新 seed の結果を読む前に
-protocol 差を特定しなければならず、判定は保留になる。
+当初は seed 1 を fresh で 1 本走らせ、既存 continuation 軌道との決定論的一致を見る案が
+あった。しかし seed 1 は参照軌道であり replication sample ではないため、本 runner は
+`SEED_NOT_FRESH` で seed ≤ 1 を fail closed に拒否する。fresh == continuation の確認は
+必要になった時点で別 runner と protocol 追記を明示的に行うものであり、この 4 arm run の
+開始条件ではない。主判定は committed 済み seed 1 軌道を `reference` として参照するだけに
+留め（analyzer は reference を R1–R5 に混ぜない）、新 seed の結果が出る前に protocol 差を
+読み込む必要はない。
 
 **Decision rule**
 
 | 結果 | 帰結 |
 |---|---|
 | 2 / 2 の新 seed で R2 再現 | G1 は早期 / 中期 sample-efficiency 部品として位置付け、high-LR final quality lane を閉じる。`2*sigmoid` 等の新 gate は saturation 機構の probe としてのみ継続 |
-| 1 / 2 のみ | 曖昧。tie-breaker として seed 3 を 1 本だけ増やす。それ以上の追加はしない |
+| 1 / 2 のみ | 曖昧。tie-breaker として seed 3 を `-AllowExploratorySeed` 付きで 1 本だけ増やす。exploratory として報告され R1–R5 の自動判定には入らないため、決着は人間の明示判断で行う。それ以上の追加はしない |
 | 0 / 2 | seed 1 の split divergence は再現せず。現行 claim（bpb / NLL が両 split で改善）を維持し、split lane は予算を割らず閉じる |
 
 **統計上の禁止事項:** seed 高々 3 の sign consistency であり、検定・有意差・
@@ -159,7 +168,7 @@ protocol 差を特定しなければならず、判定は保留になる。
 
 | ID | 必要 | 方針 |
 |---|---|---|
-| P1 | seed 対応 runner | `scripts/run_g1_1p5x_multiseed.ps1` を新規作成（lr-stress runner を踏襲）。`-Seed`、`-Arm`、`-Mode Plan\|Smoke\|Run\|Finish\|Analyze`、`-Steps 3000`、`-CheckpointInterval 250`、eval steps 固定。**既存 runner の `seed1` リテラルは seed 1 evidence の再現性を支えるので変更しない** |
+| P1 | seed 対応 runner | `scripts/run_g1_1p5x_multiseed.ps1` を新規作成（lr-stress runner を踏襲）。`-Seed`、`-Arm`、`-Mode Plan\|Smoke\|Seed\|All\|Analyze`、`-Steps 3000`、`-CheckpointInterval 250`、eval steps 固定、`-AllowExploratorySeed`（2 / 4 以外の追加 seed 用）。**既存 runner の `seed1` リテラルは seed 1 evidence の再現性を支えるので変更しない** |
 | P2 | split-level analyzer | `scripts/g1_multiseed_analyze.py`。入力はその arm の一次レポートのみ。出力は seed × step の split-level paired（bpb / NLL / top-1,2,5 を rate と token 数の両方 / mean rank）、gate trajectory（mean-of-means、min / max head mean、mean `g<0.1`、完全飽和 head 数）、R1–R5 の per-seed verdict、README 雛形 |
 | P3 | analyzer の回帰 self-test | 既存 committed tree から既知値を再計算して一致を確認する。最低: 1.5x full-8000 の step 1750（ΔVal NLL −0.030889 / ΔDev NLL +0.018780）・step 3000（−0.053659 / +0.025505）、stress grid 20 cell の ΔBalanced。2026-09-28 の split-level audit は `build/g1-lr-stress-audit/*.ps1`（ignored）で行ったので、**同じ集計を scripts 側に移植して残す**ことが条件 |
 | P4 | order prefix test | `order(3000)` が `order(8000)` の prefix であることと、run 間の order / dataset hash 一致を確認する host 側 check（python で足りなければ `host_tests` に追加）。`kNprtCanonicalTrainingOrderSeed` と data order を seed に依存させる変更は禁止 |
@@ -170,11 +179,13 @@ protocol 差を特定しなければならず、判定は保留になる。
 - eval: `evaluation_total_seconds = 233.1857515`（256 + 256 chunk 1 回）→ 7 eval ≒ 27 min / arm
 - training: continuation 実測 0.40–0.52 s/update、fresh 500-step grid の wall 770–904 s から
   固定オーバーヘッド ≒ 550–680 s → 3000 step ≒ 33 min / arm
-- **arm あたり ≒ 60 min**。seed 2・4 の 4 run ≒ 4.0–4.5 h、fresh seed 1 を足すと ≒ 6–6.5 h
+- **arm あたり ≒ 60 min**。seed 2・4 の 4 run ≒ 4.0–4.5 h、1 / 2 tie で exploratory の
+  seed 3 を足す場合は ≒ 6–6.5 h
 - disk: checkpoint 12 本 / arm ≒ 7 MB／本（grid tree 実測 0.27 GB / 40 本）→ 4 arm で ≒ 0.35 GB、
   すべて ignored な `build/g1-1p5x-multiseed-3000/` 以下
-- device session は 2 分割を想定（session A: seed 2 の 2 arm、session B: seed 4 の 2 arm、
-  session C: 任意の fresh seed 1）。device lock と active-run check は session ごとにやり直す
+- device session は 2 分割を想定（session A: seed 2 の 2 arm、session B: seed 4 の 2 arm。
+  session C は 1 / 2 tie のときの exploratory seed 3 のみ、`-AllowExploratorySeed`）。
+  device lock と active-run check は session ごとにやり直す
 
 ## 安全条件と検証
 
@@ -234,8 +245,10 @@ $qa = @{ QairtSdkRoot = 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
 # 1) plan 確認のみ（device を触らず、ファイルも書かない）
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Plan -Seeds 2,4 @qa
 
-# 2) Tier 2 device smoke（8 update、eval なし）
+# 2) Tier 2 device smoke（8 update、eval なし。Control だけでなく G1 も 1 arm 通し、
+#    G1 固有の gate 診断と analyzer 入力が実機で出ることを先に確認する）
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Smoke -Seeds 2 -Arm Control @qa
+.\scripts\run_g1_1p5x_multiseed.ps1 -Mode Smoke -Seeds 2 -Arm G1 @qa
 
 # 3) Tier 3 本 run（ユーザーの明示承認後。1 session = 1 arm ずつ）
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 2 -Arm Control @qa
@@ -253,8 +266,22 @@ $qa = @{ QairtSdkRoot = 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
 受け付ける。`powershell -File` 経由では配列リテラルを渡せないため文字列形式を使う。
 `-Mode Smoke` は 8 update で eval を走らせないので R1 / R2 band チェックを省略する。
 
+seeds は事前登録の 2 / 4 だけが通常実行の対象である。追加 seed（例: 3）は protocol event
+なので、`-AllowExploratorySeed` を明示的に付けたときだけ実行できる:
+
+```powershell
+# 1 / 2 tie の tie-breaker 専用。exploratory として記録され、R1–R5 には入らない
+.\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 3 -Arm Control -AllowExploratorySeed @qa
+```
+
+runner は `seed-registry.json`（`build/g1-1p5x-multiseed` と results tree の両方）に role を
+累積記録し、各 arm の `arm-identity.json` にも `seed_role` を残す。analyzer はその registry を
+根拠に role を決め、registry に無い seed ディレクトリは exploratory として扱う。
+
 runner は次に該当すれば fail closed で止まる: `SEED_NOT_FRESH`（seed ≤ 1）、
-`STEPS_EXCEED_DECAY_START`（peak LR 区間が崩れる）、`EVAL_STEPS_MISSING_R1_BAND` /
+`SEED_NOT_PREREGISTERED`（2 / 4 以外を `-AllowExploratorySeed` なしで指定）、
+`ARM_REQUIRED`（`-Mode Seed` で `-Arm All`）、`STEPS_EXCEED_DECAY_START`（peak LR 区間が
+崩れる）、`EVAL_STEPS_MISSING_R1_BAND` /
 `EVAL_STEPS_MISSING_R2_BAND`（verdict band が観測できない eval steps）、
 `CHECKPOINT_MISSING` / `EVAL_REPORT_MISSING` / `GATE_REPORT_MISSING`、
 `MULTISEED_HARD_STOP`（status・finiteness・HVX・focus takeover を一次レポートから別々に確認）、
@@ -282,10 +309,12 @@ G1 1.5x の multi-seed replication を設計どおり準備し、実行は Tier 
    build/ 以下の使い捨てスクリプトに依存したまま終わらせない。
 4. order prefix check を host 側で追加し、run 間の training_order_hash / dataset_hash 一致を
    assert する。data order を model seed に依存させる変更は禁止。
-5. 検証: Fast → Host → device smoke（-Mode Smoke、8 update、Tier 2）。FAIL を PASS にしない。
+5. 検証: Fast → Host → device smoke（-Mode Smoke、8 update、Tier 2。Control と G1 の両 arm）。
+   FAIL を PASS にしない。
 6. ここまでを commit して報告し、実機 3000 step run は開始しない。長時間 training は
    Tier 3 なのでユーザーの明示指示を待つ。指示が来たら session 分割
-   （seed 2 → seed 4 → 任意 fresh seed 1）で実行し、device lock と active-run check を
-   session ごとに確認する。
+   （seed 2 → seed 4、1 session = 1 arm、開始 arm は seed ごとに交替）で実行し、
+   device lock と active-run check を session ごとに確認する。第 3 サンプルは 1 / 2 tie の
+   ときだけ seed 3 を -AllowExploratorySeed で追加する（exploratory、主判定には混ぜない）。
 ```
 
