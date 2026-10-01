@@ -103,26 +103,27 @@ FLIGHT_MODE = "flight"
 def _flight_header(step_total: int, overflow: int = 0,
                    stored: int | None = None) -> list[str]:
     stored_count = step_total if stored is None else stored
+    # The header is the first line and carries the monotonic anchor, so file
+    # order and timestamp order agree. A header stamped with "now" and written
+    # last would make the analyzer's TIMESTAMP_DISORDER check reject the trace.
     return [
-        # The dump header carries the signal invariants as bare
-        # `qnn_signal_argument_nonnull_count=0` / `hexatrain_signal_trigger_count=0`
-        # tokens, matching the native dump header. They must NOT be wrapped in
-        # `invariant=<name> value=<n>`: the analyzer's
-        # SIGNAL_INVARIANT_NOT_RECORDED check looks for these names as parsed
-        # keys, and an `invariant=` wrapper would hide them.
-        _native(0, 100, 0, -1,
+        _native(100, 100, 0, -1,
                 f"event=trace_start pid=4242 run_id={FIXTURE_RUN_ID} trace_mode=flight "
-                f"dump_reason=training_failure unix_anchor_ms=1 monotonic_anchor_ns=0 "
+                f"dump_reason=training_failure unix_anchor_ms=1 monotonic_anchor_ns=100 "
                 f"clock=steady_clock trace_capacity=65536 trace_event_count={step_total} "
                 f"trace_stored_count={stored_count} "
                 f"trace_overflow_count={overflow} "
                 f"qnn_signal_argument_nonnull_count=0 "
                 f"hexatrain_signal_trigger_count=0"),
-        _native(1, 100, 0, -1,
-                f"event=training_start steps={step_total} resume_step=0 micro_batch=8 "
-                f"backend=HVX_W8 trace_mode=flight trace_event_count={step_total} "
-                f"trace_overflow_count={overflow}"),
     ]
+
+
+def _flight_training_start(ts: int, step_total: int, overflow: int = 0) -> str:
+    """training_start as a ring record, matching the native flight dump."""
+    return _native(ts, 100, 0, -1,
+                   f"event=training_start execute_id=0 value={step_total} "
+                   f"aux=0 trace_mode=flight "
+                   f"trace_event_count={step_total} trace_overflow_count={overflow}")
 
 
 def _flight_execute(ts: int, step: int, batch: int, execute_id: int,
@@ -498,13 +499,17 @@ def _flight_run(root: Path, fail_step: int | None = None,
     """Builds a flight-mode run, optionally aborting with 6031 at `fail_step`."""
     total_steps = fail_step if fail_step is not None else 3
     lines = _flight_header(total_steps, overflow=overflow)
+    # Timestamps start after the header's anchor so file order and timestamp
+    # order agree, which is what the real dump produces.
     ts = 1000
     execute_id = 0
     for step in range(1, total_steps + 1):
+        lines.append(_flight_training_start(ts, total_steps, overflow))
+        ts += 10
         # Flight mode keeps stop_check; it is how the stopRequested state at the
         # failure is recovered.
         lines.append(_native(ts, 200, step, -1,
-                             f"event=stop_check step={step} value=0 aux=0"))
+                             f"event=stop_check execute_id=0 value=0 aux=0"))
         ts += 10
         is_fail_step = fail_step is not None and step == fail_step
         for batch in range(8):

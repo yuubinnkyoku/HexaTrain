@@ -160,6 +160,7 @@ struct State {
   bool dumped = false;
   std::FILE* file = nullptr;
   std::string path;
+  std::string runId;
   std::uint64_t executeSeq = 0;
   std::uint64_t currentExecuteId = 0;
   int currentStep = 0;
@@ -249,6 +250,12 @@ inline void record(Event event, std::int32_t value, std::uint32_t aux) {
 // carries the counters that make an untrustworthy flight trace detectable:
 // trace_mode, the capacity, how many records were accepted, how many were
 // stored, and the overflow count.
+//
+// The header is written FIRST, with the monotonic anchor rather than the current
+// time.  Writing it last, or stamping it with "now", would put a line whose
+// timestamp is later than every record before it in the file, and the analyzer's
+// TIMESTAMP_DISORDER check would correctly reject the whole trace.  File order
+// and timestamp order must agree.
 inline void dump(const char* reason) {
   State& s = state();
   if (s.mode != Mode::flight || !s.enabled || s.dumped) return;
@@ -258,9 +265,6 @@ inline void dump(const char* reason) {
   if (!out) return;
   s.dumped = true;
 
-  const std::size_t slash = s.path.find_last_of("/\\");
-  const std::string runId =
-      slash == std::string::npos ? std::string() : s.path.substr(slash + 1);
   std::fprintf(out,
                "ts_ns=%llu tid=%ld src=native step=0 batch=-1 event=trace_start "
                "pid=%d run_id=%s trace_mode=flight dump_reason=%s "
@@ -274,9 +278,9 @@ inline void dump(const char* reason) {
                // them and make a healthy flight trace look unverified.
                "qnn_signal_argument_nonnull_count=0 "
                "hexatrain_signal_trigger_count=0\n",
-               static_cast<unsigned long long>(monotonicNs()),
+               static_cast<unsigned long long>(s.monotonicAnchorNs),
                static_cast<long>(threadId()), static_cast<int>(::getpid()),
-               runId.c_str(), reason,
+               s.runId.c_str(), reason,
                static_cast<unsigned long long>(s.unixAnchorMs),
                static_cast<unsigned long long>(s.monotonicAnchorNs),
                kFlightCapacity, s.ringCount, s.ringWritten,
@@ -293,13 +297,10 @@ inline void dump(const char* reason) {
                  static_cast<unsigned long long>(r.execute_id), r.value,
                  static_cast<unsigned>(r.aux));
   }
-  std::fprintf(out,
-               "ts_ns=%llu tid=%ld src=native step=0 batch=-1 "
-               "event=training_start trace_mode=flight trace_event_count=%zu "
-               "trace_overflow_count=%llu\n",
-               static_cast<unsigned long long>(monotonicNs()),
-               static_cast<long>(threadId()), s.ringCount,
-               static_cast<unsigned long long>(s.overflowCount));
+  // No trailing summary line. A line written after the records with a fresh
+  // timestamp would sit at the end of the file with a timestamp later than
+  // every record before it, and the analyzer's TIMESTAMP_DISORDER check would
+  // reject the whole trace. The header already carries every counter.
   std::fclose(out);
 }
 
@@ -368,7 +369,20 @@ inline void configure(const std::string& cachePath) {
 
   s.monotonicAnchorNs = monotonicNs();
   s.unixAnchorMs = unixMs();
-  s.path = directory + "/incident-native-trace.log";
+  // The run id is the cachePath basename, which is the host runner's run id.
+  // It is derived from cachePath rather than from the trace filename so both
+  // modes report the same identity, and so a trace is never mislabeled with
+  // "incident-native-trace.log" as its run id.
+  {
+    const std::size_t slash = cachePath.find_last_of("/\\");
+    s.runId = slash == std::string::npos ? std::string()
+                                         : cachePath.substr(slash + 1);
+  }
+  // The trace file lives beside the run inputs (cachePath) in both modes, so
+  // the host pull finds it in one predictable place regardless of mode. The
+  // mode sidecar sits next to whichever marker resolved, which may be the
+  // parent directory.
+  s.path = cachePath + "/incident-native-trace.log";
   s.mode = sidecarRequestsFlight(directory) ? Mode::flight : Mode::full;
   s.enabled = true;
 
@@ -377,7 +391,12 @@ inline void configure(const std::string& cachePath) {
     return;
   }
 
-  std::FILE* file = std::fopen(s.path.c_str(), "ab");
+  // Truncate rather than append. Each incident run owns its trace file: if a
+  // previous run's records survived, the analyzer would read one file as holding
+  // several runs, and a timestamp from the earlier run would precede a later one
+  // and trip TIMESTAMP_DISORDER for a trace that is actually fine. A stale trace
+  // from a previous run must never be mistaken for evidence about this one.
+  std::FILE* file = std::fopen(s.path.c_str(), "wb");
   if (!file) {
     s.enabled = false;
     s.mode = Mode::disabled;
@@ -388,19 +407,18 @@ inline void configure(const std::string& cachePath) {
     s.file = file;
   }
   // The two anchors let the host reconstruct cross-process time alignment even
-  // if the two files were pulled at different moments.  The trace directory
-  // basename is the run id the host runner uses, so it is recorded here to
-  // make a cross-artifact identity mismatch detectable rather than assumed.
-  const std::size_t slash = cachePath.find_last_of("/\\");
-  const std::string runId = slash == std::string::npos
-      ? std::string() : cachePath.substr(slash + 1);
+  // if the two files were pulled at different moments.  The run id is recorded
+  // here so a cross-artifact identity mismatch is detectable rather than
+  // assumed.  The invariants are emitted as bare key=value tokens, not as
+  // `invariant=<name> value=<n>`: the analyzer looks for these names as parsed
+  // keys, and an `invariant=` wrapper would hide them.
   note("event=trace_start pid=" + std::to_string(static_cast<long>(::getpid())) +
-       " run_id=" + runId + " trace_mode=full" +
+       " run_id=" + s.runId + " trace_mode=full" +
        " unix_anchor_ms=" + std::to_string(s.unixAnchorMs) +
        " monotonic_anchor_ns=" + std::to_string(s.monotonicAnchorNs) +
        " clock=steady_clock"
-       " invariant=qnn_signal_argument_nonnull_count value=0"
-       " invariant=hexatrain_signal_trigger_count value=0");
+       " qnn_signal_argument_nonnull_count=0"
+       " hexatrain_signal_trigger_count=0");
 }
 
 // The training loop owns step/batch; the QNN adapter owns the return code.
@@ -632,6 +650,15 @@ inline void fastRpcSessionEvent(const char* event, const char* operation,
 }
 
 inline void trainingStart(int steps, int resumeStep, const char* backend) {
+  State& s = state();
+  if (!s.enabled) return;
+  if (s.mode == Mode::flight) {
+    // Recorded as a ring entry so the analyzer's required-event check finds it
+    // in the dump. It carries no extra payload: the host runner already records
+    // the step count and resume point in the run metadata.
+    record(Event::training_start, steps, static_cast<std::uint32_t>(resumeStep));
+    return;
+  }
   note("event=training_start steps=" + std::to_string(steps) +
        " resume_step=" + std::to_string(resumeStep) + " micro_batch=8" +
        " backend=" + backend);

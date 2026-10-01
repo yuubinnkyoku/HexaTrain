@@ -56,9 +56,23 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 
+$repoRoot = Split-Path -Parent $PSScriptRoot
+
+# Resolve the private inputs against the repository root, not against this
+# script's working directory. The training runner validates that they live below
+# build/, and it resolves relative paths against its own location, so a relative
+# path reaching it from a different working directory fails the run with
+# "CachePath must resolve below the repository build directory".
+$CachePath = [IO.Path]::GetFullPath((Join-Path $repoRoot $CachePath))
+$TokenizerModelPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $TokenizerModelPath))
+$IncidentRoot = if ([IO.Path]::IsPathRooted($IncidentRoot)) {
+  $IncidentRoot
+} else {
+  Join-Path $repoRoot $IncidentRoot
+}
+
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
 $trainingRunner = Join-Path $PSScriptRoot 'run_nicopedia_htp_training.ps1'
 $analyzer = Join-Path $PSScriptRoot 'incident_6031_analyze.py'
 
@@ -108,7 +122,9 @@ function Assert-IncidentNamespace {
   # Fail closed: the diagnostic namespace must live under build/, never under
   # docs/results/.  A diagnostic run is not evidence for the G1 decision and
   # must not be able to enter the quality tree.
-  $full = [IO.Path]::GetFullPath((Join-Path $repoRoot $IncidentRoot))
+  # IncidentRoot is already absolute (resolved above), but Join-Path is used so
+  # an absolute value passes through unchanged.
+  $full = [IO.Path]::GetFullPath($IncidentRoot)
   $resultsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'docs\results'))
   if ($full.StartsWith($resultsRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "INCIDENT_NAMESPACE_IN_RESULTS_TREE: $IncidentRoot resolves under docs/results"

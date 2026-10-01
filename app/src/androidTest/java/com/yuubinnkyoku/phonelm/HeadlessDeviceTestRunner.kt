@@ -1199,29 +1199,47 @@ class IncidentTrace internal constructor(
     /**
      * Writes the flight buffer out. Idempotent, and never throws: tracing must
      * not be able to fail a training run.
+     *
+     * The buffer is copied and the file written under a *single* lock hold.
+     * Releasing the lock between "take the buffer" and "write it" lets the
+     * heartbeat thread append in between, which puts an older-timestamped line
+     * after a newer one in the file and makes the analyzer's TIMESTAMP_DISORDER
+     * check reject the whole trace.
      */
     fun flush(reason: String) {
         if (mode != MODE_FLIGHT) return
-        val payload: String
-        val lost: Int
-        synchronized(lock) {
-            if (flushed) return
-            flushed = true
-            lost = overflowCount
-            payload = buildString {
-                append("ts_ns=").append(SystemClock.elapsedRealtimeNanos())
-                append(" unix_ms=").append(System.currentTimeMillis())
-                append(" tid=").append(Process.myTid())
-                append(" src=kotlin event=trace_flush")
-                append(" trace_mode=flight flush_reason=").append(sanitize(reason))
-                append(" kotlin_trace_event_count=").append(buffer.size)
-                append(" kotlin_trace_overflow_count=").append(lost)
-                append('\n')
-                buffer.forEach { append(it) }
+        runCatching {
+            synchronized(lock) {
+                if (flushed) return@synchronized
+                flushed = true
+                // The header is written first, so it carries the *earliest*
+                // buffered timestamp rather than "now". A header stamped with
+                // the current time would put a later timestamp before records
+                // that were produced earlier, and the analyzer's
+                // TIMESTAMP_DISORDER check would reject the trace.
+                val firstTs = buffer.firstOrNull()
+                    ?.substringBefore(' ')
+                    ?.removePrefix("ts_ns=")
+                    ?.toLongOrNull()
+                    ?: SystemClock.elapsedRealtimeNanos()
+                val header = buildString {
+                    append("ts_ns=").append(firstTs)
+                    append(" unix_ms=").append(System.currentTimeMillis())
+                    append(" tid=").append(Process.myTid())
+                    append(" src=kotlin event=trace_flush")
+                    append(" trace_mode=flight flush_reason=").append(sanitize(reason))
+                    append(" kotlin_trace_event_count=").append(buffer.size)
+                    append(" kotlin_trace_overflow_count=").append(overflowCount)
+                    append('\n')
+                }
+                val body = buildString { buffer.forEach { append(it) } }
+                buffer.clear()
+                FileOutputStream(file, true).use { out ->
+                    out.write((header + body).toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
             }
-            buffer.clear()
         }
-        appendNow(payload)
     }
 
     private fun appendNow(text: String) {
@@ -1276,7 +1294,16 @@ class IncidentTrace internal constructor(
                     ?.takeIf { it == MODE_FLIGHT }
                     ?.let { MODE_FLIGHT }
             }.getOrNull() ?: MODE_FULL
-            val trace = IncidentTrace(File(root, TRACE_NAME), mode)
+            val traceFile = File(root, TRACE_NAME)
+            // Start each incident run from an empty trace. The file is opened in
+            // append mode on every write, so without this a later run appends to
+            // the previous run's records: the analyzer then sees one file holding
+            // several runs, and a timestamp from an earlier run precedes a later
+            // one and trips TIMESTAMP_DISORDER for a trace that is actually fine.
+            // A stale trace from a previous incident run must never be mistaken
+            // for evidence about this one.
+            runCatching { if (traceFile.exists()) traceFile.delete() }
+            val trace = IncidentTrace(traceFile, mode)
             trace.line(
                 "trace_start",
                 extra = "unix_anchor_ms=${System.currentTimeMillis()} trace_mode=$mode",
