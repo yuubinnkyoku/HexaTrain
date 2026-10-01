@@ -301,15 +301,32 @@ inline void poisonFillEnd(int step, int batch) {
 inline void fastRpcEvent(const char* event, int step, int invocation,
                          const char* operation, int status,
                          const char* sessionIdentity) {
-  note(std::string("event=") + event + " invocation=" +
-       std::to_string(invocation) + " operation=" + operation +
-       " rpc_status=" + std::to_string(status) + " session=" +
-       sessionIdentity);
+  std::string payload = "event=";
+  payload += event;
+  payload += " invocation=";
+  payload += std::to_string(invocation);
+  payload += " rpc_status=";
+  payload += std::to_string(status);
+  payload += " session=";
+  payload += sessionIdentity;
+  if (step > 0) {
+    // Session-wide events (lock acquire) carry no optimizer step; the
+    // per-invocation events do, and the analyzer pairs them by invocation id.
+    payload += " rpc_step=";
+    payload += std::to_string(step);
+  }
+  if (operation != nullptr && operation[0] != '\0') {
+    payload += " operation=";
+    payload += operation;
+  }
+  note(payload);
 }
 
 inline void fastRpcSessionEvent(const char* event, const char* operation,
                                 int status, const char* sessionIdentity) {
-  note(std::string("event=") + event + " operation=" + operation +
+  note(std::string("event=") + event +
+       (operation != nullptr && operation[0] != '\0'
+            ? std::string(" operation=") + operation : std::string()) +
        " rpc_status=" + std::to_string(status) + " session=" +
        sessionIdentity);
 }
