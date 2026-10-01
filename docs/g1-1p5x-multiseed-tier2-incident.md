@@ -3,11 +3,12 @@
 Status: **BLOCKED / 未解決。** Tier 3（3000 step 本 run）は開始していない。
 本文書は incident 記録であり、**結果 evidence ではない**。R1–R5 の判定材料に使わない。
 
-**現在の到達点（2026-10-01、host-only 作業）**: 実機 run は 0 本。6031 を再現していない。
-opt-in incident trace（native / Kotlin / FastRPC）、incident analyzer、合成 fixture 14 ケース、
-logcat capture pipeline、128-step diagnostic runner を実装し host 検証まで終えた。
-1 本の diagnostic run を実行すれば「その失敗の直前に何が起きていたか」を
-手計算なしで確定できる状態にある。詳細は §4–§8。
+**現在の到達点（2026-10-01）**: instrumentation を実装し、**実機診断 run を 2 本実行した**。
+seed 2 / Control / 128 step / incident trace ON の 2 本とも **128 step 完全成功
+（1024/1024 execute、6031 発生 0、signal invariants 0）**。停止条件 C（128-step 診断
+run が成功）に該当し、**6031 の原因は未同定のまま**。「解決」とは記録しない。
+詳細は §4（SDK 一次資料）、§5–§7（instrumentation と analyzer）、§8（プロトコル）、
+§9（run 結果と、その run で見つかった instrumentation 自身の欠陥 3 件）。
 
 ## 事象
 
@@ -517,6 +518,92 @@ Control 128-step diagnostic run をもう 1 本だけ許可。2 本とも成功�
 **C. 別の failure mode** → fail closed。6031 と混ぜず別 incident として分類。
 
 ### 8.3 解析で見るもの（品質値ではない）
+
+`-Mode Analyze` で同じ directory を再解析できる。見るのは health と
+incident timeline のみ:
+
+- status / attempt / success / failure
+- QNN return code と failure execute の step / batch / execute id
+- signal invariants
+- CPU fallback / HVX return code / DSP kernel metadata
+- FastRPC timeline / heartbeat / progress timeline
+- logcat の backend evidence
+- process 残留・lock 解放
+
+## 9. 診断 run 結果（2026-10-01、実機 2 本）
+
+**6031 は再現しなかった。2 本とも 128 step Control が完全成功。**
+これは停止条件 C（128-step 診断 run が成功）に該当し、**解決扱いしない**。
+
+| run | steps | status | execute | 6031 | signal invariants | analyzer |
+| --- | --- | --- | --- | --- | --- | --- |
+| `incident-20261001-222455-298-44272` | 128 | SUCCESS | 1024 / 1024 | **0** | nonnull=0 / trigger=0 | problem 127 件（instrumentation bug、下記 9.2） |
+| `incident-20261001-223002-448-7584` | 128 | SUCCESS | 1024 / 1024 | **0** | nonnull=0 / trigger=0 | **problem 0 件（exit 0）** |
+
+device health（両 run 共通）: `completed_steps=128` / `qnn_return_code_success=true` /
+`all_steps_finite=true` / `final_finite=true` / `nan_detected=false` /
+`inf_detected=false` / `cpu_fallback=false` / `hvx_rpc_failure_count=0` /
+`hvx_fallback_count=0` / `hvx_nonfinite_count=0` / `focus_takeover_count=0` /
+`api_trace_last_qnn_result=0`。
+
+trace 側の整合性: `execute_begin=1024 / execute_end=1024`（欠落・重複なし）、
+`hvx_rpc_begin=128 / hvx_rpc_end=128`、非 0 の `qnn_result` は **0 件**、
+`signal_arg1/2` の非 null は **0 件**。
+
+### 9.1 品質値は見ていない
+
+本 2 本は品質評価なし（eval runner を呼んでいない）。読んでいないのは品質値のみで、
+health メタデータと incident timeline のみ。R1–R5 未計算、seed 3 未着手、
+G1 quality Tier 3 は **BLOCKED のまま**。
+
+### 9.2 この run で instrumentation 自身の欠陥が 3 件見つかった
+
+**実行して初めて分かったもの**であり、コードレビューでは出てこなかった:
+
+1. **namespace 破れ**: `.inc` は `namespace phonelm::qnn` の**内側**で
+   include されるため、`incident_trace.h` を `.inc` から include すると
+   `::phonelm::qnn::phonelm::incident_trace` と名前空間が二重になり、
+   libc の `getpid` も二重宣言されて **10 件の compile error**。
+   修正: header は file scope（`qnn_runtime_qairt.cpp`）で 1 回だけ include。
+2. **checkpoint phase の非対称**: `checkpoint_begin` は checkpoint を書いた step のみ、
+   `checkpoint_end` は毎 step → 127 件の `PHASE_END_WITHOUT_BEGIN`。
+   analyzer が正しく検出した。修正: begin/end を checkpoint **判定**を囲む形で毎 step 出し、
+   `written=true/false` を持たせる。
+3. **trace pull 先の誤り**: native trace は `cachePath`（= `files/headless-input/<runId>/`）に
+   書かれるが、pull は `files/headless/` を見ていた。**trace は最初から device 上にあった**。
+   修正: 両パスを probe し、`event=` を含む payload のみ採用。
+
+さらに runner 側の引数 2 件も実機動作で露見した（`EvalOnly` は存在しないパラメータ、
+`checkpointInterval` の device 側上限は 10000）。いずれも build/install を 1 回消費后才に
+判明したため、host 側で fail fast するようにした。Seed も 2 に pin した。
+
+### 9.3 logcat は evidence にならない（本機では）
+
+`logcat -g` は全 buffer が **"0 B readable"**（`adb logcat -g`:
+main/system/kernel すべて 0 B）。`logcat -d` / `-b all` も実質 55 行しか出ず、
+run の痕跡は残らない。**本機では logcat が有効な evidence channel にならない**ことが
+確定した（§4 の「logcat も使えない」の拡張確認）。これは 6031 の原因の手がかりでは
+ないが、**logcat 依存の切り分けはこの device では成立しない**ため、次の最小実験は
+logcat 以外の channel（trace の Δ、QAIRT profile/event trace、SSR カウンタ）を
+使う必要がある。
+
+### 9.4 非再現の分類（解決ではない）
+
+- 「instrumentation 付き 128-step Control が 2 本連続成功」は **事実**
+- 既存 6031（step 4 / step 77）が消えた原因は **未同定のまま**
+- instrumentation 自身が 6031 の発生率を変えていた可能性は**排除できていない**
+  （1 step あたり数十行の per-line flush。§5.3 の caveat がそのまま残る）
+- したがって **「解決」と書かない**。停止条件 C として記録し、
+  Tier 3 再開は行わない
+
+### 9.5 残る未同定事項（変化なし）
+
+§4 の SDK 一次資料が示す 2 仮説（H1 backend 内部 abort / H2 ヘッダ契約違反）は
+**今回の 2 本では切り分けられなかった**。非再現だからである。
+batch 0 共通・signal 不変条件 0 は 3 例すべてで一致しており、これは
+「batch 0 で起きる」観測を 1 例増やしただけで、原因には何も加えない。
+
+
 
 `-Mode Analyze` で同じ directory を再解析できる。見るのは health と
 incident timeline のみ:
