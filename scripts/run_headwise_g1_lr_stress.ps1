@@ -207,12 +207,35 @@ function Read-StressDeviceLock {
 }
 
 function Enable-StressDeviceAwake {
-  $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
-  & $adb shell input keyevent KEYCODE_WAKEUP | Out-Null
-  & $adb shell wm dismiss-keyguard | Out-Null
-  & $adb shell svc power stayon true | Out-Null
-  & $adb shell dumpsys deviceidle disable | Out-Null
-  Write-Host 'device_awake_and_idle_disabled=true'
+  param([string]$Adb = '', [string]$Device = '')
+  if (-not $Adb) { $Adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe' }
+  # Endpoint-scoped on purpose: a raw `adb shell ...` resolves by transport
+  # count, so a second (even offline) transport makes every command fail with
+  # "more than one device/emulator" while the failure stays invisible.  The
+  # commands stay best-effort, but each exit code is reported because sleep /
+  # idle state is part of the thermal comparability of a long run.
+  # The endpoint is resolved here (not at the call sites) because this helper
+  # runs before the arm loop resolves it.  Redaction is the shared helper's job.
+  if (-not $Device) {
+    $Device = ''
+    try { $Device = (Resolve-PhoneLmDevice -Adb $Adb).Endpoint } catch { $Device = '' }
+  }
+  $failures = @()
+  foreach ($command in @(
+      @('awake', @('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')),
+      @('dismiss_keyguard', @('shell', 'wm', 'dismiss-keyguard')),
+      @('stayon', @('shell', 'svc', 'power', 'stayon', 'true')),
+      @('deviceidle', @('shell', 'dumpsys', 'deviceidle', 'disable')))) {
+    $adbArgs = if ($Device) { @('-s', $Device) + $command[1] } else { $command[1] }
+    & $Adb @adbArgs *> $null
+    if ($LASTEXITCODE -ne 0) { $failures += ('{0}=exit{1}' -f $command[0], $LASTEXITCODE) }
+  }
+  if ($failures.Count -eq 0) {
+    Write-Host 'device_awake_and_idle_disabled=true'
+  } else {
+    Write-Host ('device_awake_and_idle_disabled=false failures={0} endpoint_resolved={1}' `
+        -f ($failures -join ','), ([bool]$Device))
+  }
 }
 
 function Acquire-StressDeviceLock {
