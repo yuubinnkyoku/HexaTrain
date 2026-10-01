@@ -1,5 +1,6 @@
 // Execution companion for the generic N-layer/H-head builder. The registries established by
 // the builder are the binding ABI; do not substitute tensor-name lookup here.
+#include "incident_trace.h"
 bool Runtime::executeTinyTransformerTrainingGeneralized(
     const std::vector<float> &input, const std::vector<float> &target,
     const TinyTransformerParameters &current, float learningRate,
@@ -164,8 +165,13 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   }
   const double appReadBufferAllocateUs = elapsedUs(phaseStarted);
   phaseStarted = Clock::now();
+  // Opt-in incident tracing: no-op unless the marker file exists.
+  incident_trace::poisonFillBegin(incident_trace::state().currentStep,
+                                  incident_trace::state().currentBatch);
   for (size_t index = 0; index < appReadBuffers.size(); ++index)
     std::fill(appReadBuffers[index].begin(), appReadBuffers[index].end(), poison);
+  incident_trace::poisonFillEnd(incident_trace::state().currentStep,
+                                incident_trace::state().currentBatch);
   const double appReadPoisonFillUs = elapsedUs(phaseStarted);
   phaseStarted = Clock::now();
   for (size_t index = 0; index < g.appReadRegistry.size(); ++index) {
@@ -182,9 +188,14 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   std::uint32_t learningRateBitsBefore = 0;
   std::memcpy(&learningRateBitsBefore, &learningRate, sizeof(learningRateBitsBefore));
   const auto started = Clock::now();
+  // Opt-in incident tracing (no-op unless the marker file exists): the signal
+  // arguments are recorded as null and the raw return code is captured.
+  incident_trace::qnnExecuteBegin();
   const auto status = impl_->api.graphExecute(g.graph, in.data(), uint32_t(in.size()),
                                                out.data(), uint32_t(out.size()),
                                                nullptr, nullptr);
+  incident_trace::qnnExecuteEnd(QNN_GET_ERROR_CODE(status),
+                                status == QNN_SUCCESS);
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),

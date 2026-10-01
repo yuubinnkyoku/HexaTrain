@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #include "qnn_runtime.h"
+#include "incident_trace.h"
 #include "qnn_first_nonfinite_diagnostics.h"
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
@@ -7327,6 +7328,12 @@ std::string nicopediaMuonHybridTraining(
   std::vector<double> stepWallSamplesUs;
   const bool useHvxMuonBackend = trainingConfig.nicopediaOptimizer == 2;
   const char* muonBackendName = useHvxMuonBackend ? "HVX_W8" : "CPU";
+  // Incident tracing is opt-in via a marker file.  Without it every
+  // incident_trace:: call below is a single predictable-branch check, so a
+  // normal run keeps its timing and artifacts unchanged.
+  incident_trace::configure(cachePath);
+  incident_trace::trainingStart(static_cast<int>(steps),
+                                static_cast<int>(resumeStep), muonBackendName);
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
   std::vector<std::pair<uint32_t, float>> curve;
   bool allFinite = true, interrupted = false;
@@ -7343,23 +7350,36 @@ std::string nicopediaMuonHybridTraining(
   const auto trainingStarted = std::chrono::steady_clock::now();
   TinyTransformerTrainingOutputs output;
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
-    if (stopRequested && stopRequested->load()) { interrupted = true; break; }
+    const bool stopNow = stopRequested && stopRequested->load();
+    incident_trace::stopCheck(static_cast<int>(step), stopNow);
+    if (stopNow) { interrupted = true; break; }
     const auto stepStarted = std::chrono::steady_clock::now();
+    incident_trace::zeroParametersBegin(static_cast<int>(step));
     Params gradient = zeroLanguageParameters(current);
+    incident_trace::zeroParametersEnd(static_cast<int>(step));
     double loss = 0.0;
     for (uint32_t batch = 0; batch < 8; ++batch) {
+      incident_trace::scope(static_cast<int>(step), static_cast<int>(batch));
+      incident_trace::batchPrepareBegin(static_cast<int>(step),
+                                        static_cast<int>(batch));
       NprtBatchTimings batchTimings;
       const auto data = nprtBatch(
           config, cache, order[std::size_t(step - 1) * 8 + batch],
           &batchTimings);
+      incident_trace::batchPrepareEnd(static_cast<int>(step),
+                                      static_cast<int>(batch));
       batchDataPrepareUs += batchTimings.totalUs;
       oneHotInputUs += batchTimings.oneHotInputUs;
       oneHotTargetUs += batchTimings.oneHotTargetUs;
       const size_t executeBefore = runtime.metrics().executeUs.size();
       const size_t inputBefore = runtime.metrics().inputBindUs.size();
       const size_t outputBefore = runtime.metrics().outputBindUs.size();
-      if (!runtime.executeTinyTransformerTraining(data.input, data.target,
-                                                  current, 0.0f, output, error))
+      const std::uint64_t executeId = incident_trace::beginExecute(
+          static_cast<int>(step), static_cast<int>(batch));
+      const bool executeOk = runtime.executeTinyTransformerTraining(
+          data.input, data.target, current, 0.0f, output, error);
+      incident_trace::endExecute(executeId, executeOk);
+      if (!executeOk)
         return failure("nicopedia_muon_fwd_bwd", error, runtime);
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)
         fwdBwdUs += runtime.metrics().executeUs[i];
@@ -7429,6 +7449,10 @@ std::string nicopediaMuonHybridTraining(
     updateConfig.optimizerStep = step;
     const auto optimizerUpdateStarted = std::chrono::steady_clock::now();
     nicopedia_muon::Result update;
+    int optimizerRpcStatus = 0;
+    bool optimizerFallback = false;
+    bool optimizerOutputFinite = true;
+    incident_trace::optimizerBegin(static_cast<int>(step), muonBackendName);
     if (useHvxMuonBackend) {
       auto hvxUpdate = nicopedia_hvx_muon::update(
           current, gradient, momentum, adamM, adamV, updateConfig);
@@ -7437,6 +7461,9 @@ std::string nicopediaMuonHybridTraining(
       if (hvxUpdate.rpcStatus != 0) ++hvxRpcFailureCount;
       if (hvxUpdate.fallback) ++hvxFallbackCount;
       if (!hvxUpdate.outputFinite) ++hvxNonFiniteCount;
+      optimizerRpcStatus = hvxUpdate.rpcStatus;
+      optimizerFallback = hvxUpdate.fallback;
+      optimizerOutputFinite = hvxUpdate.outputFinite;
       hvxRpcUs += hvxUpdate.timings.rpcUs;
       hvxKernelUs += hvxUpdate.timings.kernelUs;
       hvxPackUs += hvxUpdate.timings.packUs;
@@ -7462,10 +7489,13 @@ std::string nicopediaMuonHybridTraining(
       update = nicopedia_muon::update(current, gradient, momentum, adamM,
                                       adamV, updateConfig);
     }
+    incident_trace::optimizerEnd(static_cast<int>(step), optimizerRpcStatus,
+                                 optimizerFallback, optimizerOutputFinite);
     optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
     if (!update.error.empty())
       return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_OPTIMIZER_UPDATE\nerror=" + update.error + "\n";
+    incident_trace::parameterMoveBegin(static_cast<int>(step));
     const auto resultMoveStarted = std::chrono::steady_clock::now();
     current = std::move(update.parameters);
     momentum = std::move(update.muonMomentum);
@@ -7473,6 +7503,7 @@ std::string nicopediaMuonHybridTraining(
     adamV = std::move(update.auxiliaryAdamV);
     optimizerResultMoveUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - resultMoveStarted).count();
+    incident_trace::parameterMoveEnd(static_cast<int>(step));
     muonUs += update.muonMicroseconds;
     auxUs += update.auxiliaryAdamMicroseconds;
     allFinite = allFinite && update.health.gradientFinite &&
@@ -7486,13 +7517,16 @@ std::string nicopediaMuonHybridTraining(
     if (completed == 1) firstLoss = meanLoss;
     lastLoss = meanLoss;
     if (step % 25 == 0 || step == steps) curve.emplace_back(step, meanLoss);
+    incident_trace::telemetryBegin(static_cast<int>(step));
     telemetry << step << ',' << auxLr << ',' << auxLr << ',' << muonLr << ','
               << nicopedia_schedule::kindName(auxSchedule.kind) << '\n';
+    incident_trace::telemetryEnd(static_cast<int>(step));
     bool checkpointWritten = false;
     if (step % checkpointInterval == 0 || step == steps) {
       const std::string path = cachePath + "/" + nprtCheckpointName(
           seed, config.numLayers, config.tokens, config.dimension,
           config.feedForwardDimension, step);
+      incident_trace::checkpointBegin(static_cast<int>(step));
       const auto checkpointStarted = std::chrono::steady_clock::now();
       if (!nprtWriteMuonCheckpoint(path, config, seed, step, current, momentum,
                                    adamM, adamV, cache, checkpointHparams, 8,
@@ -7503,6 +7537,7 @@ std::string nicopediaMuonHybridTraining(
       ++checkpointCount;
       checkpointWritten = true;
     }
+    incident_trace::checkpointEnd(static_cast<int>(step), checkpointWritten);
     if (progress && (step == resumeStep + 1 || checkpointWritten ||
                      step % kMuonProgressTelemetryCadenceSteps == 0 || step == steps)) {
       std::ostringstream status;
@@ -7513,7 +7548,11 @@ std::string nicopediaMuonHybridTraining(
              << "\noptimizer_aux_adam_backend=CPU\nqnn_return_code_success=true"
              << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
              << "\ncpu_fallback=false";
+      // The progress upcall runs on the native training thread and is the only
+      // native -> Kotlin contact point in this loop, so it is timed explicitly.
+      incident_trace::phase("progress_jni", "begin", static_cast<int>(step));
       progress(status.str());
+      incident_trace::phase("progress_jni", "end", static_cast<int>(step));
     }
     stepWallSamplesUs.push_back(std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - stepStarted).count());

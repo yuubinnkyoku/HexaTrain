@@ -2,12 +2,15 @@ package com.yuubinnkyoku.phonelm
 
 import android.content.Context
 import android.os.PowerManager
+import android.os.Process
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -53,6 +56,7 @@ class HeadlessDeviceTestRunner {
             throw AssertionError("ALREADY_RUNNING existing_status=${acquired.existingStatus}")
         }
         acquired.lease.use {
+            val incidentTrace = IncidentTrace.forRun(context)
             HeadlessActivityCounters.reset()
             // Keep phase-boundary snapshots in the private headless report.
             // They distinguish an activity caused by process/environment
@@ -70,7 +74,9 @@ class HeadlessDeviceTestRunner {
             var test = "environment"
             val currentPhase = AtomicReference(phase)
             val currentTest = AtomicReference(test)
+            incidentTrace?.line("state_write_begin", reason = "startup")
             state.write(HeadlessStatus(runId, suite, "STARTING", phase, test, 0, 2, startTime = started))
+            incidentTrace?.line("state_write_end", reason = "startup")
             val contender = state.acquire()
             check(contender.lease == null && contender.existingStatus?.contains("\"run_id\":\"$runId\"") == true) {
                 contender.lease?.close()
@@ -97,9 +103,12 @@ class HeadlessDeviceTestRunner {
                     while (heartbeatRunning.get()) {
                         try {
                             Thread.sleep(30_000L)
+                            incidentTrace?.line("heartbeat_wake", reason = "heartbeat")
                             if (heartbeatRunning.get()) {
+                                incidentTrace?.line("heartbeat_write_begin", reason = "heartbeat")
                                 state.write(HeadlessStatus(runId, suite, "RUNNING", currentPhase.get(), currentTest.get(), 1, 2,
                                     startTime = started, lastHeartbeat = System.currentTimeMillis()))
+                                incidentTrace?.line("heartbeat_write_end", reason = "heartbeat")
                             }
                         } catch (_: InterruptedException) {
                             break
@@ -108,6 +117,7 @@ class HeadlessDeviceTestRunner {
                 }, "PhoneLM-headless-heartbeat").apply { isDaemon = true; start() }
                 val lastProgressStatus = AtomicLong(started)
                 val progressCallback = ProgressCallback { message ->
+                    incidentTrace?.line("progress_callback_enter")
                     val event = NativeProgressParser.parse(message)
                     if (event != null) {
                         when (event) {
@@ -150,14 +160,18 @@ class HeadlessDeviceTestRunner {
                         val previous = lastProgressStatus.get()
                         if (terminal || now - previous >= PROGRESS_STATUS_INTERVAL_MS) {
                             if (terminal || lastProgressStatus.compareAndSet(previous, now)) {
+                                incidentTrace?.line("progress_status_write_begin", reason = "progress")
                                 state.write(HeadlessStatus(runId, suite, "RUNNING",
                                     currentPhase.get(), currentTest.get(), 1, 2,
                                     startTime = started, lastHeartbeat = now))
+                                incidentTrace?.line("progress_status_write_end", reason = "progress")
                             }
                         }
                     }
+                    incidentTrace?.line("progress_callback_exit")
                 }
                 activitySnapshots += activitySnapshot("before_native")
+                incidentTrace?.line("native_call_begin", reason = suite)
                 val report = try {
                     when {
                         suite == "nicopedia-parity" ->
@@ -209,13 +223,16 @@ class HeadlessDeviceTestRunner {
                             )
                     }
                 } finally {
+                    incidentTrace?.line("native_call_end", reason = suite)
                     heartbeatRunning.set(false)
                     heartbeat.interrupt()
                     heartbeat.join(5_000L)
                 }
                 activitySnapshots += activitySnapshot("after_native")
                 notification?.onProgress(RunProgress.Completed(null))
+                incidentTrace?.line("report_write_begin", reason = "terminal")
                 reportPath = state.writeReport(runId, report)
+                incidentTrace?.line("report_write_end", reason = "terminal")
                 val allowQualityFailure = arguments.getString("allowQualityFailure")?.let {
                     it.toBooleanStrictOrNull() ?: throw IllegalArgumentException(
                         "allowQualityFailure must be true or false",
@@ -244,13 +261,17 @@ class HeadlessDeviceTestRunner {
                     "\n" + activitySnapshots.joinToString("\n") +
                     fallbackAnnotation + "\n"
                 reportPath = state.writeReport(runId, appended)
+                incidentTrace?.line("state_write_begin", reason = "terminal_status")
                 state.write(HeadlessStatus(runId, suite, if (success && countersOk) "PASSED" else "FAILED", "complete", test, 2, 2,
                     result = if (success) "SUCCESS" else "NATIVE_FAILED", failureCode = if (countersOk) "" else "ACTIVITY_LAUNCHED", reportRelativePath = reportPath, startTime = started))
+                incidentTrace?.line("state_write_end", reason = "terminal_status")
                 assertTrue("native result failed", success)
                 assertTrue("PhoneLM Activity was launched", countersOk)
             } catch (error: Throwable) {
+                incidentTrace?.line("state_write_begin", reason = "terminal_failure")
                 state.write(HeadlessStatus(runId, suite, "FAILED", currentPhase.get(), currentTest.get(), 0, 2, result = "FAILED",
                     failureCode = error.javaClass.simpleName, reportRelativePath = reportPath, startTime = started))
+                incidentTrace?.line("state_write_end", reason = "terminal_failure")
                 throw error
             } finally {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -1104,5 +1125,75 @@ class HeadlessDeviceTestRunner {
         val DECIMAL_FLOAT = Regex(
             "[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(?:[eE][+-]?[0-9]+)?",
         )
+    }
+}
+
+/**
+ * Opt-in incident trace for the QNN 6031 investigation
+ * (docs/g1-1p5x-multiseed-tier2-incident.md).  It exists only while
+ * `files/headless-input/incident_trace_enabled` is present, so a normal run
+ * pays nothing beyond one file-existence check per emit site.
+ *
+ * Timestamps use `SystemClock.elapsedRealtimeNanos()` (CLOCK_MONOTONIC), which
+ * is the same time base the native trace uses (std::chrono::steady_clock), so
+ * the host analyzer can merge both files onto one timeline without a fitted
+ * offset.  Wall-clock is recorded alongside it so cross-process skew can still
+ * be reconstructed if one of the two files was pulled at a different moment.
+ *
+ * Every line is written and flushed individually; a process that aborts keeps
+ * everything up to the abort.  The writes are synchronized because the
+ * heartbeat thread, the instrumentation thread and the native training thread
+ * (through the progress callback) all append to the same file.
+ */
+class IncidentTrace internal constructor(private val file: File) {
+    private val lock = Any()
+
+    fun line(event: String, reason: String = "", extra: String = "") {
+        val text = buildString {
+            append("ts_ns=").append(SystemClock.elapsedRealtimeNanos())
+            append(" unix_ms=").append(System.currentTimeMillis())
+            append(" tid=").append(Process.myTid())
+            append(" src=kotlin")
+            append(" thread=").append(sanitize(Thread.currentThread().name))
+            append(" event=").append(sanitize(event))
+            if (reason.isNotEmpty()) append(" reason=").append(sanitize(reason))
+            if (extra.isNotEmpty()) append(' ').append(extra)
+            append('\n')
+        }
+        // Tracing must never be able to fail a training run.
+        runCatching {
+            synchronized(lock) {
+                FileOutputStream(file, true).use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
+            }
+        }
+    }
+
+    /** Trace the body of [block] between begin/end markers, never throwing. */
+    inline fun span(event: String, reason: String = "", block: () -> Unit) {
+        line("${event}_begin", reason)
+        block()
+        line("${event}_end", reason)
+    }
+
+    companion object {
+        const val MARKER_NAME = "incident_trace_enabled"
+        private const val TRACE_NAME = "incident-kotlin-trace.log"
+
+        /** Values are whitespace-free by construction; this strips the rest. */
+        private fun sanitize(value: String): String =
+            value.replace(Regex("[\\s=]+"), "_")
+
+        fun forRun(context: Context): IncidentTrace? {
+            val marker = File(context.filesDir, "headless-input/$MARKER_NAME")
+            if (!marker.exists()) return null
+            val root = File(context.filesDir, "headless")
+            if (!root.exists() && !root.mkdirs()) return null
+            val trace = IncidentTrace(File(root, TRACE_NAME))
+            trace.line("trace_start", extra = "unix_anchor_ms=${System.currentTimeMillis()}")
+            return trace
+        }
     }
 }
