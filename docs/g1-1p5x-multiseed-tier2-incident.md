@@ -101,3 +101,21 @@ device lock・process・terminal status が clean。
 
 offline emulator は切断しない（先に消して「直った」ことにすると、原因が
 adb 多重接続か signal abort か single-flight 状態か分からなくなるため）。
+
+## 結果: 再実行は 6031 を再現せず（2026-10-01）
+
+上記 5 条件（host epoch と device epoch の skew 実測 ≒ 0 秒を含む cleanliness 確認）を
+満たしたうえで同一 Control 8-step を 1 本だけ再実行したところ:
+
+- `PASS NICOPEDIA_HTP seed=2 layers=19 steps=8`、`SMOKE1_EXIT=0`
+- `api_trace`: attempt / success / failure が全 64 execute（8 step × 8 batch）で 64 / 64 / 0、
+  `last_result=0`
+- 修正後のおかげで `more than one device/emulator` は **0 件**、
+  `device_awake_and_idle_disabled=true`（以前は同じ 4 コマンドが無言で失敗していた）
+
+したがってこの 1 本は **単発 abort として記録**する。**原因は未同定のまま**で、
+「修正で治った」とは書かない（証明できない）。分岐に従い G1 Smoke へ進む。
+
+再現しなかった残り候補（未検証）: Doze / idle 遷移（awake helper が無言失敗していた期間と
+重なる）、HTP 内部の一時状態。6031 が再発した場合の再開条件は上記分岐をそのまま踏む。
+
