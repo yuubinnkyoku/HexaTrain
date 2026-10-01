@@ -3,6 +3,12 @@
 Status: **BLOCKED / 未解決。** Tier 3（3000 step 本 run）は開始していない。
 本文書は incident 記録であり、**結果 evidence ではない**。R1–R5 の判定材料に使わない。
 
+**現在の到達点（2026-10-01、host-only 作業）**: 実機 run は 0 本。6031 を再現していない。
+opt-in incident trace（native / Kotlin / FastRPC）、incident analyzer、合成 fixture 14 ケース、
+logcat capture pipeline、128-step diagnostic runner を実装し host 検証まで終えた。
+1 本の diagnostic run を実行すれば「その失敗の直前に何が起きていたか」を
+手計算なしで確定できる状態にある。詳細は §4–§8。
+
 ## 事象
 
 `-Mode Smoke -Seeds 2 -Arm Control`（8 update、eval なし、Tier 2）が FAILED。
@@ -245,30 +251,281 @@ create / finalize / skel / backend は正常。偶然の一致かもしれず、
   残っていない。次回の incident run では run 前に `logcat -c`、失敗時に `logcat -d` を
   private（`build/`、commit しない）へ退避する
 
-## 次の実機 run 前に入れる観測（計画）
+## 4. QAIRT 2.48.40 header / docs による一次資料調査（実機 run なし）
 
-incident 専用 trace を app-private に追加する（marker file `incident_trace_enabled` が
-run dir にあるときだけ有効。通常 run の挙動・成果物は変えない）:
+SDK root は `docs/agent/qairt-policy.md` のピン `C:\Qualcomm\AIStack\QAIRT\2.48.40.260702`
+（build id `2.48.40.260702151143`）。二次情報は使っていない。
 
-- per-execute: `execute_id`、`step`、`batch`、monotonic timestamp、thread id、
-  **signal handle = null**（invariant）、execute begin / end、QNN return code
-- 境界: `optimizer_begin/end`（FastRPC HVX を含む）、`parameter_copy_begin/end`、
-  `stop_requested`、`cancel_requested`
-- Kotlin: `heartbeat_begin/end`、`status_write_begin/end`（heartbeat / progress の別）
-- report に `signal_trigger_count=0` を invariant として出す（trigger site が存在しないため
-  記録ではなく不変条件になる）
-- run 前の `logcat -c` と失敗時の `logcat -d`（private、commit しない）
+### 4.1 6031 の公式定義と_errno_ の食い違い（重要）
 
-そのうえで **incident 専用 Control 100–128 step diagnostic run** を 1 本だけ行う
-（eval なし・checkpoint 最小・G1 品質実験とは分離）。分岐は合意どおり:
+`include/QAIRT/QairtGraph/QairtGraph.h`:
 
-- 6031 + trigger 記録あり → trigger 元を修正して再診断
-- 6031 + trigger 記録なし → backend / runtime 内部 abort として signal ownership を切る
-- 128 step 成功 → まだ Tier 3 に戻さず、再現性確認をもう 1 本
-- 複数回成功 → Tier 3 再開条件を再定義
+```
+/// Call aborted early due to a QnnSignal_trigger call issued
+/// to the observed signal object.
+QAIRT_GRAPH_ERROR_ABORTED = 6031,
+```
 
-heartbeat の無効化は最初の切り分けでは行わない（まず観測だけを増やして現状条件を再現し、
-必要になったら heartbeat ON/OFF を incident A/B として切る）。
+しかし **同じファイル内の API 契約コメントは 3 箇所とも別の言葉を使う**:
+`QairtGraph_execute`（465 行目）/ `executeAsync`（617 行目）/ `finalize`
+（310 行目）いずれも
 
+> `QAIRT_GRAPH_ERROR_ABORTED: Execution aborted due to user cancellation.`
 
+**事実**: 列挙体のコメントは「観測された signal object に対する
+`QnnSignal_trigger`」、API 契約コメントは「user cancellation」と書いてある。
+両者は同じ code を指す一つの enum であり、片方が誤記である可能性と、
+backend 内部の signal が「user cancellation」として現出する可能性のどちらも
+SDK 内だけでは排除できない。**本 incident ではこの不一致自体が未解決事項**。
+
+### 4.2 signal 引数が NULL のとき 6031 は返り得るか（最重要）
+
+`QairtGraph.h` の `signalHandle` 引数欄（421–423 行目）:
+
+> `signalHandle` Optional signal object used to control execution. **If NULL,
+> execution proceeds uninterrupted.**
+
+つまり **ヘッダの記述どおりなら、`nullptr` を渡した execute は uninterrupted に
+進む**。我々は 24/24 の call site で `nullptr, nullptr` を渡している。
+
+したがって次の 2 仮説は排他的ではなく、どちらも残る:
+
+- **H1**: backend / runtime が内部 signal を持ち、client signal が NULL でも
+  internal abort を 6031 として返す（ヘッダの「If NULL, uninterrupted」は
+  client-supplied signal のみを指す、という解釈）
+- **H2**: 同一 build の backend がヘッダ契約に反して signal 未指定 execute に
+  6031 を返す（契約違反として捕捉する価値がある）
+
+**注意**: `QAIRT_GRAPH_ERROR_SIGNAL_IN_USE = 6030` が別の code として存在する
+ため、「signal 関連，但不是 trigger 由来」という route は code 的に可能。
+`6033 TIMED_OUT`（timeout 由来）でもない。
+
+### 4.3 SSR（DSP crash）とは別 code
+
+`docs/.../QNN/general/htp/htp_ssr.html`:
+
+> The error code `QNN_COMMON_ERR_SYSTEM_COMMUNICATION` tells the client that
+> the CDSP has crashed, and QNN has successfully recovered a connection.
+
+**事実**: DSP crash / SSR は 6031 ではなく `QNN_COMMON_ERROR_SYSTEM_COMMUNICATION`
+（recoverable）または `..._FATAL` を返す。したがって
+
+- 2 件の 6031 は **SSR / CDSP crash ではない**（少なくとも報告 code は別）
+- SSR なら context / graph handle が invalid になるが、我々の 2 件は
+  graph create / finalize / backend / skel identity がすべて正常で、
+  直前まで 608 回と 24 回の execute が成功している。**handle invalidation の
+  証拠もない**
+
+### 4.4 HTP yielding / pre-emption（HVX FastRPC 仮説に最も関連する）
+
+`docs/.../QNN/general/htp/htp_yielding.html`:
+
+> Yielding and pre-emption of Hexagon clients (QNN Graphs or non-ML use-cases)
+> are based on HexagonOS client thread priority. **Every graph in QNN will
+> acquire VTCM with a priority specified by `Qnn_Priority_t`.**
+
+つまり QNN graph は優先度付きで VTCM を取得する。higher priority client は
+lower priority client を **pre-empt** し得る。我々の step 境界は
+
+```
+HTP graphExecute × 8  →  HVX Muon FastRPC（CDSP domain, custom skel）  →  次 step batch 0
+```
+
+であり、**CDSP 上の外部コードが HTP graph の合間に、排他状態で走る唯一の
+外来コード**。pre-emption が 6031 の内部 abort を誘発しうるかは SDK 記述からは
+確認できないが、**候補を「構造的に不可能」と主張できる根拠はない**。
+
+### 4.5 確定していないこと（断定しない）
+
+- QnnSignal の ownership が client / backend のどちら持有的か: header は
+  「signal handle は client が create/free」と書く（`QairtSignal.h`）が、
+  6031 の実際の emission 主体は不明
+- `QnnGraph_execute` の thread safety 記述: `execute` は「synchronous and blocks
+  until completion」「if other executions are enqueued, this call will wait in
+  queue」とだけ。**我々は同一 graph handle を単一 thread から逐次呼んでいる**
+  ので、明示的な並行性違反の証拠はない
+- power / context lifecycle の 6031 への寄与: SDK に該当記述なし
+
+## 5. 実装した incident instrumentation（opt-in）
+
+**通常 run の挙動・成果物・コストを変えない**ことを第一条件に設計した。
+
+### 5.1 有効化と無効化
+
+marker file `incident_trace_enabled` が **app-private** の
+`files/headless-input/incident_trace_enabled` に存在するときだけ有効。
+native 側（`incident_trace::configure`）は cachePath とその親を lookup し、
+Kotlin 側（`IncidentTrace.forRun`）は `files/headless-input/` を見る。両者は
+同じディレクトリを指す（cachePath は `files/headless-input/<runId>`）。
+
+marker 無しでは各 call site は 1 回の予測可能分岐のみで、ログも生成しない。
+
+### 5.2 記録内容
+
+| 層 | 記録 |
+| --- | --- |
+| native | per-execute: `execute_id` / `step` / `batch` / monotonic ns / kernel tid / `execute_begin` / `execute_end` / QNN return code / `signal_arg1=null` / `signal_arg2=null` |
+| native | step 境界: `stop_check`（`stop_requested` 値つき）/ `zero_parameters` / `batch_prepare` / `poison_fill` / `optimizer`（`rpc_status` `fallback` `output_finite`）/ `parameter_move` / `telemetry` / `checkpoint` / `progress_jni` |
+| native | FastRPC: `hvx_lock_acquired` / `hvx_rpc_begin` / `hvx_rpc_end` / `hvx_kernel_metadata` / session open-configure-ready / `hvx_domain_control` |
+| Kotlin | `heartbeat_wake` / `heartbeat_write_begin` / `heartbeat_write_end` / `progress_callback_enter` / `progress_callback_exit` / `progress_status_write_begin` / `progress_status_write_end` / `state_write_begin` / `state_write_end`（`reason=startup\|progress\|terminal_status\|terminal_failure`）/ `native_call_begin` / `native_call_end` / `report_write_begin` / `report_write_end` |
+| 両方 | `trace_start`: pid / **run_id** / wall clock anchor / monotonic anchor / clock 種別 |
+
+### 5.3 overhead と perturbation caveat（正直に）
+
+- **1 行 = 1 append + 1 flush**。`fsync` / JSON / parse / Java callback は hot path に一切無い
+- abort 時に **直前までの行が必ず残る** ことを優先して flush している
+- **native と Kotlin は **両方 CLOCK_MONOTONIC**（`steady_clock` /
+  `elapsedRealtimeNanos`）を使うので、host 側はオフセットを当てはめずに
+  1 本の timeline に載る。加えて **wall clock** も記録してあるので、pull 時刻が
+  異なっても skew を後から復元できる
+- **残存リスク**: tracing 有効時は per-step あたり数十行の追記が入る。
+  flush は page cache への書き込みで HTP execute そのものには触れないが、
+  **「tracing が 6031 の発生率を変える可能性」は排除できていない**。
+  したがって 2 本が成功しても「instrumentation 附带で 6031 が出なくなった」とは
+  書かない（下記停止条件 C 参照）
+- Kotlin 側は heartbeat thread / instrumentation thread / native training thread が
+  同じファイルに追記するため synchronized。native 側 mutex は contention しない設計
+
+### 5.4 signal invariant
+
+報告と analyzer の両方に明示:
+
+- `qnn_signal_argument_nonnull_count` = **期待 0**
+- `hexatrain_signal_trigger_count` = **期待 0**
+
+これらは**観測ではなく invariant** である（`app/src` に trigger site が 0 件なので）。
+0 でない場合は analyzer が即 `SIGNAL_*_VIOLATION` として fail closed する。
+
+## 6. incident analyzer（`scripts/incident_6031_analyze.py`）
+
+ログ収集で終わらせない。人間の手計算を不要にするため、以下を自動出力する:
+
+- failure execute の `execute_id` / `step` / `batch` / QNN return code
+- 直前の step 境界処理（optimizer / RPC / parameter move / telemetry / checkpoint）
+- **HVX RPC 終了 → failure execute の時間差**（us 単位）
+- **heartbeat 書き込み終了 → failure の時間差**（ms 単位）
+- **progress/status write → failure の時間差**
+- `stopRequested` 状態
+- signal invariants
+- 最も近い外部イベント群（窓は前後 nearest 件に制限）
+
+出力は machine-readable（`incident-timeline.csv` / `incident-findings.json`）と
+human-readable（`incident-report.md`）の両方。
+
+**proximity は因果として表現しない。** analyzer の出力には
+「shared monotonic clock 上の近接であり、near == cause ではない」旨が
+常に明記され、Markdown の該当行も observation として列挙される。
+
+### 6.1 fail-closed 条件
+
+`problems` が非空なら exit 非ゼロ。以下をすべて problem 扱いにする:
+
+| code | 意味 |
+| --- | --- |
+| `NATIVE_TRACE_MISSING` / `KOTLIN_EVENT_MISSING` | incident mode で必須 trace / anchor が無い |
+| `RUN_IDENTITY_MISMATCH` / `RUN_IDENTITY_ABSENT` | trace と status.json の run id 不一致 / 照合不能 |
+| `EXECUTE_ID_MISSING` / `EXECUTE_ID_DUPLICATE` | execute id 欠落 / 重複 |
+| `EXECUTE_BEGIN_WITHOUT_END` / `EXECUTE_END_WITHOUT_BEGIN` | begin/end 不対（failure execute は特別扱い） |
+| `TIMESTAMP_DISORDER` / `TIMESTAMP_UNPARSABLE` | ファイル内 timestamp 逆転 |
+| `STEP_MISSING` / `BATCH_OUT_OF_RANGE` | step / batch 不整合 |
+| `PHASE_*` | step 境界 phase の pairing 崩れ |
+| `SIGNAL_ARGUMENT_NONNULL` / `SIGNAL_*_INVARIANT_*` | signal invariant 違反 |
+| `SIGNAL_INVARIANT_NOT_RECORDED` | invariant が「観測」されていない（未違反ではなく未確認） |
+
+timestamp 逆転の検査は **merge 前の file 順**で行う。timestamp でソートした
+timeline では検出できないため。
+
+### 6.2 legacy evidence（過去 2 件）
+
+`--legacy` / `--legacy-dir` は instrumentation 以前の primary report を解析する。
+**新 instrumentation 相当の値を捏造しない。** 復元可能なのは
+`status` / `error` / execute counts / `first_failure_call` / QNN identity /
+fallback / focus のみで、step/batch は記録された execute index と
+文書化された 1 step = 8 micro-batch から**導出**する（data から推測したのではなく
+loop 構造の定数）。
+
+記録されなかった項目は `NOT RECORDED` として列挙し、absent を 0 と読ませない。
+
+実測: 2 件とも **step 4 batch 0** / **step 77 batch 0** を復元（本ドキュメントの
+既存記述と一致）。
+
+## 7. 合成 fixture と self-test（`scripts/incident_trace_selftest.py`）
+
+実機不要で analyzer の fail-closed 規則と時間差演算を固定する 14 ケース。
+`verify.ps1 -Profile Fast` に組み込まれている。
+
+| fixture | 期待 |
+| --- | --- |
+| `normal_success` | problem 0 件 |
+| `failure_step4_batch0` | 6031 / step 4 / batch 0 / problem 0 |
+| `failure_step77_batch0` | 6031 / step 77 / batch 0 / problem 0 |
+| `failure_missing_end` | `EXECUTE_BEGIN_WITHOUT_END`（failure を捏造しない） |
+| `failure_after_heartbeat` | heartbeat delta ≈ 4 ms + execute duration |
+| `failure_after_progress` | progress write delta ≈ 2 ms + execute duration |
+| `failure_after_hvx_rpc` | HVX RPC delta ≈ 200 us + execute duration |
+| `failure_no_external_event` | 該当 Δ は `n/a`（近接が無いことを捏造しない） |
+| `timestamp_disorder` | `TIMESTAMP_DISORDER` |
+| `duplicate_execute_id` | `EXECUTE_ID_DUPLICATE` |
+| `signal_nonnull` | `SIGNAL_ARGUMENT_NONNULL` |
+| `signal_trigger_violation` | `SIGNAL_TRIGGER_INVARIANT_VIOLATION` |
+| `identity_mismatch` | `RUN_IDENTITY_MISMATCH` |
+| `missing_trace_file` | `NATIVE_TRACE_MISSING` |
+
+結果: **14/14 PASS**。
+
+## 8. 帰宅後の診断プロトコル（実機 1 本）
+
+**この指示期間中に実機 run は 0 本**。以下は接続後の手順。
+
+前提: `.\scripts\verify.ps1 -Profile Fast` の PASS（唯一の FAIL が
+`g++ not found on PATH` なら本 commit で_FIX した 6031 analyzer self-test が PASS すること）
+と analyzer self-test PASS を確認済み。
+
+### 8.1 1 本だけ: seed 2 / Control / 128 step / incident trace ON
+
+```powershell
+.\scripts\run_incident_6031_diagnostic.ps1 -Mode Run `
+  -QairtSdkRoot 'C:\Qualcomm\AIStack\QAIRT\2.48.40.260702' `
+  -ExpectedBuildId '2.48.40.260702151143' `
+  -Seed 2 -Steps 128
+```
+
+固定条件（意図的に「怪しい機能を消して成功させる」ことを禁じている）:
+batch 8 / Control（gate なし）/ 現行 Muon + HVX FastRPC / heartbeat ON /
+progress + status write ON / host polling ON。品質評価なし、checkpoint 無効。
+
+Runner が fail closed で守るもの:
+
+- incident namespace が `docs/results/` 配下に解決したら **拒否**
+- `build/` 外なら **拒否**
+- trace marker をプロセス起動**前**に配置し、終了**後**に削除
+- logcat を run 前 `logcat -c`、run 後（成功/失敗regardless）に `logcat -d` で private へ
+- 完了後に analyzer を自動実行（trace があれば）
+- G1 quality Tier 3 には一切触れない
+
+### 8.2 1 本目の結果による分岐
+
+**A. 6031 再現** → incident evidence として保全。analyzer の timeline で確定。
+追加 3000-step run は禁止。trace で仮説が 1 つに絞れた場合のみ、
+Phase G の範囲（最大 2 本の 128-step Control A/B、1 変数ずつ）で切り分け。
+
+**B. 128 step 成功** → それだけで Tier 3 に戻らない。同一条件の
+Control 128-step diagnostic run をもう 1 本だけ許可。2 本とも成功なら
+「instrumentation 付き 128-step Control が 2 本連続成功」と記録するが、
+**既存 6031 の消失原因は未同定**のまま、Tier 3 再開は行わない。
+
+**C. 別の failure mode** → fail closed。6031 と混ぜず別 incident として分類。
+
+### 8.3 解析で見るもの（品質値ではない）
+
+`-Mode Analyze` で同じ directory を再解析できる。見るのは health と
+incident timeline のみ:
+
+- status / attempt / success / failure
+- QNN return code と failure execute の step / batch / execute id
+- signal invariants
+- CPU fallback / HVX return code / DSP kernel metadata
+- FastRPC timeline / heartbeat / progress timeline
+- logcat の backend evidence
+- process 残留・lock 解放
 

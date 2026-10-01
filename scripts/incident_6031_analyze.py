@@ -348,9 +348,11 @@ def check_invariants(
         if step is None or step <= 0:
             problem("STEP_MISSING",
                     f"execute_begin (line {event.get('_lineno')}) has step={event.get('step')}")
-        if batch is None or not (0 <= batch < 8):
+        if batch is None or not (0 <= batch < LEGACY_MICRO_BATCH):
             problem("BATCH_OUT_OF_RANGE",
-                    f"execute_begin (line {event.get('_lineno')}) has batch={event.get('batch')}")
+                    f"execute_begin (line {event.get('_lineno')}) has "
+                    f"batch={event.get('batch')} outside "
+                    f"0..{LEGACY_MICRO_BATCH - 1}")
 
     # --- step phase pairing -------------------------------------------
     open_phase: dict[str, int] = {}
