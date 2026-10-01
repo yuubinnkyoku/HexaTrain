@@ -269,13 +269,28 @@ function Read-MultiseedDeviceLock {
   return [pscustomobject]@{ path = $DeviceLockRoot; owner = $owner }
 }
 
-function Enable-MultiseedDeviceAwake {
-  $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
-  & $adb shell input keyevent KEYCODE_WAKEUP | Out-Null
-  & $adb shell wm dismiss-keyguard | Out-Null
-  & $adb shell svc power stayon true | Out-Null
-  & $adb shell dumpsys deviceidle disable | Out-Null
-  Write-Host 'device_awake_and_idle_disabled=true'
+function Enable-MultiseedDeviceAwake([string]$Adb, [string]$Device) {
+  # Endpoint-scoped on purpose: a raw `adb shell ...` resolves by transport
+  # count, so a second (even offline) transport makes every command fail with
+  # "more than one device/emulator" while the failure stays invisible.  The
+  # commands stay best-effort, but each exit code is reported because sleep /
+  # idle state is part of the thermal comparability of a long run.
+  $failures = @()
+  foreach ($command in @(
+      @('awake', @('shell','input','keyevent','KEYCODE_WAKEUP')),
+      @('dismiss_keyguard', @('shell','wm','dismiss-keyguard')),
+      @('stayon', @('shell','svc','power','stayon','true')),
+      @('deviceidle', @('shell','dumpsys','deviceidle','disable')))) {
+    $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments $command[1] -AllowFailure
+    if ($result.ExitCode -ne 0) {
+      $failures += ('{0}=exit{1}' -f $command[0], $result.ExitCode)
+    }
+  }
+  if ($failures.Count -eq 0) {
+    Write-Host 'device_awake_and_idle_disabled=true'
+  } else {
+    Write-Host ('device_awake_and_idle_disabled=false failures={0}' -f ($failures -join ','))
+  }
 }
 
 function Acquire-MultiseedDeviceLock {
@@ -340,7 +355,9 @@ function Start-MultiseedDeviceGuard {
   } else {
     Acquire-MultiseedDeviceLock
   }
-  Enable-MultiseedDeviceAwake
+  # The wake / stay-on helper runs after endpoint resolution in
+  # Invoke-MultiseedSequence: it must be endpoint-scoped and must not turn a
+  # failed device resolution into a half-held guard.
 }
 
 function Invoke-MultiseedArm {
@@ -637,6 +654,7 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
     # cannot leave the guard half-held.
     Start-MultiseedDeviceGuard
     $devEndpoint = (Resolve-PhoneLmDevice -Adb $adbPath).Endpoint
+    Enable-MultiseedDeviceAwake -Adb $adbPath -Device $devEndpoint
     foreach ($entry in $runOrder) {
       try {
         $state = Get-PhoneLmThermalBatteryState -Adb $adbPath -Device $devEndpoint -Phase 'multiseed-pre'
@@ -653,7 +671,7 @@ function Invoke-MultiseedSequence([string]$ArmMode) {
       } catch {
         Write-Host "thermal_probe_soft_fail=$($_.Exception.Message)"
       }
-      Enable-MultiseedDeviceAwake
+      Enable-MultiseedDeviceAwake -Adb $adbPath -Device $devEndpoint
 
       $outcome = Invoke-MultiseedArm -Seed $entry.seed -ArmName $entry.arm -ArmMode $entry.mode
       $outcomes += $outcome
