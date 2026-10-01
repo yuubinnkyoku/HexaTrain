@@ -7522,11 +7522,15 @@ std::string nicopediaMuonHybridTraining(
               << nicopedia_schedule::kindName(auxSchedule.kind) << '\n';
     incident_trace::telemetryEnd(static_cast<int>(step));
     bool checkpointWritten = false;
+    // The begin/end pair brackets the checkpoint decision itself, so it is
+    // emitted every step. Emitting the pair only around an actual write would
+    // leave `checkpoint_end written=false` unpaired on the steps that skip a
+    // checkpoint, which is the common case at any large interval.
+    incident_trace::checkpointBegin(static_cast<int>(step));
     if (step % checkpointInterval == 0 || step == steps) {
       const std::string path = cachePath + "/" + nprtCheckpointName(
           seed, config.numLayers, config.tokens, config.dimension,
           config.feedForwardDimension, step);
-      incident_trace::checkpointBegin(static_cast<int>(step));
       const auto checkpointStarted = std::chrono::steady_clock::now();
       if (!nprtWriteMuonCheckpoint(path, config, seed, step, current, momentum,
                                    adamM, adamV, cache, checkpointHparams, 8,

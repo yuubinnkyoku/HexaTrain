@@ -40,6 +40,7 @@ param(
   [string]$IncidentRoot = 'build/incident-6031/diagnostics',
   [string]$DiagnosticId = '',
   [string]$AnalysisOut = '',
+  [string]$DeviceLockRoot = 'D:\ghq\github.com\yuubinnkyoku\.hexatrain-device-lock',
   [switch]$SkipBuild,
   [switch]$SkipInstall
 )
@@ -118,6 +119,47 @@ function Get-IncidentId {
     return $DiagnosticId
   }
   return ('incident-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'), $PID)
+}
+
+$incidentLockOwner = 'g1-6031-incident-diagnostic'
+
+function Assert-IncidentDeviceLockFree {
+  # One physical phone, one training run. The lock is the same directory the
+  # G1 runners use, so an incident diagnostic cannot be started on top of an
+  # active quality run or another agent's device work.
+  if ([IO.Directory]::Exists($DeviceLockRoot)) {
+    $ownerPath = Join-Path $DeviceLockRoot 'owner.txt'
+    $owner = if (Test-Path -LiteralPath $ownerPath -PathType Leaf) {
+      (Get-Content -LiteralPath $ownerPath -Raw) -replace '\n', ' | '
+    } else { '' }
+    throw "DEVICE_LOCK_HELD path=$DeviceLockRoot owner=$owner (wait for the other run to finish)"
+  }
+}
+
+function Enter-IncidentDeviceLock {
+  New-Item -ItemType Directory -Force -Path $DeviceLockRoot | Out-Null
+  $lines = @(
+    "owner=$incidentLockOwner",
+    "pid=$PID",
+    "timestamp=$([DateTimeOffset]::UtcNow.ToString('o'))",
+    "purpose=incident-6031-diagnostic"
+  )
+  # Never record the endpoint or the repo absolute path in the lock file.
+  Set-Content -LiteralPath (Join-Path $DeviceLockRoot 'owner.txt') -Value $lines -Encoding utf8
+  Write-Host "incident_device_lock_acquired=$DeviceLockRoot"
+}
+
+function Exit-IncidentDeviceLock {
+  if (-not [IO.Directory]::Exists($DeviceLockRoot)) { return }
+  $ownerPath = Join-Path $DeviceLockRoot 'owner.txt'
+  if (Test-Path -LiteralPath $ownerPath -PathType Leaf) {
+    $text = Get-Content -LiteralPath $ownerPath -Raw
+    if ($text -notmatch [regex]::Escape($incidentLockOwner) -and $text -notmatch "pid=$PID") {
+      throw "DEVICE_LOCK_NOT_OURS: refusing to release $DeviceLockRoot"
+    }
+  }
+  Remove-Item -LiteralPath $DeviceLockRoot -Recurse -Force
+  Write-Host 'incident_device_lock_released=true'
 }
 
 function Write-IncidentIdentity {
@@ -239,6 +281,16 @@ switch ($Mode) {
     $device = (Resolve-PhoneLmDevice -Adb $adb)
     $package = 'com.yuubinnkyoku.phonelm'
 
+    # Fail fast on argument values the *device* rejects. These are validated in
+    # Kotlin (HeadlessDeviceTestRunner.intArgument) long after the APK build, so
+    # catching them here avoids spending a full build/install cycle to learn
+    # that the run never started.
+    #   checkpointInterval 1..10000, steps > 0, batchSize 8 for this graph.
+    if ($Steps -lt 1) { throw "INCIDENT_STEPS_INVALID: steps=$Steps must be >= 1" }
+    if ($Seed -ne 2) {
+        throw "INCIDENT_SEED_PINNED: this diagnostic is pinned to seed 2 (the seed under which both 6031 occurrences were observed); got $Seed"
+    }
+
     # Enable the opt-in trace BEFORE the app process starts.  Both the Kotlin
     # and the native side look for this marker at startup; without it the run
     # is a normal run and the analyzer must be told so rather than silently
@@ -287,11 +339,22 @@ switch ($Mode) {
       CachePath = $CachePath
       TokenizerModelPath = $TokenizerModelPath
       ReportRoot = $dir
-      # Quality evaluation is off: this run must not produce quality numbers.
-      EvalOnly = $false
+      HexagonSdkRoot = $HexagonSdkRoot
+      # No quality evaluation: this runner never calls the eval runner, so the
+      # training report is the only device artifact and no quality number is
+      # produced.  (run_nicopedia_htp_training.ps1 has no EvalOnly parameter;
+      # quality evaluation is a separate runner, so it is simply not invoked.)
       # Checkpoints are unnecessary for a 128-step incident run and would only
-      # add I/O that perturbs the timeline being measured.
-      CheckpointInterval = 1000000
+      # add I/O that perturbs the timeline being measured.  The device accepts
+      # checkpointInterval in 1..10000, so 10000 suppresses every intermediate
+      # checkpoint for this run length; the device still writes one checkpoint at
+      # the final step, which the interval cannot avoid.
+      CheckpointInterval = 10000
+      # The training runner treats a device FAILED as a thrown error. For an
+      # incident run that outcome is the expected result, not a runner fault,
+      # so quality-failure tolerance keeps the throw from masking the device
+      # report we are about to collect.
+      AllowQualityFailure = $true
       RunId = $id
     }
     if ($SkipBuild) { $trainArgs.SkipBuild = $true }
@@ -299,35 +362,57 @@ switch ($Mode) {
 
     Write-Host "incident_run_start diagnostic_id=$id steps=$Steps seed=$Seed"
     $runError = $null
-    try {
-      & $trainingRunner @trainArgs
-    } catch {
-      # A FAILED diagnostic run is a legitimate outcome, not a runner bug.
-      # Record it and continue to artifact collection.
-      $runError = $_
-      Write-Host "incident_run_threw=$($_.Exception.Message)"
-    }
-    Write-Host "incident_marker_created=$markerCreated"
-
-    # Pull the traces regardless of outcome.  These are the whole point: a
-    # FAILED run is the case the analyzer exists for.
     $nativeTrace = Join-Path $dir 'incident-native-trace.log'
-    foreach ($name in @('incident-native-trace.log', 'incident-kotlin-trace.log')) {
-      $pulled = Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
-        -Arguments @('exec-out', 'run-as', $package, 'cat', "files/headless/$name") -AllowFailure
-      if ($pulled.ExitCode -eq 0) {
-        [IO.File]::WriteAllText((Join-Path $dir $name), ($pulled.Text -join "`n"), (New-Object Text.UTF8Encoding($false)))
-        Write-Host "pulled=$name"
-      } else {
-        Write-Host "pull_missing=$name (incident tracing was not active for this run)"
+    try {
+      # Hold the device lock across the run *and* the artifact pull, and release
+      # it in `finally` so a FAILED run cannot leave the phone locked.
+      Assert-IncidentDeviceLockFree
+      Enter-IncidentDeviceLock
+      try {
+        & $trainingRunner @trainArgs
+      } catch {
+        # A FAILED diagnostic run is a legitimate outcome, not a runner bug.
+        # Record it and continue to artifact collection.
+        $runError = $_
+        Write-Host "incident_run_threw=$($_.Exception.Message)"
       }
+      Write-Host "incident_marker_created=$markerCreated"
+
+      # Pull the traces regardless of outcome.  These are the whole point: a
+      # FAILED run is the case the analyzer exists for.
+      # The native trace lands next to the run inputs (cachePath), i.e.
+      # files/headless-input/<runId>/, because incident_trace::configure writes
+      # into cachePath.  The Kotlin trace lands in files/headless/.  Searching
+      # for both rather than assuming a fixed path keeps the pull correct if
+      # either side's output directory changes.
+      $candidates = @(
+        @{ Name = 'incident-native-trace.log'; Dir = "files/headless-input/$id" },
+        @{ Name = 'incident-native-trace.log'; Dir = 'files/headless' },
+        @{ Name = 'incident-kotlin-trace.log'; Dir = 'files/headless' },
+        @{ Name = 'incident-kotlin-trace.log'; Dir = "files/headless-input/$id" }
+      )
+      foreach ($candidate in $candidates) {
+        $name = $candidate.Name
+        $target = Join-Path $dir $name
+        if (Test-Path -LiteralPath $target -PathType Leaf) { continue }
+        $pulled = Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
+          -Arguments @('exec-out', 'run-as', $package, 'cat', "$($candidate.Dir)/$name") -AllowFailure
+        if ($pulled.ExitCode -eq 0 -and $pulled.Text -match 'event=') {
+          [IO.File]::WriteAllText($target, ($pulled.Text -join "`n"), (New-Object Text.UTF8Encoding($false)))
+          Write-Host "pulled=$name from=$($candidate.Dir)"
+        } else {
+          Write-Host "pull_empty=$name from=$($candidate.Dir)"
+        }
+      }
+      # Dump logcat after the run, pass or fail, and remove the marker so the
+      # next run cannot silently inherit instrumentation.
+      [void](Invoke-IncidentLogcatCapture -Adb $adb -Device $device.Endpoint -Directory $dir)
+      [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
+        -Arguments @('shell', 'run-as', $package, 'rm', '-f', 'files/headless-input/incident_trace_enabled') `
+        -AllowFailure)
+    } finally {
+      Exit-IncidentDeviceLock
     }
-    # Dump logcat after the run, pass or fail, and remove the marker so the next
-    # run cannot silently inherit instrumentation.
-    [void](Invoke-IncidentLogcatCapture -Adb $adb -Device $device.Endpoint -Directory $dir)
-    [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
-      -Arguments @('shell', 'run-as', $package, 'rm', '-f', 'files/headless-input/incident_trace_enabled') `
-      -AllowFailure)
 
     if (-not (Test-Path -LiteralPath $nativeTrace -PathType Leaf)) {
       Write-Host 'incident_analysis=SKIPPED (no native trace was produced)'

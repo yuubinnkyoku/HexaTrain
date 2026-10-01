@@ -1,6 +1,11 @@
 // Execution companion for the generic N-layer/H-head builder. The registries established by
 // the builder are the binding ABI; do not substitute tensor-name lookup here.
-#include "incident_trace.h"
+//
+// This file is textually included from qnn_runtime_qairt.cpp *inside*
+// `namespace phonelm::qnn`, so it must not include headers here: a header
+// pulled in at this point would have its own namespace and global declarations
+// nested inside phonelm::qnn. incident_trace.h is included once at file scope
+// by that translation unit instead; see qnn_runtime_qairt.cpp.
 bool Runtime::executeTinyTransformerTrainingGeneralized(
     const std::vector<float> &input, const std::vector<float> &target,
     const TinyTransformerParameters &current, float learningRate,

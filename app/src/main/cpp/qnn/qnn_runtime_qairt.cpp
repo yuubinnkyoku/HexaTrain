@@ -1,5 +1,11 @@
 #include "qnn_runtime.h"
 #include "qnn_graph_shape_validator.h"
+// Opt-in 6031 incident tracing. Included here, at file scope, because the
+// .inc companions below are textually included inside `namespace phonelm::qnn`;
+// a header included from one of them would nest its namespace and its global
+// declarations inside phonelm::qnn. The header is inert unless the marker file
+// exists, so this costs a guarded branch at each call site.
+#include "incident_trace.h"
 #include "../transformer_resource_estimator.h"
 
 #include <QnnInterface.h>
