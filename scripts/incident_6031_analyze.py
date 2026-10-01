@@ -10,6 +10,19 @@ observed around the failing graphExecute?*  It never claims that proximity is
 causation.  Every "nearest event" it prints is labelled as an observation, and
 the report carries an explicit statement that correlation is not attribution.
 
+Two trace modes are parsed by the same code path, because both emit the same
+`key=value` line format and differ only in how many lines they emit:
+
+  full    every event, flushed as it is written (maximum perturbation)
+  flight  a minimal event set, buffered in memory and dumped at a terminal or
+          at a nonzero graphExecute (the mode used to test whether the
+          instrumentation itself was suppressing the abort)
+
+`trace_mode` is read from the trace itself rather than assumed from the
+filename, so a mode can never be misreported. A flight trace that lost records
+raises TRACE_OVERFLOW: "no failure observed" from a trace with holes in it is
+not evidence of absence.
+
 Inputs (all optional except the native trace in incident mode):
 
   --native   incident-native-trace.log   (training thread; CLOCK_MONOTONIC)
@@ -61,7 +74,18 @@ LEGACY_MICRO_BATCH = 8
 NATIVE_REQUIRED_EVENTS = ("trace_start", "training_start")
 KOTLIN_REQUIRED_EVENTS = ("trace_start",)
 
+# Flight mode emits a deliberately minimal set: the execute pair (which names a
+# failure and carries the QNN return code), the HVX RPC pair (the delta the
+# investigation needs), stop_check (the stopRequested state), the progress pair,
+# and the two anchors.  It emits no step phases at all, which is why the phase
+# pairing check is a correct no-op for a flight trace rather than a source of
+# unpaired-end false positives.
+FLIGHT_REQUIRED_EVENTS = ("trace_start", "execute_begin", "execute_end",
+                          "qnn_execute_begin", "qnn_execute_end")
+
 # Step-boundary phases that must appear as a begin/end pair per training step.
+# Flight mode emits none of these, so pairing checks are skipped there; full
+# mode emits them as complete pairs.
 STEP_PHASES = (
     "zero_parameters",
     "optimizer",
@@ -69,6 +93,9 @@ STEP_PHASES = (
     "telemetry",
     "checkpoint",
 )
+
+MODE_FULL = "full"
+MODE_FLIGHT = "flight"
 
 # Fields that make a trace line parseable.  Values never contain whitespace,
 # so a split on whitespace is exact.
@@ -125,6 +152,50 @@ def as_int(record: dict[str, Any], key: str) -> int | None:
         return None
 
 
+def detect_mode(timeline: "Timeline") -> str:
+    """Read trace_mode from the trace itself, defaulting to full.
+
+    Reading it from the data rather than the filename means a mode can never be
+    reported as something the recorder did not actually use.  A trace with no
+    trace_mode token predates flight mode, which is full by definition.
+    """
+    for event in timeline.events:
+        mode = event.get("trace_mode")
+        if mode in (MODE_FLIGHT, MODE_FULL):
+            return mode
+    return MODE_FULL
+
+
+def trace_counters(timeline: "Timeline") -> dict[str, int | None]:
+    """Collect the flight-mode capacity/overflow counters from the trace.
+
+    `trace_overflow_count` is the field that makes a sparse flight trace
+    trustworthy or not: a nonzero value means records were dropped, so the
+    trace has holes and its silence is not evidence.
+    """
+    overflow: int | None = None
+    events_seen: int | None = None
+    bytes_hint: int | None = None
+    for event in timeline.events:
+        for key in ("trace_overflow_count", "kotlin_trace_overflow_count"):
+            value = as_int(event, key)
+            if value is not None:
+                overflow = value if overflow is None else max(overflow, value)
+        for key in ("trace_event_count", "kotlin_trace_event_count"):
+            value = as_int(event, key)
+            if value is not None:
+                events_seen = value if events_seen is None else max(events_seen, value)
+        for key in ("trace_bytes", "kotlin_trace_bytes"):
+            value = as_int(event, key)
+            if value is not None:
+                bytes_hint = value if bytes_hint is None else max(bytes_hint, value)
+    return {
+        "trace_overflow_count": overflow,
+        "trace_event_count": events_seen,
+        "trace_bytes": bytes_hint,
+    }
+
+
 def load_kv_report(path: Path) -> dict[str, str]:
     """Parse a device primary report (`key=value` per line).
 
@@ -168,11 +239,19 @@ class Timeline:
             else [e for e in events if e.get("src") == "kotlin"])
 
     def failures(self) -> list[dict[str, Any]]:
+        """Failing executes, identified from either mode's encoding.
+
+        Full mode writes `qnn_result=N`; flight mode packs the same number into
+        the POD record's `value` field. Both are read here so one code path
+        serves both modes.
+        """
         out = []
         for event in self.events:
             if event.get("event") != "qnn_execute_end":
                 continue
             result = as_int(event, "qnn_result")
+            if result is None:
+                result = as_int(event, "value")
             if result is not None and result >= FAILURE_RESULT_MIN:
                 out.append(event)
         return out
@@ -251,6 +330,8 @@ def check_invariants(
         problems.append({"code": code, "detail": detail})
 
     events = timeline.events
+    mode = detect_mode(timeline)
+    is_flight = mode == MODE_FLIGHT
 
     # --- native trace structural requirements -------------------------
     native = [e for e in events if e.get("src") == "native"]
@@ -258,9 +339,11 @@ def check_invariants(
     if incident_mode and not native:
         problem("NATIVE_TRACE_MISSING",
                 "incident mode but no native-sourced events were parsed")
-    for required in NATIVE_REQUIRED_EVENTS:
+    required_native = FLIGHT_REQUIRED_EVENTS if is_flight else NATIVE_REQUIRED_EVENTS
+    for required in required_native:
         if native and not any(e.get("event") == required for e in native):
-            problem("NATIVE_EVENT_MISSING", f"required native event {required} absent")
+            problem("NATIVE_EVENT_MISSING",
+                    f"required native event {required} absent in {mode} mode")
     for required in KOTLIN_REQUIRED_EVENTS:
         if kotlin and not any(e.get("event") == required for e in kotlin):
             problem("KOTLIN_EVENT_MISSING", f"required kotlin event {required} absent")
@@ -355,10 +438,14 @@ def check_invariants(
                     f"0..{LEGACY_MICRO_BATCH - 1}")
 
     # --- step phase pairing -------------------------------------------
+    # Flight mode emits no step phases at all, so this check is skipped rather
+    # than run against a set that is empty by design. Running it there would be
+    # harmless (an empty phase list pairs nothing) but stating the intent is
+    # clearer than relying on that.
     open_phase: dict[str, int] = {}
     for event in events:
         name = event.get("event", "")
-        for phase in STEP_PHASES:
+        for phase in (() if is_flight else STEP_PHASES):
             if name == f"{phase}_begin":
                 if phase in open_phase:
                     problem("PHASE_REOPENED",
@@ -379,6 +466,11 @@ def check_invariants(
                 f"(expected when the run aborts inside it)")
 
     # --- signal invariants --------------------------------------------
+    # Full mode writes the arguments as `signal_arg1=null signal_arg2=null`.
+    # Flight mode writes the same fact as a packed bitmask in `aux`
+    # (bit0 = arg1 non-null, bit1 = arg2 non-null) because it cannot afford a
+    # string on the hot path. Both encodings are checked here so the invariant
+    # holds in either mode rather than being assumed in one of them.
     nonnull_signal = 0
     for event in events:
         for key in ("signal_arg1", "signal_arg2"):
@@ -387,6 +479,13 @@ def check_invariants(
                 nonnull_signal += 1
                 problem("SIGNAL_ARGUMENT_NONNULL",
                         f"line {event.get('_lineno')}: {key}={value}")
+        if event.get("event") == "qnn_execute_begin":
+            aux = as_int(event, "aux")
+            if aux is not None and aux != 0:
+                nonnull_signal += bin(aux).count("1")
+                problem("SIGNAL_ARGUMENT_NONNULL",
+                        f"line {event.get('_lineno')}: flight aux mask={aux} "
+                        f"marks a non-null signal argument")
         counted = as_int(event, "qnn_signal_argument_nonnull_count")
         if counted is not None and counted != 0:
             problem("SIGNAL_INVARIANT_VIOLATION",
@@ -399,10 +498,28 @@ def check_invariants(
                     f"hexatrain_signal_trigger_count={triggers}")
     if nonnull_signal == 0 and native:
         # The invariant must be positively recorded, not merely unviolated.
+        # Full mode records it on trace_start and on every qnn_execute_begin;
+        # flight mode records it once on the dump header. All three spellings
+        # are the bare `name=0` key form, so one check covers both modes.
         if not any("qnn_signal_argument_nonnull_count" in e for e in native):
             problem("SIGNAL_INVARIANT_NOT_RECORDED",
                     "no native event carries qnn_signal_argument_nonnull_count; "
                     "the invariant was not observed, only assumed")
+
+    # --- flight-mode ring overflow -------------------------------------
+    # A flight trace that dropped records has holes in it. Its silence is then
+    # not evidence of absence, so this is fail-closed rather than a note.
+    counters = trace_counters(timeline)
+    overflow = counters.get("trace_overflow_count")
+    if overflow is not None and overflow != 0:
+        problem("TRACE_OVERFLOW",
+                f"trace_overflow_count={overflow}: flight-mode records were "
+                f"dropped, so this trace cannot support an absence-of-failure "
+                f"claim")
+    if is_flight and overflow is None:
+        problem("TRACE_OVERFLOW_UNKNOWN",
+                "flight-mode trace carries no trace_overflow_count, so whether "
+                "records were lost cannot be established")
 
     # --- device identity ----------------------------------------------
     # The native trace_start carries the run id (the trace directory basename,
@@ -439,6 +556,10 @@ def failure_analysis(timeline: Timeline, window_ns: int = 2_000_000_000,
     monotonic clock; the caller must not read it as attribution.  The window
     list is bounded to the `nearest` closest events on each side so a report
     stays readable instead of dumping the whole run.
+
+    The QNN return code is read from `qnn_result` in full mode and from `value`
+    in flight mode, because flight mode packs the return code into the POD
+    record's value field instead of formatting a string.
     """
     results = []
     for failure in timeline.failures():
@@ -448,7 +569,12 @@ def failure_analysis(timeline: Timeline, window_ns: int = 2_000_000_000,
             "execute_id": execute_id,
             "step": as_int(failure, "step"),
             "batch": as_int(failure, "batch"),
-            "qnn_result": as_int(failure, "qnn_result"),
+            # Full mode writes qnn_result=N; flight mode packs the same number
+            # into value. failures() already resolved which encoding applies,
+            # so read it the same way here.
+            "qnn_result": (as_int(failure, "qnn_result")
+                           if as_int(failure, "qnn_result") is not None
+                           else as_int(failure, "value")),
             "ts_ns": ts,
             "tid": failure.get("tid"),
         }
@@ -469,6 +595,12 @@ def failure_analysis(timeline: Timeline, window_ns: int = 2_000_000_000,
             ts, lambda e: e.get("event") == "checkpoint_end")
         stop_check = timeline.nearest_before(
             ts, lambda e: e.get("event") == "stop_check")
+
+        # Full mode writes stop_requested=0|1; flight mode packs it into value.
+        if stop_check is not None and "stop_requested" not in stop_check:
+            packed = as_int(stop_check, "value")
+            if packed is not None:
+                stop_check = dict(stop_check, stop_requested=str(packed))
 
         def delta(event: dict[str, Any] | None) -> int | None:
             if event is None:
@@ -517,6 +649,7 @@ def render_markdown(findings: dict[str, Any]) -> str:
     add(f"- schema_version: {findings['schema_version']}")
     add(f"- incident_mode: {findings['incident_mode']}")
     add(f"- evidence_class: {findings['evidence_class']}")
+    add(f"- trace_mode: {findings.get('trace_mode', 'unknown')}")
     add(f"- native events: {findings['counts']['native']}")
     add(f"- kotlin events: {findings['counts']['kotlin']}")
     add(f"- failing executes: {findings['counts']['failures']}")
@@ -524,6 +657,31 @@ def render_markdown(findings: dict[str, Any]) -> str:
     add("> All deltas below are *proximity on a shared monotonic clock*, not")
     add("> evidence of causation. `near == cause` is never asserted by this tool.")
     add("")
+
+    overhead = findings.get("trace_overhead") or {}
+    if overhead:
+        add("## Trace overhead")
+        add("")
+        add("Diagnostic instrumentation cost only. This is **not** a quality")
+        add("measurement and must not be compared against any G1 run.")
+        add("")
+        add(f"- `trace_event_count` = {overhead.get('trace_event_count')}")
+        add(f"- `trace_bytes` = {overhead.get('trace_bytes')}")
+        overflow = overhead.get("trace_overflow_count")
+        add(f"- `trace_overflow_count` = {overflow}")
+        if overflow is not None and overflow == 0:
+            add("")
+            add("No records were lost, so this trace supports an")
+            add("absence-of-failure claim.")
+        elif overflow is None:
+            add("")
+            add("No overflow counter was present; for a flight trace that")
+            add("means the claim could not be established.")
+        else:
+            add("")
+            add("Records were lost. This trace has holes and cannot support an")
+            add("absence-of-failure claim.")
+        add("")
 
     problems = findings["problems"]
     add("## Fail-closed problems")
@@ -650,6 +808,7 @@ def analyze(args: argparse.Namespace) -> int:
         native_in_order=native_in_order,
         kotlin_in_order=kotlin_in_order,
     )
+    counters = trace_counters(timeline)
 
     report = load_kv_report(args.report) if args.report else None
     if report:
@@ -695,6 +854,12 @@ def analyze(args: argparse.Namespace) -> int:
         "schema_version": SCHEMA_VERSION,
         "incident_mode": incident_mode,
         "evidence_class": "instrumented" if incident_mode else "legacy",
+        "trace_mode": detect_mode(timeline) if incident_mode else "legacy",
+        "trace_overhead": {
+            "trace_overflow_count": counters.get("trace_overflow_count"),
+            "trace_event_count": counters.get("trace_event_count"),
+            "trace_bytes": counters.get("trace_bytes"),
+        },
         "counts": {
             "native": sum(1 for e in timeline.events if e.get("src") == "native"),
             "kotlin": sum(1 for e in timeline.events if e.get("src") == "kotlin"),

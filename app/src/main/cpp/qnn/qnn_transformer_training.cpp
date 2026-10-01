@@ -7789,9 +7789,20 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const LogSink &progress,
                                  std::atomic_bool *stopRequested) {
   if (trainingConfig.nicopediaOptimizer == 1 ||
-      trainingConfig.nicopediaOptimizer == 2)
-    return nicopediaMuonHybridTraining(config, trainingConfig, progress,
-                                       stopRequested);
+      trainingConfig.nicopediaOptimizer == 2) {
+    std::string result = nicopediaMuonHybridTraining(
+        config, trainingConfig, progress, stopRequested);
+    // Single dump site for every exit out of the Muon training loop. The loop
+    // has ~15 early returns after configure(), so instrumenting each one would
+    // be both easy to miss and easy to get wrong; the forwarder sees all of
+    // them. A failure whose QNN return code was nonzero has already dumped at
+    // the graphExecute call site, and dump() is idempotent, so this only fires
+    // for the paths that never reached a failing execute.
+    incident_trace::dump(result.find("status=SUCCESS") != std::string::npos
+                             ? "training_success"
+                             : "training_failure");
+    return result;
+  }
   // Cache path: app-private file pushed by the host runner.  The parameter is
   // carried in diagnosticCheckpointDir to avoid extending the JNI ABI; the
   // Kotlin side validates it to stay below the app files directory.

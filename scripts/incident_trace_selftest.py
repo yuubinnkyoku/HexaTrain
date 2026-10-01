@@ -91,6 +91,61 @@ class Fixture:
 
 FIXTURE_RUN_ID = "20261001-000000-000"
 
+# Flight mode is a minimal event set: no step phases, no batch_prepare, no
+# poison_fill, no optimizer/telemetry/checkpoint pairs. Only the execute pair
+# (which names a failure and carries the return code), the HVX RPC pair, the
+# stop_check and the progress pair survive. The signal invariant rides on the
+# dump header, and the non-null argument state rides on the qnn_execute_begin
+# aux mask.
+FLIGHT_MODE = "flight"
+
+
+def _flight_header(step_total: int, overflow: int = 0,
+                   stored: int | None = None) -> list[str]:
+    stored_count = step_total if stored is None else stored
+    return [
+        # The dump header carries the signal invariants as bare
+        # `qnn_signal_argument_nonnull_count=0` / `hexatrain_signal_trigger_count=0`
+        # tokens, matching the native dump header. They must NOT be wrapped in
+        # `invariant=<name> value=<n>`: the analyzer's
+        # SIGNAL_INVARIANT_NOT_RECORDED check looks for these names as parsed
+        # keys, and an `invariant=` wrapper would hide them.
+        _native(0, 100, 0, -1,
+                f"event=trace_start pid=4242 run_id={FIXTURE_RUN_ID} trace_mode=flight "
+                f"dump_reason=training_failure unix_anchor_ms=1 monotonic_anchor_ns=0 "
+                f"clock=steady_clock trace_capacity=65536 trace_event_count={step_total} "
+                f"trace_stored_count={stored_count} "
+                f"trace_overflow_count={overflow} "
+                f"qnn_signal_argument_nonnull_count=0 "
+                f"hexatrain_signal_trigger_count=0"),
+        _native(1, 100, 0, -1,
+                f"event=training_start steps={step_total} resume_step=0 micro_batch=8 "
+                f"backend=HVX_W8 trace_mode=flight trace_event_count={step_total} "
+                f"trace_overflow_count={overflow}"),
+    ]
+
+
+def _flight_execute(ts: int, step: int, batch: int, execute_id: int,
+                    qnn_result: int = 0) -> tuple[int, list[str]]:
+    """One flight execute: POD-shaped lines with the return code in `value`."""
+    return ts, [
+        _native(ts, 200, step, batch, f"event=execute_begin execute_id={execute_id}"),
+        _native(ts + 1, 200, step, batch,
+                f"event=qnn_execute_begin execute_id={execute_id} aux=0"),
+        _native(ts + 500 * US, 200, step, batch,
+                f"event=qnn_execute_end execute_id={execute_id} value={qnn_result} "
+                f"aux={1 if qnn_result == 0 else 0}"),
+        _native(ts + 501 * US, 200, step, batch,
+                f"event=execute_end execute_id={execute_id} value={1 if qnn_result == 0 else 0}"),
+    ]
+
+
+def _flight_hvx(ts: int, step: int) -> list[str]:
+    return [
+        _native(ts, 200, step, -1, "event=hvx_rpc_begin invocation=1 value=-1 aux=1"),
+        _native(ts + 500 * US, 200, step, -1, "event=hvx_rpc_end invocation=1 value=0 aux=1"),
+    ]
+
 
 def _header(step_total: int, first_step: int = 1) -> list[str]:
     return [
@@ -430,6 +485,113 @@ def fixture_missing_trace_file(root: Path) -> Fixture:
 
 
 # ---------------------------------------------------------------------------
+# Flight-mode fixtures
+#
+# Flight mode is the low-perturbation recorder: the same line format, a minimal
+# event set, buffered in memory and dumped at a terminal. These fixtures pin the
+# analyzer against that shape rather than against full-mode density.
+# ---------------------------------------------------------------------------
+
+def _flight_run(root: Path, fail_step: int | None = None,
+                overflow: int = 0, dump_reason: str = "training_failure",
+                kotlin_lines: list[str] | None = None) -> Fixture:
+    """Builds a flight-mode run, optionally aborting with 6031 at `fail_step`."""
+    total_steps = fail_step if fail_step is not None else 3
+    lines = _flight_header(total_steps, overflow=overflow)
+    ts = 1000
+    execute_id = 0
+    for step in range(1, total_steps + 1):
+        # Flight mode keeps stop_check; it is how the stopRequested state at the
+        # failure is recovered.
+        lines.append(_native(ts, 200, step, -1,
+                             f"event=stop_check step={step} value=0 aux=0"))
+        ts += 10
+        is_fail_step = fail_step is not None and step == fail_step
+        for batch in range(8):
+            execute_id += 1
+            if is_fail_step and batch == 0:
+                # The abort: begin + qnn begin + nonzero end, no execute_end,
+                # exactly as the recorder sees it before the loop unwinds.
+                lines.append(_native(ts, 200, step, batch,
+                                     f"event=execute_begin execute_id={execute_id}"))
+                lines.append(_native(ts + 1, 200, step, batch,
+                                     f"event=qnn_execute_begin execute_id={execute_id} aux=0"))
+                lines.append(_native(ts + 900 * US, 200, step, batch,
+                                     f"event=qnn_execute_end execute_id={execute_id} "
+                                     f"value=6031 aux=0"))
+                ts += 1000 * US
+                return Fixture(root, lines, kotlin_lines or [])
+            _, produced = _flight_execute(ts, step, batch, execute_id)
+            lines.extend(produced)
+            ts += 1000 * US
+        lines.extend(_flight_hvx(ts + 1000, step))
+        ts += 2 * MS
+    return Fixture(root, lines, kotlin_lines or [])
+
+
+def fixture_flight_success(root: Path) -> Fixture:
+    fixture = _flight_run(root, fail_step=None)
+    return fixture
+
+
+def fixture_flight_failure_step4_batch0(root: Path) -> Fixture:
+    return _flight_run(root, fail_step=4)
+
+
+def fixture_flight_failure_step77_batch0(root: Path) -> Fixture:
+    return _flight_run(root, fail_step=77)
+
+
+def fixture_flight_overflow(root: Path) -> Fixture:
+    """A flight trace that lost records must be rejected, not read as silence."""
+    return _flight_run(root, fail_step=None, overflow=7)
+
+
+def fixture_flight_dump_on_failure(root: Path) -> Fixture:
+    """Failure dump: the header carries dump_reason and the failure follows it."""
+    fixture = _flight_run(root, fail_step=4)
+    lines = fixture.native.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[0] = lines[0].replace("dump_reason=training_failure",
+                                "dump_reason=qnn_execute_failure")
+    fixture.native = write(fixture.root / "incident-native-trace.log", lines)
+    return fixture
+
+
+def fixture_flight_dump_on_terminal(root: Path) -> Fixture:
+    """Clean run still produces a dump; silence is only trustworthy with overflow=0."""
+    return _flight_run(root, fail_step=None, dump_reason="training_success")
+
+
+def fixture_flight_full_same_identity(root: Path) -> Fixture:
+    """The same failure must resolve identically from both modes.
+
+    This is the property that makes full-vs-flight comparison meaningful: if a
+    flight trace could not name the same execute/step/batch/return code as a
+    full trace, a full-vs-flight difference in reproduction rate would say
+    nothing about the instrumentation.
+    """
+    full_dir = root / "full"
+    flight_dir = root / "flight"
+    full_dir.mkdir(parents=True, exist_ok=True)
+    flight_dir.mkdir(parents=True, exist_ok=True)
+    full = _failure_fixture(full_dir, 4, [], [], 5 * MS)
+    flight = _flight_run(flight_dir, fail_step=4)
+    full_entry = analyzer.failure_analysis(full.parse())["failures"]
+    flight_entry = analyzer.failure_analysis(flight.parse())["failures"]
+    _check(len(full_entry) == 1 and len(flight_entry) == 1,
+           "both modes must resolve exactly one failure")
+    full_id = full_entry[0]
+    flight_id = flight_entry[0]
+    for key in ("execute_id", "step", "batch"):
+        _check(full_id[key] == flight_id[key],
+               f"{key} must match across modes: full={full_id[key]} "
+               f"flight={flight_id[key]}")
+    _check(full_id["qnn_result"] == flight_id["qnn_result"] == 6031,
+           "return code must match across modes")
+    return flight
+
+
+# ---------------------------------------------------------------------------
 # Case table
 # ---------------------------------------------------------------------------
 
@@ -441,6 +603,8 @@ FAILURE_CASES = (
     "failure_after_progress",
     "failure_after_hvx_rpc",
     "failure_no_external_event",
+    "flight_failure_step4_batch0",
+    "flight_failure_step77_batch0",
 )
 EXPECTED_PROBLEM_CASES = {
     "failure_missing_end": "EXECUTE_BEGIN_WITHOUT_END",
@@ -450,7 +614,38 @@ EXPECTED_PROBLEM_CASES = {
     "signal_trigger_violation": "SIGNAL_TRIGGER_INVARIANT_VIOLATION",
     "identity_mismatch": "RUN_IDENTITY_MISMATCH",
     "missing_trace_file": "NATIVE_TRACE_MISSING",
+    "flight_overflow": "TRACE_OVERFLOW",
 }
+
+# Cases that must report trace_mode=flight. These pin that the mode is read
+# from the trace data rather than inferred from the filename or the runner.
+FLIGHT_MODE_CASES = (
+    "flight_success",
+    "flight_failure_step4_batch0",
+    "flight_failure_step77_batch0",
+    "flight_overflow",
+    "flight_dump_on_failure",
+    "flight_dump_on_terminal",
+    "flight_full_same_identity",
+)
+
+# Cases that must report trace_mode=full. The two completed 128-step runs and
+# every legacy fixture are full mode; a mode regression there would silently
+# mislabel existing evidence.
+FULL_MODE_CASES = (
+    "normal_success",
+    "failure_step4_batch0",
+    "failure_step77_batch0",
+    "failure_missing_end",
+    "failure_after_heartbeat",
+    "failure_after_progress",
+    "failure_after_hvx_rpc",
+    "failure_no_external_event",
+    "timestamp_disorder",
+    "duplicate_execute_id",
+    "signal_nonnull",
+    "signal_trigger_violation",
+)
 
 FIXTURES: dict[str, Callable[[Path], Any]] = {
     "normal_success": fixture_normal_success,
@@ -467,6 +662,13 @@ FIXTURES: dict[str, Callable[[Path], Any]] = {
     "signal_trigger_violation": fixture_signal_trigger_violation,
     "identity_mismatch": fixture_identity_mismatch,
     "missing_trace_file": fixture_missing_trace_file,
+    "flight_success": fixture_flight_success,
+    "flight_failure_step4_batch0": fixture_flight_failure_step4_batch0,
+    "flight_failure_step77_batch0": fixture_flight_failure_step77_batch0,
+    "flight_overflow": fixture_flight_overflow,
+    "flight_dump_on_failure": fixture_flight_dump_on_failure,
+    "flight_dump_on_terminal": fixture_flight_dump_on_terminal,
+    "flight_full_same_identity": fixture_flight_full_same_identity,
 }
 
 
@@ -506,6 +708,20 @@ def run() -> int:
                     _check(not codes,
                            f"{name}: expected a clean trace, got {sorted(codes)}")
 
+                # The mode must be read from the trace data, never assumed. A
+                # regression here would let a full trace be reported as flight
+                # or the reverse, which would make any full-vs-flight
+                # comparison meaningless.
+                if name in FLIGHT_MODE_CASES or name in FULL_MODE_CASES:
+                    fixture = result
+                    mode = analyzer.detect_mode(fixture.parse())
+                    if name in FLIGHT_MODE_CASES:
+                        _check(mode == analyzer.MODE_FLIGHT,
+                               f"{name}: expected trace_mode=flight, got {mode}")
+                    else:
+                        _check(mode == analyzer.MODE_FULL,
+                               f"{name}: expected trace_mode=full, got {mode}")
+
                 if name in FAILURE_CASES:
                     fixture = result
                     timeline = fixture.parse()
@@ -518,8 +734,8 @@ def run() -> int:
                            f"{name}: expected 6031, got {entry['qnn_result']}")
                     _check(entry["batch"] == 0,
                            f"{name}: expected batch 0, got {entry['batch']}")
-                    expected_step = 4 if name == "failure_step4_batch0" else (
-                        77 if name == "failure_step77_batch0" else 2)
+                    expected_step = 4 if name.endswith("step4_batch0") else (
+                        77 if name.endswith("step77_batch0") else 2)
                     _check(entry["step"] == expected_step,
                            f"{name}: expected step {expected_step}, got {entry['step']}")
                     if name == "failure_after_hvx_rpc":

@@ -224,6 +224,10 @@ class HeadlessDeviceTestRunner {
                     }
                 } finally {
                     incidentTrace?.line("native_call_end", reason = suite)
+                    // Flight mode writes its buffer here rather than per event.
+                    // This is inside `finally`, so it covers success, device
+                    // failure and an unexpected throw alike.
+                    incidentTrace?.flush("native_call_end")
                     heartbeatRunning.set(false)
                     heartbeat.interrupt()
                     heartbeat.join(5_000L)
@@ -1134,19 +1138,42 @@ class HeadlessDeviceTestRunner {
  * `files/headless-input/incident_trace_enabled` is present, so a normal run
  * pays nothing beyond one file-existence check per emit site.
  *
+ * Two modes, selected by an optional `incident_trace_mode` sidecar next to the
+ * marker, read the same way on both the native and the Kotlin side:
+ *
+ *  - `full` (marker only, or an unreadable/unrecognised sidecar - the default)
+ *    Every line is written and flushed individually.  Maximum fidelity,
+ *    maximum perturbation.  This is what the two completed 128-step runs used.
+ *
+ *  - `flight` (marker + sidecar containing `flight`)
+ *    Lines accumulate in a preallocated buffer and are written once, at
+ *    `native_call_end` and at the terminal status writes.  This removes the
+ *    per-event open/write/close from the observation path.
+ *
+ * Only the *observation* I/O is buffered.  [HeadlessTestState.write], the
+ * heartbeat thread and the progress/status writes are untouched, because the
+ * conditions under which 6031 occurred are the thing being preserved.
+ *
  * Timestamps use `SystemClock.elapsedRealtimeNanos()` (CLOCK_MONOTONIC), which
  * is the same time base the native trace uses (std::chrono::steady_clock), so
  * the host analyzer can merge both files onto one timeline without a fitted
  * offset.  Wall-clock is recorded alongside it so cross-process skew can still
  * be reconstructed if one of the two files was pulled at a different moment.
  *
- * Every line is written and flushed individually; a process that aborts keeps
- * everything up to the abort.  The writes are synchronized because the
- * heartbeat thread, the instrumentation thread and the native training thread
- * (through the progress callback) all append to the same file.
+ * Writes are synchronized because the heartbeat thread, the instrumentation
+ * thread and the native training thread (through the progress callback) all
+ * append to the same file.  Overflow is counted and never silent.
  */
-class IncidentTrace internal constructor(private val file: File) {
+class IncidentTrace internal constructor(
+    private val file: File,
+    val mode: String,
+) {
     private val lock = Any()
+
+    /** Flight-mode line buffer. A 128-step run emits ~87 lines, so this is ample. */
+    private val buffer = ArrayList<String>(kFlightLineCapacity)
+    private var overflowCount = 0
+    private var flushed = false
 
     fun line(event: String, reason: String = "", extra: String = "") {
         val text = buildString {
@@ -1160,7 +1187,44 @@ class IncidentTrace internal constructor(private val file: File) {
             if (extra.isNotEmpty()) append(' ').append(extra)
             append('\n')
         }
-        // Tracing must never be able to fail a training run.
+        if (mode == MODE_FLIGHT) {
+            synchronized(lock) {
+                if (buffer.size < kFlightLineCapacity) buffer.add(text) else overflowCount++
+            }
+            return
+        }
+        appendNow(text)
+    }
+
+    /**
+     * Writes the flight buffer out. Idempotent, and never throws: tracing must
+     * not be able to fail a training run.
+     */
+    fun flush(reason: String) {
+        if (mode != MODE_FLIGHT) return
+        val payload: String
+        val lost: Int
+        synchronized(lock) {
+            if (flushed) return
+            flushed = true
+            lost = overflowCount
+            payload = buildString {
+                append("ts_ns=").append(SystemClock.elapsedRealtimeNanos())
+                append(" unix_ms=").append(System.currentTimeMillis())
+                append(" tid=").append(Process.myTid())
+                append(" src=kotlin event=trace_flush")
+                append(" trace_mode=flight flush_reason=").append(sanitize(reason))
+                append(" kotlin_trace_event_count=").append(buffer.size)
+                append(" kotlin_trace_overflow_count=").append(lost)
+                append('\n')
+                buffer.forEach { append(it) }
+            }
+            buffer.clear()
+        }
+        appendNow(payload)
+    }
+
+    private fun appendNow(text: String) {
         runCatching {
             synchronized(lock) {
                 FileOutputStream(file, true).use { out ->
@@ -1180,7 +1244,17 @@ class IncidentTrace internal constructor(private val file: File) {
 
     companion object {
         const val MARKER_NAME = "incident_trace_enabled"
+        const val MODE_SIDECAR_NAME = "incident_trace_mode"
+        const val MODE_FLIGHT = "flight"
+        const val MODE_FULL = "full"
         private const val TRACE_NAME = "incident-kotlin-trace.log"
+
+        /**
+         * Preallocated line capacity for flight mode. A 128-step run produced 87
+         * Kotlin lines; this leaves a wide margin. The counter exists so that if
+         * it is ever exceeded the loss is reported rather than silent.
+         */
+        const val kFlightLineCapacity = 4096
 
         /** Values are whitespace-free by construction; this strips the rest. */
         private fun sanitize(value: String): String =
@@ -1191,8 +1265,22 @@ class IncidentTrace internal constructor(private val file: File) {
             if (!marker.exists()) return null
             val root = File(context.filesDir, "headless")
             if (!root.exists() && !root.mkdirs()) return null
-            val trace = IncidentTrace(File(root, TRACE_NAME))
-            trace.line("trace_start", extra = "unix_anchor_ms=${System.currentTimeMillis()}")
+            // Same sidecar, same lookup and same fallback as the native side:
+            // absent, unreadable or unrecognized means full mode, never
+            // disabled. The marker alone stays the enable switch.
+            val mode = runCatching {
+                File(context.filesDir, "headless-input/$MODE_SIDECAR_NAME")
+                    .takeIf { it.isFile }
+                    ?.readText()
+                    ?.trim()
+                    ?.takeIf { it == MODE_FLIGHT }
+                    ?.let { MODE_FLIGHT }
+            }.getOrNull() ?: MODE_FULL
+            val trace = IncidentTrace(File(root, TRACE_NAME), mode)
+            trace.line(
+                "trace_start",
+                extra = "unix_anchor_ms=${System.currentTimeMillis()} trace_mode=$mode",
+            )
             return trace
         }
     }

@@ -28,6 +28,12 @@ param(
   [ValidateSet('Plan', 'Run', 'Analyze', 'SelfTest')]
   [string]$Mode,
 
+  # Trace recorder mode.  full is the detailed per-event trace (what the two
+  # completed 128-step runs used); flight is the low-perturbation buffered
+  # recorder whose purpose is to test whether the instrumentation itself was
+  # suppressing the abort.  Both modes keep the run conditions identical.
+  [ValidateSet('full', 'flight')]
+  [string]$TraceMode = 'full',
   [int]$Seed = 2,
   [ValidateRange(1, 100000)][int]$Steps = 128,
   [Parameter(Mandatory = $true)][string]$QairtSdkRoot,
@@ -85,6 +91,7 @@ $incidentIdentity = [ordered]@{
   progress_status = 'on'
   host_polling    = 'on'
   incident_trace  = 'on'
+  incident_trace_mode = $TraceMode
   logcat          = 'cleared-before-run,dumped-after'
   quality_eval    = 'disabled'
   checkpoint      = 'disabled'
@@ -163,7 +170,7 @@ function Exit-IncidentDeviceLock {
 }
 
 function Write-IncidentIdentity {
-  param([string]$Directory, [string]$Id)
+  param([string]$Directory, [string]$Id, [string]$RunStartUtc)
   New-Item -ItemType Directory -Force -Path $Directory | Out-Null
   $record = [ordered]@{
     schema_version = 1
@@ -172,7 +179,9 @@ function Write-IncidentIdentity {
     actual         = [ordered]@{
       seed = $Seed
       steps = $Steps
+      trace_mode = $TraceMode
       qairt_expected_build_id = $ExpectedBuildId
+      run_start_utc = $RunStartUtc
     }
     created_utc = [DateTimeOffset]::UtcNow.ToString('o')
   }
@@ -181,6 +190,46 @@ function Write-IncidentIdentity {
     (Join-Path $Directory 'incident-identity.json'),
     (($record | ConvertTo-Json -Depth 6) + "`n"),
     (New-Object Text.UTF8Encoding($false)))
+}
+
+# Diagnostic wall time and ms/update, written after the run.
+#
+# This is instrumentation-cost measurement only. It is NOT a quality metric and
+# must never be compared against a G1 run, whose timing is taken under a
+# different protocol. Its only purpose is to let the full-vs-flight perturbation
+# be quantified at all.
+function Write-IncidentOverhead {
+  param(
+    [string]$Directory,
+    [string]$Id,
+    [datetime]$RunStart,
+    [datetime]$RunEnd
+  )
+  $wallSeconds = ($RunEnd - $RunStart).TotalSeconds
+  $msPerUpdate = if ($Steps -gt 0) { [math]::Round(1000.0 * $wallSeconds / $Steps, 2) } else { $null }
+  $nativeTrace = Join-Path $Directory 'incident-native-trace.log'
+  $kotlinTrace = Join-Path $Directory 'incident-kotlin-trace.log'
+  $nativeBytes = if (Test-Path -LiteralPath $nativeTrace -PathType Leaf) { (Get-Item -LiteralPath $nativeTrace).Length } else { 0 }
+  $kotlinBytes = if (Test-Path -LiteralPath $kotlinTrace -PathType Leaf) { (Get-Item -LiteralPath $kotlinTrace).Length } else { 0 }
+  $record = [ordered]@{
+    schema_version = 1
+    diagnostic_id = $Id
+    trace_mode = $TraceMode
+    steps = $Steps
+    diagnostic_wall_seconds = [math]::Round($wallSeconds, 2)
+    diagnostic_ms_per_update = $msPerUpdate
+    native_trace_bytes = $nativeBytes
+    kotlin_trace_bytes = $kotlinBytes
+    native_trace_bytes_per_step = if ($Steps -gt 0) { [math]::Round($nativeBytes / $Steps, 1) } else { $null }
+    not_a_quality_measurement = $true
+    recorded_utc = [DateTimeOffset]::UtcNow.ToString('o')
+  }
+  [IO.File]::WriteAllText(
+    (Join-Path $Directory 'incident-overhead.json'),
+    (($record | ConvertTo-Json -Depth 4) + "`n"),
+    (New-Object Text.UTF8Encoding($false)))
+  Write-Host ("incident_overhead trace_mode={0} wall_seconds={1} ms_per_update={2} native_bytes={3}" `
+      -f $TraceMode, $record.diagnostic_wall_seconds, $msPerUpdate, $nativeBytes)
 }
 
 function Invoke-IncidentLogcatCapture {
@@ -234,7 +283,13 @@ switch ($Mode) {
     Write-Host "incident_mode=plan diagnostic_id=$id"
     Write-Host "incident_namespace=$incidentRoot (guard: outside docs/results)"
     Write-Host "incident_steps=$Steps seed=$Seed arm=Control batch=8 muon_backend=HVX"
+    Write-Host "incident_trace_mode=$TraceMode"
     Write-Host "incident_trace=on logcat=clear-then-dump quality_eval=disabled checkpoint=disabled"
+    if ($TraceMode -eq 'flight') {
+      Write-Host "flight_recorder=buffered-in-memory dump=qnn_execute_failure|training_terminal overflow=fail-closed"
+    } else {
+      Write-Host "flight_recorder=off (per-event flush; this is the mode of the two completed 128-step runs)"
+    }
     Write-Host "g1_quality_tier3=BLOCKED (this runner never touches it)"
     Write-Host "would_run: $trainingRunner -Seed $Seed -Steps $Steps -AttentionGate none ..."
     exit 0
@@ -273,7 +328,8 @@ switch ($Mode) {
     $id = Get-IncidentId
     $dir = Join-Path $incidentRoot $id
     if (Test-Path -LiteralPath $dir) { throw "RUN_ID_REUSE: $dir already exists" }
-    Write-IncidentIdentity -Directory $dir -Id $id
+    $runStarted = [datetime]::UtcNow
+    Write-IncidentIdentity -Directory $dir -Id $id -RunStartUtc $runStarted.ToString('o')
 
     $python = Get-IncidentPython
     $adb = [IO.Path]::Combine($env:LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', 'adb.exe')
@@ -295,14 +351,29 @@ switch ($Mode) {
     # and the native side look for this marker at startup; without it the run
     # is a normal run and the analyzer must be told so rather than silently
     # reporting an empty trace as "nothing happened near the failure".
+    #
+    # The mode sidecar is written next to the marker and read by both sides at
+    # startup. For full mode it is removed, so the device falls back to the
+    # default: that keeps the full-mode path exactly as it was before flight
+    # mode existed rather than depending on a new file being correct.
     $markerCreated = $false
     try {
       [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
         -Arguments @('shell', 'run-as', $package, 'mkdir', '-p', 'files/headless-input'))
       [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
         -Arguments @('shell', 'run-as', $package, 'touch', 'files/headless-input/incident_trace_enabled'))
+      if ($TraceMode -eq 'flight') {
+        # Written via shell so no temp file on the host carries run content.
+        [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
+          -Arguments @('shell', 'run-as', $package, 'sh', '-c',
+            "'echo flight > files/headless-input/incident_trace_mode'"))
+      } else {
+        [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
+          -Arguments @('shell', 'run-as', $package, 'rm', '-f', 'files/headless-input/incident_trace_mode') `
+          -AllowFailure)
+      }
       $markerCreated = $true
-      Write-Host 'incident_trace_marker=created'
+      Write-Host "incident_trace_marker=created mode=$TraceMode"
       # Clear logcat immediately before the run so the dump is dominated by
       # this run rather than by whatever the device logged beforehand.
       [void](Invoke-IncidentLogcatCapture -Adb $adb -Device $device.Endpoint -Directory $dir)
@@ -404,22 +475,35 @@ switch ($Mode) {
           Write-Host "pull_empty=$name from=$($candidate.Dir)"
         }
       }
-      # Dump logcat after the run, pass or fail, and remove the marker so the
-      # next run cannot silently inherit instrumentation.
+      # Dump logcat after the run, pass or fail, and remove the marker and the
+      # mode sidecar so the next run cannot silently inherit instrumentation.
       [void](Invoke-IncidentLogcatCapture -Adb $adb -Device $device.Endpoint -Directory $dir)
-      [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
-        -Arguments @('shell', 'run-as', $package, 'rm', '-f', 'files/headless-input/incident_trace_enabled') `
-        -AllowFailure)
+      foreach ($leftover in @('files/headless-input/incident_trace_enabled',
+                              'files/headless-input/incident_trace_mode')) {
+        [void](Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint `
+          -Arguments @('shell', 'run-as', $package, 'rm', '-f', $leftover) -AllowFailure)
+      }
     } finally {
       Exit-IncidentDeviceLock
     }
+
+    Write-IncidentOverhead -Directory $dir -Id $id -RunStart $runStarted -RunEnd ([datetime]::UtcNow)
 
     if (-not (Test-Path -LiteralPath $nativeTrace -PathType Leaf)) {
       Write-Host 'incident_analysis=SKIPPED (no native trace was produced)'
       if ($runError) { throw $runError }
       return
     }
-    & $python $analyzer --native $nativeTrace --out (Join-Path $dir 'analysis')
+    # Pass the Kotlin trace too when it was produced: the heartbeat and progress
+    # deltas live on that side, and omitting it would silently reduce a flight
+    # report to the native timeline only.
+    $analyzerArgs = @($analyzer, '--native', $nativeTrace,
+                      '--out', (Join-Path $dir 'analysis'))
+    $kotlinTrace = Join-Path $dir 'incident-kotlin-trace.log'
+    if (Test-Path -LiteralPath $kotlinTrace -PathType Leaf) {
+      $analyzerArgs += @('--kotlin', $kotlinTrace)
+    }
+    & $python @analyzerArgs
     $analysisExit = $LASTEXITCODE
     Write-Host "incident_analysis_exit=$analysisExit"
     Write-Host "g1_quality_tier3=BLOCKED (unchanged by this diagnostic run)"

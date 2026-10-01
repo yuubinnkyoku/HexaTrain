@@ -193,14 +193,21 @@ bool Runtime::executeTinyTransformerTrainingGeneralized(
   std::uint32_t learningRateBitsBefore = 0;
   std::memcpy(&learningRateBitsBefore, &learningRate, sizeof(learningRateBitsBefore));
   const auto started = Clock::now();
-  // Opt-in incident tracing (no-op unless the marker file exists): the signal
-  // arguments are recorded as null and the raw return code is captured.
-  incident_trace::qnnExecuteBegin();
+  // Opt-in incident tracing (no-op unless the marker file exists). The signal
+  // arguments are the literal nullptr values this call site passes, so the
+  // recorder sees the real values rather than an assumption about them.
+  incident_trace::qnnExecuteBegin(true, true);
   const auto status = impl_->api.graphExecute(g.graph, in.data(), uint32_t(in.size()),
                                                out.data(), uint32_t(out.size()),
                                                nullptr, nullptr);
-  incident_trace::qnnExecuteEnd(QNN_GET_ERROR_CODE(status),
-                                status == QNN_SUCCESS);
+  const int executeResult = QNN_GET_ERROR_CODE(status);
+  incident_trace::qnnExecuteEnd(executeResult, status == QNN_SUCCESS);
+  // Flight-mode flush point. A 6031 arrives here as a return code, not as a
+  // crash, so this is the one place guaranteed to run before the training loop
+  // unwinds - which makes it the highest-value dump site. It only does
+  // anything when flight mode is active and no dump has happened yet, so a full
+  // -mode run pays one predictable branch here.
+  if (executeResult != 0) incident_trace::dump("qnn_execute_failure");
   metrics_.executeUs.push_back(elapsedUs(started));
   ++metrics_.graphExecuteCount;
   recordGraphExecuteResult(QNN_GET_ERROR_CODE(status), QNN_GET_ERROR_CODE(status),
