@@ -168,4 +168,107 @@ create / finalize / skel / backend は正常。偶然の一致かもしれず、
 （一次レポート、status.json、host log）。private のまま、results tree には昇格していない。
 次に必要なのは 6031 の原因切り分けであり、実機 run 再開は新しい指示があるまで行わない。
 
+## 静的調査（実機 run なし）: QnnSignal / step 境界 / 30 s 境界（2026-10-01）
+
+### 1. QnnSignal lifecycle: HexaTrain 側の trigger 経路は 0 件
+
+- `app/src`（cpp / inc / h / kt）全体で `QnnSignal`、`signalCreate`、`signalTrigger`、
+  `signalDestroy`、`signalHandle` の識別子は **0 件**。SDK 側に `QnnSignal.h` はあるが
+  repo は include していない
+- `api.graphExecute(` の呼び出しは **24 箇所**。機械照合で **24 / 24 が signal 引数に
+  `nullptr, nullptr`** を渡している（`nullptr, nullptr` 以外を渡す site は 0）
+- したがって「`QAIRT_GRAPH_ERROR_ABORTED` を HexaTrain 自身の signal trigger が起こした」
+  という経路は**コード上存在しない**。6031 の trigger が実在するなら、それは backend /
+  HTP runtime の内部（または別主体）である
+- stop / cancel は QNN API ではなくプロセス内の `std::atomic_bool`
+  （`native_bridge.cpp` の `gRunning` / `gStopRequested`）と Kotlin 側
+  `NativeRunArbiter` / WorkManager / UI Stop。headless suite ではこれらの set 経路は動かない。
+  学習ループは step 先頭で atomic を load して break（`interrupted`）するだけで、
+  QNN handle には触れない
+- 次の run で示すべきは「trigger が無いこと」: 各 execute に signal handle が null である
+  ことを記録し、report に `signal_trigger_count=0` を持つ（emission ではなく invariant として）
+
+### 2. step 境界の実行順（step N-1 最終 batch → step N batch 0）
+
+`app/src/main/cpp/qnn/qnn_transformer_training.cpp` の L19 Muon ループ（7345–7520）:
+
+1. 最終 batch の `graphExecute` が返る → registry identity 検査 + 勾配累積（CPU、758,528 要素）
+2. （G1 のみ）gate aggregate 更新
+3. `auxLr` / `muonLr` / `updateConfig` を計算（7420–7429）
+4. **HVX Muon update（7432–7460）** = `nicopedia_hvx_muon::update`。`nicopedia_hvx_muon.cpp` は
+   `<remote.h>` / `<rpcmem.h>` を使う **FastRPC（DSP）経路**で、custom skel
+   `hexatrain_hvx_probe_configure/transport` を persistent session + `std::mutex` で呼ぶ。
+   **HTP execute と HTP execute の間に DSP 上で走る唯一の外来コード**
+5. `update` の move、`current` / `momentum` / `adamM` / `adamV` 差し替え（7469–7477）
+6. finiteness AND 連結（7478–7482）
+7. `++completed`、meanLoss、（`step % 25 == 0` のときだけ）curve 追記（7483–7488）
+8. **telemetry 書き込み**（毎 step、buffered ofstream、7489–7490）
+9. checkpoint 書き込み（**step % 250 == 0 か最終 step のみ**、7492–7504）
+10. **progress emission**（`step == resumeStep + 1`、`step % 8 == 0`、checkpoint 時、最終 step、
+    7506–7517）→ JNI upcall で Kotlin へ
+11. ループ先頭: `stopRequested` atomic load（7346）、`zeroLanguageParameters` で **3 MB 確保**（7348）
+12. batch 0: `nprtBatch`（order 読み・one-hot 生成）→ `executeTinyTransformerTraining` →
+    registry 検査、APP_WRITE bind 更新（ポインタ再設定 + 128 KB スナップショット）、
+    APP_READ 約 30 MB の poison fill → **`graphExecute`** ← 6031 はここ（2 / 77 回）
+
+失敗は 2 回とも手順 12 の最初の execute で、手順 4（DSP 上の FastRPC）と手順 10（JNI upcall）を
+含む境界の直後である。
+
+### 3. 30 s 境界: 共有している状態・mutex・lifecycle object は無い
+
+- **device 側 writer 1**: `HeadlessDeviceTestRunner` の heartbeat thread（`Thread.sleep(30_000)`）
+  が `HeadlessTestState.write()` を呼ぶ
+- **device 側 writer 2**: 同じファイルの progress callback。native が step 1 / 8 step ごと /
+  checkpoint / 最終 step で `progress(status.str())` を呼び（7506–7517）、Kotlin は
+  `PROGRESS_STATUS_INTERVAL_MS = 1_000L` の throttle で `state.write()` を呼ぶ。
+  この経路は **native training thread 上の JNI upcall** として実行される
+- `HeadlessTestState.write` は `@Synchronized` + 4096 B 固定長書き込み + `fd.sync()` +
+  ATOMIC_MOVE（`Files.move`）。lock は `single-flight.lock` の FileLock のみ
+- **QNN handle / context / signal と共有する object・mutex は無い**（native 側は Kotlin の
+  state に参照を持たない。native→Kotlin の接触は progress upcall 1 経路だけ）
+- host 側: 2 s ごとに `run-as cat status.json`、30 s ごとに checkpoint を `run-as ls`。
+  host プロセス側の操作で、QNN と状態を共有しない
+- Android watchdog / WorkManager: headless suite は WorkManager を使わない（UI Stop 経路も無し）
+- **観察**: 失敗は heartbeat 書き込みの約 2 s 後（32 s / 62 s）。ただし heartbeat は 30 s 周期で
+  あり、無作為な失敗が 2 s 以内に落ちる確率は各約 7%。2 例では原因と断定しない
+
+### 4. 608 回の成功境界と 76 → 77 の比較: 既存 artifact では不能
+
+- instrumentation の `stdout.txt` / `stderr.txt` は JUnit の枠（INSTRUMENTATION_STATUS と stack）だけで
+  **per-step 行が無い**（41 行）
+- host progress は 30 s 粒度、checkpoint 一覧は 250 step 毎、device の
+  `learning-rate-telemetry.csv` は per-step 行を持つが **timestamp が無い**
+- よって「失敗直前の境界だけ特別だったのか」「heartbeat が重なったのか」を既存 evidence から
+  切り分けることはできない。これが instrumentation を足す理由である
+- **logcat も使えない**: 事後の read-only dump（`logcat -d -t 6000`、private）では buffer の最新が
+  `10-01 00:03:00` までで、`PhoneLMBench` 行 0・`6031` 行 0。失敗時刻 13:54 の backend ログは
+  残っていない。次回の incident run では run 前に `logcat -c`、失敗時に `logcat -d` を
+  private（`build/`、commit しない）へ退避する
+
+## 次の実機 run 前に入れる観測（計画）
+
+incident 専用 trace を app-private に追加する（marker file `incident_trace_enabled` が
+run dir にあるときだけ有効。通常 run の挙動・成果物は変えない）:
+
+- per-execute: `execute_id`、`step`、`batch`、monotonic timestamp、thread id、
+  **signal handle = null**（invariant）、execute begin / end、QNN return code
+- 境界: `optimizer_begin/end`（FastRPC HVX を含む）、`parameter_copy_begin/end`、
+  `stop_requested`、`cancel_requested`
+- Kotlin: `heartbeat_begin/end`、`status_write_begin/end`（heartbeat / progress の別）
+- report に `signal_trigger_count=0` を invariant として出す（trigger site が存在しないため
+  記録ではなく不変条件になる）
+- run 前の `logcat -c` と失敗時の `logcat -d`（private、commit しない）
+
+そのうえで **incident 専用 Control 100–128 step diagnostic run** を 1 本だけ行う
+（eval なし・checkpoint 最小・G1 品質実験とは分離）。分岐は合意どおり:
+
+- 6031 + trigger 記録あり → trigger 元を修正して再診断
+- 6031 + trigger 記録なし → backend / runtime 内部 abort として signal ownership を切る
+- 128 step 成功 → まだ Tier 3 に戻さず、再現性確認をもう 1 本
+- 複数回成功 → Tier 3 再開条件を再定義
+
+heartbeat の無効化は最初の切り分けでは行わない（まず観測だけを増やして現状条件を再現し、
+必要になったら heartbeat ON/OFF を incident A/B として切る）。
+
+
 
