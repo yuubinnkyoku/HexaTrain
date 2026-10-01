@@ -3,12 +3,19 @@
 Status: **BLOCKED / 未解決。** Tier 3（3000 step 本 run）は開始していない。
 本文書は incident 記録であり、**結果 evidence ではない**。R1–R5 の判定材料に使わない。
 
-**現在の到達点（2026-10-01）**: instrumentation を実装し、**実機診断 run を 2 本実行した**。
-seed 2 / Control / 128 step / incident trace ON の 2 本とも **128 step 完全成功
-（1024/1024 execute、6031 発生 0、signal invariants 0）**。停止条件 C（128-step 診断
-run が成功）に該当し、**6031 の原因は未同定のまま**。「解決」とは記録しない。
+**現在の到達点（2026-10-02）**: instrumentation を実装し、**実機診断 run を 4 本実行した**。
+seed 2 / Control / 128 step で、**full trace 2 本 + flight trace 2 本のすべてが
+128 step 完全成功（1024/1024 execute、6031 発生 0、signal invariants 0、
+overflow 0）**。
+
+- full 2/2 success、flight 2/2 success を **negative evidence** として記録
+- 低摂動 flight mode でも 6031 は再現せず、**「instrumentation が 6031 を隠していた」
+  は否定も肯定もされていない**
+- 停止条件 C（128-step 診断 run が成功）が **依然適用**、**G1 quality Tier 3 は BLOCKED**
+- **原因: unresolved**
+
 詳細は §4（SDK 一次資料）、§5–§7（instrumentation と analyzer）、§8（プロトコル）、
-§9（run 結果と、その run で見つかった instrumentation 自身の欠陥 3 件）。
+§9（full trace run 結果）、§10（flight recorder 設計と結果）。
 
 ## 事象
 
@@ -602,6 +609,111 @@ logcat 以外の channel（trace の Δ、QAIRT profile/event trace、SSR カウ
 **今回の 2 本では切り分けられなかった**。非再現だからである。
 batch 0 共通・signal 不変条件 0 は 3 例すべてで一致しており、これは
 「batch 0 で起きる」観測を 1 例増やしただけで、原因には何も加えない。
+
+## 10. flight recorder mode（低摂動）— 実装と結果
+
+### 10.0 なぜ flight mode を追加したか
+
+- full trace 2 本（Control 128-step）が **連続成功**、**6031 発生 0**
+- 一方 **非 instrumented の Control では 6031 が 2 回**（step 4 / step 77）
+- したがって次の問いは「再現の消失了」ではなく **「instrumentation が 6031 を
+  隠していないか」**
+
+full mode は 128-step で **10,152 行**を出し、**その 81% が micro-batch 毎 8 行**で
+1 行ごとに `fwrite` + `fflush`。Kotlin 側は 1 行ごとに `FileOutputStream` を
+open/write/close。**これが 6031 を消していた可能性は現時点で最も有力な説明**であり、
+観測能力を保ったまま検証できる。
+
+### 10.1 設計
+
+marker `incident_trace_enabled` は従来通り。有効化は marker の**存在のみ**で、
+mode は隣接 sidecar `incident_trace_mode` で選ぶ:
+
+| ファイル | mode |
+| --- | --- |
+| marker のみ | `full`（従来動作。default） |
+| marker + `incident_trace_mode` に `flight` | `flight` |
+| sidecar 不在/読めない/未知 | **`full`**（`disabled` には**決して**しない） |
+
+native `flight` は**固定容量 ring に POD record**を書く。hot path に
+`std::string` 構築も `to_string` も syscall も mutex もない（lock は `dump()` 内のみ）。
+容量 65536（128-step で必要行数 ~4.5k）。満杯時は**最新 record を捨てて損失を計上**する。
+最古を上書きすると失敗直前の記録が消えるため。`trace_overflow_count` は dump header に
+載り、analyzer が 0 以外を problem 扱いする（**穴のある trace の沈黙は証拠にならない**）。
+
+dump 地点 3 つ:
+1. **`graphExecute` が非 0 を返した直後**（ループ unwind 前に必ず通る唯一の地点）
+2. 正常 terminal
+3. `nicopediaHtpTraining` の forwarder（Muon loop の ~15 early return を 1 箇所で網羅）
+
+Kotlin は preallocated list に buffer し `native_call_end`（`finally` 内）で 1 回だけ書出。
+**観測以外の I/O は一切変えない** — `HeadlessTestState.write` / heartbeat thread /
+progress・status write は元のまま。
+
+### 10.2 実機結果（seed 2 / Control / 128 step / flight）
+
+| run | status | execute | 6031 | signal | overflow | analyzer |
+| --- | --- | --- | --- | --- | --- | --- |
+| `…-003843-904-29120` | SUCCESS | 1024/1024 | **0** | nonnull=0 / trigger=0 | **0** | problem 2 件（instrumentation bug） |
+| `…-005203-688-6264` | SUCCESS | 1024/1024 | **0** | nonnull=0 / trigger=0 | **0** | **problem 0 件 / exit 0** |
+
+health（flight）: `completed_steps=128` / `all_steps_finite=true` /
+`final_finite=true` / `nan_detected=false` / `inf_detected=false` /
+`cpu_fallback=false` / `hvx_rpc_failure_count=0` /
+`api_trace_graph_execute_success_count=1024` / `api_trace_last_qnn_result=0`。
+
+### 10.3 full vs flight の additional overhead 差
+
+| 指標 | full（2 本） | flight（2 本） | 差 |
+| --- | --- | --- | --- |
+| native trace 行数 | 10,025 / 10,152 | 4,482 | **−56%** |
+| native trace bytes | 1,132,980 / 1,144,319 | 484,102 | **−57%** |
+| trace_event_count | — | 4,481 | — |
+| overflow | 該当なし | **0 / 0** | — |
+
+diagnostic wall time（**instrumentation cost のみ。品質指標ではない。G1 run と比較しない**）:
+
+| run | mode | wall (s) | ms/update |
+| --- | --- | --- | --- |
+| `…-222455-298-44272` | full | 264.8 | 2068.9 |
+| `…-223002-448-7584` | full | 247.9 | 1936.8 |
+| `…-003051-037-37072` | flight | 264.8 | 2068.9 |
+| `…-003843-904-29120` | flight | 247.9 | 1936.8 |
+| `…-005203-688-6264` | flight | 190.0 | 1484.1 |
+
+flight は確かに速い。ただし **build/install を含む総 time の差**であり、
+**HTP execute 単体の時間差として提示できるものではない**（同じ run の内訳がないため）。
+**「flight は full より速い」ことは言えるが、「6031 の再現率を左右する perturbation が
+消えた」とは言えない**（§10.4）。
+
+### 10.4 結論（重要）
+
+- **`full trace 2/2 success`、`flight trace 2/2 success`** を negative evidence として記録
+- **6031 は flight mode でも再現しなかった**
+- **原因: unresolved**。「instrumentation が 6031 を隠していた」は **否定も肯定もされていない**
+  — flight でも出ないため、instrumentation は **無実犯人** であった可能性と
+  **真の原因が依然として稀** である可能性の両方が残る
+- したがって §9.4 の停止条件 C は **依然適用**。**G1 quality Tier 3 は BLOCKED のまま**
+- 品質値・R1–R5・seed 3 には一切触れていない
+
+### 10.5 flight mode を実装して実機で動かして分かった欠陥（4 件）
+
+実行して初めて見えたもので、レビューでは出てこなかった:
+
+1. **dump header を末尾に書いていた**（しかも現在時刻）→ file 内 timestamp 逆転で
+   analyzer が健全な trace を `TIMESTAMP_DISORDER` で拒否。**先に書き、anchor 時刻**に修正
+2. **`run_id` が trace のファイル名だった**（`incident-native-trace.log`）→
+   identity cross-check が機能しない。`cachePath` basename に修正（full mode と統一）
+3. **両 trace を append で open して truncate していなかった** → 3 本目の run の
+   Kotlin trace が **398 行・flush header 3 本**になり、前 run の timestamp が
+   後に来到 `TIMESTAMP_DISORDER`。**run ごとに trace ファイルを所有し truncate** するよう修正
+4. **signal invariant を `invariant=<name> value=<n>` 形式で出していた** →
+   analyzer は parsed **key** として invariant 名を探すので wrapper に隠れ
+   健全な trace が `SIGNAL_INVARIANT_NOT_RECORDED` に。**bare key=value** に修正
+
+1 と 4 は analyzer の fail-closed 判定が**自分の実装のバグを検出した**例であり、
+fail-closed を捨てずに維持した根拠になる。
+
 
 
 
