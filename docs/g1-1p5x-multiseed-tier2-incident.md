@@ -119,3 +119,53 @@ adb 多重接続か signal abort か single-flight 状態か分からなくな�
 再現しなかった残り候補（未検証）: Doze / idle 遷移（awake helper が無言失敗していた期間と
 重なる）、HTP 内部の一時状態。6031 が再発した場合の再開条件は上記分岐をそのまま踏む。
 
+## 2 回目の発生: Tier 3 arm 1 で再現（2026-10-01）→ Tier 3 は再度 BLOCKED
+
+事前登録どおりの順序の 1 本目（seed 2 Control、3000 step、eval 7 点、role=preregistered、
+APK は本日 audit 済み SHA-256 を `-SkipBuild -SkipInstall` で固定、起動時
+`Assert-PhoneLmInstalledApkMatches` 通過）が同一エラーで失敗した。
+
+| 項目 | 値 |
+| --- | --- |
+| run id | `20261001-135414-572` |
+| run status | `status=FAILED`（device）／host は `TIER3_ARM1_CAUGHT: NICOPEDIA_HTP_FAILED` |
+| error | `generalized tiny training graphExecute=6031`（**同一**） |
+| execute | `attempt_count=609 / success=608 / failure=1`、`first_failure_call=608`（0-based） |
+| 時刻 | start から最終 heartbeat 80.1 s、host progress 62 s 行の直後。**checkpoint は 1 本も無し**（interval 250 で最初の checkpoint 以前） |
+| 原因 | **未同定**（下記の観察は因果を主張しない） |
+
+**call 608 の意味づけ（同じ算術）**: `608 = 76 step × 8 batch` なので、call 0–607 は
+step 1–76 の全 batch が成功し、**call 608 = step 77 の最初の micro-batch**。中止は学習
+ループの途中で、これも「batch 0」。
+
+**失敗レポートに存在する項目（健全性として確認できるもの）**: runtime QAIRT identity は健全 —
+`compile_time_sdk_build_id=2.48.40.260702151143`、`backend_build_id_match=true`、core API
+2.37.0 / HTP 5.48.0、backend/device/context/graph create・finalize すべて result=0、
+`qnn_skel_expected == qnn_skel_actual`（`reused`）、`cpu_fallback=false`、
+`api_trace_fallback_attempted=false`、`failure_injection_enabled=false`、
+`focus_takeover_count=0`。host 側では起動時の pinned 引数一致と APK SHA-256 一致（本日 audit
+と同一）が通過している。
+
+**失敗経路では書かれない項目（absent = 済みではない。成功時のみ host/device が書く）**:
+`qnn_return_code_success`、`output_tensors_finite` / `all_steps_finite` / `final_finite`、
+`nan_detected` / `inf_detected`、`hvx_rpc_failure_count` / `hvx_fallback_count` /
+`hvx_nonfinite_count`、`dataset_hash` / `training_order_hash` / `training_order_seed`、
+`completed_steps`、host 追記の `compile_time_qairt_build_id` / `attention_gate` /
+`parameter_count` / `checkpoint_format`。**これらの absent を成功と読まないこと。**
+
+**観察（因果ではない）**: 2 回とも (a) ある step の **batch 0** で失敗（step 4 → step 77）、
+(b) 30 s 境目の progress / heartbeat 行の直後（32 s 後 → 62 s 後）、(c) いずれも seed 2
+Control、(d) いずれも checkpoint 以前、(e) 直前までの 609 中 608 execute が成功し
+create / finalize / skel / backend は正常。偶然の一致かもしれず、batch 0 か 30 s 境界かを
+原因と断定しない。
+
+**分岐の適用**: 合意された分岐「6031 再現 → G1 実験から切り離し QNN / runner incident として
+継続調査、Tier 3 は引き続き BLOCKED」に該当。よって本 incident は **2 回目の発生で
+「単発 abort」という前回の分類を破棄**し、arm 2–4 は開始していない。R1–R5 は計算していない。
+途中の Val / Dev / gate の品質値は一切読んでいない（health メタデータのみ）。
+
+**証拠保全**: `build/g1-1p5x-multiseed/incident/tier3-blocked-20261001-135414-572-*`
+（一次レポート、status.json、host log）。private のまま、results tree には昇格していない。
+次に必要なのは 6031 の原因切り分けであり、実機 run 再開は新しい指示があるまで行わない。
+
+

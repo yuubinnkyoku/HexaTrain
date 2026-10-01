@@ -228,7 +228,13 @@ Tier 2 smoke の初回（seed 2 / Control / 8 step）は QNN `6031`（`QAIRT_GRA
 FAILED し、原因未同定の incident として
 [docs/g1-1p5x-multiseed-tier2-incident.md](g1-1p5x-multiseed-tier2-incident.md) に記録した。
 同文書に graphExecute call の意味づけ、single-flight 2 系統の対応、unscoped adb の全列挙、
-再実行の条件と分岐を書いている。**Tier 3 は incident が閉じるまで開始しない。**
+再実行の条件と分岐を書いている。
+
+その後、合意済みの再開条件を満たして Tier 3 arm 1（seed 2 Control / 3000 step）を 1 本
+開始したが、**step 77 の最初の micro-batch で同一の 6031 を再現**した。分岐どおり
+QNN / runner incident に切り替え、**Tier 3 は arm 2–4 未着手のまま BLOCKED**。
+R1–R5 は未計算、途中の Val / Dev / gate の品質値は読んでいない。詳細は同 incident 文書。
+
 
 analyzer は一次レポート（`eval256-step*-htp.txt`、`seed<N>-l19-v1024-t32-d64-f128-steps3000-result.txt`、
 G1 の `gate-static-step*.txt`）だけを読み、`quality-split-level.csv`、`gate-trajectory.csv`、
