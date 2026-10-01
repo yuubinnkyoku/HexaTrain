@@ -353,6 +353,9 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
   - MQA / low-bit KV / cross-layer sharing / CSA2 / CED / DSparkの前提baselineとする
 - **Learned Residual / Branch Scale**
   - `x' = λ_resid x + λ_branch f(x)`をidentity初期化し、multi-stream residualより先に試す
+- **xIPReLU short A/B**
+  - ReLU²の棄却とは独立に、負側gradient + layer-wise trainable `αp / αn` の寄与を検証
+  - まず500 / 1000 / 2000 step。2000でtieでもparameter分化とloss trendが改善方向なら4000へ延長
 - **Parameter-Matched Shape Search**
   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけ、bpb・wall time・original-byte throughput・RAMのParetoで比較する
 - **Horizon-Specific MTP-lite**
@@ -736,15 +739,35 @@ Violetto本体はSwiGLUだが、Paradigmaのspeedrun系ではReLU²も使われ�
 
 1. 現行ReLU FFN（control）
 2. ~~ReLU²~~【Rejected】500/1000/1500/2000 で改善が一貫せず、2000 でも実質tie
-3. Gated ReLU / ReGLU（独立candidate）
-4. SwiGLU（独立candidate）
+3. **xIPReLU**（独立candidate。まずshort matched A/B）
+4. Gated ReLU / ReGLU（独立candidate）
+5. SwiGLU（独立candidate）
 
-FFN activation 系を再開する場合は SwiGLU / ReGLU を独立 candidate として扱う。
+ReLU²のnegative evidenceはxIPReLUを直接否定しない。ReLU²で変えたのは主に正側の二次形状だが、xIPReLUは負側も捨てず、layerごとのtrainable scalar `αp / αn` で勾配形状を適応させる。
+
+```text
+x > 0:  f(x) = αp * x^2 + 0.5 * x
+x <= 0: f(x) = αn * x^2 + 0.5 * x
+```
+
+論文設定は `αp = αn = 0.8` 初期化で、正値制約はsoftplus。L19なら追加parameterは38 scalarだけなので、projectionを増やすSwiGLU / ReGLUより先に「activation shapeそのもの」の寄与を低コストで切り分けやすい。一方、論文の主実験は1.1B / 3B Llamaを125B tokens学習した条件で、改善は学習後半に強くなるため、HexaTrainの小規模・短期runへそのまま外挿しない。
+
+最初のxIPReLU A/Bでは、qualityだけでなく次を同時記録する。
+
+- matched seed / initial weights / data orderでReLU controlと比較
+- 500 / 1000 / 2000 stepのVal / Dev / Balanced
+- layer別 `αp / αn` の移動量と深さ方向の分化
+- `FF1 < 0` 比率、activation RMS、gradient RMS
+- QNN graph node / tensor増分とfwd/bwd wall time
+- ReLU²で観測したcross-phase runtime anomalyと混同しないよう、quality判定とruntime原因調査を分離
+
+2000 stepでqualityがtieでも `αp / αn` が系統的に動き、loss trendが改善方向なら4000まで延長する。parameterがほぼ初期値のままでqualityもtieなら早期終了する。
 
 SwiGLU / ReGLUはprojectionが増えるため、品質だけでなくHTP上のMatMul増加・Muon/Aux Adam role・checkpoint payloadを必ず測る。
 
 参考:
 
+- [Deriving Activation Functions Using Integration — xIPReLU](https://arxiv.org/abs/2411.13010)
 - [GLU Variants Improve Transformer](https://arxiv.org/abs/2002.05202)
 - [Paradigma: A Retrospective on Our World Records](https://paradigma.inc/blog/a-retrospective-on-our-world-records/)
 
