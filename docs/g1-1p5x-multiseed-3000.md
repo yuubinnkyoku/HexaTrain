@@ -83,7 +83,8 @@ gate 側は 500–2000 の完全飽和 head 数が `12 / 6 / 4 / 5 / 2 / 4 / 2` 
 | eval steps | 500, 1000, 1500, 1750, 2000, 2500, 3000（予算が許せば 250 / 750 / 1250 を追加） | 1750 と 3000 を必ず含む |
 | eval | Val first 256 + Dev first 256 chunk、HTP native、canonical original UTF-8 byte bpb | 同一 |
 | data | `train_pilot.bin`（dataset `fnv1a64:0c7b2826f5f26fea`）、tokenizer `byte-bpe-v1024` | 同一 |
-| device / QAIRT | NX741J 1 台、QAIRT `2.48.40.260702151143`（pinned、fallback 禁止） | 同一 |
+| Device | NX741J 1 台、QAIRT `2.48.40.260702151143`（pinned、fallback 禁止） | 同一 |
+| device 前後の awake helper | `svc power stayon` / `dumpsys deviceidle disable` を **endpoint 明示**で実行し、失敗は `device_awake_and_idle_disabled=false failures=...` として記録する（unscoped な `adb shell` は transport が 2 本以上あると無言で失敗する） | 同一 |
 | arm order | seed2 Control → seed2 G1 → seed4 G1 → seed4 Control（1 session = 1 arm） | 交互配置で thermal / battery drift を分散。Mode All / Smoke は seed ごとに開始 arm を入れ替える |
 
 **3000 step にする理由:** seed 1 の反転は 1750 と 3000 の 2 点。2000 で切ると 1 点しか
@@ -222,6 +223,12 @@ Control と within-seed で pair する。
 
 上記の 2–4（runner・analyzer・order prefix / hash assert）は実装済み。
 5 の device smoke と 6 の本 run はそれぞれ Tier 2 / Tier 3 なので未実行のまま。
+
+Tier 2 smoke の初回（seed 2 / Control / 8 step）は QNN `6031`（`QAIRT_GRAPH_ERROR_ABORTED`）で
+FAILED し、原因未同定の incident として
+[docs/g1-1p5x-multiseed-tier2-incident.md](g1-1p5x-multiseed-tier2-incident.md) に記録した。
+同文書に graphExecute call の意味づけ、single-flight 2 系統の対応、unscoped adb の全列挙、
+再実行の条件と分岐を書いている。**Tier 3 は incident が閉じるまで開始しない。**
 
 analyzer は一次レポート（`eval256-step*-htp.txt`、`seed<N>-l19-v1024-t32-d64-f128-steps3000-result.txt`、
 G1 の `gate-static-step*.txt`）だけを読み、`quality-split-level.csv`、`gate-trajectory.csv`、
