@@ -1,21 +1,57 @@
-# G1 1.5x multi-seed: Tier 2 smoke incident（6031 ABORTED）— 原因未同定
+# G1 1.5x multi-seed: Tier 2 smoke incident（6031 ABORTED）
 
-Status: **BLOCKED / 未解決。** Tier 3（3000 step 本 run）は開始していない。
-本文書は incident 記録であり、**結果 evidence ではない**。R1–R5 の判定材料に使わない。
+Status: **`UNRESOLVED / DORMANT / WATCH`**
 
-**現在の到達点（2026-10-02）**: instrumentation を実装し、**実機診断 run を 4 本実行した**。
-seed 2 / Control / 128 step で、**full trace 2 本 + flight trace 2 本のすべてが
-128 step 完全成功（1024/1024 execute、6031 発生 0、signal invariants 0、
-overflow 0）**。
+本 incident は **`RESOLVED` でも「修正済み」でもない**。root cause は未同定のまま。
+再発時は即 incident lane へ戻る。本文書は incident 記録であり、**結果 evidence では
+ない**。R1–R5 の判定材料に使わない。
 
-- full 2/2 success、flight 2/2 success を **negative evidence** として記録
-- 低摂動 flight mode でも 6031 は再現せず、**「instrumentation が 6031 を隠していた」
-  は否定も肯定もされていない**
-- 停止条件 C（128-step 診断 run が成功）が **依然適用**、**G1 quality Tier 3 は BLOCKED**
-- **原因: unresolved**
+## 分類の根拠
 
-詳細は §4（SDK 一次資料）、§5–§7（instrumentation と analyzer）、§8（プロトコル）、
-§9（full trace run 結果）、§10（flight recorder 設計と結果）。
+- 過去に 6031 を **2 回**観測済み（step 4 batch 0 / step 77 batch 0）
+- **root cause は未同定**
+- full trace Control 128-step ×2 本で **非再現**
+- flight trace Control 128-step ×2 本で **非再現**
+- 計 **4 本連続成功**。うち flight run は **1024/1024 graphExecute 成功**
+- **signal invariant = 0**（`qnn_signal_argument_nonnull_count` /
+  `hexatrain_signal_trigger_count` の両方）
+- **trace overflow = 0**
+- CPU fallback / HVX failure / nonfinite なし
+- **再発時に利用できる full/flight recorder・analyzer・fixture が完成済み**
+
+**「instrumentation が 6031 を隠していた」は否定も肯定もされていない。** flight mode
+でも再現しなかったため、instrumentation が無実犯人であった可能性と、真の原因が
+依然として稀である可能性の両方が残る。4 本の連続成功は negative evidence であり、
+解決の根拠ではない。
+
+## 決定（2026-10-02）
+
+**原因未同定だが、instrumentation 整備後 4 本連続診断が成功したため、本研究を再開する。
+再発時は即 incident lane へ戻る。**
+
+追加の 128-step 繰り返し、QAIRT profiling、heartbeat A/B 等は**現時点では実施しない**。
+
+優先順位は当面 **`G1 multi-seed 研究 > 6031 追加原因究明`** とする。ただし
+**6031 が再発した瞬間にこの優先順位を反転する**。
+
+再開した G1 1.5x multi-seed Tier 3 は **通常の quality run** であり、
+**incident trace を有効化しない**（6031 回避目的で quality experiment の
+timing や条件を変更しない）。
+
+### 再発時の手順（fail closed）
+
+6031 が **1 回でも再発**したら即座に Tier 3 を BLOCKED へ戻す:
+
+- 後続 arm を開始しない
+- quality 値を読まない
+- 失敗 run を成功扱いしない
+- private incident evidence を保存
+- 本研究で完成した **flight recorder / analyzer** を使う incident lane へ戻る
+
+6031 以外の QNN failure、nonfinite、fallback、identity mismatch 等も同様に
+fail closed とし、**別 incident として扱う**。
+
+---
 
 ## 事象
 
@@ -695,6 +731,11 @@ flight は確かに速い。ただし **build/install を含む総 time の差**
   **真の原因が依然として稀** である可能性の両方が残る
 - したがって §9.4 の停止条件 C は **依然適用**。**G1 quality Tier 3 は BLOCKED のまま**
 - 品質値・R1–R5・seed 3 には一切触れていない
+
+> **2026-10-02 追記**: 本節が記録した BLOCKED は、その後**上位の決定
+> （`UNRESOLVED / DORMANT / WATCH` として本研究を再開）により解除**された。§9 の
+> full/flight 4 本連続非再現は negative evidence として有効であり、原因未同定は
+> 変わらない。再発時は本節の recorder/analyzer をそのまま使う。
 
 ### 10.5 flight mode を実装して実機で動かして分かった欠陥（4 件）
 
