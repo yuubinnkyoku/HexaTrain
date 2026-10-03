@@ -5,12 +5,18 @@
     2,
     4
   ],
-  "allow_exploratory_seed": false,
-  "exploratory_seeds": [],
+  "allow_exploratory_seed": true,
+  "exploratory_seeds": [
+    3
+  ],
   "seeds": [
     {
       "seed": 2,
       "role": "preregistered"
+    },
+    {
+      "seed": 3,
+      "role": "exploratory"
     },
     {
       "seed": 4,

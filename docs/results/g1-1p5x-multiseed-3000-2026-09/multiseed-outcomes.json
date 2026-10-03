@@ -18,6 +18,24 @@
     "final_parameter_hash": "fnv1a64:8e57b9ca2c8e1d08"
   },
   {
+    "seed": 3,
+    "arm": "Control",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed3\\control",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:67d3bf2b70bbc1b6",
+    "final_parameter_hash": "fnv1a64:fb49984e643ce886"
+  },
+  {
+    "seed": 3,
+    "arm": "G1",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed3\\g1",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:e396cd52a4c326ad",
+    "final_parameter_hash": "fnv1a64:a3d897eeff91203f"
+  },
+  {
     "seed": 4,
     "arm": "G1",
     "status": "COMPLETED",

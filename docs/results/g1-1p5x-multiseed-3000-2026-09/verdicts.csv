@@ -2,6 +2,9 @@ seed,seed_role,criterion,verdict,value,detail
 2,preregistered,R1,pass,2/2,"steps [500, 1000] lower both Val and Dev bpb; threshold 60% of steps <= 1000"
 2,preregistered,R2,not_reproduced,0/5,Dev NLL delta > 0 at steps []; band 1500-3000
 2,preregistered,R3,none,none,reversal step set; the R1 early band must stay unaffected
+3,exploratory,R1,pass,2/2,"steps [500, 1000] lower both Val and Dev bpb; threshold 60% of steps <= 1000"
+3,exploratory,R2,not_reproduced,0/5,Dev NLL delta > 0 at steps []; band 1500-3000
+3,exploratory,R3,none,none,reversal step set; the R1 early band must stay unaffected
 4,preregistered,R1,pass,2/2,"steps [500, 1000] lower both Val and Dev bpb; threshold 60% of steps <= 1000"
 4,preregistered,R2,reproduced,1/5,Dev NLL delta > 0 at steps [2500]; band 1500-3000
 4,preregistered,R3,located,2500,reversal step set; the R1 early band must stay unaffected

@@ -18,11 +18,26 @@
 
 pre-registered coverage: seeds [2, 4] of [2, 4]
 
+### exploratory / reference seeds (excluded from the R1-R5 decision)
+seed 3 (exploratory, source=registry)
+| seed | role | step | d Val bpb | d Dev bpb | d Val NLL | d Dev NLL | d Val top-1 | d Dev top-1 | sup. heads |
+| ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 exploratory | 500 | -0.019394 | -0.031459 | -0.034996 | -0.051940 | +12 | +71 | 14 |
+| 3 exploratory | 1000 | -0.044861 | -0.033600 | -0.080950 | -0.055476 | +48 | +72 | 6 |
+| 3 exploratory | 1500 | -0.031910 | -0.030536 | -0.057580 | -0.050417 | -17 | -21 | 8 |
+| 3 exploratory | 1750 | -0.036149 | -0.050808 | -0.065229 | -0.083887 | +40 | -77 | 7 |
+| 3 exploratory | 2000 | -0.044957 | -0.032295 | -0.081122 | -0.053320 | +1 | +14 | 9 |
+| 3 exploratory | 2500 | -0.027023 | -0.049140 | -0.048761 | -0.081133 | -75 | -17 | 9 |
+| 3 exploratory | 3000 | -0.025350 | -0.071902 | -0.045742 | -0.118714 | -2 | +137 | 12 |
+
 | seed | role | criterion | verdict | value |
 | ---: | :--- | :--- | :--- | :--- |
 | 2 | preregistered | R1 | pass | 2/2 |
 | 2 | preregistered | R2 | not_reproduced | 0/5 |
 | 2 | preregistered | R3 | none | none |
+| 3 | exploratory | R1 | pass | 2/2 |
+| 3 | exploratory | R2 | not_reproduced | 0/5 |
+| 3 | exploratory | R3 | none | none |
 | 4 | preregistered | R1 | pass | 2/2 |
 | 4 | preregistered | R2 | reproduced | 1/5 |
 | 4 | preregistered | R3 | located | 2500 |
@@ -32,7 +47,8 @@ pre-registered coverage: seeds [2, 4] of [2, 4]
 decision: ambiguous_tie_breaker (pre-registered seeds only)
 R2 reproduced in 1/2 pre-registered fresh seeds (seeds [4]): ambiguous.  The documented tie-breaker is one seed 3 run via -AllowExploratorySeed; the analyzer reports it as exploratory and keeps it outside this decision, so the tie is broken by an explicit human call, not by an automatic merge.
 
-rows=14 gate=14 verdicts=8 problems=0
+rows=21 gate=21 verdicts=11 problems=0
 NOTE: seed_role_source=registry
 NOTE: preregistered_seeds=[2, 4]
 NOTE: preregistered_coverage=[2, 4]
+NOTE: EXPLORATORY_SEED_EXCLUDED seeds=[3] — outside the pre-registered R1-R5 decision

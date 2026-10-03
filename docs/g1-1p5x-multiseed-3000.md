@@ -2,15 +2,18 @@
 
 ## Status
 
-**COMPLETE / 4 arm 揃い・analyzer exit 0。** 事前登録 seed 2 / 4 の 4 arm
+**COMPLETE / G1 multi-seed lane 閉鎖。** 事前登録 seed 2 / 4 の 4 arm
 （seed2 Control / seed2 G1 / seed4 G1 / seed4 Control）がすべて
 training SUCCESS・eval 7/7 で、analyzer は `problems=0`、
 `decision: ambiguous_tie_breaker` を返した。
 
-**seed 3 は未実施。** `ambiguous_tie_breaker` は protocol 上「seed 3 を
-`-AllowExploratorySeed` 付きで1本だけ追加する」分岐だが、**exploratory
-evidence であり事前登録判定には混ざらない**。同じ commit に混ぜず、
-別の exploratory lane として実行する。
+**exploratory tie-breaker として seed 3 も 2 arm 完了**（health PASS・eval 7/7）。
+seed 3 は `role=exploratory` として registry に残り、analyzer は
+`EXPLORATORY_SEED_EXCLUDED seeds=[3]` と明示して R1–R5 の判定から除外した。
+**`ambiguous_tie_breaker` は変更していない。**
+
+**この lane はここで閉じる。** 新たに明確な failure や極端な seed 差が出ない限り
+seed 5 等は追加しない。
 
 本節以外は実験設計と引き継ぎ指示を固定するものである。**結果の解釈は
 末尾の「実行結果」節に分離して記載する。**
@@ -232,7 +235,7 @@ Control と within-seed で pair する。
 
 上記の 2–4（runner・analyzer・order prefix / hash assert）は実装済み。
 5 の device smoke と 6 の本 run はそれぞれ Tier 2 / Tier 3 として実行済みで、
-結果は末尾の「実行結果」節に記録した。**seed 3 のみ未実施**。
+結果は末尾の「実行結果」節に記録した。seed 3 も exploratory として実行済み。
 
 Tier 2 smoke の初回（seed 2 / Control / 8 step）は QNN `6031`（`QAIRT_GRAPH_ERROR_ABORTED`）で
 FAILED し、原因未同定の incident として
@@ -448,10 +451,11 @@ seed 4 では 2500 の 1 点にずれて現れ、seed 2 では現れなかった
 ## 統計上の禁止事項（再掲）
 
 seed 高々 3 の sign consistency であり、検定・有意差・"consistent across seeds" は主張しない。
-率だけでなく token 数（8192 / split）を併記する。単一 device の単一夜の 4 run であることを
-各報告に添える。balanced bpb だけで勝敗を決めない。
+率だけでなく token 数（8192 / split）を併記する。単一 device・単一機体の 6 run
+（preregistered 4 + exploratory 2）であることを各報告に添える。
+balanced bpb だけで勝敗を決めない。
 
-## seed 3（exploratory、未実施）
+## seed 3（exploratory、実行済み）
 
 ```powershell
 # 1 / 2 tie の tie-breaker 専用。exploratory として記録され、R1–R5 には入らない
@@ -459,9 +463,123 @@ seed 高々 3 の sign consistency であり、検定・有意差・"consistent 
 .\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 3 -Arm G1 -AllowExploratorySeed @qa
 ```
 
-実行には Tier 3 の明示承認と約 2 時間の device time を要する。
-`ambiguous_tie_breaker` の条件は成立しているため protocol 上は実行可能だが、
-**結果は追加解釈にのみ使い、事前登録判定を書き換えない。**
+**結果は追加解釈にのみ使い、事前登録判定を書き換えない。** 実行結果と
+combined interpretation は以下の節を参照。
+
+### seed 3 の arm order（結果を見る前に固定）
+
+protocol の arm order 規定は「seed ごとに Control 先行 / G1 先行を交互」であり、
+実際に seed 2 は Control 先行・seed 4 は G1 先行で実行した。交互を維持するため
+**seed 3 は Control 先行**とする。これは結果を見て決めたものではなく、
+上の規定から一意に導かれる。
+
+| order | seed | arm | role |
+|---:|---:|---|---|
+| 1 | 3 | Control | exploratory |
+| 2 | 3 | G1 | exploratory |
+
+この順序は途中で変更しない。1 session = 1 arm。
+
+## seed 3 実行結果（exploratory / 2026-10-04）
+
+`ambiguous_tie_breaker` の tie-breaker として、上の固定順で 2 arm を実行した。
+**seed 3 は exploratory であり、事前登録判定には入らない。**
+
+### health（両 arm PASS）
+
+| arm | role | steps | graphExecute | failure | QNN | finite | HVX f/f/nf | CPU fallback | checkpoint |
+|---|---|---:|---|---:|---|---|---|---|---|
+| Control | exploratory | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V4, 12, 758528 |
+| G1 | exploratory | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V5, 12, 760960 |
+
+- `nan_detected=false` / `inf_detected=false` / `focus_takeover_count=0`
+- `dataset_hash=fnv1a64:0c7b2826f5f26fea`、`training_order_hash=fnv1a64:e7991d7250fc3428` は
+  **seed 2 / 4 と同一**（`training_order_seed=20260806` 固定）
+- compile-time / runtime QAIRT build ID とも `2.48.40.260702151143`
+- eval 一次 report **14/14**、completeness problems=0
+- 両 arm とも runner exit 0。device lock 解放、process 残留なし
+- **6031 再発 0**。`last_loss=4.360318184` に "6031" が部分一致する場面があったが、
+  failure signature（`QAIRT_GRAPH_ERROR_ABORTED` / `failed_api` / 非ゼロ failure counter）は
+  どの artifact にも存在せず、誤検出である
+
+### exploratory trajectory（Δ = G1 − Control、負 = G1 良い）
+
+`sup` は G1 の完全 Suppress head 数:
+
+| step | ΔVal bpb | ΔDev bpb | ΔVal NLL | ΔDev NLL | ΔVal top-1 | ΔDev top-1 | sup |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 500 | −0.019394 | −0.031459 | −0.034996 | −0.051940 | +12 | +71 | 14 |
+| 1000 | −0.044861 | −0.033600 | −0.080950 | −0.055476 | +48 | +72 | 6 |
+| 1500 | −0.031910 | −0.030536 | −0.057580 | −0.050417 | −17 | −21 | 8 |
+| 1750 | −0.036149 | −0.050808 | −0.065229 | −0.083887 | +40 | −77 | 7 |
+| 2000 | −0.044957 | −0.032295 | −0.081122 | −0.053320 | +1 | +14 | 9 |
+| 2500 | −0.027023 | −0.049140 | −0.048761 | −0.081133 | −75 | −17 | 9 |
+| 3000 | −0.025350 | −0.071902 | −0.045742 | −0.118714 | −2 | +137 | 12 |
+
+**7 checkpoint すべてで ΔVal・ΔDev ともに負**（両 split 改善）であり、
+1750–3000 に Val 改善 / Dev 悪化という split reversal は**出ない**。
+
+### exploratory verdict（analyzer 出力、decision には未混入）
+
+| seed | role | R1 | R2 | R3 |
+|---|---|---|---|---|
+| 3 | exploratory | **pass 2/2** | **not_reproduced 0/5** | none |
+
+R2 判定は seed 2 と同じで 0/5。R4 は ΔDev top-1 が 3000 で +137 と大きい変化幅度がある
+ものの、Dev bpb / NLL は改善しているので reversal ではなく improved-with-top1-noise と
+読むのが自然。R5 は reversal step が無いため算出対象なし（`gate-trajectory.csv` に
+seed 3 の 7 step を記録）。
+
+## combined interpretation（seed 1 reference + 2/4 preregistered + 3 exploratory）
+
+**これは combined interpretation であり、事前登録判定を書き換えるものではない。**
+`decision: ambiguous_tie_breaker` は履歴として保持される。
+
+### early sample-efficiency gain の再現性
+
+| seed | role | R1 | ΔVal bpb @500 | ΔDev bpb @500 |
+|---|---|---|---:|---:|
+| 1 | reference | pass 5/5 | −0.036408 | −0.023564 |
+| 2 | preregistered | pass 2/2 | −0.034767 | −0.019663 |
+| 3 | exploratory | pass 2/2 | −0.019394 | −0.031459 |
+| 4 | preregistered | pass 2/2 | −0.025406 | −0.043629 |
+
+**4 seed すべてで初期の Val/Dev 同時改善が再現**する。seed 3 も同じ符号・同じ範囲であり、
+これは G1 の初期 sample-efficiency 優位が初期化ノイズに依存しない安定現象であることを
+支持する。R1 は 4/4 で一貫。
+
+### late Dev reversal の seed 依存性
+
+| seed | role | R2 反転 | 位置 |
+|---|---|---|---|
+| 1 | reference | 2 点 | 1750, 3000 |
+| 2 | preregistered | 0 点 | — |
+| 3 | exploratory | 0 点 | — |
+| 4 | preregistered | 1 点 | 2500 |
+
+**late Dev reversal は 2/4 でしか観測されない**（seed 2 / 3 は 7 checkpoint すべて改善、
+seed 1 は 2 点、seed 4 は 1 点）。かつ観測された場合も位置が一致しない
+（1750+3000 / 2500）。
+
+これは「late Dev reversal は G1 の安定した構造的事象ではなく、seed 依存かつ
+trajectory 依存の現象」と読むのが最も記述的に素直である。
+
+この解釈の限界も明記する。seed 1 / 3 / 4 の 3 seed では reversal が出るが seed 2 だけ
+出ない。「固定 step でなく、late training phase で split divergence が起こりやすい
+可能性」は残るが、4 seed のうち 2 seed で出ないため強い主張はできない。
+**seed 3 は reversal なしという観測は、この方向の証拠を弱める。**
+
+### G1 を baseline 候補として残すか
+
+**残す。** R1 が 4/4 で再現しており、初期 sample-efficiency としての一貫した利得がある。
+反転が 1/4（preregistered 2 seed では 1/2）でしか出ないため、high-LR final quality lane を
+閉じる根拠はない。
+
+### 追加 seed の必要性
+
+**不要。** seed 3 が reversal なしであったことで、主問い（reversal が安定現象か偶発か）は
+「偶発寄り」に寄った。G1 multi-seed lane はここで閉じる。明確に失敗した seed 極端に
+明白な seed 差が出ない限り seed 5 等は追加しない。
 
 ## 6031 incident
 

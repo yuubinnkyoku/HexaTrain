@@ -1,7 +1,7 @@
 {
   "order": 1,
-  "seed": 4,
-  "arm": "Control",
+  "seed": 3,
+  "arm": "G1",
   "mode": "Run",
-  "role": "preregistered"
+  "role": "exploratory"
 }
