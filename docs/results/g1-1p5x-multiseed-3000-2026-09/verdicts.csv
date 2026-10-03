@@ -1,0 +1,10 @@
+seed,seed_role,criterion,verdict,value,detail
+2,preregistered,R1,pass,2/2,"steps [500, 1000] lower both Val and Dev bpb; threshold 60% of steps <= 1000"
+2,preregistered,R2,not_reproduced,0/5,Dev NLL delta > 0 at steps []; band 1500-3000
+2,preregistered,R3,none,none,reversal step set; the R1 early band must stay unaffected
+4,preregistered,R1,pass,2/2,"steps [500, 1000] lower both Val and Dev bpb; threshold 60% of steps <= 1000"
+4,preregistered,R2,reproduced,1/5,Dev NLL delta > 0 at steps [2500]; band 1500-3000
+4,preregistered,R3,located,2500,reversal step set; the R1 early band must stay unaffected
+4,preregistered,R4,mixed,val+13 dev-29 top-1 tokens,"step 2500: exact top-k token counts, no rounding threshold"
+4,preregistered,R5,no_peak,5 <= 11,"step 2500: heads with g<0.1 fraction >= 0.999 against the nearest gate checkpoints [2000, 3000] (descriptive, never causal)"
+,,decision,ambiguous_tie_breaker,,"R2 reproduced in 1/2 pre-registered fresh seeds (seeds [4]): ambiguous.  The documented tie-breaker is one seed 3 run via -AllowExploratorySeed; the analyzer reports it as exploratory and keeps it outside this decision, so the tie is broken by an explicit human call, not by an automatic merge."

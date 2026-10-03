@@ -1,0 +1,38 @@
+[
+  {
+    "seed": 2,
+    "arm": "Control",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed2\\control",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:9e14cc657a220637",
+    "final_parameter_hash": "fnv1a64:79e7f9a90fb27484"
+  },
+  {
+    "seed": 2,
+    "arm": "G1",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed2\\g1",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:86779cdc0e4f33c9",
+    "final_parameter_hash": "fnv1a64:8e57b9ca2c8e1d08"
+  },
+  {
+    "seed": 4,
+    "arm": "G1",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed4\\g1",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:1ea0feea32afda26",
+    "final_parameter_hash": "fnv1a64:f766e305eed0a2c2"
+  },
+  {
+    "seed": 4,
+    "arm": "Control",
+    "status": "COMPLETED",
+    "result_dir": "docs\\results\\g1-1p5x-multiseed-3000-2026-09\\seed4\\control",
+    "hard_flags": "",
+    "initial_parameter_hash": "fnv1a64:2b7afbac5d2ff6ad",
+    "final_parameter_hash": "fnv1a64:2caf5232b03517ae"
+  }
+]

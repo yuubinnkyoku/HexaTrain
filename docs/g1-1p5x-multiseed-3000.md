@@ -2,9 +2,18 @@
 
 ## Status
 
-**PLANNED / 未実行。** 長時間 training は Tier 3 であり、ユーザーの明示指示なしには開始しない
-（[docs/agent/device-test-tiers.md](agent/device-test-tiers.md)）。
-本文書は実験設計と引き継ぎ指示を固定するもので、**結果を含めない**。
+**COMPLETE / 4 arm 揃い・analyzer exit 0。** 事前登録 seed 2 / 4 の 4 arm
+（seed2 Control / seed2 G1 / seed4 G1 / seed4 Control）がすべて
+training SUCCESS・eval 7/7 で、analyzer は `problems=0`、
+`decision: ambiguous_tie_breaker` を返した。
+
+**seed 3 は未実施。** `ambiguous_tie_breaker` は protocol 上「seed 3 を
+`-AllowExploratorySeed` 付きで1本だけ追加する」分岐だが、**exploratory
+evidence であり事前登録判定には混ざらない**。同じ commit に混ぜず、
+別の exploratory lane として実行する。
+
+本節以外は実験設計と引き継ぎ指示を固定するものである。**結果の解釈は
+末尾の「実行結果」節に分離して記載する。**
 
 ## 目的
 
@@ -222,7 +231,8 @@ Control と within-seed で pair する。
 ## 実装状況と実行コマンド
 
 上記の 2–4（runner・analyzer・order prefix / hash assert）は実装済み。
-5 の device smoke と 6 の本 run はそれぞれ Tier 2 / Tier 3 なので未実行のまま。
+5 の device smoke と 6 の本 run はそれぞれ Tier 2 / Tier 3 として実行済みで、
+結果は末尾の「実行結果」節に記録した。**seed 3 のみ未実施**。
 
 Tier 2 smoke の初回（seed 2 / Control / 8 step）は QNN `6031`（`QAIRT_GRAPH_ERROR_ABORTED`）で
 FAILED し、原因未同定の incident として
@@ -234,6 +244,26 @@ FAILED し、原因未同定の incident として
 開始したが、**step 77 の最初の micro-batch で同一の 6031 を再現**した。分岐どおり
 QNN / runner incident に切り替え、**Tier 3 は arm 2–4 未着手のまま BLOCKED**。
 R1–R5 は未計算、途中の Val / Dev / gate の品質値は読んでいない。詳細は同 incident 文書。
+
+その後の経緯（arm 1–4 の training health は全 arm PASS、6031 再発なし。詳細は「実行結果」節）:
+
+1. incident lane 側で full trace / flight trace の 128-step 診断を 4 本連続成功させ、
+   incident を `UNRESOLVED / DORMANT / WATCH` のまま据え置き、本研究を再開した。
+2. arm 1（seed 2 Control）が training SUCCESS まで到達したが、**その host セッションが
+   実行中に中断され**、checkpoint pull と eval 遷移まで到達しないまま終わった。
+   device 側の native training 自体は完走しており、checkpoint 12 本が device に残っていた。
+3. arm 2（seed 2 G1）も同じ host 中断で pull 途中、arm 3（seed 4 G1）は eval 起動直後に
+   中断し、`status.json` が `RUNNING` のまま（pid は消滅）残った。**いずれも QNN / device の
+   不具合ではなく host 側の lifecycle 中断**である（logcat・tombstone とも該当なし、
+   exit code 1 の stdout に `OK (1 test)` が無い = assertion 失敗ではなく wrapper 停止）。
+4. eval 遷移の復旧試験として seed 4 / G1 / step 500 を既存 checkpoint から再実行し、
+   NPRTCKPTV5 と NPRTCKPTV4 の両経路が正常であることを確認したうえで、
+   **training を再実行せずに** arms 1–3 の eval 21 本（登録済み EvalSteps のみ）を生成した。
+5. arm 4（seed 4 Control）を実行。初回は host wrapper 切断により host 環境 annotation
+   （thermal / battery / compile-time 行）だけが欠落し、analyzer が fail closed した
+   （`FIELD_MISSING: android_thermal_status_before`）。**arm 4 のみ**を通常条件で再実行し、
+   exit 0 で完走して annotation 付きの正当な result を得た。arms 1–3 の training は
+   一度も再実行していない。
 
 
 analyzer は一次レポート（`eval256-step*-htp.txt`、`seed<N>-l19-v1024-t32-d64-f128-steps3000-result.txt`、
@@ -330,4 +360,110 @@ G1 1.5x の multi-seed replication を設計どおり準備し、実行は Tier 
    device lock と active-run check を session ごとに確認する。第 3 サンプルは 1 / 2 tie の
    ときだけ seed 3 を -AllowExploratorySeed で追加する（exploratory、主判定には混ぜない）。
 ```
+
+---
+
+# 実行結果（2026-10-03 / 04）
+
+一次 evidence: `docs/results/g1-1p5x-multiseed-3000-2026-09/`。
+analyzer 生成 CSV と `analysis.md` も同じ tree の root にあり、**一次データではない**。
+
+## health（全 arm PASS）
+
+| arm | seed | role | steps | graphExecute | failure | QNN | finite | HVX f/f/nf | CPU fallback | checkpoint |
+|---|---|---|---:|---|---:|---|---|---|---|---|
+| Control | 2 | preregistered | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V4, 12, 758528 |
+| G1 | 2 | preregistered | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V5, 12, 760960 |
+| G1 | 4 | preregistered | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V5, 12, 760960 |
+| Control | 4 | preregistered | 3000 | 24000/24000 | 0 | success | all true | 0/0/0 | なし | V4, 12, 758528 |
+
+- `nan_detected=false` / `inf_detected=false` / `focus_takeover_count=0`、全 arm
+- `dataset_hash=fnv1a64:0c7b2826f5f26fea`、**`training_order_hash=fnv1a64:e7991d7250fc3428` は
+  4 arm 同一**（`training_order_seed=20260806` 固定の設計どおり。seed で変わる必要はない）
+- compile-time / runtime QAIRT build ID とも `2.48.40.260702151143`
+- eval 一次 report **28/28**、duplicate なし・未登録 step なし、analyzer `problems=0`
+- **6031 再発 0**。累積 96,000 graphExecute 成功（4 arm × 24,000）
+- 単一 device・単一機体の 4 run。NPU-only 主张はしない（学習 step の数値演算を HTP で実行）
+
+## 事前登録判定（analyzer そのまま・exit 0）
+
+`decision: ambiguous_tie_breaker`
+
+| seed | role | R1 初期同時改善 | R2 Dev 反転 | R3 反転位置 | R4 top-1 | R5 gate |
+|---|---|---|---|---|---|---|
+| 2 | preregistered | pass 2/2 | **not_reproduced 0/5** | none | – | – |
+| 4 | preregistered | pass 2/2 | **reproduced 1/5** | 2500 | mixed（Val +13 / Dev −29 token） | insufficient_data |
+
+split-level paired（Δ = G1 − Control、負 = G1 良い）:
+
+| seed | step | ΔVal bpb | ΔDev bpb | ΔVal NLL | ΔDev NLL | ΔVal top-1 | ΔDev top-1 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 500 | −0.034767 | −0.019663 | −0.062735 | −0.032464 | +72 | +77 |
+| 2 | 1000 | −0.040609 | −0.016583 | −0.073278 | −0.027379 | −3 | −64 |
+| 2 | 1500 | −0.040620 | −0.033357 | −0.073296 | −0.055073 | +9 | −8 |
+| 2 | 1750 | −0.021960 | −0.034319 | −0.039626 | −0.056662 | −11 | +25 |
+| 2 | 2000 | −0.039665 | −0.040111 | −0.071574 | −0.066225 | −17 | −8 |
+| 2 | 2500 | −0.056329 | −0.032325 | −0.101642 | −0.053370 | +91 | −27 |
+| 2 | 3000 | −0.017353 | −0.021594 | −0.031313 | −0.035652 | −35 | +0 |
+| 4 | 500 | −0.025406 | −0.043629 | −0.045844 | −0.072034 | +74 | +109 |
+| 4 | 1000 | −0.038116 | −0.033878 | −0.068779 | −0.055933 | +10 | +71 |
+| 4 | 1500 | −0.026154 | −0.027331 | −0.047194 | −0.045124 | −11 | +12 |
+| 4 | 1750 | −0.031777 | −0.026903 | −0.057340 | −0.044418 | +74 | −71 |
+| 4 | 2000 | −0.027774 | −0.039366 | −0.050116 | −0.064995 | +10 | −9 |
+| 4 | 2500 | −0.007641 | **+0.001603** | −0.013788 | **+0.002647** | +13 | −29 |
+| 4 | 3000 | −0.013354 | −0.046454 | −0.024097 | −0.076698 | −108 | +76 |
+
+**seed 2 は 7 checkpoint すべてで ΔVal・ΔDev ともに負**（両 split 改善）であり、Dev 反転は 0。
+**seed 4 は 500–2000 で両 split 改善、2500 で Val 改善・Dev 悪化（符号が乖離）、
+3000 で両 split 改善に戻る。**
+
+seed 1 参照（既存 committed evidence）では 1750 と 3000 の 2 点で Dev 反転出现过。
+seed 4 では 2500 の 1 点にずれて現れ、seed 2 では現れなかった。
+
+## 事実としての結論
+
+- **R1（500 step 付近の Val/Dev 同時改善）は 2/2 seed で再現**した
+- **R2（1750–3000 の Dev 反転）は 1/2 seed のみ**（seed 4 の 2500 一点）
+- 反転は seed 1 の 1750 / 3000 のように複数点出现的のではなく、**seed 4 で 1 点だけ**。
+  seed を跨いで固定 step に載る，也不是構造的な位相とも断定できない
+- 統計的主張はしない（seed 高々 3 の sign consistency のみ。検定・有意差は言わない）
+
+## 追加解釈（事前登録判定とは分離）
+
+- G1 の**初期 sample-efficiency 優位（R1）は 2 seed で安定して再現**している
+- **high-LR の final quality lane を閉じる根拠は現時点で弱い**。反転が 1/2 seed・1 点のみで、
+  seed 2 では 3000 step まで改善が継続するため、「G1 は初期〜中期に有利、長期的には減益」という
+  シンプルな構造は支持されない
+- `ambiguous_tie_breaker` は protocol 上「seed 3 を `-AllowExploratorySeed` 付きで 1 本だけ追加」
+  の分岐。**この判定は自動 merge せず、人間が明示判断する**。seed 3 は exploratory として
+  報告され、R1–R5 の自動判定には入らない
+- seed 3 の目的は「3 seed 平均で勝ったか」ではなく、
+  **「Dev 反転が seed 1 / 4 だけの偶発寄りなのか、seed 3 でも late checkpoint に出るのか」**
+  に限定する
+- **seed 1 は reference**。preregistered decision には混ざっていない（trajectory 比較用として
+  参照したのみ）
+
+## 統計上の禁止事項（再掲）
+
+seed 高々 3 の sign consistency であり、検定・有意差・"consistent across seeds" は主張しない。
+率だけでなく token 数（8192 / split）を併記する。単一 device の単一夜の 4 run であることを
+各報告に添える。balanced bpb だけで勝敗を決めない。
+
+## seed 3（exploratory、未実施）
+
+```powershell
+# 1 / 2 tie の tie-breaker 専用。exploratory として記録され、R1–R5 には入らない
+.\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 3 -Arm Control -AllowExploratorySeed @qa
+.\scripts\run_g1_1p5x_multiseed.ps1 -Mode Seed -Seeds 3 -Arm G1 -AllowExploratorySeed @qa
+```
+
+実行には Tier 3 の明示承認と約 2 時間の device time を要する。
+`ambiguous_tie_breaker` の条件は成立しているため protocol 上は実行可能だが、
+**結果は追加解釈にのみ使い、事前登録判定を書き換えない。**
+
+## 6031 incident
+
+**`UNRESOLVED / DORMANT / WATCH` のまま。** 本実験で再発は観測されていない。
+4 本連続の 128-step 診断成功と今回の 96,000 graphExecute 連続成功は negative evidence であり、
+解決の根拠ではない。root cause は未同定のまま。再発時は即 incident lane へ戻る。
 
