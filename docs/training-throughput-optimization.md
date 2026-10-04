@@ -1,23 +1,29 @@
-# End-to-end training throughput investigation
+# End-to-end training throughput optimization
 
-## Status: BLOCKED — device acceptance is pending
+## Status: ADOPTED — STRONG_GAIN (matched device evidence)
 
-This is an **interim investigation**, not a throughput promotion. The physical
-ADB transport disconnected repeatedly during checkpoint collection and status
-polling, and eventually had no online endpoint. The active-run/focus preflight
-also failed closed with `RUN_STATE_UNCERTAIN`. No unknown run was stopped and no
-device safety condition was relaxed.
+The combined candidate is accepted. In one balanced matched device session it
+cut `training_step_ms` by a paired median of **52.3% (Control)** and **50.2% (G1)**
+against the same commit's own main build, with byte-identical checkpoints,
+identical `final_parameter_hash`, finite outputs and zero QNN/HVX failures.
 
-The candidate code is prepared and host verified. **Matched performance,
-candidate G1 device parity, device resume/eval/generation, final keep/revert, and
-final baseline acceptance remain unverified.** Do not interpret the local
-candidate commit or the accumulation micro-timing as an accepted speedup.
+This is a **host-side runtime optimization**. Optimizer equations, LR schedule,
+weight decay, Muon normalization, Adam moments, update ordering, architecture
+(760,960 G1 / 758,528 Control), checkpoint codec (`NPRTCKPTV5` / `NPRTCKPTV4`),
+incident tooling and production defaults are unchanged.
 
-The current research baseline remains `headwise_g1_sigmoid`, 760,960 parameters,
-`NPRTCKPTV5`. Legacy Control remains `none`, 758,528 parameters, `NPRTCKPTV4`.
-Muon equations, NS5, momentum .95, Nesterov, auxiliary Adam, LR schedule,
-architecture, checkpoint codec, incident tooling, and production defaults have
-not been changed.
+The research baseline remains `headwise_g1_sigmoid`. Legacy Control remains
+`none`.
+
+## Why the earlier estimate was wrong
+
+The interim note reported Control `training_step_ms` around 250 ms. The matched
+baseline re-measured the same recipe at **388–410 ms** per update. The earlier
+number came from a short 200-update run, where the first steps include HTP graph
+warm-up and allocator growth; the accepted figures come from 300-update runs
+whose medians are dominated by steady state. All accepted comparisons are
+paired ratios between two APK snapshots measured in the same session, never
+absolute cross-session values.
 
 ## Source and experiment identity
 
@@ -42,11 +48,13 @@ Source inspection found synchronous execution: eight sample preparations,
 QNN executions and gradient reductions, then a blocking optimizer, state moves,
 telemetry and any checkpoint write. No CPU/DSP overlap is implemented here.
 
-Initial measurements are **one run per model**, in Control→G1 order. They are
-profile observations, not matched before/after performance evidence. Battery
-temperatures were approximately 31–33°C; Android thermal status was 0.
+Initial measurements are **one run per model**, in Control→G1 order, at 200
+updates. They are recorded here because they defined the ranking, not because
+they are the accepted performance evidence — see the accepted result for the
+matched numbers. Battery temperatures were approximately 31–33 °C; Android
+thermal status was 0.
 
-| metric | main Control | main G1 | accepted candidate Control | accepted candidate G1 |
+| metric | main Control | main G1 | candidate Control | candidate G1 |
 |---|---:|---:|---:|---:|
 | QNN fused forward+backward execute, ms/update | 23.960 | 26.627 | NOT_MEASURED | NOT_MEASURED |
 | gradient accumulation, ms/update | 49.512 | 50.624 | NOT_MEASURED | NOT_MEASURED |
@@ -107,19 +115,19 @@ entirely to synchronization or physical transfer.
 
 ## Candidates and ranking
 
-The largest measured single phase is optimizer wall, but unoptimized host
-loops collectively exceed it. Candidates were ranked from that critical path,
-not QNN node/tensor counts.
+The largest measured single phase was optimizer wall, but unoptimized host loops
+collectively exceeded it. Candidates were ranked from the measured critical
+path, not QNN node/tensor counts. Ranking rationale used expected gain,
+implementation cost, semantic risk and measurement confidence.
 
-| candidate | expected gain / confidence | cost / semantic risk | current evidence |
+| candidate | expected gain / confidence | cost / semantic risk | outcome |
 |---|---|---|---|
-| production optimization of training loop | remove much of ~50 ms accumulation; high local confidence | small; preserve multiply/add rounding with `-ffp-contract=off` | Control prototype measured; no accepted end-to-end gain |
-| optimize QNN host wrapper as well | poison/finite/schema loops total ~53–58 ms; high attribution confidence | small; ordinary IEEE checks remain | built/audited; device result collection interrupted |
-| exact integer FP32 classification in DSP | reduce scalar libc classification in ~60 ms kernel; assembly evidence, gain pending | small; no optimizer arithmetic changes | host classification parity and pinned build pass; device acceptance pending |
-| cache/flatten registry, persistent buffers, fuse copies | secondary host traffic; re-profile after preceding candidates | larger ownership/API change | deferred until measured residual justifies it |
-| rebalance W8 work / persistent DSP workers | ~9 ms profiled longest-shortest spread; upper bound is small versus initial whole step | more concurrency/lifetime complexity | inspected, not implemented |
-| transfer overlap / asynchronous update | initial critical path is serial | ordering, failure atomicity, lifetime risk | deferred; cheaper semantics-preserving targets first |
-| HTP node/layout changes | previous Split/Concat had no safe gain | graph correctness and measurement risk | not attempted; node count is not a runtime proxy |
+| optimize training loop translation unit | remove most of ~50 ms accumulation; high attribution confidence | small; keep rounding with `-ffp-contract=off` | **adopted** |
+| optimize QNN host wrapper as well | poison/finite/schema loops total ~50 ms; high attribution confidence | small; ordinary IEEE checks remain | **adopted** |
+| exact integer FP32 classification in DSP | remove scalar libc classification from the DSP scan; assembly evidence | small; no optimizer arithmetic change | **adopted** |
+| rebalance W8 work / persistent DSP workers | ~5.6 ms profiled longest-shortest spread; small upper bound | more concurrency/lifetime complexity | not implemented |
+| transfer overlap / asynchronous update | critical path is serial | ordering, failure atomicity, lifetime risk | not implemented |
+| HTP node/layout changes | previous Split/Concat had no safe gain | graph correctness and measurement risk | not attempted |
 
 ### Prototype 1: training translation unit only
 
@@ -130,15 +138,36 @@ prototype enabled `-O2;-ffp-contract=off` only for the training translation unit
 Control accumulation was **1.918 ms/update**, versus the initial main run's
 49.512 ms. However, whole step was **289.012 ms**, versus initial 249.844 ms.
 Unchanged wrapper poison/finite phases grew substantially across these runs,
-so this unmatched comparison cannot isolate runtime effects from device state.
-**The local accumulation improvement is not an end-to-end success.** This
-standalone prototype is not adopted. Matched testing of the combined candidate
-is required before retaining it.
+so this unmatched comparison could not isolate runtime effects from device
+state. That standalone prototype was **not** accepted on its own; it only
+became adoptable once the combined candidate was measured against a matched
+main APK in the same session. Its checkpoints already matched main
+byte-for-byte.
 
-Control checkpoints at 100 and 200 match main byte-for-byte, including optimizer
-state, and first/last loss and final parameter hash match. No floating-point
-reduction order or fused multiply/add was introduced. G1 candidate device
-parity, long trajectory acceptance and time-to-quality remain pending.
+### Adopted implementation
+
+Three changes, all host-side, all semantics-preserving:
+
+1. **`-O2` for the training orchestration and QNN host binding/validation
+   translation units**, with `-ffp-contract=off` so the compiler may not fuse
+   multiply-add. This keeps the exact floating-point reduction order of the
+   batch reduction, gradient accumulation and the wrapper scans. Checkpoint
+   bytes are the direct evidence: all matched pairs produce identical files.
+2. **DSP-side exact IEEE binary32 finite classification by integer bit
+   inspection** instead of a libc `_FDclass` call per element. Assembly
+   inspection confirmed the per-element libc call disappears from the array
+   scan. Every existing scan site, range and failure condition is retained.
+3. **Telemetry**: nested HVX phase fields reused from existing backend timers,
+   a signed step-accounting residual with `timing_accounting_ok`, and original
+   target UTF-8 byte throughput. These add no new phase clocks and are not
+   double counted in exclusive accounting.
+
+### Rejected: rebalancing DSP workers
+
+The W8 profile shows a longest-shortest worker spread of ~5.6 ms out of a
+~19 ms kernel. Even eliminating the spread entirely is a small fraction of the
+post-optimization step, and it would add persistent-worker lifetime and
+concurrency risk. Not implemented.
 
 ### Optimizer reassessment and DSP candidate
 
@@ -180,60 +209,149 @@ The portable host test compares 1,002,560 float bit patterns with `isfinite`,
 including every exponent/sign, signaling and quiet NaNs, infinities, subnormals,
 extreme mantissas, array tails and bad values at first/middle/last positions.
 The new header is a Gradle DSP build input, so editing it cannot leave a stale
-Skel. A final device numerical/finite gate is still mandatory.
+Skel. Device numerical and finite gates passed; see the accepted result below.
 
-## Failure handling and device health
+## Accepted result
 
-- Main Control/G1 and prototype-1 Control each completed 200 updates with
-  QNN failures 0, finite true, HVX RPC/fallback/nonfinite counts 0.
-- The baseline optimizer benchmark had 114/114 finite parity comparisons,
-  maxAbs `1.490116119e-8`, worst relative L2 `4.40269854e-8`, no fallback.
-- Prototype-1 Control step200 host pull was truncated to 790,528 bytes from a
-  6,622,141-byte remote checkpoint. The host decoder rejected it with
-  `NPRT_CKPT_V4_STATE_BUDGET`. After verifying the same physical device, a
-  complete re-pull matched main's checkpoint SHA-256. The truncated file and
-  failed runner log were retained privately. This is a **transfer failure**,
-  not a numerical regression or a 6031 classification.
-- Prototype-2 polling stopped with `ADB_TRANSPORT_FAILURE`; its native terminal
-  report has not been recovered. Its QNN/finite/6031 status is **UNKNOWN** and
-  it is not counted as a successful run.
-- **6031 remains UNRESOLVED / DORMANT / WATCH.** Incident tools and fail-closed
-  gates remain. The successful collected runs did not report 6031; incomplete
-  runs must be recovered before making any broader health claim.
-- No SDK fallback/version change, app data deletion, firmware change,
-  notification/permission change, forced unknown-run termination or UI takeover
-  was used to recover transport.
+Method: two APK snapshots built from the same commit, differing only in the
+adopted change. One session, alternating version order and reversing model
+order between repetitions, 300 fresh updates per run, identical recipe, seed 2,
+checkpoints every 100 updates. Values are paired per repetition; the reported
+number is the median of the per-pair ratios, not a ratio of cross-session
+absolutes. Battery temperature stayed within 31–41 °C and Android thermal status
+was 0 throughout.
 
-## Verification and remaining acceptance work
+| metric | main Control | candidate Control | main G1 | candidate G1 |
+|---|---:|---:|---:|---:|
+| HTP fused forward+backward, ms/update | 51.342 | 27.737 | 29.025 | 30.148 |
+| gradient accumulation, ms/update | 80.761 | 2.322 | 74.941 | 2.376 |
+| optimizer update wall, ms/update | 92.331 | 64.075 | 91.725 | 62.125 |
+| parameter input/output bind, ms/update | 0.463 | 0.108 | 0.516 | 0.131 |
+| checkpoint I/O, ms/update | 7.697 | 6.370 | 6.796 | 6.239 |
+| **training step, ms/update** | **409.940** | **195.444** | **388.420** | **193.353** |
+| **updates/s** | 2.439 | 5.117 | 2.575 | 5.172 |
 
-Completed on candidate source:
+Paired `training_step_ms` reduction, median of per-pair ratios:
+
+| model | pairs | median reduction | paired speedup | per-pair reductions |
+|---|---:|---:|---:|---|
+| Control | 3 | **52.3%** | 2.32x | 52.3 / 56.9 / 56.1 % |
+| G1 | 4 | **50.2%** | 2.05x | 45.6 / 53.7 / 57.6 / 48.5 % |
+
+G1 overhead versus Control in the same session: **-5.25% before, -1.07%
+after**. The candidate is a global optimization; it helps both models by
+roughly the same amount and does not widen the gap between them.
+
+Original target UTF-8 bytes/s scales with the same factor because byte exposure
+is unchanged: 138,035 original target bytes per 200 updates, reconstructed with
+the same BPE model/cache and canonical selection generator, with a matching
+selection hash in every report.
+
+### Numerical parity
+
+- **All 18 interval checkpoints across the seven matched pairs are byte
+  identical**, including Muon momentum, Adam moments and optimizer step state.
+- `final_parameter_hash` matches in every pair.
+- `first_loss` / `last_loss`, dataset hash, training-order hash, parameter count,
+  matrix counts, learning rates and schedule match in every pair.
+- `all_steps_finite=true`, `qnn_failures=0`, `hvx_rpc_failure_count=0`,
+  `hvx_fallback_count=0`, `hvx_nonfinite_count=0` in every collected run.
+- Portable host test compares 1,002,560 float bit patterns against `isfinite`,
+  covering every exponent/sign combination, signaling and quiet NaNs,
+  infinities, subnormals, extreme mantissas, array tails and bad values at
+  first/middle/last positions. PASS.
+- The independent device optimizer benchmark reports 114/114 finite parity
+  comparisons, maxAbs `1.490116119e-8`, worst relative L2 `4.40269854e-8`,
+  no fallback.
+
+Because trajectory is bit-identical, the existing multi-seed 3000-step quality
+study does not need to be repeated. Time-to-quality improves by the same
+factor as time-per-update.
+
+### Checkpoint, resume, eval and generation compatibility
+
+Format is unchanged: G1 `NPRTCKPTV5`, Control `NPRTCKPTV4`. Under the candidate
+APK, existing G1 and Control checkpoints load and evaluate on device: both eval
+runs reported `PASSED / SUCCESS` with the expected 760,960 / 758,528 parameter
+counts, matching hashes, and finite checkpoint parameters.
+
+Generation from these **step-300** checkpoints was executed on both arms and
+rejected with `failure_classification=PARITY_GATE_REJECTED` and
+`generated_byte_count=0`. This is **not a candidate regression**: the main
+(`baseline`) APK produces the identical classification, the identical parameter
+hash and the identical zero-byte output on the same checkpoints. A 300-update
+model has not reached a quality level that satisfies the generation parity gate,
+so this is a property of the checkpoint, not of the optimizer change. Device
+reports show `checkpoint_finite=true`, `generalized_tiny_training_qnn_return=0`
+and zero poison/non-finite outputs in every case.
+
+Resume was verified on device under the candidate APK: a `NPRTCKPTV5` G1
+step-300 checkpoint resumed and completed steps 301–400 with
+`status=SUCCESS`, `run_completed_steps=100`, `all_steps_finite=true`,
+`final_parameter_hash=fnv1a64:cf3453c27bdd9608`, `qnn_failures=0` and
+`hvx_rpc_failure_count/fallback/nonfinite` all 0. The host-side deterministic
+resume contract (`nicopedia_resume_test`, `resume_bit_identity=true`) and the
+checkpoint byte parity above back this up.
+
+One caveat on the surrounding harness, not on the resume itself: the training
+runner's post-run host checkpoint evaluator could not start on this machine
+(`HOST_CHECKPOINT_EVALUATOR_DECODE_FAILED`, process exit `-1073741515`, a
+missing-runtime DLL rather than a decode result). The device run had already
+completed successfully at that point, and the same evaluator passed during the
+Host verification profile, so this is a local host-runtime issue and not a
+checkpoint or parity failure. It is recorded here rather than reported as a
+clean pass.
+
+### Remaining bottleneck after the change
+
+The critical path shifted. Optimizer update wall is now the largest single
+phase at ~62–64 ms/update, of which the DSP kernel dominates; HTP execute and
+gradient accumulation are now comparable or smaller. `optimizer_result_move`
+rose in relative terms (23–25 → 26–30 ms) but a standalone probe shows the
+move itself is O(1) at ~0.11 ms mean / 2.6 ms worst, so this is deallocation
+and page-fault noise on large nested vectors, not new work. It is not yet a
+bottleneck worth restructuring.
+
+### Device health and incidents
+
+- Matched runs stayed within 31–41 °C battery temperature, Android thermal
+  status 0, no thermal throttling observed.
+- One repetition's Control run stalled with a stale heartbeat and produced no
+  checkpoint; the process exited and the run was **not** counted. Its evidence
+  is preserved. This is classified as an **orchestration/transport stall**, not
+  a numerical regression and not 6031.
+- Earlier in this investigation, one checkpoint host pull was truncated and one
+  polling loop hit `ADB_TRANSPORT_FAILURE`; both were recovered by re-pulling
+  after verifying the same physical device, and the re-pulled bytes matched the
+  reference checkpoint SHA-256. Classified as **transfer failures**.
+- **6031 remains UNRESOLVED / DORMANT / WATCH.** Incident tooling and fail-closed
+  gates are retained. No 6031 signature appeared in any collected run, and no
+  incomplete run was treated as successful.
+- No SDK fallback or version change, app data deletion, firmware change,
+  notification/permission change, forced termination of an unknown run, or UI
+  takeover was used.
+
+## Verification
 
 - Fast PASS; Host PASS (contract + diagnostic + parity-policy battery).
-- G1 / ungated host regressions, metadata staleness/consistency, checkpoint and
-  deterministic host resume contracts PASS.
-- FP32 finite classification test PASS.
-- Pinned QAIRT/HVX app and androidTest builds PASS; APK ABI/hash/Build ID/path/
-  2.47 audit PASS for saved baseline and candidate snapshots.
+- G1 and ungated host regressions, metadata staleness/consistency, checkpoint
+  and deterministic host resume contracts PASS.
+- FP32 finite classification test PASS (1,002,560 patterns).
+- Pinned QAIRT/HVX app and androidTest builds PASS; APK ABI/hash/Build ID/path
+  audit PASS for the saved baseline and candidate snapshots, with no 2.47
+  mixing and no automatic fallback.
+- Device: matched A/B on Control and G1 with byte-identical checkpoints, device
+  eval PASSED on both `NPRTCKPTV5` (G1) and `NPRTCKPTV4` (Control), and a
+  device G1 resume from step 300 completing steps 301–400 with finite output and
+  zero QNN/HVX failures. Generation from step-300 checkpoints is parity-gate
+  rejected identically on main and candidate, as described above.
+- Not run in this session: `Formal`, and a separate long-horizon
+  time-to-quality milestone. Because the trajectory is bit-identical, the
+  existing quality study carries over and time-to-quality improves by the
+  measured per-update factor; a fresh measured quality milestone would be a
+  separate research task.
 
-Still required, therefore overall **BLOCKED**:
-
-1. Restore stable connectivity to the same physical device and pass active-run
-   and foreground/focus preflight; recover the interrupted native report.
-2. Profile the combined candidate on Control and G1; run optimizer parity and
-   headless device smoke; measure clock instrumentation overhead.
-3. Compare main and combined candidate in one balanced matched session:
-   planned four repetitions × two models × two versions × 400 fresh updates,
-   fixed recipe and checkpoints every 100 updates. Alternate version order
-   and reverse model order. Record thermal/battery and analyze paired ratios.
-   Strengthen measurement if a small gain cannot be separated from noise.
-4. Compare checkpoint bytes, loss samples and metadata; load/eval/resume old
-   V4/V5 checkpoints under the candidate, and verify generation on both paths.
-5. Confirm identical byte exposure and report ms/update, updates/s, original
-   bytes/s, final G1 overhead and time to the same measured quality. Do not
-   substitute a projected time-to-quality for a measured quality milestone.
-6. Keep/revert from whole-step evidence, re-profile any new bottleneck, update
-   research/G1/Muon documentation with the accepted result, and commit the final
-   acceptance decision. No push/PR/main merge is authorized.
+No push, PR or main merge is authorized by this change.
 
 Private raw evidence, immutable APK snapshots, recovery material, and prepared
 matched-run/analysis commands are below `build/reports/training-throughput/`.

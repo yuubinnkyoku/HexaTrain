@@ -313,7 +313,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **G1 baseline promotion / systems cost 判定（2026-10-04、既存 artifact のみ・training 追加なし）**: seed 2 / 3 / 4 の paired Control vs G1 から architecture / runtime / time-to-bpb を抽出。**parameter overhead +0.321%**（+2,432、Muon は不変で Aux Adam 側のみ）、memory・checkpoint overhead は実用上無視可能。**wall/update は native per-update で median −4.76%**（seed 2 −7.49% / seed 4 −4.76% で G1 が速い、seed 3 のみ +10.23%）。**time-to-bpb は Control 全 7 checkpoint を target として median +4.76%、G1 勝ち 17/21**。一方 **HTP execute / mean QNN execute は +9.95%（median）で明確**、HVX Muon は +2.10%、parameter transfer は +20.07%。seed 3 は run-wide 条件差で絶対値が外れ値（Control 単独で seed 2 の 3.64 倍）だが **arm 間 ratio は健全**なので paired 比較には採用し、cross-seed 絶対値比較は行わない。host 事故（session interruption / eval recovery / detached launcher / stale lock / undrained pipe / PS5.1 / arm 4 annotation）は **architecture cost ではなく**、run-total wall は `HOST_ORCHESTRATION_CONTAMINATED` として比較に使わず device-side per-update のみを使用。**判定 = `PROMOTE_WITH_RUNTIME_FOLLOWUP`**（`headwise_g1_sigmoid` を **current research baseline** として採用し、HTP execute と parameter transfer の runtime optimization lane を別laneとして残す。production / default behavior は変更しない）。seed 3 の絶対 runtime は **`CROSS_SEED_ABSOLUTE_RUNTIME_NOT_COMPARABLE`** として扱い、paired Control/G1 ratio のみ利用し、原因を DVFS 等に断定しない。`+399 nodes / +476 tensors` 等は **resource estimator / structural count** であり、RSS・ORT・physical checkpoint file-size delta の**実測ではない**（いずれも `NOT_MEASURED`）。詳細は [g1-1p5x-baseline-promotion-cost.md](g1-1p5x-baseline-promotion-cost.md)、昇格記録は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`
    - reduced-channel gate は未実装（本 task 対象外）
 
-3. **G1 HTP runtime optimization【別 lane / 2026-10-04 開設】**
+3. **G1 HTP runtime optimization【別 lane / 2026-10-04 開設 → CLOSED / NO_SAFE_GAIN】**
    - **G1 の再検証 lane ではない。** 主目的 = **G1 の quality を変えず**に HTP `graphExecute`
      overhead（現状 median **+9.95%**、paired Control/G1 ratio）を削減すること。
    - 現状の構造的分岐（`transformer_resource_estimator.h` と
@@ -337,12 +337,37 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **成功条件（最低）**: G1 の mathematical definition 不変 / checkpoint compatibility 維持 /
      parameter hash・deterministic parity / 既存 quality evidence を無効化しない /
      HTP execute overhead 削減 / fallback なし / finite / 6031 の新 signal なし
-   - **目標（研究目標であり promotion の gate ではない）**: 現状の **+10% から +5% 以下**、
-     可能なら **+3% 以下**。この数値は目標であり、**今回の昇格を阻止する条件ではない**
-   - 正本: [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
-     `### Remaining runtime follow-up`
+   - **結果（2026-10-04 追記）**: Split/Concat 置換で node `+399 → +342` /
+     tensor `+476 → +382` まで削減できたが、実機 median overhead は
+     **+9.06% → +10.11%** で改善せず、**全 source 変更を revert** した。
+     判定 = **`NO_SAFE_GAIN`**。
+   - **得到的知見（重要）**: **QNN node / tensor count だけでは HTP runtime を予測できない。**
+     実機 telemetry を正本として扱うこと。この知見は下記の throughput lane の
+      candidacy ranking（node 数ではなく host wall time と実測比で判断）に反映済み。
+   - 背景と成功后続の正本: [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
+     `### Remaining runtime follow-up`、negative result の詳細は
+     [g1-htp-runtime-optimization.md](g1-htp-runtime-optimization.md)
 
-4. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
+4. **End-to-end training throughput【別 lane / 2026-10-04 開設、STRONG_GAIN 採用済み】**
+   - **研究課題ではない。** optimizer / architecture / quality を変えず、
+     1 training update 全体の wall time を縮める runtime lane。
+   - **結果**: host 側（training loop と QNN host binding/validation の
+     `-O2` + `-ffp-contract=off`、DSP finite 検査の整数bit分類）を最適化し、
+     同一 session の matched A/B で `training_step_ms` を
+     **Control -52.3% / G1 -50.2%**（paired median、3 / 4 pair）。
+     全 checkpoint が **byte 一致**、`final_parameter_hash` 一致、
+     `all_steps_finite=true`、QNN/HVX failure 0。更新回数は **約2.1〜2.3倍**。
+   - G1 overhead は **-5.25% → -1.07%**。global optimization として
+     Control / G1 ほぼ同率で効き、モデル間 gap を広げない。
+   - 採用後の新 bottleneck は **optimizer update wall ~62–64 ms/update**
+     （DSP kernel 主体）。HTP execute と gradient accumulation は
+     その半分以下になっている。
+   - **未実施**: worker 再balance、非同期 update、transfer overlap、
+     HTP node 変更。これらは残存 optimizer 時間に比べ小さいか、
+     順序・failure 风险が大きい。
+   - 正本: [training-throughput-optimization.md](training-throughput-optimization.md)
+
+5. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
    - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
    - CSA2を模して **Full（KV/index自前） / Reindex（source KV共有・index再計算） / Reuse（KV/index共有）** の3 oracleを分け、KV共有とindex共有の誤差を別々に測る
@@ -351,7 +376,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
    - これはGLM-5.3-Flash IndexPool / DeepSeek-V4.1 CSA2の完全再現ではなく、**新規QNN graphを作る前の分解診断**として扱う
 
-5. **品質非変更のlayout microbenchmark**
+6. **品質非変更のlayout microbenchmark**
    - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
    - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
    - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
