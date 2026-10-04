@@ -583,7 +583,26 @@ trajectory 依存の現象」と読むのが最も記述的に素直である。
 
 ## 6031 incident
 
-**`UNRESOLVED / DORMANT / WATCH` のまま。** 本実験で再発は観測されていない。
-4 本連続の 128-step 診断成功と今回の 96,000 graphExecute 連続成功は negative evidence であり、
-解決の根拠ではない。root cause は未同定のまま。再発時は即 incident lane へ戻る。
+**`UNRESOLVED / DORMANT / WATCH`。** 本実験で再発は観測されていない。
+
+- incident trace は**有効化していない**。本 Tier 3 は**従来の通常条件で実行**し、
+  6031 を避けるために quality experiment の timing や条件を変更していない
+- Control 128-step 診断は full trace 2 本 + flight trace 2 本の**計 4 本連続成功**
+  （各 `graphExecute 1024/1024`、6031 = 0、signal invariant 違反 0）。加えて本実験の
+  6 arm で累積 **144,000 graphExecute 連続成功**
+- これらの非再現は **negative evidence であり、解決の根拠ではない**。
+  **「直った」「修正済み」とは記載しない。root cause は未同定のまま。**
+- 当面の優先順位は **G1 multi-seed 研究 > 6031 追加原因究明**。QAIRT profiling /
+  heartbeat A/B 等の追加切り分けは、6031 が再発して新しい timing evidence が得られた
+  場合に初めて検討する
+- **6031 が 1 回でも再発したら即座に Tier 3 を BLOCKED に戻す。** 後続 arm を開始せず、
+  品質値を読まず、private incident evidence を保存して flight recorder を使う
+  incident lane へ戻る。品質 run を後付けで成功扱いしない
+- 6031 以外の QNN error / nonfinite / fallback / identity mismatch も同様に fail closed とし、
+  6031 とは**別の failure** として分類する
+
+incident tooling（full trace / flight recorder / incident analyzer / signal invariant /
+synthetic selftest / diagnostic runner / legacy evidence / fail-closed guards）は
+**削除・簡略化せず保持**する。詳細は
+[g1-1p5x-multiseed-tier2-incident.md](g1-1p5x-multiseed-tier2-incident.md)。
 

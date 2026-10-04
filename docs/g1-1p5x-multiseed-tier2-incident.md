@@ -6,6 +6,55 @@ Status: **`UNRESOLVED / DORMANT / WATCH`**
 再発時は即 incident lane へ戻る。本文書は incident 記録であり、**結果 evidence では
 ない**。R1–R5 の判定材料に使わない。
 
+## watch 状態への移行（2026-10-04）
+
+**追加の原因究明を主作業とする継続は停止する。** 当面の優先順位は
+**G1 multi-seed 研究 > 6031 追加原因究明** とする。ただし **6031 が再発した瞬間に
+この優先順位を反転する**。
+
+### 移行の根拠（実測した事実）
+
+- 6031 の発生は历史上 **2 回**（step 4 batch 0 / step 77 batch 0）
+- HexaTrain 側の QnnSignal trigger site は **0 件**、対象 graphExecute は
+  signal 引数を `nullptr, nullptr` で呼んでいる
+- **Control 128-step 診断が 4 本連続成功**（full trace 2 本 + flight trace 2 本）。
+  各 run とも `graphExecute 1024/1024` 成功、6031 = 0、finite、CPU fallback なし、
+  HVX failure なし、**signal invariant 違反 0**
+  （`qnn_signal_argument_nonnull_count=0` / `hexatrain_signal_trigger_count=0` /
+  `trace_overflow_count=0`）
+- **4 本では 6031 は非再現**
+
+### 移行後の運用
+
+- **「直った」「修正済み」「原因解決」とは記載しない。** 非再現は negative evidence
+  であり解決の根拠ではない。root cause は未同定のまま保持する
+- 追加の QAIRT profiling / event trace、heartbeat A/B、FastRPC A/B は、**6031 が再発して
+  新しい timing evidence が得られた場合に初めて検討する**。現時点では追加 incident run を
+  無目的に増やさない
+- **6031 が 1 回でも再発したら即座に Tier 3 を BLOCKED に戻す**。後続 arm を開始せず、
+  品質値を読まず、当該 run を private incident evidence として保存する
+  （failure execute index / step / batch / api trace / status / health /
+  preceding checkpoint・progress を先に記録）。その後、本 incident で完成した
+  flight recorder と analyzer をそのまま使う incident diagnostic lane へ戻る
+- 6031 以外の QNN error / nonfinite / fallback / identity mismatch も同様に fail closed とし、
+  **6031 とは別の failure として分類する**
+- 通常 quality run では incident trace を**常時有効化しない**。G1 multi-seed Tier 3 は
+  **従来の通常条件で実行**し、6031 を避けるために quality experiment の timing を変えない
+
+### incident tooling は削除・簡略化しない
+
+以下は watch 状態に遷った後も**そのまま保持**する。再発時の切り分け能力の源泉であり、
+簡略化は行わない:
+
+- full trace
+- flight recorder
+- incident analyzer（`scripts/incident_6031_analyze.py`）
+- signal invariant
+- synthetic fixture / selftest（`scripts/incident_trace_selftest.py`）
+- incident diagnostic runner（`scripts/run_incident_6031_diagnostic.ps1`）
+- 6031 legacy evidence（2 件の過去 primary report）
+- fail-closed guards
+
 ## 分類の根拠
 
 - 過去に 6031 を **2 回**観測済み（step 4 batch 0 / step 77 batch 0）
@@ -736,6 +785,12 @@ flight は確かに速い。ただし **build/install を含む総 time の差**
 > （`UNRESOLVED / DORMANT / WATCH` として本研究を再開）により解除**された。§9 の
 > full/flight 4 本連続非再現は negative evidence として有効であり、原因未同定は
 > 変わらない。再発時は本節の recorder/analyzer をそのまま使う。
+
+> **2026-10-04 追記**: 本節の「§9.4 の停止条件 C は依然適用」という記述は、
+> 冒頭の「watch 状態への移行」節に**置き換えられた**。現在の運用は:
+> full trace 2 本 + flight trace 2 本の**計 4 本連続非再現**（各 1024/1024 execute、
+> signal invariant 違反 0）を根拠に **G1 multi-seed 研究を優先**し、6031 追加原因究明は
+> 再発時にのみ行う。**「直った」とは記載しない。** root cause は未同定のまま。
 
 ### 10.5 flight mode を実装して実機で動かして分かった欠陥（4 件）
 
