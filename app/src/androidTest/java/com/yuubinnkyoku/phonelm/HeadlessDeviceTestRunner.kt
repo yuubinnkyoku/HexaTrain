@@ -2,12 +2,15 @@ package com.yuubinnkyoku.phonelm
 
 import android.content.Context
 import android.os.PowerManager
+import android.os.Process
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -53,6 +56,7 @@ class HeadlessDeviceTestRunner {
             throw AssertionError("ALREADY_RUNNING existing_status=${acquired.existingStatus}")
         }
         acquired.lease.use {
+            val incidentTrace = IncidentTrace.forRun(context)
             HeadlessActivityCounters.reset()
             // Keep phase-boundary snapshots in the private headless report.
             // They distinguish an activity caused by process/environment
@@ -70,7 +74,9 @@ class HeadlessDeviceTestRunner {
             var test = "environment"
             val currentPhase = AtomicReference(phase)
             val currentTest = AtomicReference(test)
+            incidentTrace?.line("state_write_begin", reason = "startup")
             state.write(HeadlessStatus(runId, suite, "STARTING", phase, test, 0, 2, startTime = started))
+            incidentTrace?.line("state_write_end", reason = "startup")
             val contender = state.acquire()
             check(contender.lease == null && contender.existingStatus?.contains("\"run_id\":\"$runId\"") == true) {
                 contender.lease?.close()
@@ -97,9 +103,12 @@ class HeadlessDeviceTestRunner {
                     while (heartbeatRunning.get()) {
                         try {
                             Thread.sleep(30_000L)
+                            incidentTrace?.line("heartbeat_wake", reason = "heartbeat")
                             if (heartbeatRunning.get()) {
+                                incidentTrace?.line("heartbeat_write_begin", reason = "heartbeat")
                                 state.write(HeadlessStatus(runId, suite, "RUNNING", currentPhase.get(), currentTest.get(), 1, 2,
                                     startTime = started, lastHeartbeat = System.currentTimeMillis()))
+                                incidentTrace?.line("heartbeat_write_end", reason = "heartbeat")
                             }
                         } catch (_: InterruptedException) {
                             break
@@ -108,6 +117,7 @@ class HeadlessDeviceTestRunner {
                 }, "PhoneLM-headless-heartbeat").apply { isDaemon = true; start() }
                 val lastProgressStatus = AtomicLong(started)
                 val progressCallback = ProgressCallback { message ->
+                    incidentTrace?.line("progress_callback_enter")
                     val event = NativeProgressParser.parse(message)
                     if (event != null) {
                         when (event) {
@@ -150,14 +160,18 @@ class HeadlessDeviceTestRunner {
                         val previous = lastProgressStatus.get()
                         if (terminal || now - previous >= PROGRESS_STATUS_INTERVAL_MS) {
                             if (terminal || lastProgressStatus.compareAndSet(previous, now)) {
+                                incidentTrace?.line("progress_status_write_begin", reason = "progress")
                                 state.write(HeadlessStatus(runId, suite, "RUNNING",
                                     currentPhase.get(), currentTest.get(), 1, 2,
                                     startTime = started, lastHeartbeat = now))
+                                incidentTrace?.line("progress_status_write_end", reason = "progress")
                             }
                         }
                     }
+                    incidentTrace?.line("progress_callback_exit")
                 }
                 activitySnapshots += activitySnapshot("before_native")
+                incidentTrace?.line("native_call_begin", reason = suite)
                 val report = try {
                     when {
                         suite == "nicopedia-parity" ->
@@ -209,13 +223,20 @@ class HeadlessDeviceTestRunner {
                             )
                     }
                 } finally {
+                    incidentTrace?.line("native_call_end", reason = suite)
+                    // Flight mode writes its buffer here rather than per event.
+                    // This is inside `finally`, so it covers success, device
+                    // failure and an unexpected throw alike.
+                    incidentTrace?.flush("native_call_end")
                     heartbeatRunning.set(false)
                     heartbeat.interrupt()
                     heartbeat.join(5_000L)
                 }
                 activitySnapshots += activitySnapshot("after_native")
                 notification?.onProgress(RunProgress.Completed(null))
+                incidentTrace?.line("report_write_begin", reason = "terminal")
                 reportPath = state.writeReport(runId, report)
+                incidentTrace?.line("report_write_end", reason = "terminal")
                 val allowQualityFailure = arguments.getString("allowQualityFailure")?.let {
                     it.toBooleanStrictOrNull() ?: throw IllegalArgumentException(
                         "allowQualityFailure must be true or false",
@@ -244,13 +265,17 @@ class HeadlessDeviceTestRunner {
                     "\n" + activitySnapshots.joinToString("\n") +
                     fallbackAnnotation + "\n"
                 reportPath = state.writeReport(runId, appended)
+                incidentTrace?.line("state_write_begin", reason = "terminal_status")
                 state.write(HeadlessStatus(runId, suite, if (success && countersOk) "PASSED" else "FAILED", "complete", test, 2, 2,
                     result = if (success) "SUCCESS" else "NATIVE_FAILED", failureCode = if (countersOk) "" else "ACTIVITY_LAUNCHED", reportRelativePath = reportPath, startTime = started))
+                incidentTrace?.line("state_write_end", reason = "terminal_status")
                 assertTrue("native result failed", success)
                 assertTrue("PhoneLM Activity was launched", countersOk)
             } catch (error: Throwable) {
+                incidentTrace?.line("state_write_begin", reason = "terminal_failure")
                 state.write(HeadlessStatus(runId, suite, "FAILED", currentPhase.get(), currentTest.get(), 0, 2, result = "FAILED",
                     failureCode = error.javaClass.simpleName, reportRelativePath = reportPath, startTime = started))
+                incidentTrace?.line("state_write_end", reason = "terminal_failure")
                 throw error
             } finally {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -345,8 +370,10 @@ class HeadlessDeviceTestRunner {
         val attentionGate = when (attentionGateName) {
             "none" -> 0
             "headwise_g1_sigmoid" -> 1
+            "headwise_g1_scale2_identity" -> 2
+            "fixed_half" -> 3
             else -> throw IllegalArgumentException(
-                "attentionGate must be none or headwise_g1_sigmoid",
+                "attentionGate must be none, headwise_g1_sigmoid, headwise_g1_scale2_identity, or fixed_half",
             )
         }
         val muonLearningRate = floatArgument(arguments, "muonLearningRate", 0.01f, 0.000001f..1f)
@@ -395,12 +422,20 @@ class HeadlessDeviceTestRunner {
                 require(learningRateSchedule == 1 || learningRateSchedule == 2) {
                     "unsupported learning rate schedule"
                 }
-                require(learningRate.toBits() == 0.0022f.toBits()) {
-                    "decay schedule requires peak LR=.0022"
+                // Formal 1.0x peak is 0.0022. G1 high-LR stress grid scales
+                // Aux Adam and Muon by the same multiplier while keeping the
+                // 0.0022 : 0.0001 ratio, so accept those scaled peaks only.
+                val allowedPeaks = setOf(0.0022f, 0.00275f, 0.0033f, 0.0044f)
+                require(learningRate in allowedPeaks) {
+                    "decay schedule peak LR is outside the formal/stress allow-list"
                 }
                 if (learningRateSchedule == 1) {
-                    require(targetLearningRate in setOf(0.0015f, 0.0010f, 0.0007f, 0.0004f, 0.0002f, 0.0001f, 0f)) {
-                        "linear schedule target LR is outside the HPO allow-list"
+                    val allowedTargets = setOf(
+                        0.0015f, 0.0010f, 0.0007f, 0.0004f, 0.0002f, 0.0001f, 0f,
+                        0.000125f, 0.00015f,
+                    )
+                    require(targetLearningRate in allowedTargets) {
+                        "linear schedule target LR is outside the HPO/stress allow-list"
                     }
                 } else {
                     require(targetLearningRate.toBits() == 0.0001f.toBits()) {
@@ -410,7 +445,12 @@ class HeadlessDeviceTestRunner {
                 require(decayStartStep > 0 && decayStartStep < decayEndStep) { "decay schedule boundaries are invalid" }
                 require(decayEndStep <= scheduleTotalSteps) { "decay schedule end exceeds schedule total" }
                 require(experimentFork) { "decay schedule requires experimentFork=true" }
-                require(parentLearningRate.toBits() == 0.0022f.toBits()) { "decay schedule requires parent LR=.0022" }
+                require(parentLearningRate in allowedPeaks) {
+                    "decay schedule parent LR is outside the formal/stress allow-list"
+                }
+                require(parentLearningRate.toBits() == learningRate.toBits()) {
+                    "decay schedule parent LR must match the experiment peak LR"
+                }
             }
         }
         if (suite == "nicopedia-dffn-probe") {
@@ -1089,5 +1129,186 @@ class HeadlessDeviceTestRunner {
         val DECIMAL_FLOAT = Regex(
             "[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(?:[eE][+-]?[0-9]+)?",
         )
+    }
+}
+
+/**
+ * Opt-in incident trace for the QNN 6031 investigation
+ * (docs/g1-1p5x-multiseed-tier2-incident.md).  It exists only while
+ * `files/headless-input/incident_trace_enabled` is present, so a normal run
+ * pays nothing beyond one file-existence check per emit site.
+ *
+ * Two modes, selected by an optional `incident_trace_mode` sidecar next to the
+ * marker, read the same way on both the native and the Kotlin side:
+ *
+ *  - `full` (marker only, or an unreadable/unrecognised sidecar - the default)
+ *    Every line is written and flushed individually.  Maximum fidelity,
+ *    maximum perturbation.  This is what the two completed 128-step runs used.
+ *
+ *  - `flight` (marker + sidecar containing `flight`)
+ *    Lines accumulate in a preallocated buffer and are written once, at
+ *    `native_call_end` and at the terminal status writes.  This removes the
+ *    per-event open/write/close from the observation path.
+ *
+ * Only the *observation* I/O is buffered.  [HeadlessTestState.write], the
+ * heartbeat thread and the progress/status writes are untouched, because the
+ * conditions under which 6031 occurred are the thing being preserved.
+ *
+ * Timestamps use `SystemClock.elapsedRealtimeNanos()` (CLOCK_MONOTONIC), which
+ * is the same time base the native trace uses (std::chrono::steady_clock), so
+ * the host analyzer can merge both files onto one timeline without a fitted
+ * offset.  Wall-clock is recorded alongside it so cross-process skew can still
+ * be reconstructed if one of the two files was pulled at a different moment.
+ *
+ * Writes are synchronized because the heartbeat thread, the instrumentation
+ * thread and the native training thread (through the progress callback) all
+ * append to the same file.  Overflow is counted and never silent.
+ */
+class IncidentTrace internal constructor(
+    private val file: File,
+    val mode: String,
+) {
+    private val lock = Any()
+
+    /** Flight-mode line buffer. A 128-step run emits ~87 lines, so this is ample. */
+    private val buffer = ArrayList<String>(kFlightLineCapacity)
+    private var overflowCount = 0
+    private var flushed = false
+
+    fun line(event: String, reason: String = "", extra: String = "") {
+        val text = buildString {
+            append("ts_ns=").append(SystemClock.elapsedRealtimeNanos())
+            append(" unix_ms=").append(System.currentTimeMillis())
+            append(" tid=").append(Process.myTid())
+            append(" src=kotlin")
+            append(" thread=").append(sanitize(Thread.currentThread().name))
+            append(" event=").append(sanitize(event))
+            if (reason.isNotEmpty()) append(" reason=").append(sanitize(reason))
+            if (extra.isNotEmpty()) append(' ').append(extra)
+            append('\n')
+        }
+        if (mode == MODE_FLIGHT) {
+            synchronized(lock) {
+                if (buffer.size < kFlightLineCapacity) buffer.add(text) else overflowCount++
+            }
+            return
+        }
+        appendNow(text)
+    }
+
+    /**
+     * Writes the flight buffer out. Idempotent, and never throws: tracing must
+     * not be able to fail a training run.
+     *
+     * The buffer is copied and the file written under a *single* lock hold.
+     * Releasing the lock between "take the buffer" and "write it" lets the
+     * heartbeat thread append in between, which puts an older-timestamped line
+     * after a newer one in the file and makes the analyzer's TIMESTAMP_DISORDER
+     * check reject the whole trace.
+     */
+    fun flush(reason: String) {
+        if (mode != MODE_FLIGHT) return
+        runCatching {
+            synchronized(lock) {
+                if (flushed) return@synchronized
+                flushed = true
+                // The header is written first, so it carries the *earliest*
+                // buffered timestamp rather than "now". A header stamped with
+                // the current time would put a later timestamp before records
+                // that were produced earlier, and the analyzer's
+                // TIMESTAMP_DISORDER check would reject the trace.
+                val firstTs = buffer.firstOrNull()
+                    ?.substringBefore(' ')
+                    ?.removePrefix("ts_ns=")
+                    ?.toLongOrNull()
+                    ?: SystemClock.elapsedRealtimeNanos()
+                val header = buildString {
+                    append("ts_ns=").append(firstTs)
+                    append(" unix_ms=").append(System.currentTimeMillis())
+                    append(" tid=").append(Process.myTid())
+                    append(" src=kotlin event=trace_flush")
+                    append(" trace_mode=flight flush_reason=").append(sanitize(reason))
+                    append(" kotlin_trace_event_count=").append(buffer.size)
+                    append(" kotlin_trace_overflow_count=").append(overflowCount)
+                    append('\n')
+                }
+                val body = buildString { buffer.forEach { append(it) } }
+                buffer.clear()
+                FileOutputStream(file, true).use { out ->
+                    out.write((header + body).toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
+            }
+        }
+    }
+
+    private fun appendNow(text: String) {
+        runCatching {
+            synchronized(lock) {
+                FileOutputStream(file, true).use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
+            }
+        }
+    }
+
+    /** Trace the body of [block] between begin/end markers, never throwing. */
+    inline fun span(event: String, reason: String = "", block: () -> Unit) {
+        line("${event}_begin", reason)
+        block()
+        line("${event}_end", reason)
+    }
+
+    companion object {
+        const val MARKER_NAME = "incident_trace_enabled"
+        const val MODE_SIDECAR_NAME = "incident_trace_mode"
+        const val MODE_FLIGHT = "flight"
+        const val MODE_FULL = "full"
+        private const val TRACE_NAME = "incident-kotlin-trace.log"
+
+        /**
+         * Preallocated line capacity for flight mode. A 128-step run produced 87
+         * Kotlin lines; this leaves a wide margin. The counter exists so that if
+         * it is ever exceeded the loss is reported rather than silent.
+         */
+        const val kFlightLineCapacity = 4096
+
+        /** Values are whitespace-free by construction; this strips the rest. */
+        private fun sanitize(value: String): String =
+            value.replace(Regex("[\\s=]+"), "_")
+
+        fun forRun(context: Context): IncidentTrace? {
+            val marker = File(context.filesDir, "headless-input/$MARKER_NAME")
+            if (!marker.exists()) return null
+            val root = File(context.filesDir, "headless")
+            if (!root.exists() && !root.mkdirs()) return null
+            // Same sidecar, same lookup and same fallback as the native side:
+            // absent, unreadable or unrecognized means full mode, never
+            // disabled. The marker alone stays the enable switch.
+            val mode = runCatching {
+                File(context.filesDir, "headless-input/$MODE_SIDECAR_NAME")
+                    .takeIf { it.isFile }
+                    ?.readText()
+                    ?.trim()
+                    ?.takeIf { it == MODE_FLIGHT }
+                    ?.let { MODE_FLIGHT }
+            }.getOrNull() ?: MODE_FULL
+            val traceFile = File(root, TRACE_NAME)
+            // Start each incident run from an empty trace. The file is opened in
+            // append mode on every write, so without this a later run appends to
+            // the previous run's records: the analyzer then sees one file holding
+            // several runs, and a timestamp from an earlier run precedes a later
+            // one and trips TIMESTAMP_DISORDER for a trace that is actually fine.
+            // A stale trace from a previous incident run must never be mistaken
+            // for evidence about this one.
+            runCatching { if (traceFile.exists()) traceFile.delete() }
+            val trace = IncidentTrace(traceFile, mode)
+            trace.line(
+                "trace_start",
+                extra = "unix_anchor_ms=${System.currentTimeMillis()} trace_mode=$mode",
+            )
+            return trace
+        }
     }
 }

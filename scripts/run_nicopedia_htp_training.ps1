@@ -31,7 +31,7 @@ param(
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
   [ValidateSet('Adam','Muon')][string]$Optimizer = 'Adam',
-  [ValidateSet('none','headwise_g1_sigmoid')][string]$AttentionGate = 'none',
+  [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none',
   [ValidateSet('CPU','HVX')][string]$MuonBackend = 'CPU',
   [string]$HexagonSdkRoot = '',
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonLearningRate = '0.010',
@@ -185,12 +185,15 @@ if ($LearningRateSchedule -eq 'constant') {
   # Linear HPO forks keep the validated peak/parent LR and may vary only the
   # declared target endpoint.  Restrict the endpoint to the Schedule-v2a
   # allow-list so an accidental cross-experiment resume cannot silently run.
-  $allowedLinearTargetLearningRates = @('0.0015', '0.0010', '0.0007', '0.0004', '0.0002', '0.0001', '0.0000')
-  if ($learningRateValue -ne 0.0022 -or
+  # G1 high-LR stress grid scales Aux Adam/Muon by 1.0/1.25/1.5/2.0 while
+  # keeping the 0.0022 : 0.0001 ratio; accept those scaled peaks/targets.
+  $allowedLinearPeakLearningRates = @('0.0022', '0.00275', '0.0033', '0.0044')
+  $allowedLinearTargetLearningRates = @('0.0015', '0.0010', '0.0007', '0.0004', '0.0002', '0.0001', '0.0000', '0.000125', '0.00015')
+  if (-not ($allowedLinearPeakLearningRates -contains $LearningRate) -or
       -not ($allowedLinearTargetLearningRates -contains $TargetLearningRate) -or
       $DecayStartStep -le 0 -or $DecayStartStep -ge $DecayEndStep -or
       $DecayEndStep -gt $ScheduleTotalSteps -or -not $ExperimentFork -or
-      $parentLearningRateValue -ne 0.0022) { throw 'NICOPEDIA_LINEAR_SCHEDULE_INVALID' }
+      $parentLearningRateValue -ne $learningRateValue) { throw 'NICOPEDIA_LINEAR_SCHEDULE_INVALID' }
 } else {
   # Schedule-v2c is deliberately a single fixed-target shape comparison.  Do
   # not allow the runner to silently turn this into another LR/parent sweep.
@@ -438,8 +441,9 @@ $reportMap = if ($OneUpdateProbe) {
   # requires regenerating the artifact.
   $muonDerived = Get-PhoneLmParameterMetadataDerivation `
       -Vocabulary 1024 -Dimension 64 -FeedForwardDimension 128 -Layers 19 -Heads 2 `
-      -HeadwiseG1 ($AttentionGate -eq 'headwise_g1_sigmoid')
-  $expectedCheckpointFormat = if ($AttentionGate -eq 'headwise_g1_sigmoid') { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
+      -HeadwiseG1 ($AttentionGate -like 'headwise_g1_*')
+  $hasGateIdentity = ($AttentionGate -ne 'none')
+  $expectedCheckpointFormat = if ($hasGateIdentity) { 'NPRTCKPTV5' } else { 'NPRTCKPTV4' }
   $expectedAuxAdamParameters = $muonDerived.aux_adam_parameter_count
   $expectedMuonBackend = if ($MuonBackend -eq 'HVX') { 'HVX_W8' } else { 'CPU' }
   $muonMap = Get-PhoneLmKeyValueMap -Text $result
@@ -547,7 +551,7 @@ foreach ($name in $checkpointNames) {
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
   if ($Optimizer -eq 'Muon') {
     $magic = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($local), 0, 11)
-    $expectedMagic = if ($AttentionGate -eq 'headwise_g1_sigmoid') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
+    $expectedMagic = if ($AttentionGate -ne 'none') { "NPRTCKPTV5`n" } else { "NPRTCKPTV4`n" }
     if ($magic -ne $expectedMagic) { throw "CHECKPOINT_RESUME_FORMAT_INVALID: $name" }
   } else {
     $header = Get-PhoneLmCheckpointHeaders -Path $local

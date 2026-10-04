@@ -104,6 +104,10 @@ PreparedGenerationHandle prepareNicopediaGeneration(
         config.attentionGate = tiny_lm::AttentionGate::NONE;
     } else if (key.attentionGate == 1) {
         config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (key.attentionGate == 2) {
+        config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
+    } else if (key.attentionGate == 3) {
+        config.attentionGate = tiny_lm::AttentionGate::FIXED_HALF;
     } else {
         error = "ATTENTION_GATE_IDENTITY_INVALID";
         return nullptr;
@@ -179,7 +183,7 @@ PreparedGenerationHandle prepareNicopediaGeneration(
             TinyTransformerTrainingVariant::FORWARD_ONLY,
             TinyTransformerTrainingTapSet::NONE, config.numLayers,
             config.numHeads,
-            config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID,
+            static_cast<uint32_t>(config.attentionGate),
             /*minimalGenerationOutputs=*/true)) {
         return nullptr;
     }

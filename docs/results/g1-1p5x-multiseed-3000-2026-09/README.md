@@ -1,0 +1,47 @@
+# G1 1.5x multi-seed 3000-step（seed 2 / 4 preregistered + seed 3 exploratory）
+
+事前登録 protocol: [../../g1-1p5x-multiseed-3000.md](../../g1-1p5x-multiseed-3000.md)
+（Protocol / R1–R5 / Decision rule は同文書が正本）。
+
+**この tree は quality evidence である。baseline 昇格そのものは
+[../../headwise-g1-gated-attention.md](../../headwise-g1-gated-attention.md) の
+`## Baseline promotion`（判定 `PROMOTE_WITH_RUNTIME_FOLLOWUP`）が正本で、
+systems cost は [../../g1-1p5x-baseline-promotion-cost.md](../../g1-1p5x-baseline-promotion-cost.md)。
+本 tree の preregistered decision は昇格によって書き換えられていない。**
+
+## この tree の中身
+
+一次 evidence（device 側 native run が所有する report）:
+
+- `seed{2,3,4}/{control,g1}/seed<N>-l19-v1024-t32-d64-f128-steps3000-result.txt`
+  — training 1 本ぶんの health / identity。QNN return code と tensor finite は別々に含む
+- `seed{2,3,4}/{control,g1}/eval256-step<step>-htp.txt`
+  — 登録済み EvalSteps（500 / 1000 / 1500 / 1750 / 2000 / 2500 / 3000）の HTP-native 評価
+- `seed{2,3,4}/{control,g1}/arm-identity.json` — seed / role / arm identity
+- `seed{2,3,4}/g1/gate-static-step<step>.txt`
+  — G1 の gate 診断（host tool による静的集計。R5 の入力）
+
+seed 2 / 4 は `preregistered`、seed 3 は `exploratory`。
+
+analyzer 生成物（**一次データではない**。上の report から再計算できる）:
+
+- `quality-split-level.csv` — seed × step の split-level paired（bpb / NLL / top-1 / mean rank）
+- `verdicts.csv` — R1–R5 の per-seed verdict
+- `run-health.csv` / `run-identity.csv` — health と identity の集計
+- `gate-trajectory.csv` — gate telemetry
+- `analysis.md` — 上記の markdown 表
+- `run-order.json` / `seed-registry.json` / `multiseed-outcomes.json` — 実行順と seed role
+
+raw checkpoint、logcat、ADB endpoint、絶対 path はこの tree に含まれない。
+
+## 結果サマリ
+
+事前登録 4 arm（seed 2 / 4）がすべて training SUCCESS、eval 28/28、`problems=0`、
+analyzer exit 0、6031 再発 0。`decision: ambiguous_tie_breaker`。
+
+exploratory 2 arm（seed 3）も training SUCCESS、eval 14/14。seed 3 は
+`role=exploratory` として記録され、analyzer は
+`EXPLORATORY_SEED_EXCLUDED seeds=[3]` と明示して R1–R5 の判定から除外した。
+**事前登録判定は変更していない。**
+
+詳細は protocol 文書の「実行結果」節と「seed 3 実行結果」節が正本。

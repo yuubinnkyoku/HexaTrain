@@ -25,7 +25,7 @@ param(
   [ValidateSet(256, 1024)][int]$Vocabulary = 256,
   [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
-  [ValidateSet('none','headwise_g1_sigmoid')][string]$AttentionGate = 'none',
+  [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none',
   [int]$CheckpointStep = 1000,
   [int]$ValidationChunks = 8192,
   [int]$DevelopmentChunks = 16384,

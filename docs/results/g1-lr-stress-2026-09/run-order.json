@@ -1,0 +1,42 @@
+[
+  {
+    "order": 1,
+    "multiplier": "1.0",
+    "arm": "Control"
+  },
+  {
+    "order": 2,
+    "multiplier": "1.0",
+    "arm": "G1"
+  },
+  {
+    "order": 3,
+    "multiplier": "1.25",
+    "arm": "G1"
+  },
+  {
+    "order": 4,
+    "multiplier": "1.25",
+    "arm": "Control"
+  },
+  {
+    "order": 5,
+    "multiplier": "1.5",
+    "arm": "Control"
+  },
+  {
+    "order": 6,
+    "multiplier": "1.5",
+    "arm": "G1"
+  },
+  {
+    "order": 7,
+    "multiplier": "2.0",
+    "arm": "G1"
+  },
+  {
+    "order": 8,
+    "multiplier": "2.0",
+    "arm": "Control"
+  }
+]

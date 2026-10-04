@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #include "qnn_runtime.h"
+#include "incident_trace.h"
 #include "qnn_first_nonfinite_diagnostics.h"
 #include "qnn_reproducibility.h"
 #include "qnn_transformer.h"
@@ -4025,7 +4026,7 @@ std::vector<first_nonfinite::RegistryEntry> lateParameterRegistry(
   const tiny_lm::ParameterDimensions dimensions{
       config.vocabularySize, config.dimension, config.feedForwardDimension,
       config.numLayers, config.numHeads,
-      config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID};
+      tiny_lm::hasHeadwiseG1Gate(config.attentionGate)};
   std::vector<first_nonfinite::RegistryEntry> registry;
   for (const auto &entry : tiny_lm::parameterRegistry(parameters)) {
     const tiny_lm::ParameterDefinition *definition =
@@ -5913,7 +5914,7 @@ std::string nicopediaHtpGeneration(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, layers, heads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return failure("nicopedia_generate_prepare", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -6783,7 +6784,7 @@ std::string nicopediaHtpDivergenceLocalization(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL, tapSet, layers, heads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return "NICOPEDIA_HTP_DIVERGENCE_LOCALIZATION\nstatus=FAILED\n"
            "failure_classification=QNN_PREPARE\n" +
            failure("localization_prepare", error, runtime);
@@ -7309,7 +7310,7 @@ std::string nicopediaMuonHybridTraining(
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return failure("nicopedia_muon_prepare", error, runtime);
   std::ofstream telemetry(cachePath + "/learning-rate-telemetry.csv",
                           std::ios::trunc);
@@ -7327,6 +7328,12 @@ std::string nicopediaMuonHybridTraining(
   std::vector<double> stepWallSamplesUs;
   const bool useHvxMuonBackend = trainingConfig.nicopediaOptimizer == 2;
   const char* muonBackendName = useHvxMuonBackend ? "HVX_W8" : "CPU";
+  // Incident tracing is opt-in via a marker file.  Without it every
+  // incident_trace:: call below is a single predictable-branch check, so a
+  // normal run keeps its timing and artifacts unchanged.
+  incident_trace::configure(cachePath);
+  incident_trace::trainingStart(static_cast<int>(steps),
+                                static_cast<int>(resumeStep), muonBackendName);
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
   std::vector<std::pair<uint32_t, float>> curve;
   bool allFinite = true, interrupted = false;
@@ -7336,31 +7343,43 @@ std::string nicopediaMuonHybridTraining(
     float minimum = std::numeric_limits<float>::infinity();
     float maximum = -std::numeric_limits<float>::infinity();
   };
-  const bool gated = config.attentionGate ==
-      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+  const bool gated = tiny_lm::hasHeadwiseG1Gate(config.attentionGate);
   std::vector<GateAggregate> gateAggregates(
       gated ? size_t(config.numLayers) * config.numHeads : 0);
   float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
   const auto trainingStarted = std::chrono::steady_clock::now();
   TinyTransformerTrainingOutputs output;
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
-    if (stopRequested && stopRequested->load()) { interrupted = true; break; }
+    const bool stopNow = stopRequested && stopRequested->load();
+    incident_trace::stopCheck(static_cast<int>(step), stopNow);
+    if (stopNow) { interrupted = true; break; }
     const auto stepStarted = std::chrono::steady_clock::now();
+    incident_trace::zeroParametersBegin(static_cast<int>(step));
     Params gradient = zeroLanguageParameters(current);
+    incident_trace::zeroParametersEnd(static_cast<int>(step));
     double loss = 0.0;
     for (uint32_t batch = 0; batch < 8; ++batch) {
+      incident_trace::scope(static_cast<int>(step), static_cast<int>(batch));
+      incident_trace::batchPrepareBegin(static_cast<int>(step),
+                                        static_cast<int>(batch));
       NprtBatchTimings batchTimings;
       const auto data = nprtBatch(
           config, cache, order[std::size_t(step - 1) * 8 + batch],
           &batchTimings);
+      incident_trace::batchPrepareEnd(static_cast<int>(step),
+                                      static_cast<int>(batch));
       batchDataPrepareUs += batchTimings.totalUs;
       oneHotInputUs += batchTimings.oneHotInputUs;
       oneHotTargetUs += batchTimings.oneHotTargetUs;
       const size_t executeBefore = runtime.metrics().executeUs.size();
       const size_t inputBefore = runtime.metrics().inputBindUs.size();
       const size_t outputBefore = runtime.metrics().outputBindUs.size();
-      if (!runtime.executeTinyTransformerTraining(data.input, data.target,
-                                                  current, 0.0f, output, error))
+      const std::uint64_t executeId = incident_trace::beginExecute(
+          static_cast<int>(step), static_cast<int>(batch));
+      const bool executeOk = runtime.executeTinyTransformerTraining(
+          data.input, data.target, current, 0.0f, output, error);
+      incident_trace::endExecute(executeId, executeOk);
+      if (!executeOk)
         return failure("nicopedia_muon_fwd_bwd", error, runtime);
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)
         fwdBwdUs += runtime.metrics().executeUs[i];
@@ -7430,6 +7449,10 @@ std::string nicopediaMuonHybridTraining(
     updateConfig.optimizerStep = step;
     const auto optimizerUpdateStarted = std::chrono::steady_clock::now();
     nicopedia_muon::Result update;
+    int optimizerRpcStatus = 0;
+    bool optimizerFallback = false;
+    bool optimizerOutputFinite = true;
+    incident_trace::optimizerBegin(static_cast<int>(step), muonBackendName);
     if (useHvxMuonBackend) {
       auto hvxUpdate = nicopedia_hvx_muon::update(
           current, gradient, momentum, adamM, adamV, updateConfig);
@@ -7438,6 +7461,9 @@ std::string nicopediaMuonHybridTraining(
       if (hvxUpdate.rpcStatus != 0) ++hvxRpcFailureCount;
       if (hvxUpdate.fallback) ++hvxFallbackCount;
       if (!hvxUpdate.outputFinite) ++hvxNonFiniteCount;
+      optimizerRpcStatus = hvxUpdate.rpcStatus;
+      optimizerFallback = hvxUpdate.fallback;
+      optimizerOutputFinite = hvxUpdate.outputFinite;
       hvxRpcUs += hvxUpdate.timings.rpcUs;
       hvxKernelUs += hvxUpdate.timings.kernelUs;
       hvxPackUs += hvxUpdate.timings.packUs;
@@ -7463,10 +7489,13 @@ std::string nicopediaMuonHybridTraining(
       update = nicopedia_muon::update(current, gradient, momentum, adamM,
                                       adamV, updateConfig);
     }
+    incident_trace::optimizerEnd(static_cast<int>(step), optimizerRpcStatus,
+                                 optimizerFallback, optimizerOutputFinite);
     optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
     if (!update.error.empty())
       return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_OPTIMIZER_UPDATE\nerror=" + update.error + "\n";
+    incident_trace::parameterMoveBegin(static_cast<int>(step));
     const auto resultMoveStarted = std::chrono::steady_clock::now();
     current = std::move(update.parameters);
     momentum = std::move(update.muonMomentum);
@@ -7474,6 +7503,7 @@ std::string nicopediaMuonHybridTraining(
     adamV = std::move(update.auxiliaryAdamV);
     optimizerResultMoveUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - resultMoveStarted).count();
+    incident_trace::parameterMoveEnd(static_cast<int>(step));
     muonUs += update.muonMicroseconds;
     auxUs += update.auxiliaryAdamMicroseconds;
     allFinite = allFinite && update.health.gradientFinite &&
@@ -7487,9 +7517,16 @@ std::string nicopediaMuonHybridTraining(
     if (completed == 1) firstLoss = meanLoss;
     lastLoss = meanLoss;
     if (step % 25 == 0 || step == steps) curve.emplace_back(step, meanLoss);
+    incident_trace::telemetryBegin(static_cast<int>(step));
     telemetry << step << ',' << auxLr << ',' << auxLr << ',' << muonLr << ','
               << nicopedia_schedule::kindName(auxSchedule.kind) << '\n';
+    incident_trace::telemetryEnd(static_cast<int>(step));
     bool checkpointWritten = false;
+    // The begin/end pair brackets the checkpoint decision itself, so it is
+    // emitted every step. Emitting the pair only around an actual write would
+    // leave `checkpoint_end written=false` unpaired on the steps that skip a
+    // checkpoint, which is the common case at any large interval.
+    incident_trace::checkpointBegin(static_cast<int>(step));
     if (step % checkpointInterval == 0 || step == steps) {
       const std::string path = cachePath + "/" + nprtCheckpointName(
           seed, config.numLayers, config.tokens, config.dimension,
@@ -7504,6 +7541,7 @@ std::string nicopediaMuonHybridTraining(
       ++checkpointCount;
       checkpointWritten = true;
     }
+    incident_trace::checkpointEnd(static_cast<int>(step), checkpointWritten);
     if (progress && (step == resumeStep + 1 || checkpointWritten ||
                      step % kMuonProgressTelemetryCadenceSteps == 0 || step == steps)) {
       std::ostringstream status;
@@ -7514,7 +7552,11 @@ std::string nicopediaMuonHybridTraining(
              << "\noptimizer_aux_adam_backend=CPU\nqnn_return_code_success=true"
              << "\noutput_tensors_finite=" << (allFinite ? "true" : "false")
              << "\ncpu_fallback=false";
+      // The progress upcall runs on the native training thread and is the only
+      // native -> Kotlin contact point in this loop, so it is timed explicitly.
+      incident_trace::phase("progress_jni", "begin", static_cast<int>(step));
       progress(status.str());
+      incident_trace::phase("progress_jni", "end", static_cast<int>(step));
     }
     stepWallSamplesUs.push_back(std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - stepStarted).count());
@@ -7706,7 +7748,7 @@ std::string nicopediaMuonHybridTraining(
          << "\nall_steps_finite=" << (allFinite ? "true" : "false")
          << "\ncheckpoint_written=" << (checkpointCount > 0 ? "true" : "false")
          << "\ncheckpoint_count=" << checkpointCount << "\ncheckpoint_format="
-         << (config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID
+         << (tiny_lm::hasAttentionGateIdentity(config.attentionGate)
                  ? "NPRTCKPTV5" : "NPRTCKPTV4")
          << "\nfinal_parameter_hash=" << nprtParameterHash(current)
          << "\ncpu_fallback=false\nfallback=false\nnan_detected=" << (allFinite ? "false" : "true")
@@ -7747,9 +7789,20 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
                                  const LogSink &progress,
                                  std::atomic_bool *stopRequested) {
   if (trainingConfig.nicopediaOptimizer == 1 ||
-      trainingConfig.nicopediaOptimizer == 2)
-    return nicopediaMuonHybridTraining(config, trainingConfig, progress,
-                                       stopRequested);
+      trainingConfig.nicopediaOptimizer == 2) {
+    std::string result = nicopediaMuonHybridTraining(
+        config, trainingConfig, progress, stopRequested);
+    // Single dump site for every exit out of the Muon training loop. The loop
+    // has ~15 early returns after configure(), so instrumenting each one would
+    // be both easy to miss and easy to get wrong; the forwarder sees all of
+    // them. A failure whose QNN return code was nonzero has already dumped at
+    // the graphExecute call site, and dump() is idempotent, so this only fires
+    // for the paths that never reached a failing execute.
+    incident_trace::dump(result.find("status=SUCCESS") != std::string::npos
+                             ? "training_success"
+                             : "training_failure");
+    return result;
+  }
   // Cache path: app-private file pushed by the host runner.  The parameter is
   // carried in diagnosticCheckpointDir to avoid extending the JNI ABI; the
   // Kotlin side validates it to stay below the app files directory.
@@ -7934,7 +7987,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return failure("nicopedia_prepare_training", error, runtime);
   const double initializeUs =
       std::chrono::duration<double, std::micro>(
@@ -8813,7 +8866,7 @@ std::string runNicopediaHtpOneUpdateProbe(
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return emit("FAILED", "prepare_begin", error, 0.0,
                 runtime.metrics().graphExecuteCount);
   trainingPrepared = true;
@@ -9040,7 +9093,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
           TinyTransformerTrainingVariant::FULL,
           TinyTransformerTrainingTapSet::NONE, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+          static_cast<uint32_t>(config.attentionGate)))
     return failure("nicopedia_eval_prepare", error, runtime);
 
   struct SplitResult {
@@ -9863,6 +9916,10 @@ std::string runTinyTransformerTrainingExperiment(
       config.attentionGate = tiny_lm::AttentionGate::NONE;
     } else if (trainingConfig.attentionGate == 1) {
       config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (trainingConfig.attentionGate == 2) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
+    } else if (trainingConfig.attentionGate == 3) {
+      config.attentionGate = tiny_lm::AttentionGate::FIXED_HALF;
     } else {
       return "NICOPEDIA_HTP\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -9952,6 +10009,10 @@ std::string runTinyTransformerTrainingExperiment(
       config.attentionGate = tiny_lm::AttentionGate::NONE;
     } else if (trainingConfig.attentionGate == 1) {
       config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+    } else if (trainingConfig.attentionGate == 2) {
+      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY;
+    } else if (trainingConfig.attentionGate == 3) {
+      config.attentionGate = tiny_lm::AttentionGate::FIXED_HALF;
     } else {
       return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
              "failure_classification=APP_CONFIGURATION_VALIDATION\n"
@@ -10339,7 +10400,7 @@ std::string replayFirstNonfiniteCheckpoint(
           config.epsilon, true, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL, tapSet, config.numLayers,
           config.numHeads,
-          config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID) ||
+          tiny_lm::hasHeadwiseG1Gate(config.attentionGate)) ||
       elementCount > std::numeric_limits<uint32_t>::max() ||
       !runtime.prepareAdamOptimizer(static_cast<uint32_t>(elementCount), error)) {
     report << "htp_prepare_success=false\nhtp_prepare_error=" << error << '\n'

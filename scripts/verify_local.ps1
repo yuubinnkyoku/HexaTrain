@@ -208,6 +208,21 @@ try {
         "agent skill trees in sync"
     }
 
+    # The 6031 incident analyzer parses traces and computes time deltas; both are
+    # easy to get subtly wrong and impossible to review by eye.  Its synthetic
+    # fixture battery pins the fail-closed rules and the delta arithmetic, and
+    # needs no device and no network.
+    Invoke-Step "incident-6031-analyzer-self-test" {
+        $incidentPython = if ($env:MIMO_PYTHON) { $env:MIMO_PYTHON } else { 'python' }
+        $incidentAnalyzer = Join-Path $Root "scripts\incident_6031_analyze.py"
+        if (-not (Get-Command $incidentPython -ErrorAction SilentlyContinue)) {
+            throw "PYTHON_NOT_FOUND: set MIMO_PYTHON or put python on PATH (required by the 6031 incident analyzer self-test)"
+        }
+        & $incidentPython $incidentAnalyzer --selftest
+        if ($LASTEXITCODE -ne 0) { throw "incident 6031 analyzer self-test failed" }
+        "6031 incident analyzer synthetic fixtures PASS (fail-closed rules + delta arithmetic)"
+    }
+
     Invoke-HeavyOrSkip "margin-decomposition-probe" "fast mode" {
         Invoke-PwshScript "l19 first-error/margin decomposition probe" `
             (Join-Path $Root "scripts\run_l19_margin_decomposition.ps1") @()

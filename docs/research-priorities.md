@@ -1,8 +1,10 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-09-26 JST**
+> **研究内容の最終更新: 2026-10-04 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
+>
+> **2026-10-04 更新**: `headwise_g1_sigmoid` を **current research baseline** へ昇格（`PROMOTE_WITH_RUNTIME_FOLLOWUP`）。legacy control（`attention_gate=none` / 758,528 params / `NPRTCKPTV4`）は historical anchor として保持し、**production / default behavior は変更していない**。詳細は「学習baseline」節と [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -53,11 +55,32 @@ Forward / Loss / Backward / Adamは引き続きQNN opを明示的に構築する
 
 ### 学習baseline
 
-- **V1024 / T32 / D64 / FFN128 / L19 / H2**、**758,528 parameters**が現行の公式品質baseline。
+用語を固定する。以降 docs で「baseline」は曖昧にせず、次のように呼ぶ。
+
+| 名称 | `attention_gate` | 位置づけ |
+|---|---|---|
+| **legacy control / ungated control** | `none` | historical anchor / regression reference。**削除しない**（実装・`NPRTCKPTV4`・ungated regression test・ungated generation/eval 互換を維持） |
+| **current research baseline** | `headwise_g1_sigmoid` | 2026-10-04 昇格。**以後の architecture candidate を比較する parent** |
+
+既存 script / API の識別子（`ARM_IDENTITY["control"]`、runner の `-Arm Control`、
+成果物 directory `control/`、`attention_gate=none`）は**rename しない**。既に公開済みの
+evidence の追跡性を壊すため。
+
+- **current research baseline = `headwise_g1_sigmoid`（V1024/T32/D64/FFN128/L19/H2 + head-wise
+  sigmoid gate、760,960 parameters、NPRTCKPTV5）。** 昇格判定は
+  `PROMOTE_WITH_RUNTIME_FOLLOWUP`。詳細は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
+  `## Baseline promotion`、一次 evidence は [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md) と
+  [g1-1p5x-baseline-promotion-cost.md](g1-1p5x-baseline-promotion-cost.md)。
+- **legacy control = `attention_gate=none`、758,528 parameters、NPRTCKPTV4。** 引き続き保持する。
 - tokenizerは決定的**Byte-BPE V=1024**。tokenizer / cache / checkpoint / evaluationのidentityをSHA-256等で結び、互換しないartifactはfail-closedで拒否する。
 - Adamは`LR=0.0022`をstep 4000まで維持し、step 8000で`0.0001`へlinear decayする **S4000** を独立した安定controlとして保持する。
 - untouched final sampleは既存のread-once結果を研究候補の選別へ逆流させない。新候補はVal/Devで比較する。
 - parameter identity / shape / optimizer role / fan-in・fan-out semanticsは`transformer_parameter_metadata`へ集約され、Muon / Aux Adamの分割をname substringへ依存しないSSOTとして扱える。
+
+**今回の昇格で変えないもの:** production / default behavior。script の
+`-AttentionGate` 既定値、Kotlin 呼び出し側の既定値、device runner の既定値、
+checkpoint format policy はすべて `none` のまま維持する。昇格の意味は
+「**以後の architecture research で比較対象となる parent baseline を G1 へ変更**」のみである。
 
 ### Muon — 「候補」から正式baselineへ
 
@@ -117,7 +140,10 @@ Violettoで確認できる主要要素は、
 
 HexaTrainへ直近で落とし込む問いは次の5つ。
 
-1. 既存G1 gateの改善がstep 2000以降も残るか。残らない場合、Limite型の`2 * sigmoid` / reduced gate channels / identity initializationで改善するか
+1. ~~既存G1 gateの改善がstep 2000以降も残るか~~【multi-seed lane で完了。残留・反転の記述は
+   [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md) の combined interpretation を参照】
+   残る具体問いは **reduced-channel gate**（Limite型の reduced gate channels）のみで、
+   これは G1 を parent とする candidate として扱う
 2. XSAをlearnable strengthかつzero-initで加えたとき、T32でもattentionの自己成分依存を減らしてbpbが改善するか
 3. Value Embeddingを直接増設する前に、既存Vを再利用する**Value Residual**で同じ方向の効果を安く得られるか
 4. MUDDのような重いdense residual mixingへ行く前に、learned residual scale / branch scaleで深さ19の情報流を改善できるか
@@ -258,15 +284,65 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - windows/s、original UTF-8 bytes/s、graph prepare amortizationを測る
    - full-final相当を現実的な時間で読める経路を作り、以後の研究iteration自体を短縮する
 
-2. **Gated Attention: G1の高LR安定性 / time-to-bpb stress grid**
+2. **Gated Attention: G1 lane【完了 — research baseline 昇格（2026-10-04）】**
+   - **最終判定 = `PROMOTE_WITH_RUNTIME_FOLLOWUP`。`headwise_g1_sigmoid` を current research baseline へ昇格。**
+   - 完了した工程: multi-seed quality lane（seed 2 / 4 preregistered）、seed 3 exploratory
+     tie-breaker、systems cost gate。**G1 自体の追加 seed・長期再検証は行わない**（原則終了）。
+     HTP runtime 最適化は下記 3 の**別lane**として扱う。
+   - **昇格の意味は「以後の architecture candidate を比較する parent baseline を G1 へ変更」までで、
+     production / default behavior は変えない。** legacy control（`attention_gate=none`）は
+     historical anchor / regression reference として削除しない。
+   - **seed 1（reference）の当初予定**: stress grid（`PROMOTE_G1_GATE_VARIANTS`）→ identity-init
+     （`KEEP_CURRENT_G1`、lane閉）→ fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`、replacement閉）→
+     **1.5x long-horizon 2000（`PROMOTE_G1_1P5X_4000STEP`）**。
    - `headwise_g1_sigmoid`のseed1 matched runはstep 8000まで完了。ΔBalancedはstep 500 / 1000 / 1500 / 2000 / 2500 / 3000 / 3500 / 4000 / 5000 / 6000 / 7000 / 8000で `-0.032712 / -0.036686 / -0.021864 / -0.007113 / -0.016147 / -0.017483 / -0.007219 / -0.007490 / +0.004985 / +0.008981 / +0.009498 / -0.000367`
    - 結論は、**早期sample-efficiency gainは強いが、8000ではbaselineと実質tie**。したがって「4000まで延長」は完了済みで、同一LRの長期runを追加しても情報量は低い
-   - 次はcontrol / G1を同じ短期stress gridで比較し、Gated Attentionが高learning-rate側の安定領域や収束速度を広げるかを判定する
-   - stress gridは現行formal LRを基準に `1.0x / 1.25x / 1.5x / 2.0x` 程度から始め、`time-to-bpb`、loss spike、gradient/update norm、gate saturation、non-finite、row geometryを記録する
-   - 「同じstepのbpb」だけでなく、**同じ目標bpbへ到達するwall time / original bytes**をG1の正式な価値指標へ加える
-   - stress gridでG1の価値が残る場合にだけ、`2 * sigmoid` / `Wg=0` identity init / reduced-channel gateへ進む。残らない場合は新gate variantへ投資せず、別architecture laneへslotを移す
+    - ただし「強い早期gain」を一貫した汎化品質改善とは扱わない。**balanced bpb上では早期gainが確認される一方、step 1750 / 3000ではVal/Dev間でNLL差の符号が反転し、val/dev top-1も悪化している**（step 1750: Δval NLL −0.030889 に対し Δdev NLL +0.018780、top-1 は val 0.1340→0.1248・dev 0.1052→0.0988 がいずれもG1で低下。step 3000: Δval NLL −0.053659 に対し Δdev NLL +0.025505、top-1 は val 0.1598→0.1543・dev 0.1274→0.1255 がいずれもG1で低下。一次レポートはいずれも `status=SUCCESS`、両splitの `nonfinite_chunks=0`）。いずれもseed 1単独であり、seed noise / split-specific interaction / 一時的なtrajectory差のいずれかは未同定。したがってG1を一貫した汎化品質改善とは扱わず、高LR stress gridで安定領域・time-to-bpb・split間挙動を追加検証する。詳細は [1.5x full-run の split-level 留保](results/g1-1p5x-full-8000-2026-09/README.md)
+   - **高LR stress grid（1.0x/1.25x/1.5x/2.0x × Control/G1、seed1、500 step、eval 100/200/300/400/500）を完了。** 詳細は [g1-lr-stress.md](g1-lr-stress.md)
+   - 安定領域は **Control=G1=2.0x** で拡大なし（500-step stress region）
+   - 同一LRのcanonical Balanced bpbは **全LR・全eval pointでG1優位**（1.0x step500でhistorical sanityと完全一致）
+   - time-to-bpb: target 2.90 で G1 step400 vs Control step500（1.5x、20% step削減）。checkpoint cumulative training wallはstep500 endpoint以外 `NOT_MEASURED` のため wall 改善は主張しない
+   - **decision = `PROMOTE_G1_GATE_VARIANTS`**（learned gate variants の探索を継続）
+   - **split-level audit 完了（2026-09-28）**: 一次 eval レポートから 20 matched cell を再計算し、`quality-paired.csv` と ≤1e-9 で一致。bpb / NLL は Val・Dev **とも 20/20 で G1 改善**し、1.5x full-8000 で出た split 間の符号反転は 500-step では観測されない。ただしlate-stepの利得はVal偏重で、1.25x step500は ΔDev bpb `−0.002972` / ΔDev NLL `−0.004908` まで縮み、Dev mean rank `+0.904`・Val top-1 `−29 tokens` が同じ cell に揃う。Val top-1 は 3 cell、Dev mean rank は 1 cell で悪化するため「全指標・全 split で一貫改善」とは表現しない。安定領域は 2.0x で拡大なし、`device-health.csv` の thermal status は全 arm 0。詳細は [stress grid evidence README](results/g1-lr-stress-2026-09/README.md)
+   - **identity-init A/B 完了（2026-09-27）**: Current G1 vs `2*sigmoid`+`Wg=0` を LR1.5x / seed1 / 500 step で比較。ΔBalanced = Identity−Current は step100/200/300/400/500 で `+0.100 / +0.035 / +0.019 / +0.038 / +0.005`。早期 gain を失い target 2.90 は 400→500 step。**decision = `KEEP_CURRENT_G1`**（identity lane は閉じる）。詳細は [g1-identity-init-500.md](g1-identity-init-500.md)
+   - **fixed 0.5 A/B 完了（2026-09-27）**: Current G1 vs `Yh=0.5*Ah`（Wg なし / 758,528 params）を同条件で比較。ΔBalanced = Fixed−Current は `+0.024 / +0.006 / +0.002 / +0.028 / +0.006`。0.5 suppression prior が早期 gain の大半を説明するが、learned adaptation が残余の優位を説明。target 2.90 は Current 400 vs Fixed 500。**decision = `KEEP_CURRENT_G1_LEARNED_GATE`**（fixed-scale lane は replacement として閉じる）。詳細は [g1-fixed-half-500.md](g1-fixed-half-500.md)
+   - **1.5x long-horizon 2000 完了（2026-09-27）**: stress-grid step500 から continuation。ΔBalanced = G1−Control は 500/750/1000/1250/1500/1750/2000 で `-0.030 / -0.033 / -0.042 / -0.046 / -0.033 / -0.003 / -0.025`。**全7点でG1優位**、mean ΔBalanced ≈ `-0.030`。target 2.80 は G1 が 250 step 早い。**decision = `PROMOTE_G1_1P5X_4000STEP`**。詳細は [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md)
+   - **multi-seed replication 完了（2026-10-04、4 arm 揃い / analyzer exit 0）**: best arm は 1.5x に確定済み。seed 2 / 4 の fresh step-0 / 3000 step を 4 arm すべて完走。eval 一次 report **28/28**、`problems=0`、6031 再発 0、累積 96,000 graphExecute 成功（seed 3 まで含む 6 arm 合計で 144,000）。全 arm `status=SUCCESS` / graphExecute `24000/24000` / failure 0 / QNN success / finite / HVX 0/0/0 / CPU fallback なし。`dataset_hash` と **`training_order_hash=fnv1a64:e7991d7250fc3428` は 4 arm 同一**（`training_order_seed=20260806` 固定の設計どおり）。**R1（500 step 付近の Val/Dev 同時改善）は 2/2 seed で再現**。**R2（1750–3000 の Dev 反転）は 1/2 seed のみ**（seed 4 の step 2500 一点、ΔDev bpb `+0.001603`）で、**seed 2 は 7 checkpoint すべて両 split 改善・反転 0**。seed 1 参照の 1750 / 3000 の 2 点反転は seed 4 では 2500 の 1 点にずれ、seed 2 では出現せず。R4 は seed 4 で mixed（Val +13 / Dev −29 token）。**R5 は `no_peak`**（反転 step 2500 の完全 Suppress head 5 が前後の 2000=8 / 3000=11 を下回る = seed 1 と同じ「gate saturation と反転の対応なし」側）。**decision = `ambiguous_tie_breaker`**。seed 1 は reference のまま preregistered decision には混ざっていない。**exploratory tie-breaker として seed 3 も 2 arm 実行済み**（Control 先行 → G1、health PASS・eval 14/14、`dataset_hash` / `training_order_hash` は seed 2/4 と同一）。analyzer は `EXPLORATORY_SEED_EXCLUDED seeds=[3]` と明示して除外し、**`ambiguous_tie_breaker` は変更していない**。seed 3 は **R1 pass 2/2 / R2 not_reproduced 0/5**（7 checkpoint すべて両 split 改善、late reversal なし）。**初期 Val/Dev 同時改善は 4/4 seed で再現（G1 の初期 sample-efficiency 優位は安定）一方、late Dev reversal は 2/4 seed でしか出ず（seed 1 が 1750+3000 の 2 点、seed 4 が 2500 の 1 点、seed 2/3 は 0 点）、観測時も位置が一致しないため「安定した構造的事象」ではなく seed / trajectory 依存と読む。high-LR final quality lane を閉じる根拠はない。**G1 multi-seed lane はここで閉じる**（seed 5 等は追加しない）。**この quality lane の結論は baseline 昇格の入力であり、単独では昇格判定ではない**（systems cost gate と合わせて下記 promotion 項で判定する）。詳細は [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md)
+   - **eval evidence 復旧（2026-10-03）**: arms 1–3 は training SUCCESS 後、**host セッションの中断**により checkpoint pull / eval 遷移まで到達せず一次 report が 0 件だった。device 側に checkpoint 12 本 × 3 arm が健在で残っていたため、**training を再実行せずに**既存 checkpoint から登録済み EvalSteps のみを評価して 21 本を生成した（seed 4/G1 step500 を最小再現として V5 / V4 両経路を先に検証）。arm 4 は初回実行で host 環境 annotation だけ欠落して analyzer が fail closed したため、**arm 4 のみ**再実行して正当な result を得た。**6031 / QNN / device 不具合ではなく host 側の lifecycle 中断**（logcat・tombstone 該当なし、exit code 1 の stdout に `OK (1 test)` が無い = assertion 失敗でない）
+   - **6031 incident = `UNRESOLVED / DORMANT / WATCH`（2026-10-04、watch 状態へ移行）**: 追加原因究明を主作業とする継続を停止し、**当面は G1 multi-seed 研究 > 6031 追加原因究明**を優先する（**6031 が再発した瞬間に反転**）。根拠は **Control 128-step 診断が full trace 2 本 + flight trace 2 本の計 4 本連続成功**（各 `graphExecute 1024/1024`、6031 = 0、finite、CPU fallback なし、HVX failure なし、`qnn_signal_argument_nonnull_count=0` / `hexatrain_signal_trigger_count=0` / `trace_overflow_count=0`）。**root cause は未同定のまま**であり、非再現は negative evidence にすぎず **「直った」「修正済み」とは記載しない**。QAIRT profiling / heartbeat A/B / FastRPC A/B は再発して新しい timing evidence が得られた場合に初めて検討し、現時点では追加 incident run を無意味に増やさない。通常 quality run では incident trace を常時有効化せず、**G1 Tier 3 は従来の通常条件で実行**した（6031 回避のために quality の timing を変えない）。**6031 が 1 回でも再発したら即座に Tier 3 を BLOCKED に戻し**、後続 arm を開始せず品質値を読まず private incident evidence を保存（failure execute index / step / batch / api trace / status / health / preceding checkpoint・progress を先に記録）して、完成済みの flight recorder を使う incident lane へ戻る。品質 run を後付けで成功扱いしない。6031 以外の QNN error / nonfinite / fallback / identity mismatch も fail closed とし**別の failure として分類**する。incident tooling（full trace / flight recorder / incident analyzer / signal invariant / synthetic selftest / diagnostic runner / legacy evidence / fail-closed guards）は削除・簡略化せず保持する。詳細は [g1-1p5x-multiseed-tier2-incident.md](g1-1p5x-multiseed-tier2-incident.md)
+   - **G1 baseline promotion / systems cost 判定（2026-10-04、既存 artifact のみ・training 追加なし）**: seed 2 / 3 / 4 の paired Control vs G1 から architecture / runtime / time-to-bpb を抽出。**parameter overhead +0.321%**（+2,432、Muon は不変で Aux Adam 側のみ）、memory・checkpoint overhead は実用上無視可能。**wall/update は native per-update で median −4.76%**（seed 2 −7.49% / seed 4 −4.76% で G1 が速い、seed 3 のみ +10.23%）。**time-to-bpb は Control 全 7 checkpoint を target として median +4.76%、G1 勝ち 17/21**。一方 **HTP execute / mean QNN execute は +9.95%（median）で明確**、HVX Muon は +2.10%、parameter transfer は +20.07%。seed 3 は run-wide 条件差で絶対値が外れ値（Control 単独で seed 2 の 3.64 倍）だが **arm 間 ratio は健全**なので paired 比較には採用し、cross-seed 絶対値比較は行わない。host 事故（session interruption / eval recovery / detached launcher / stale lock / undrained pipe / PS5.1 / arm 4 annotation）は **architecture cost ではなく**、run-total wall は `HOST_ORCHESTRATION_CONTAMINATED` として比較に使わず device-side per-update のみを使用。**判定 = `PROMOTE_WITH_RUNTIME_FOLLOWUP`**（`headwise_g1_sigmoid` を **current research baseline** として採用し、HTP execute と parameter transfer の runtime optimization lane を別laneとして残す。production / default behavior は変更しない）。seed 3 の絶対 runtime は **`CROSS_SEED_ABSOLUTE_RUNTIME_NOT_COMPARABLE`** として扱い、paired Control/G1 ratio のみ利用し、原因を DVFS 等に断定しない。`+399 nodes / +476 tensors` 等は **resource estimator / structural count** であり、RSS・ORT・physical checkpoint file-size delta の**実測ではない**（いずれも `NOT_MEASURED`）。詳細は [g1-1p5x-baseline-promotion-cost.md](g1-1p5x-baseline-promotion-cost.md)、昇格記録は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`
+   - reduced-channel gate は未実装（本 task 対象外）
 
-3. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
+3. **G1 HTP runtime optimization【別 lane / 2026-10-04 開設】**
+   - **G1 の再検証 lane ではない。** 主目的 = **G1 の quality を変えず**に HTP `graphExecute`
+     overhead（現状 median **+9.95%**、paired Control/G1 ratio）を削減すること。
+   - 現状の構造的分岐（`transformer_resource_estimator.h` と
+     `app/src/main/cpp/qnn/qnn_runtime_transformer_training_generalized.inc` からの分類）:
+     - forward は layer あたり `2 + 2*H = 6` nodes（gate projection MatMul / `QNN_OP_SIGMOID` /
+       per-head select MatMul + broadcast multiply）。`H2` なので後者 4 node と小さいが、
+       `H` に比例して増える
+     - backward は layer あたり `5*H + 5 = 15` nodes（per-head `dAh` / `dGh` product /
+       reduce / scatter の各 `H` 個 + `1-G` / `G(1-G)` / `dZ` / `dWg` / `dN_gate` /
+       **`dLN1 = dLN1_qkv + dN_gate` の accumulation**）
+     - tensors は layer あたり `9 + 8*H = 25` + `attention_gates` の global `APP_READ` slot 1
+     - 合計 **+399 nodes / +476 tensors**（estimator の構造数。実測ではない）
+   - 候補（今回は**実装しない**。分類と設計のみ）:
+     - gate projection / sigmoid / broadcast multiply の fusion
+     - `1-G` / `G(1-G)` などの unnecessary intermediate tensor の削減
+     - per-head select/scatter MatMul を減らし `[T,H]` 型の broadcast へ寄せる
+     - backward chain の fusion、LN1 gradient accumulation との統合
+     - parameter transfer overhead（実測 median **+20.07%** — HTP graph よりここが大きい）
+     - static な small-shape `[64,2]` gate の扱い
+     - graph construction overhead
+   - **成功条件（最低）**: G1 の mathematical definition 不変 / checkpoint compatibility 維持 /
+     parameter hash・deterministic parity / 既存 quality evidence を無効化しない /
+     HTP execute overhead 削減 / fallback なし / finite / 6031 の新 signal なし
+   - **目標（研究目標であり promotion の gate ではない）**: 現状の **+10% から +5% 以下**、
+     可能なら **+3% 以下**。この数値は目標であり、**今回の昇格を阻止する条件ではない**
+   - 正本: [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
+     `### Remaining runtime follow-up`
+
+4. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
    - k=4/8/16、recent window=4/8/16、token Top-k / block Top-k / recent+globalを比較
    - CSA2を模して **Full（KV/index自前） / Reindex（source KV共有・index再計算） / Reuse（KV/index共有）** の3 oracleを分け、KV共有とindex共有の誤差を別々に測る
@@ -275,7 +351,7 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
    - これはGLM-5.3-Flash IndexPool / DeepSeek-V4.1 CSA2の完全再現ではなく、**新規QNN graphを作る前の分解診断**として扱う
 
-4. **品質非変更のlayout microbenchmark**
+5. **品質非変更のlayout microbenchmark**
    - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
    - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
    - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
@@ -310,6 +386,12 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - RPC external / DSP worker imbalance / optimizer geometryを必要な実験で標準telemetryへ
 - architecture変更とoptimizer変更とsampling変更を同じA/Bへ混ぜない
 - architecture A/Bでは同一recipe比較に加え、必要ならstress harnessで**最適LR領域が移動していないか**を確認する
+- **新しい architecture candidate の parent は `headwise_g1_sigmoid`（current research baseline）とする。**
+  candidate が G1 を上回らなければ採用しない。legacy control（`attention_gate=none`）を
+  parent に新規 architecture を組む場合は、その理由を experiment manifest に明示する
+  （G1 側の独立因子だけを孤立させたい場合と、G1 自身の effect を測りたい場合で使い分ける）
+- production / default behavior は `attention_gate=none` のまま維持する。**research baseline の
+  昇格と default の変更は別の commit で行う**
 
 ## P1 — NOWのゲート通過後【実行順】
 
@@ -522,7 +604,9 @@ Limiteから特に重要なのは、**1Bモデルの個々の部品をコピー�
 
 HexaTrainでは、
 
-- 既存G1を4000まで延長し、必要ならLimite型`2 * sigmoid` / reduced gate channelsを比較
+- ~~既存G1を4000まで延長~~【完了】~~、Limite型`2 * sigmoid`~~【identity-init lane で否定済み】
+  - 残るのは **reduced-channel gate**（D64全部 vs 8 / 16 channel subset）で、
+    これは **G1 baseline → candidate** の比較として行う
 - packed QKVとhead split/concatのlayout最適化を品質非変更のspeed trackとして独立評価
 - learned residual scale / Horizon-Specific MTP-liteを低コストquality trackとして追加（ReLU²は終了）
 - XSAをzero-init learnable strengthで小さく導入
@@ -637,7 +721,10 @@ HexaTrainではこれをそのまま巨大RLへ拡張せず、
 
 → **milestone達成。以後はP1のparameter-matched shape search**
 
-現行の研究baselineは **V1024/T32/D64/FFN128/L19/H2 = 758,528 parameters**。
+この parameter-matched capacity 探索で identity を確立した時点の legacy control は
+**V1024/T32/D64/FFN128/L19/H2 = 758,528 parameters**。**現在の research baseline は
+この shape に `headwise_g1_sigmoid` gate を加えた 760,960 parameters である**
+（gate 分 +2,432 / +0.321%）。つまり、shape / capacity は legacy control の根拠のまま確立済みであり、baseline 昇格は shape 選定の結論を変えない。
 
 D64/FFN64 → D64/FFN128ではparametersが約25.8%増えた一方、256+256 held-outのBalanced改善は比較方法により約`0.0054〜0.0100 bpb`だった。改善は小さいが一貫しており、FFN64に多少のcapacity bottleneckがあった可能性はある。ただし次にFFN160/256へ直進する根拠は弱い。
 
@@ -886,20 +973,31 @@ Qwen3-NextでQK-Normのnorm weightが大きくなる問題への対策として�
 
 ## Gated Attention
 
-→ **P0**
+→ **完了 / G1 は current research baseline（2026-10-04）**
 
-現行HexaTrainにはすでに`headwise_g1_sigmoid`が実装され、HTP Forward/Backward、NPRTCKPTV5、resume、FORWARD_ONLY generationまで通っている。Candidate2000はcontrolに対しBalanced `-0.007113`で、早期500〜1000 stepでは約`-0.03`台のgainがあった。
+現行HexaTrainにはすでに`headwise_g1_sigmoid`が実装され、HTP Forward/Backward、NPRTCKPTV5、resume、FORWARD_ONLY generationまで通っている。Candidate2000はlegacy controlに対しBalanced `-0.007113`で、早期500〜1000 stepでは約`-0.03`台のgainがあった。
 
-現行:
+**2026-10-04 に `headwise_g1_sigmoid` を current research baseline へ昇格した**（判定 `PROMOTE_WITH_RUNTIME_FOLLOWUP`）。詳細は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`。
+
+現行（昇格済み）:
 
 `O' = O * sigmoid(LN1(X) W_g)`
 
-Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * sigmoid(...)`を使う。HexaTrainではまず現行G1を4000まで延長し、その後必要なら次を分離比較する。
+**この lane で今後行うこと:**
 
-- scale 1 vs 2
-- random init vs `Wg=0` identity init（scale 2なら初期gate=1）
-- input channels D64全部 vs 8 / 16 channel subset
+- HTP `graphExecute` overhead（現状 +9.95% median）の削減。**G1 の quality を変えない**ことが最優先。
+  独立laneとして扱う。詳細は NOW の「G1 HTP runtime optimization」
+- reduced-channel gate など gate variant の追加探索（`PROMOTE_G1_GATE_VARIANTS` の継続分）。
+  いずれも **`headwise_g1_sigmoid` を parent として**比較する
+- 既に否定済みの lane は開けない: identity init（`KEEP_CURRENT_G1`）、
+  fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`）
+
+Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * sigmoid(...)`を使う。HexaTrainではscale 1 vs 2 の分離比較を既に identity-init lane として実施済みで、`2 * sigmoid` は否定的（初期の sample-efficiency gain を失う）だった。残るのは:
+
+- input channels D64全部 vs 8 / 16 channel subset（reduced-channel gate。**未実装**）
 - gate trajectoryのsaturation / sparsity
+
+**これらは G1 baseline に対する candidate であり、G1 より上回らなければ採用しない。**
 
 追加演算が比較的小さいため、GDN/Sparse Attentionより先に扱う。
 
@@ -1659,7 +1757,10 @@ LR 0.0022 through step 4000
 
 - Muon: Wq / Wk / Wv / Wo / W1 / W2、19層で114 matrices、622,592 parameters
 - Aux Adam: embedding / output / norm等、135,936 parameters
-- total: 758,528 parameters
+- total: 758,528 parameters（**legacy control / ungated、`attention_gate=none`**）
+- **current research baseline は head-wise gate を足した 760,960 parameters**
+  （Muon 114 matrices / 622,592 は不変、追加 +2,432 は Aux Adam 側）。
+  gate を含む checkpoint は `NPRTCKPTV5`、ungated は `NPRTCKPTV4`。両形式とも保持する
 - checkpoint: NPRTCKPTV4、Adam V3とのcross-resumeは拒否
 - role / shape / fan-in / fan-outはparameter metadata SSOTから取得
 
@@ -3451,7 +3552,7 @@ Evaluation:
 
 NOWのactive queueとして、長いimplementation chainを必要としない項目を並行して閉じる。
 
-- G1は8000まで回収済み。次はcontrol / G1の高LR stress gridで安定領域とtime-to-bpbを比較
+- G1: stress grid（`PROMOTE_G1_GATE_VARIANTS`）→ identity-init（`KEEP_CURRENT_G1`、lane閉）→ fixed 0.5（`KEEP_CURRENT_G1_LEARNED_GATE`、replacement閉）→ **1.5x long-horizon 2000（`PROMOTE_G1_1P5X_4000STEP`）**。1.5x は 8000 step まで完了済みで、split-level の留保（step 1750 / 3000 の Dev 反転）だけが残っている。次は 4000 step 延長ではなく **seed 2 / 4 の multi-seed 3000 step replication（設計のみ確定、Tier 3 未承認）**。詳細は [g1-lr-stress.md](g1-lr-stress.md) / [g1-identity-init-500.md](g1-identity-init-500.md) / [g1-fixed-half-500.md](g1-fixed-half-500.md) / [g1-1p5x-long-2000.md](g1-1p5x-long-2000.md) / [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md)
 - Muon Split checkpoint-only診断 + deterministic 1-step replay
 - Cross-Layer Attention Reuse + 4-token pooled-index oracle
 - packed QKV / selector-scatter除去のquality-neutral microbenchmark
@@ -3532,7 +3633,17 @@ QNN HTP-native Newton–Schulzを再開する意味ではない。**HVX FP32上�
 
 MUDD-liteは上記の軽量residual/value候補が不十分な場合のみ追加する。
 
-最初は現行D64/F128/L19/H2を固定する。
+最初に固定するのは現行D64/F128/L19/H2（NPRTCKPTV5、`headwise_g1_sigmoid`）とする。
+
+**parent baseline の変更（2026-10-04）**: G1 が current research baseline に昇格したため、
+**これ以降の新しい architecture candidate は `G1 baseline → candidate` で比較する**
+（candidate が G1 を上回らなければ採用しない）。**既存の過去実験は再解釈しない。**
+
+ただし **legacy control（`attention_gate=none`）も引き続き有効な arm である**。G1 に
+対する独立 factor（gate 以外の要素のみを変える arm）を取る場合は
+`G1 baseline → candidate` を使い、G1 自体の effect を求めたい historical 比較の
+目的では legacy control を引き続き用いる。production / default behavior は
+`none` のままである点にも注意する。
 
 ## Phase 8 — Parameter-Matched Shape Search
 

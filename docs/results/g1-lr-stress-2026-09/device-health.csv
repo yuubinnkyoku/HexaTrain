@@ -1,0 +1,9 @@
+lr_multiplier,arm,qnn_return_code_success,hvx_rpc_failure_count,hvx_fallback_count,hvx_nonfinite_count,cpu_fallback,nan_detected,inf_detected,api_trace_graph_execute_failure_count,focus_takeover_count,thermal_status_before,thermal_status_after,battery_temperature_c_before,battery_temperature_c_after
+1.0,Control,true,0,0,0,false,false,false,0,0,0,0,29,30
+1.0,G1,true,0,0,0,false,false,false,0,0,0,0,30,31
+1.25,Control,true,0,0,0,false,false,false,0,0,0,0,29,31
+1.25,G1,true,0,0,0,false,false,false,0,0,0,0,30,31
+1.5,Control,true,0,0,0,false,false,false,0,0,0,0,29,31
+1.5,G1,true,0,0,0,false,false,false,0,0,0,0,29,30
+2.0,Control,true,0,0,0,false,false,false,0,0,0,0,31,31
+2.0,G1,true,0,0,0,false,false,false,0,0,0,0,29,30

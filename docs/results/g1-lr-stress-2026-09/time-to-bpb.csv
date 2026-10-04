@@ -1,0 +1,6 @@
+target_bpb,control_best_lr,control_step,control_checkpoint_training_wall_s,control_estimated_original_bytes_to_target,g1_best_lr,g1_step,g1_checkpoint_training_wall_s,g1_estimated_original_bytes_to_target,delta_step,delta_checkpoint_training_wall_s,delta_estimated_bytes
+3.10,1.5,300,NOT_MEASURED,205922.1,2.0,300,NOT_MEASURED,205922.1,0,CENSORED,0.0
+3.00,2.0,400,NOT_MEASURED,274562.8,1.5,400,NOT_MEASURED,274562.8,0,CENSORED,0.0
+2.95,2.0,400,NOT_MEASURED,274562.8,1.5,400,NOT_MEASURED,274562.8,0,CENSORED,0.0
+2.90,1.25,500,776.249,343203.5,1.5,400,NOT_MEASURED,274562.8,-100,CENSORED,-68640.7
+2.85,NOT_REACHED,>500,NOT_REACHED,NOT_REACHED,NOT_REACHED,>500,NOT_REACHED,NOT_REACHED,CENSORED,CENSORED,CENSORED

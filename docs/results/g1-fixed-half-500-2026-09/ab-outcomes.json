@@ -1,0 +1,14 @@
+[
+  {
+    "arm": "Current",
+    "status": "COMPLETED",
+    "dir": "build\\g1-fixed-half-500-2026-09\\current",
+    "result_dir": "docs\\results\\g1-fixed-half-500-2026-09\\current"
+  },
+  {
+    "arm": "FixedHalf",
+    "status": "COMPLETED",
+    "dir": "build\\g1-fixed-half-500-2026-09\\fixedhalf",
+    "result_dir": "docs\\results\\g1-fixed-half-500-2026-09\\fixedhalf"
+  }
+]
