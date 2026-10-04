@@ -313,33 +313,44 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - **G1 baseline promotion / systems cost 判定（2026-10-04、既存 artifact のみ・training 追加なし）**: seed 2 / 3 / 4 の paired Control vs G1 から architecture / runtime / time-to-bpb を抽出。**parameter overhead +0.321%**（+2,432、Muon は不変で Aux Adam 側のみ）、memory・checkpoint overhead は実用上無視可能。**wall/update は native per-update で median −4.76%**（seed 2 −7.49% / seed 4 −4.76% で G1 が速い、seed 3 のみ +10.23%）。**time-to-bpb は Control 全 7 checkpoint を target として median +4.76%、G1 勝ち 17/21**。一方 **HTP execute / mean QNN execute は +9.95%（median）で明確**、HVX Muon は +2.10%、parameter transfer は +20.07%。seed 3 は run-wide 条件差で絶対値が外れ値（Control 単独で seed 2 の 3.64 倍）だが **arm 間 ratio は健全**なので paired 比較には採用し、cross-seed 絶対値比較は行わない。host 事故（session interruption / eval recovery / detached launcher / stale lock / undrained pipe / PS5.1 / arm 4 annotation）は **architecture cost ではなく**、run-total wall は `HOST_ORCHESTRATION_CONTAMINATED` として比較に使わず device-side per-update のみを使用。**判定 = `PROMOTE_WITH_RUNTIME_FOLLOWUP`**（`headwise_g1_sigmoid` を **current research baseline** として採用し、HTP execute と parameter transfer の runtime optimization lane を別laneとして残す。production / default behavior は変更しない）。seed 3 の絶対 runtime は **`CROSS_SEED_ABSOLUTE_RUNTIME_NOT_COMPARABLE`** として扱い、paired Control/G1 ratio のみ利用し、原因を DVFS 等に断定しない。`+399 nodes / +476 tensors` 等は **resource estimator / structural count** であり、RSS・ORT・physical checkpoint file-size delta の**実測ではない**（いずれも `NOT_MEASURED`）。詳細は [g1-1p5x-baseline-promotion-cost.md](g1-1p5x-baseline-promotion-cost.md)、昇格記録は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`
    - reduced-channel gate は未実装（本 task 対象外）
 
-3. **G1 HTP runtime optimization【別 lane / 2026-10-04 開設】**
+3. **G1 HTP runtime optimization【別 lane / 2026-10-04 開設 → `NO_SAFE_GAIN` で終了】**
    - **G1 の再検証 lane ではない。** 主目的 = **G1 の quality を変えず**に HTP `graphExecute`
      overhead（現状 median **+9.95%**、paired Control/G1 ratio）を削減すること。
-   - 現状の構造的分岐（`transformer_resource_estimator.h` と
+   - **結果（2026-10-04、実機測定）: `NO_SAFE_GAIN`。** 実装した変更は revert 済みで、
+     repository にソース変更は残っていない。旧 G1 baseline を維持する。
+     完全な記録: [g1-htp-runtime-optimization.md](g1-htp-runtime-optimization.md)
+   - 構造的分岐（`transformer_resource_estimator.h` と
      `app/src/main/cpp/qnn/qnn_runtime_transformer_training_generalized.inc` からの分類）:
      - forward は layer あたり `2 + 2*H = 6` nodes（gate projection MatMul / `QNN_OP_SIGMOID` /
-       per-head select MatMul + broadcast multiply）。`H2` なので後者 4 node と小さいが、
-       `H` に比例して増える
+       per-head select MatMul + broadcast multiply）
      - backward は layer あたり `5*H + 5 = 15` nodes（per-head `dAh` / `dGh` product /
        reduce / scatter の各 `H` 個 + `1-G` / `G(1-G)` / `dZ` / `dWg` / `dN_gate` /
        **`dLN1 = dLN1_qkv + dN_gate` の accumulation**）
      - tensors は layer あたり `9 + 8*H = 25` + `attention_gates` の global `APP_READ` slot 1
-     - 合計 **+399 nodes / +476 tensors**（estimator の構造数。実測ではない）
-   - 候補（今回は**実装しない**。分類と設計のみ）:
-     - gate projection / sigmoid / broadcast multiply の fusion
+     - 合計 **+399 nodes / +476 tensors**。このうち **304（76%）は G1 の数学的定義上必須**、
+       **95（24%）が純 layout**（per-head select MatMul `2H` / `dG` scatter MatMul `2H` /
+       `dG` add chain `H-1`）であり、**後者のみが optimization の合法な標的**
+   - **試行した案**: per-head select/scatter MatMul と `dG` add chain を QNN `Split` / `Concat`
+     の各 1 node に置換。**nodes +399 → +342、tensors +476 → +382**。
+     **bitwise parity は完全一致**（parameter hash、loss 曲線、checkpoint bytes、決定性、
+     `qnn_failures=0`、`all_steps_finite`）。
+     **しかし速くなかった。** 実機 5×400 update の paired ratio で
+     baseline median **+9.06%**（既存記録 +9.95% と整合）→ Split/Concat 版 median **+10.11%**。
+     目標の +5% 以下には到達せず。
+   - **原因**: `Split` は 1 入力から H 個の出力 slice を materialize するため
+     **移動バイト数は変わらず、node 数だけ減る**。HTP の実行コストは node 数ではなく
+     tensor traffic とグラフ構造に支配される。残る 76% は数学的に必須。
+     → **node/tensor count は HTP runtime の proxy にならない。**
+   - **残る支配的ボトルネック（G1 非固有）**: per-update で
+     `gradient_accumulation` 69–83 ms、`optimizer_update_wall` 88–94 ms に対し
+     HTP fwd+bwd は 26–29 ms。**throughput 改善は optimizer / gradient 側が正しい対象**で、
+     Control と G1 に等しく効く。
+   - 未実施の候補（次回以降）:
      - `1-G` / `G(1-G)` などの unnecessary intermediate tensor の削減
-     - per-head select/scatter MatMul を減らし `[T,H]` 型の broadcast へ寄せる
      - backward chain の fusion、LN1 gradient accumulation との統合
-     - parameter transfer overhead（実測 median **+20.07%** — HTP graph よりここが大きい）
-     - static な small-shape `[64,2]` gate の扱い
-     - graph construction overhead
-   - **成功条件（最低）**: G1 の mathematical definition 不変 / checkpoint compatibility 維持 /
-     parameter hash・deterministic parity / 既存 quality evidence を無効化しない /
-     HTP execute overhead 削減 / fallback なし / finite / 6031 の新 signal なし
-   - **目標（研究目標であり promotion の gate ではない）**: 現状の **+10% から +5% 以下**、
-     可能なら **+3% 以下**。この数値は目標であり、**今回の昇格を阻止する条件ではない**
-   - 正本: [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
+     - parameter transfer overhead（実測 median **+20.07%** — 比率では大きいが絶対値は ~0.1 ms/update）
+   - 正本: [g1-htp-runtime-optimization.md](g1-htp-runtime-optimization.md) /
+     [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
      `### Remaining runtime follow-up`
 
 4. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
@@ -351,10 +362,17 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
    - pooling前後でattention mass recall / context cosine / relative L2を測り、coarse index化が成立するかを見る
    - これはGLM-5.3-Flash IndexPool / DeepSeek-V4.1 CSA2の完全再現ではなく、**新規QNN graphを作る前の分解診断**として扱う
 
-5. **品質非変更のlayout microbenchmark**
+5. **品質非変更のlayout microbenchmark【G1 Split/Concat で実測済み / neutral】**
    - optimizer/checkpoint上のWq/Wk/Wv identityは維持したまま、QNN実行用packed QKV cacheを作る
    - H2 selector/scatter MatMulとreshape / slice / concatをV81で比較する
    - node数ではなくexecute latency、APP tensor traffic、pack/update costを含む実wall timeで判定する
+   - **結果**: selector/scatter MatMul → `Split`/`Concat` は nodes/tensors を実際に削減
+     （+399→+342 / +476→+382）し、bitwise parity も保ったが、HTP execute latency は
+     **neutral〜やや悪化**（paired ratio median +9.06% → +10.11%）。
+     `Split` は出力 slice を materialize するので総移動バイト数が変わらないため。
+     詳細は [g1-htp-runtime-optimization.md](g1-htp-runtime-optimization.md)
+   - packed QKV cache 側は未実施。**node 数で判断せず latency で判断する**という
+     判断基準のみを次へ持ち越す
 
 ### P0共通基盤 — Training Stability Stress Harness
 

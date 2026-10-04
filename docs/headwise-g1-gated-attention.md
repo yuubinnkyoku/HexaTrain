@@ -315,6 +315,32 @@ This is a separate optimization lane, **not** a G1 re-verification lane. Its
 primary goal is to reduce the HTP `graphExecute` overhead of ≈ +10% **without
 changing G1 quality**.
 
+**Outcome (device-measured): `NO_SAFE_GAIN`.** An optimization pass was executed
+against this target and the full record is
+[g1-htp-runtime-optimization.md](g1-htp-runtime-optimization.md). Summary:
+
+- The per-head gate `select` / `dG` `scatter` MatMuls and the `dG` add chain —
+  **95 of the 399 added nodes (24%)** — were replaced by single QNN `Split` and
+  `Concat` nodes. That is a pure layout change: **QNN nodes 2404 → 2746 became
+  2404 → 2704** (`+399` → `+342`) and **tensors +476 → +382**.
+- The result was **bitwise identical** to the baseline (parameter hash, loss
+  curve, checkpoint bytes, determinism, `qnn_failures=0`, `all_steps_finite`).
+- It was **not faster.** Measured G1-vs-Control paired HTP execute overhead over
+  5 × 400-update repetitions on the device: baseline median **+9.06%**
+  (range +5.3…+10.6%, consistent with the recorded +9.95%), Split/Concat median
+  **+10.11%**. The target of ≤ +5% was not reached.
+- Reason: `Split` still materializes `H` output tensors from one input, so the
+  **total bytes moved are unchanged — only the node count drops.** HTP execute
+  cost tracks tensor traffic and graph structure, not node count. The remaining
+  76% of the added nodes are mathematically required by G1, so they cannot be
+  removed without changing G1's definition.
+- The change was therefore **reverted**. No source change remains on this branch.
+
+The remaining material bottleneck is **not** G1-specific: per update,
+`gradient_accumulation` is 69–83 ms and `optimizer_update_wall` 88–94 ms,
+versus 26–29 ms for HTP forward+backward. Any future throughput work should
+target the optimizer/gradient path, which affects Control and G1 equally.
+
 Where the `+399` nodes and `+476` tensors originate (classification from
 `transformer_resource_estimator.h` and the graph builder in
 `app/src/main/cpp/qnn/qnn_runtime_transformer_training_generalized.inc`; L19/H2):
@@ -345,17 +371,25 @@ Backward, per layer `5*H + 5 = 15` nodes (`+285` total):
 Tensors, per layer `9 + 8*H = 25` (`+475`) plus 1 extra global `APP_READ` slot
 for the `attention_gates` output (`+1`), i.e. `25 × 19 + 1 = +476`.
 
-Candidate directions (not implemented in this pass):
+Of the 399 nodes, **304 (76%) are mathematically required** by G1's definition
+(gate projection, sigmoid, the per-head multiply/product/reduce chain, and the
+`dG → dW / dN / dLN1` chain). Only **95 (24%)** is pure layout: the `2*H` gate
+select MatMuls, the `2*H` `dG` scatter MatMuls, and the `H-1` `dG` add chain.
+Those 95 were the only admissible optimization target, and they were measured to
+be neutral on HTP (see above).
 
-- fuse the gate projection / sigmoid / broadcast multiply chain
+Candidate directions not reached by that pass:
+
+- fuse the gate projection / sigmoid / broadcast multiply chain — blocked: these
+  are the mathematically required nodes
 - remove unnecessary intermediate tensors (`1-G`, `G(1-G)` are elementwise and
-  may be foldable into consumers)
-- reduce per-head select/scatter MatMuls by keeping the gate broadcast in
-  `[T,H]` form instead of the `[T,1]` per-head form
-- fuse the backward chain and fold the LN1 gradient accumulation
-- reduce parameter transfer overhead (measured +20.07% median)
-- reconsider the treatment of the static `[64,2]` small-shape gate
-- graph construction overhead
+  may be foldable into consumers) — **not tried; worth a follow-up pass**
+- fuse the backward chain and fold the LN1 gradient accumulation — **not tried**
+- reduce parameter transfer overhead (measured +20.07% median) — G1-specific but
+  only ~0.1 ms/update in absolute terms
+- graph construction overhead — one-time, not per-update
+- **optimizer / gradient accumulation path** — the largest remaining per-update
+  cost, but not G1-specific (see above)
 
 Success conditions for a future optimization pass (research targets, **not**
 gates on this promotion):
@@ -368,3 +402,6 @@ gates on this promotion):
   signal
 - target: reduce the current ≈ +10% HTP execute overhead to **≤ +5%**, and if
   possible **≤ +3%**
+- measurement must separate **node/tensor counts** (which a layout change does
+  reduce) from **device execute time** (which it did not); only the latter is
+  the objective
