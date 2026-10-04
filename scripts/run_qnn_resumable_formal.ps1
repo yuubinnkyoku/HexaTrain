@@ -1182,8 +1182,19 @@ try {
                     Start-Sleep -Seconds 10
                     $online = @((& $adb devices 2>$null) | Where-Object { $_ -match '^(\S+)\s+device$' } |
                         ForEach-Object { ($_ -split '\s+')[0] })
-                    $packagePresent = (& $adb shell pm list packages $package 2>$null) -match [regex]::Escape($package)
-                    $deviceContext = (& $adb shell run-as $package cat files/phonelm-formal-run-context.txt 2>$null) -join "`n"
+                    # Endpoint-scoped like every other device-facing call: an
+                    # unscoped `adb shell` resolves by transport count, so a
+                    # second (even offline) transport silently breaks both
+                    # reads below and would be misread as "device gone".
+                    $probeEndpoint = if ($online.Count -gt 0) { $online[0] } else { '' }
+                    $probeArgs = @('shell', 'pm', 'list', 'packages', $package)
+                    $contextArgs = @('shell', 'run-as', $package, 'cat', 'files/phonelm-formal-run-context.txt')
+                    if ($probeEndpoint) {
+                        $probeArgs = @('-s', $probeEndpoint) + $probeArgs
+                        $contextArgs = @('-s', $probeEndpoint) + $contextArgs
+                    }
+                    $packagePresent = (& $adb @probeArgs 2>$null) -match [regex]::Escape($package)
+                    $deviceContext = (& $adb @contextArgs 2>$null) -join "`n"
                     $decision = Resolve-ReattachDecision -OnlineCount $online.Count `
                         -PackagePresent ([bool]$packagePresent) -DeviceContextContent $deviceContext `
                         -ExpectedRunId $runIdEffective -ExpectedConfigHash $configHash

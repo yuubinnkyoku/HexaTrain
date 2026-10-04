@@ -1,0 +1,13 @@
+{
+  "mean_delta_balanced": -0.030317809642857036,
+  "normalized_area_delta_balanced": -0.030776909541666602,
+  "eval_steps": [
+    500,
+    750,
+    1000,
+    1250,
+    1500,
+    1750,
+    2000
+  ]
+}

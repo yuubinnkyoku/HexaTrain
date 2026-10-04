@@ -1,0 +1,6 @@
+target_bpb,current_first_step,fixed_first_step,delta_step,current_estimated_original_bytes_to_target,fixed_estimated_original_bytes_to_target,current_checkpoint_training_wall_s,fixed_checkpoint_training_wall_s
+3.10,300,300,0,205922.1,205922.1,NOT_MEASURED,NOT_MEASURED
+3.00,400,400,0,274562.8,274562.8,NOT_MEASURED,NOT_MEASURED
+2.95,400,400,0,274562.8,274562.8,NOT_MEASURED,NOT_MEASURED
+2.90,400,500,100,274562.8,343203.5,NOT_MEASURED,NOT_MEASURED
+2.85,>500,>500,CENSORED,NOT_REACHED,NOT_REACHED,NOT_REACHED,NOT_REACHED

@@ -1,0 +1,9 @@
+lr_multiplier,arm,status,stability,hard_flags,soft_flags,completed_steps
+1.0,Control,SUCCESS,STABLE,,,500
+1.0,G1,SUCCESS,STABLE,,,500
+1.25,Control,SUCCESS,STABLE,,,500
+1.25,G1,SUCCESS,STABLE,,,500
+1.5,Control,SUCCESS,STABLE,,,500
+1.5,G1,SUCCESS,STABLE,,,500
+2.0,Control,SUCCESS,STABLE,,,500
+2.0,G1,SUCCESS,STABLE,,,500

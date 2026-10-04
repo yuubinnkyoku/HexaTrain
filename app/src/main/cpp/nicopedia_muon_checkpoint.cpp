@@ -41,8 +41,7 @@ bool validConfig(const tiny_lm::Config& config) {
   if (!tiny_lm::checkedParameterElementCount(
           {config.vocabularySize, config.dimension,
            config.feedForwardDimension, config.numLayers, config.numHeads,
-           config.attentionGate ==
-               tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID},
+           tiny_lm::hasHeadwiseG1Gate(config.attentionGate)},
           &total) ||
       total > kMaxParameterElements)
     return false;
@@ -275,7 +274,7 @@ std::vector<RegistryEntry> expectedRegistry(const tiny_lm::Config& config) {
   const auto metadata = tiny_lm::parameterMetadata(
       {config.vocabularySize, config.dimension, config.feedForwardDimension,
        config.numLayers, config.numHeads,
-       config.attentionGate == tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID});
+       tiny_lm::hasHeadwiseG1Gate(config.attentionGate)});
   registry.reserve(metadata.size());
   for (const auto& source : metadata) {
     ParameterRole role;
@@ -376,8 +375,8 @@ bool encodeCheckpoint(const Checkpoint& checkpoint,
   if (!validateCheckpoint(checkpoint, error)) return false;
 
   std::vector<std::uint8_t> encoded;
-  const bool gated = checkpoint.identity.config.attentionGate ==
-      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+  const bool gated = tiny_lm::hasAttentionGateIdentity(
+      checkpoint.identity.config.attentionGate);
   const char* magic = gated ? kGatedMagic : kMagic;
   encoded.insert(encoded.end(), magic, magic + kMagicBytes);
   const auto& identity = checkpoint.identity;
@@ -463,9 +462,13 @@ bool decodeCheckpoint(const std::vector<std::uint8_t>& bytes,
     if (gated) {
       const auto gate = reader.u32();
       if (gate != static_cast<std::uint32_t>(
-                      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID))
+                      tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID) &&
+          gate != static_cast<std::uint32_t>(
+                      tiny_lm::AttentionGate::HEADWISE_G1_SCALE2_IDENTITY) &&
+          gate != static_cast<std::uint32_t>(
+                      tiny_lm::AttentionGate::FIXED_HALF))
         throw std::runtime_error("NPRT_CKPT_V5_ATTENTION_GATE");
-      config.attentionGate = tiny_lm::AttentionGate::HEADWISE_G1_SIGMOID;
+      config.attentionGate = static_cast<tiny_lm::AttentionGate>(gate);
     }
     // Do not derive a registry (or reserve parameter/state storage) until all
     // serialized dimensions have passed the same allocation policy as the

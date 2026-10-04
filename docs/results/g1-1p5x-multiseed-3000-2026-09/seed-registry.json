@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "protocol": "docs/g1-1p5x-multiseed-3000.md",
+  "preregistered_seeds": [
+    2,
+    4
+  ],
+  "allow_exploratory_seed": true,
+  "exploratory_seeds": [
+    3
+  ],
+  "seeds": [
+    {
+      "seed": 2,
+      "role": "preregistered"
+    },
+    {
+      "seed": 3,
+      "role": "exploratory"
+    },
+    {
+      "seed": 4,
+      "role": "preregistered"
+    }
+  ]
+}

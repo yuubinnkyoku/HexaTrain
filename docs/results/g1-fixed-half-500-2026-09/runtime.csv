@@ -1,0 +1,3 @@
+arm,training_wall_s,training_step_ms,fwd_backward_ms_per_update,muon_ms_per_update,aux_adam_ms_per_update,completed_steps,status
+current,185.5469542,371.0939084,29.13147052,89.12739537,0.777197494,500,SUCCESS
+fixedhalf,179.6841943,359.3683885,27.13042561,87.18580037,0.757610762,500,SUCCESS

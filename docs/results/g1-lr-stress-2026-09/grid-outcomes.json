@@ -1,0 +1,44 @@
+[
+  {
+    "arm": "Control",
+    "multiplier": "1.0",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.0\\control"
+  },
+  {
+    "arm": "G1",
+    "multiplier": "1.0",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.0\\g1"
+  },
+  {
+    "arm": "G1",
+    "multiplier": "1.25",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.25\\g1"
+  },
+  {
+    "arm": "Control",
+    "multiplier": "1.25",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.25\\control"
+  },
+  {
+    "arm": "Control",
+    "multiplier": "1.5",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.5\\control"
+  },
+  {
+    "arm": "G1",
+    "multiplier": "1.5",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr1.5\\g1"
+  },
+  {
+    "arm": "G1",
+    "multiplier": "2.0",
+    "status": "REUSED",
+    "dir": "build\\g1-lr-stress\\lr2.0\\g1"
+  }
+]

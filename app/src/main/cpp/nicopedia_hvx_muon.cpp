@@ -2,10 +2,13 @@
 // Copyright 2026 yuubinnkyoku
 #include "nicopedia_hvx_muon.h"
 
+#include "qnn/incident_trace.h"
+
 #include "nicopedia_htp_muon.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -99,8 +102,15 @@ class Session {
       reset();
       return false;
     }
+    // Incident tracing only: the unsigned-PD control call is recorded because
+    // it is the only place the FastRPC domain is switched before the session
+    // opens, and domain/session state is one of the incident hypotheses.
+    incident_trace::fastRpcSessionEvent("hvx_domain_control", "unsigned_module",
+                                        0, "hvx_muon_session");
     const std::string uri = std::string(hexatrain_hvx_probe_URI) + "&_dom=cdsp";
     int status = hexatrain_hvx_probe_open(uri.c_str(), &handle_);
+    incident_trace::fastRpcSessionEvent("hvx_session_open", "open", status,
+                                        "hvx_muon_session");
     if (status) {
       *error = "HVX_RPC_OPEN_FAILED:" + std::to_string(status);
       reset();
@@ -108,11 +118,15 @@ class Session {
     }
     int configure[4] = {};
     status = hexatrain_hvx_probe_configure(handle_, 1, configure, 4);
+    incident_trace::fastRpcSessionEvent("hvx_session_configure", "configure",
+                                        status, "hvx_muon_session");
     if (status || configure[1] < 8 || configure[2] != 1) {
       *error = "HVX_PERFORMANCE_CONFIGURATION_FAILED:" + std::to_string(status);
       reset();
       return false;
     }
+    incident_trace::fastRpcSessionEvent("hvx_session_ready", "ready",
+                                        configure[1], "hvx_muon_session");
     initialized_ = true;
     return true;
   }
@@ -128,6 +142,10 @@ class Session {
 };
 
 Session& session() { static Session value; return value; }
+
+// Incident tracing only: a local, non-secret invocation counter so the host
+// analyzer can pair hvx_rpc_begin/hvx_rpc_end with the surrounding steps.
+std::atomic<int> gHvxRpcInvocation{0};
 #endif
 
 template <std::size_t N> double median(std::array<double, N> values) {
@@ -214,6 +232,11 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   Session& rpc = session();
   auto phase = Clock::now();
   std::lock_guard<std::mutex> lock(rpc.mutex);
+  // Incident tracing only: the persistent FastRPC session mutex is held across
+  // the whole pack + RPC + unpack window, so how long a caller waits for it is
+  // part of the DSP-domain timeline.
+  incident_trace::fastRpcEvent("hvx_lock_acquired", 0, 0, "mutex",
+                               0, "hvx_muon_session");
   result.timings.mutexWaitUs = elapsedUs(phase);
   phase = Clock::now();
   if (!rpc.initialize(&result.update.error)) {
@@ -281,11 +304,28 @@ Result update(const qnn::TinyTransformerParameters& parameters,
   result.timings.inputValidationUs = elapsedUs(phase);
 
   phase = Clock::now();
+  const int rpcInvocation = ++gHvxRpcInvocation;
+  incident_trace::fastRpcEvent("hvx_rpc_begin",
+                               static_cast<int>(config.optimizerStep),
+                               rpcInvocation, "run", -1, "hvx_muon_session");
   result.rpcStatus = hexatrain_hvx_probe_run(
       rpc.handle_, 5, 8, 0, 0, rpc.input_, static_cast<int>(kInputFloats),
       rpc.hyper_, static_cast<int>(kHyperFloats), rpc.output_,
       static_cast<int>(kOutputFloats), rpc.metadata_,
       static_cast<int>(kMetadataInts));
+  // The DSP-side kernel status is recorded alongside the transport status so a
+  // successful transport with a DSP-side error is distinguishable from a
+  // transport failure.
+  incident_trace::fastRpcEvent("hvx_rpc_end",
+                               static_cast<int>(config.optimizerStep),
+                               rpcInvocation, "run", result.rpcStatus,
+                               "hvx_muon_session");
+  incident_trace::note("event=hvx_kernel_metadata step=" +
+                       std::to_string(static_cast<int>(config.optimizerStep)) +
+                       " kernel=" + std::to_string(rpc.metadata_[4]) +
+                       " ns_steps=" + std::to_string(rpc.metadata_[7]) +
+                       " dims=" + std::to_string(rpc.metadata_[10]) + "x" +
+                       std::to_string(rpc.metadata_[11]));
   result.timings.rpcUs = elapsedUs(phase);
   result.timings.kernelUs = rpc.metadata_[3];
   if (result.rpcStatus || rpc.metadata_[0] != 0x48565831 ||
