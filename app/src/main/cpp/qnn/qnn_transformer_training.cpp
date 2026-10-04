@@ -7323,6 +7323,7 @@ std::string nicopediaMuonHybridTraining(
          oneHotTargetUs = 0.0, outerFiniteTrainingOutputsUs = 0.0,
          gradientRegistryValidationUs = 0.0, checkpointIoUs = 0.0;
   double hvxRpcUs = 0.0, hvxKernelUs = 0.0, hvxPackUs = 0.0, hvxUnpackUs = 0.0;
+  nicopedia_hvx_muon::Timings hvxPhaseTotals;
   std::uint64_t qnnExecuteCount = 0;
   std::uint64_t hvxRpcFailureCount = 0, hvxFallbackCount = 0, hvxNonFiniteCount = 0;
   std::vector<double> stepWallSamplesUs;
@@ -7468,6 +7469,23 @@ std::string nicopediaMuonHybridTraining(
       hvxKernelUs += hvxUpdate.timings.kernelUs;
       hvxPackUs += hvxUpdate.timings.packUs;
       hvxUnpackUs += hvxUpdate.timings.unpackApplyUs;
+      // Reuse the backend's existing timers: these are nested optimizer
+      // diagnostics, never extra terms in the exclusive step accounting.
+      using HvxTimings = nicopedia_hvx_muon::Timings;
+      for (auto field : {&HvxTimings::mutexWaitUs, &HvxTimings::sessionSetupUs,
+                         &HvxTimings::inputValidationUs,
+                         &HvxTimings::outputValidationUs,
+                         &HvxTimings::packRegistryTraversalUs,
+                         &HvxTimings::packFlatRpcCopyUs,
+                         &HvxTimings::unpackCandidateGenerationUs,
+                         &HvxTimings::unpackRpcOutputDecodeUs,
+                         &HvxTimings::unpackAuxAdamUs,
+                         &HvxTimings::auxRegistryConstructionUs,
+                         &HvxTimings::auxRegistryValidationUs,
+                         &HvxTimings::auxPreUpdateFiniteValidationUs,
+                         &HvxTimings::auxArithmeticUs,
+                         &HvxTimings::auxPostUpdateFiniteValidationUs})
+        hvxPhaseTotals.*field += hvxUpdate.timings.*field;
       // Prefer the explicit backend error (including NOT_BUILT / pack /
       // nonfinite) before classifying a bare RPC status.
       if (!hvxUpdate.update.error.empty()) {
@@ -7615,6 +7633,16 @@ std::string nicopediaMuonHybridTraining(
       checkpointIoUs;
   const double unclassifiedHostUs = std::max(
       0.0, seconds * 1000000.0 - explicitlyMeasuredExclusiveUs);
+  // Count original target bytes outside the timed loop. This uses the same
+  // canonical selections and excludes context/padding and pre-resume work.
+  std::uint64_t runTargetUtf8BytesSeen = 0;
+  for (std::size_t selection = std::size_t(resumeStep) * 8;
+       selection < std::size_t(lastStep) * 8; ++selection) {
+    const auto& record = cache.records[order[selection]];
+    for (uint32_t row = 1; row <= config.tokens; ++row)
+      runTargetUtf8BytesSeen += bpeModel
+          ? bpeModel->tokenByteLength(record.window[row]) : 1u;
+  }
   tiny_lm::ParameterDimensions reportDimensions{
       static_cast<std::uint64_t>(config.vocabularySize),
       static_cast<std::uint64_t>(config.dimension),
@@ -7691,10 +7719,29 @@ std::string nicopediaMuonHybridTraining(
          << "\nmuon_rpc_us=" << hvxRpcUs
          << "\nmuon_kernel_us=" << hvxKernelUs
          << "\nmuon_unpack_us=" << hvxUnpackUs
+         << "\nhvx_mutex_wait_us=" << hvxPhaseTotals.mutexWaitUs
+         << "\nhvx_session_setup_us=" << hvxPhaseTotals.sessionSetupUs
+         << "\nhvx_input_validation_us=" << hvxPhaseTotals.inputValidationUs
+         << "\nhvx_output_validation_us=" << hvxPhaseTotals.outputValidationUs
+         << "\nhvx_pack_registry_us=" << hvxPhaseTotals.packRegistryTraversalUs
+         << "\nhvx_pack_flat_rpc_copy_us=" << hvxPhaseTotals.packFlatRpcCopyUs
+         << "\nhvx_unpack_candidate_generation_us=" << hvxPhaseTotals.unpackCandidateGenerationUs
+         << "\nhvx_unpack_decode_us=" << hvxPhaseTotals.unpackRpcOutputDecodeUs
+         << "\nhvx_aux_adam_wall_us=" << hvxPhaseTotals.unpackAuxAdamUs
+         << "\nhvx_aux_registry_construction_us=" << hvxPhaseTotals.auxRegistryConstructionUs
+         << "\nhvx_aux_registry_validation_us=" << hvxPhaseTotals.auxRegistryValidationUs
+         << "\nhvx_aux_pre_finite_validation_us=" << hvxPhaseTotals.auxPreUpdateFiniteValidationUs
+         << "\nhvx_aux_arithmetic_us=" << hvxPhaseTotals.auxArithmeticUs
+         << "\nhvx_aux_post_finite_validation_us=" << hvxPhaseTotals.auxPostUpdateFiniteValidationUs
          << "\naux_adam_us=" << auxUs
          << "\noptimizer_result_move_us=" << optimizerResultMoveUs
          << "\ncheckpoint_io_us=" << checkpointIoUs
          << "\nunclassified_host_us=" << unclassifiedHostUs
+         << "\nmeasured_exclusive_step_us=" << explicitlyMeasuredExclusiveUs
+         << "\nunclassified_host_signed_us="
+         << seconds * 1000000.0 - explicitlyMeasuredExclusiveUs
+         << "\ntiming_accounting_ok="
+         << (explicitlyMeasuredExclusiveUs <= seconds * 1000000.0 ? "true" : "false")
          << "\ntotal_step_wall_us=" << seconds * 1000000.0
          << "\nstep_wall_mean_us="
          << (stepWallSamplesUs.empty() ? 0.0
@@ -7719,6 +7766,11 @@ std::string nicopediaMuonHybridTraining(
           << "\ntotal_update_ms=" << seconds * 1000.0
           << "\ntraining_total_seconds=" << seconds
           << "\ntraining_step_ms=" << (completed ? seconds * 1000.0 / completed : 0.0)
+          << "\nupdates_per_second=" << (seconds > 0.0 ? completed / seconds : 0.0)
+          << "\nrun_target_utf8_bytes_seen=" << runTargetUtf8BytesSeen
+          << "\noriginal_utf8_bytes_per_second="
+          << (seconds > 0.0 ? runTargetUtf8BytesSeen / seconds : 0.0)
+          << "\nthroughput_byte_semantics=original_utf8_bytes_of_training_targets_excluding_context_and_pre_resume"
           << "\nfwd_backward_ms_per_update="
           << (completed ? fwdBwdUs / 1000.0 / completed : 0.0)
           << "\nmuon_ms_per_update="

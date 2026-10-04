@@ -244,6 +244,13 @@ Invoke-PhoneLmHostCppRun -Label "Nicopedia HTP Muon pack host test" -Executable 
 Write-Host "nicopedia_htp_muon_pack_host_test=PASS"
 
 # Muon optimizer correctness retained in contract suite (not diagnostic by name).
+# DSP finite classification is a safety contract independent of Muon math.
+$Fp32FiniteExecutable = Join-Path $OutputDirectory "fp32_finite_test.exe"
+Invoke-PhoneLmHostCppCompile -Label "DSP FP32 finite classification" `
+    -Output $Fp32FiniteExecutable `
+    -Sources @(Join-Path $Root "host_tests\fp32_finite_test.cpp")
+Invoke-PhoneLmHostCppRun -Label "DSP FP32 finite classification" -Executable $Fp32FiniteExecutable
+
 $NicopediaMuonNsStageExecutable = Join-Path $OutputDirectory "nicopedia_muon_ns_stage_test.exe"
 Invoke-PhoneLmHostCppCompile -Label "Nicopedia Muon NS stage host test" `
     -Output $NicopediaMuonNsStageExecutable `
