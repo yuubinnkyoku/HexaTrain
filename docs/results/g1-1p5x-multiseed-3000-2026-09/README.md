@@ -3,6 +3,12 @@
 事前登録 protocol: [../../g1-1p5x-multiseed-3000.md](../../g1-1p5x-multiseed-3000.md)
 （Protocol / R1–R5 / Decision rule は同文書が正本）。
 
+**この tree は quality evidence である。baseline 昇格そのものは
+[../../headwise-g1-gated-attention.md](../../headwise-g1-gated-attention.md) の
+`## Baseline promotion`（判定 `PROMOTE_WITH_RUNTIME_FOLLOWUP`）が正本で、
+systems cost は [../../g1-1p5x-baseline-promotion-cost.md](../../g1-1p5x-baseline-promotion-cost.md)。
+本 tree の preregistered decision は昇格によって書き換えられていない。**
+
 ## この tree の中身
 
 一次 evidence（device 側 native run が所有する report）:

@@ -1,5 +1,21 @@
 # G1 1.5x multi-seed replication（3000 step / seed 2・4）— 実験設計
 
+## この lane と baseline promotion の関係
+
+本 lane は **quality の evidence lane** であり、**単独では baseline 昇格を判定しない**。
+
+| 段階 | 内容 | 出力 |
+|---|---|---|
+| preregistered seed 2 / 4 | 事前登録された quality 判定 | `decision: ambiguous_tie_breaker`（**変更しない**） |
+| exploratory seed 3 | `ambiguous_tie_breaker` の tie-breaker。主判定には入らない | `R1 pass 2/2 / R2 not_reproduced 0/5` |
+| combined interpretation | seed 1 reference + 2/4 preregistered + 3 exploratory | 初期 Val/Dev 同時改善は 4/4 で再現、late Dev reversal は 2/4 seed でのみ観測 |
+| **baseline promotion** | quality evidence + systems cost gate を合わせた判定 | **`PROMOTE_WITH_RUNTIME_FOLLOWUP`** → `headwise_g1_sigmoid` が **current research baseline** |
+
+baseline promotion そのもの（systems cost、判定、runtime follow-up）は
+[headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion` と
+[g1-1p5x-baseline-promotion-cost.md](g1-1p5x-baseline-promotion-cost.md) が正本である。
+**本書の preregistered decision は昇格によって書き換えていない。**
+
 ## Status
 
 **COMPLETE / G1 multi-seed lane 閉鎖。** 事前登録 seed 2 / 4 の 4 arm
@@ -571,9 +587,15 @@ trajectory 依存の現象」と読むのが最も記述的に素直である。
 
 ### G1 を baseline 候補として残すか
 
-**残す。** R1 が 4/4 で再現しており、初期 sample-efficiency としての一貫した利得がある。
+**この lane の結論: 残す。** R1 が 4/4 で再現しており、初期 sample-efficiency としての一貫した利得がある。
 反転が 1/4（preregistered 2 seed では 1/2）でしか出ないため、high-LR final quality lane を
 閉じる根拠はない。
+
+**その後の baseline 昇格（2026-10-04）**: 本 quality lane の結論に systems cost gate を合わせた
+判定で **`PROMOTE_WITH_RUNTIME_FOLLOWUP`**、`headwise_g1_sigmoid` が **current research baseline** に
+昇格した。正本は [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の
+`## Baseline promotion`。**G1 の追加 seed / 長期再検証は行わない。** HTP runtime overhead の削減は
+独立laneとして扱う。
 
 ### 追加 seed の必要性
 

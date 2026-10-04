@@ -8,6 +8,9 @@ registry role は品質判定にのみ効くので、runtime の paired 比較�
 品質判定そのものは [g1-1p5x-multiseed-3000.md](g1-1p5x-multiseed-3000.md) の
 combined interpretation を参照（本書はそれを繰り返さない）。
 
+昇格の正式記録（用語定義・quality と systems の分離・残る runtime follow-up）は
+[headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`。
+
 ## 集計方法
 
 - すべての数値は**一次 evidence の report フィールド**からのみ摘自。**推測禁止**。
