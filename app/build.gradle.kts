@@ -109,6 +109,7 @@ val generateHvxMuonRpc by tasks.registering {
         rootProject.file("host_tests/hvx_rpc/probe_dsp.c"),
         rootProject.file("host_tests/hvx_rpc/original_qhl.c"),
         rootProject.file("host_tests/hvx_rpc/original_qhl.h"),
+        rootProject.file("host_tests/hvx_rpc/fp32_finite.h"),
     )
     outputs.dir(hvxRpcDir)
     outputs.dir(hvxDspAssetDir)

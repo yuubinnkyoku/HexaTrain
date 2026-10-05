@@ -189,6 +189,17 @@ set_source_files_properties(
     nicopedia_hvx_muon.cpp
     PROPERTIES COMPILE_OPTIONS "-O2")
 
+# Training orchestration and QNN binding/validation are numerical hot paths
+# (batch accumulation, poison/finite scans, registry walks and state ownership).
+# Keep debug symbols,
+# but do not run these loops at -O0 in the debuggable research APK. Disable
+# contraction so multiply-then-add retains the established FP32 rounding and
+# batch reduction order; finite/poison checks still use ordinary IEEE math.
+set_source_files_properties(
+    qnn/qnn_transformer_training.cpp
+    ${PHONELM_QNN_RUNTIME_SOURCE}
+    PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
+
 if(PHONELM_ENABLE_HVX_MUON)
     if(NOT PHONELM_ENABLE_QNN)
         message(FATAL_ERROR "HVX Muon is only valid in the QNN hybrid-training build")

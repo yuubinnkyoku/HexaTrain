@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 yuubinnkyoku
 #include "original_qhl.h"
+#include "fp32_finite.h"
 
 #include <HAP_perf.h>
 #include <qhblas_hvx.h>
@@ -11,8 +12,7 @@
 #include <string.h>
 
 static int all_finite(const float* values, int count) {
-  for (int i = 0; i < count; ++i) if (!isfinite(values[i])) return 0;
-  return 1;
+  return hexatrain_fp32_all_finite(values, count);
 }
 
 static uint64_t qhl_now_us(void) {
