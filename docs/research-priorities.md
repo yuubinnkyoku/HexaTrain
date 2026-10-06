@@ -359,13 +359,24 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
      `all_steps_finite=true`、QNN/HVX failure 0。更新回数は **約2.1〜2.3倍**。
    - G1 overhead は **-5.25% → -1.07%**。global optimization として
      Control / G1 ほぼ同率で効き、モデル間 gap を広げない。
-   - 採用後の新 bottleneck は **optimizer update wall ~62–64 ms/update**
-     （DSP kernel 主体）。HTP execute と gradient accumulation は
-     その半分以下になっている。
+   - 当時の次候補は **optimizer update wall ~62–64 ms/update**。
+     2026-10-07 の最新main再profileでは optimizer は約55–59 ms、
+     内包する DSP execution span は約17 msだった。「DSP kernel 主体」
+     という帰属は訂正する。optimizer外の state move 約25–26 msと
+     gradient registry 約26 msにもまたがる、未最適化の共有CPU処理が
+     大きな改善機会だった。
+   - **2026-10-07 branch内追補**: 共有CPU translation unitだけを元の
+     FP contraction設定のまま `-O2` にし、最新mainとのbalanced 4 pairで
+     **Control -57.1% / G1 -56.7%**（paired median）。checkpoint・記録済み
+     loss曲線はbyte一致。残る optimizer wallは約73–75 ms、DSP spanは
+     約17 ms、QNN execute / APP_READ検査は約47–50 ms。
+     追加finite-check群は12 pairの信頼区間がゼロを跨いだためrevert。
+     この追補はmain未mergeで、前回の絶対時間をbeforeに再利用していない。
    - **未実施**: worker 再balance、非同期 update、transfer overlap、
      HTP node 変更。これらは残存 optimizer 時間に比べ小さいか、
      順序・failure 风险が大きい。
    - 正本: [training-throughput-optimization.md](training-throughput-optimization.md)
+     ／追加調査: [optimizer-throughput-optimization.md](optimizer-throughput-optimization.md)
 
 5. **Cross-Layer Attention Reuse + pooled-index / CSA2 oracle**
    - 現行L19/H2で取得できる38 headのattention probabilityから、adjacent / 2-layer / 3-layerのTop-k Jaccard、target attention mass capture、sparse contextのL2 / cosineを測る
