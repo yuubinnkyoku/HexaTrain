@@ -243,6 +243,8 @@ function Top-Package {
 
 Push-Location $root
 try {
+    Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
+    Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
     if (-not $SkipBuild) {
         $gradleArguments = @(
             ":app:assembleDebug", ":app:assembleDebugAndroidTest",
@@ -264,13 +266,18 @@ try {
             -ReportPath (Join-Path $reportRoot "apk-audit.txt")
     }
     if (-not $SkipInstall) {
-        Adb @("install", "-r", "-t", $apk) | Out-Null
-        Adb @("install", "-r", "-t", $testApk) | Out-Null
+        Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+            -TargetPackage $package -LocalApk $apk -TestApk
+        Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+            -TargetPackage "$package.test" -LocalApk $testApk -TestApk
     }
+    Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
+    Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
+    Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
+    Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
     if ($Suite -eq "nicopedia-parity") { Stage-NicopediaParityInputs }
     $conditionBefore = Get-DeviceCondition
     Assert-SafeDeviceCondition $conditionBefore
-    Adb @("shell", "am", "force-stop", $package) | Out-Null
     $beforeTop = Top-Package
     $instrumentStdout = Join-Path $reportRoot "instrumentation.txt"
     $instrumentStderr = Join-Path $reportRoot "instrumentation-stderr.txt"
@@ -298,8 +305,7 @@ try {
     while (-not $instrumentProcess.HasExited) {
         if ([DateTime]::UtcNow -ge $deadline) {
             $instrumentProcess.Kill()
-            Adb @("shell", "am", "force-stop", $package) | Out-Null
-            throw "Instrumentation timed out after $TimeoutSeconds seconds."
+            throw "Instrumentation timed out after $TimeoutSeconds seconds; device ownership must be reconciled before another run."
         }
         $top = Top-Package
         if ($top -eq $package) { $phoneLmTopCount++ }
@@ -313,7 +319,6 @@ try {
                 Assert-SafeDeviceCondition $conditionDuring
             } catch {
                 $instrumentProcess.Kill()
-                Adb @("shell", "am", "force-stop", $package) | Out-Null
                 throw
             }
         }

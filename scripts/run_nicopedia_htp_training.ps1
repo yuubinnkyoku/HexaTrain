@@ -77,6 +77,13 @@ function Get-PhoneLmExpectedLearningRate {
 }
 
 if ($SelfTest) {
+  $transferHash = 'a' * 64
+  Assert-PhoneLmBinaryTransferIdentity -ExpectedSize 100 -ExpectedSha256 $transferHash -ActualSize 100 -ActualSha256 $transferHash
+  foreach ($badTransfer in @(@{ Size = 99; Hash = $transferHash }, @{ Size = 101; Hash = $transferHash }, @{ Size = 100; Hash = ('b' * 64) })) {
+    $transferRejected = $false
+    try { Assert-PhoneLmBinaryTransferIdentity -ExpectedSize 100 -ExpectedSha256 $transferHash -ActualSize $badTransfer.Size -ActualSha256 $badTransfer.Hash } catch { $transferRejected = $_.Exception.Message -eq 'ADB_BINARY_TRANSFER_IDENTITY_MISMATCH' }
+    if (-not $transferRejected) { throw 'SELFTEST_BINARY_TRANSFER_FAIL_CLOSED' }
+  }
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
   if ($Layers -ne 19) { throw "SELFTEST_LAYERS_DEFAULT: expected=19 actual=$Layers" }
   if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
@@ -283,18 +290,17 @@ function Adb([string[]]$Arguments) {
 
 if (-not $SkipInstall) {
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
-  # The verified QNN-enabled app APK is large (~190 MB) and may legitimately
-  # exceed the ordinary command timeout over a TCP ADB transport.  Keep the
-  # normal short timeout for health/control operations, but give installation
-  # a bounded one-shot window so a transport timeout is not mistaken for a
-  # trial numerical failure.
-  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', $apk) -TimeoutSeconds 300 | Out-Null
-  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', '-t', $testApk) -TimeoutSeconds 300 | Out-Null
-  # `adb install -r` can restore a retained task and start the app process.
-  # Re-establish the headless baseline before instrumentation; this does not
-  # clear app data or weaken the later activity/focus invariant.
-  Adb @('shell', 'am', 'force-stop', $package) | Out-Null
+  # Repeated large streaming installs can stall the transport. Stage the exact
+  # audited bytes once, verify size/SHA, and install locally with bounded calls.
+  Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+    -TargetPackage $package -LocalApk $apk
+  Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+    -TargetPackage "$package.test" -LocalApk $testApk -TestApk
+  # Installation can restore a retained process/task. Recheck live ownership
+  # before proceeding; never force-stop an app that may have become active.
+  # Instrumentation owns its subsequent process and the same focus gate.
   Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
+  Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
 }
 Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
 Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
