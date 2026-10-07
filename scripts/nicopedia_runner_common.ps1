@@ -769,6 +769,30 @@ function Get-PhoneLmCheckpointHeaders {
     }
 }
 
+function Assert-PhoneLmBinaryTransferIdentity {
+    param([long]$ExpectedSize, [string]$ExpectedSha256,
+          [long]$ActualSize, [string]$ActualSha256)
+    if ($ExpectedSize -lt 0 -or $ExpectedSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw 'ADB_BINARY_SOURCE_IDENTITY_INVALID'
+    }
+    if ($ActualSize -ne $ExpectedSize -or $ActualSha256 -cne $ExpectedSha256) {
+        throw 'ADB_BINARY_TRANSFER_IDENTITY_MISMATCH'
+    }
+}
+
+function Get-PhoneLmRemoteBinaryIdentity {
+    param([string]$Adb, [string]$Device, [string]$Package, [string]$RemotePath)
+    $size = (Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+        'shell', 'run-as', $Package, 'stat', '-c', '%s', $RemotePath)).Text.Trim()
+    $hashText = (Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+        'shell', 'run-as', $Package, 'sha256sum', $RemotePath)).Text.Trim()
+    $hash = [regex]::Match($hashText, '^([0-9a-f]{64})\s').Groups[1].Value
+    if ($size -notmatch '^\d+$' -or $hash -notmatch '^[0-9a-f]{64}$') {
+        throw 'ADB_BINARY_SOURCE_IDENTITY_INVALID'
+    }
+    return [pscustomobject]@{ Size = [long]$size; Sha256 = $hash }
+}
+
 function Receive-PhoneLmBinary {
     param(
         [Parameter(Mandatory = $true)][string]$Adb,
@@ -779,6 +803,11 @@ function Receive-PhoneLmBinary {
         [int64]$MinimumBytes = 1024,
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 120
     )
+    # adb can exit zero after returning only a prefix. Validate against the
+    # device file before publishing a local target, and detect a source change
+    # during transfer independently of the process return code.
+    $sourceIdentity = Get-PhoneLmRemoteBinaryIdentity -Adb $Adb -Device $Device `
+        -Package $Package -RemotePath $RemotePath
     $directory = Split-Path -Parent $LocalPath
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     $incoming = "$LocalPath.incoming.$([guid]::NewGuid().ToString('N'))"
@@ -825,6 +854,20 @@ function Receive-PhoneLmBinary {
         $size = (Get-Item -LiteralPath $incoming).Length
         if ($size -lt $MinimumBytes) { throw "CHECKPOINT_PULL_TOO_SMALL: $size" }
         $hash = (Get-FileHash -LiteralPath $incoming -Algorithm SHA256).Hash.ToLowerInvariant()
+        try {
+            Assert-PhoneLmBinaryTransferIdentity -ExpectedSize $sourceIdentity.Size `
+                -ExpectedSha256 $sourceIdentity.Sha256 -ActualSize $size -ActualSha256 $hash
+            $sourceAfter = Get-PhoneLmRemoteBinaryIdentity -Adb $Adb -Device $Device `
+                -Package $Package -RemotePath $RemotePath
+            Assert-PhoneLmBinaryTransferIdentity -ExpectedSize $sourceIdentity.Size `
+                -ExpectedSha256 $sourceIdentity.Sha256 -ActualSize $sourceAfter.Size `
+                -ActualSha256 $sourceAfter.Sha256
+        } catch {
+            # Preserve the failed bytes as private transfer evidence. They must
+            # never be promoted to the requested checkpoint/report filename.
+            Move-Item -LiteralPath $incoming -Destination "$incoming.transfer-failed"
+            throw
+        }
         if (Test-Path -LiteralPath $LocalPath -PathType Leaf) {
             $old = Get-Item -LiteralPath $LocalPath
             $oldHash = (Get-FileHash -LiteralPath $LocalPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -865,6 +908,60 @@ function Get-PhoneLmCheckpointNames {
     param([Parameter(Mandatory = $true)][string]$Adb, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][string]$Package, [Parameter(Mandatory = $true)][string]$RemoteDir)
     $result = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @('shell', 'run-as', $Package, 'ls', '-1', $RemoteDir)
     return @($result.Text -split "`r?`n" | Where-Object { $_ -match '^htp-seed\d+-l\d+(-t\d+-d\d+-f\d+)?-step\d+\.ckpt$' } | Sort-Object -Unique)
+}
+
+function Install-PhoneLmVerifiedCachedApk {
+    param(
+        [Parameter(Mandatory = $true)][string]$Adb,
+        [Parameter(Mandatory = $true)][string]$Device,
+        [Parameter(Mandatory = $true)][string]$ActivePackage,
+        [Parameter(Mandatory = $true)][string]$TargetPackage,
+        [Parameter(Mandatory = $true)][string]$LocalApk,
+        [switch]$TestApk
+    )
+    # The caller audits this exact local APK against pinned QAIRT first. Cache
+    # identity is content-addressed, never selected by a version/name guess.
+    $local = Get-Item -LiteralPath $LocalApk -ErrorAction Stop
+    $hash = (Get-FileHash -LiteralPath $local.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $remote = "/data/local/tmp/phonelm-apk-cache-$hash.apk"
+    $stat = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+        'shell', 'stat', '-c', '%s', $remote) -AllowFailure
+    if ($stat.ExitCode -ne 0) {
+        if ($stat.Classification -ne 'ADB_COMMAND_FAILURE' -or
+            $stat.Text -notmatch 'No such file or directory') {
+            throw 'APK_CACHE_STATE_UNKNOWN'
+        }
+        $incoming = "$remote.incoming.$([guid]::NewGuid().ToString('N'))"
+        Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+            'push', ('"' + $local.FullName + '"'), $incoming) -TimeoutSeconds 300 | Out-Null
+        $remote = $incoming
+    }
+    $sizeText = (Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+        'shell', 'stat', '-c', '%s', $remote)).Text.Trim()
+    $hashText = (Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+        'shell', 'sha256sum', $remote)).Text.Trim()
+    $hashMatch = [regex]::Match($hashText, '^([0-9a-f]{64})\s')
+    if ($sizeText -notmatch '^\d+$' -or -not $hashMatch.Success) {
+        throw 'APK_CACHE_IDENTITY_INVALID'
+    }
+    Assert-PhoneLmBinaryTransferIdentity -ExpectedSize $local.Length -ExpectedSha256 $hash `
+        -ActualSize ([long]$sizeText) -ActualSha256 $hashMatch.Groups[1].Value
+    $cached = "/data/local/tmp/phonelm-apk-cache-$hash.apk"
+    if ($remote -ne $cached) {
+        Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments @(
+            'shell', 'mv', $remote, $cached) | Out-Null
+    }
+    # A potentially long transfer must not leave a stale preflight decision.
+    Assert-PhoneLmNoExistingRun -Adb $Adb -Device $Device -Package $ActivePackage
+    Assert-PhoneLmNoExistingHeadlessRun -Adb $Adb -Device $Device -Package $ActivePackage
+    $arguments = @('shell', 'pm', 'install', '-r')
+    if ($TestApk) { $arguments += '-t' }
+    $arguments += $cached
+    $installed = Invoke-PhoneLmAdb -Adb $Adb -Device $Device -Arguments $arguments -TimeoutSeconds 300
+    if ($installed.Text.Trim() -ne 'Success') { throw 'APK_CACHE_INSTALL_NOT_SUCCESS' }
+    Assert-PhoneLmInstalledApkMatches -Adb $Adb -Device $Device `
+        -Package $TargetPackage -LocalApk $local.FullName
+    Write-Host 'apk_cache_identity=verified installed_apk_identity=verified'
 }
 
 function Assert-PhoneLmInstalledApkMatches {

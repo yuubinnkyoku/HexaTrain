@@ -1,5 +1,10 @@
 # End-to-end training throughput optimization
 
+The next optimization starts from this result's merged main, with a new
+physical baseline. See [optimizer and critical-path follow-up](optimizer-throughput-optimization.md)
+for the shared CPU build fix and the rejected secondary validation candidates.
+The before numbers below belong to the earlier optimization only.
+
 ## Status: ADOPTED — STRONG_GAIN (matched device evidence)
 
 The combined candidate is accepted. In one balanced matched device session it

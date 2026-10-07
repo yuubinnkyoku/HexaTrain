@@ -21,7 +21,9 @@ function Get-Sha256([byte[]]$Bytes) {
 function Get-EntryBytes($Entry) {
     $input = $Entry.Open()
     $memory = [IO.MemoryStream]::new()
-    try { $input.CopyTo($memory); return $memory.ToArray() }
+    # Keep the byte array as one pipeline object. Enumerating every byte here
+    # boxes large SDK libraries and makes repeated immutable-APK audits slow.
+    try { $input.CopyTo($memory); return ,$memory.ToArray() }
     finally { $memory.Dispose(); $input.Dispose() }
 }
 

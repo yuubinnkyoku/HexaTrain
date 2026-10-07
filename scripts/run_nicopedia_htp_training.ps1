@@ -40,6 +40,11 @@ param(
   [string]$CachePath = "",
   [string]$TokenizerModelPath = "",
   [string]$ReportRoot = "",
+  [string]$AppApkPath = "",
+  [string]$AndroidTestApkPath = "",
+  [string]$AuditTelemetryDirectory = "",
+  [string]$ExpectedDeviceSerial = "",
+  [ValidateRange(0, 86400)][int]$MidTelemetryAfterSeconds = 0,
   [int]$PollLimit = 7200,
   [int]$PollSeconds = 2,
   [int]$ProgressEverySeconds = 30,
@@ -77,6 +82,13 @@ function Get-PhoneLmExpectedLearningRate {
 }
 
 if ($SelfTest) {
+  $transferHash = 'a' * 64
+  Assert-PhoneLmBinaryTransferIdentity -ExpectedSize 100 -ExpectedSha256 $transferHash -ActualSize 100 -ActualSha256 $transferHash
+  foreach ($badTransfer in @(@{ Size = 99; Hash = $transferHash }, @{ Size = 101; Hash = $transferHash }, @{ Size = 100; Hash = ('b' * 64) })) {
+    $transferRejected = $false
+    try { Assert-PhoneLmBinaryTransferIdentity -ExpectedSize 100 -ExpectedSha256 $transferHash -ActualSize $badTransfer.Size -ActualSha256 $badTransfer.Hash } catch { $transferRejected = $_.Exception.Message -eq 'ADB_BINARY_TRANSFER_IDENTITY_MISMATCH' }
+    if (-not $transferRejected) { throw 'SELFTEST_BINARY_TRANSFER_FAIL_CLOSED' }
+  }
   if ($BatchSize -ne 8) { throw "SELFTEST_BATCH_SIZE_DEFAULT: expected=8 actual=$BatchSize" }
   if ($Layers -ne 19) { throw "SELFTEST_LAYERS_DEFAULT: expected=19 actual=$Layers" }
   if ($Tokens -ne 32) { throw "SELFTEST_TOKENS_DEFAULT: expected=32 actual=$Tokens" }
@@ -217,8 +229,8 @@ $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $package = 'com.yuubinnkyoku.phonelm'
-$apk = Join-Path $root 'app\build\outputs\apk\debug\app-debug.apk'
-$testApk = Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
+$apk = if ($AppApkPath) { if ([IO.Path]::IsPathRooted($AppApkPath)) { [IO.Path]::GetFullPath($AppApkPath) } else { [IO.Path]::GetFullPath((Join-Path $root $AppApkPath)) } } else { Join-Path $root 'app\build\outputs\apk\debug\app-debug.apk' }
+$testApk = if ($AndroidTestApkPath) { if ([IO.Path]::IsPathRooted($AndroidTestApkPath)) { [IO.Path]::GetFullPath($AndroidTestApkPath) } else { [IO.Path]::GetFullPath((Join-Path $root $AndroidTestApkPath)) } } else { Join-Path $root 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk' }
 $reportDirectory = if ($Vocabulary -eq 1024) {
   "build\reports\nicopedia-htp-training-v1024"
 } else { "build\reports\nicopedia-htp-training" }
@@ -229,6 +241,12 @@ $reportRoot = [IO.Path]::GetFullPath($reportCandidate)
 $allowedReportRoot = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
 if (-not $reportRoot.StartsWith($allowedReportRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'ReportRoot must resolve below the repository build directory' }
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
+$auditTelemetryRoot = ''
+if ($AuditTelemetryDirectory) {
+  $auditTelemetryRoot = if ([IO.Path]::IsPathRooted($AuditTelemetryDirectory)) { [IO.Path]::GetFullPath($AuditTelemetryDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $AuditTelemetryDirectory)) }
+  $allowedTelemetryRoot = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
+  if (-not $auditTelemetryRoot.StartsWith($allowedTelemetryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'AuditTelemetryDirectory must resolve below the repository build directory' }
+}
 
 # The private token cache lives under build/private-data and is never
 # committed.  The host pushes only the minimal pilot input the device needs.
@@ -269,6 +287,7 @@ if (-not $SkipBuild) {
 }
 $deviceInfo = Resolve-PhoneLmDevice -Adb $adb
 $device = $deviceInfo.Endpoint
+if ($ExpectedDeviceSerial -and $deviceInfo.Serial -ne $ExpectedDeviceSerial) { throw 'ADB_EXPECTED_DEVICE_IDENTITY_MISMATCH' }
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $device
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
@@ -283,18 +302,17 @@ function Adb([string[]]$Arguments) {
 
 if (-not $SkipInstall) {
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $testApk -PathType Leaf)) { throw 'APK_OR_TEST_APK_MISSING' }
-  # The verified QNN-enabled app APK is large (~190 MB) and may legitimately
-  # exceed the ordinary command timeout over a TCP ADB transport.  Keep the
-  # normal short timeout for health/control operations, but give installation
-  # a bounded one-shot window so a transport timeout is not mistaken for a
-  # trial numerical failure.
-  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', $apk) -TimeoutSeconds 300 | Out-Null
-  Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @('install', '-r', '-t', $testApk) -TimeoutSeconds 300 | Out-Null
-  # `adb install -r` can restore a retained task and start the app process.
-  # Re-establish the headless baseline before instrumentation; this does not
-  # clear app data or weaken the later activity/focus invariant.
-  Adb @('shell', 'am', 'force-stop', $package) | Out-Null
+  # Repeated large streaming installs can stall the transport. Stage the exact
+  # audited bytes once, verify size/SHA, and install locally with bounded calls.
+  Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+    -TargetPackage $package -LocalApk $apk
+  Install-PhoneLmVerifiedCachedApk -Adb $adb -Device $device -ActivePackage $package `
+    -TargetPackage "$package.test" -LocalApk $testApk -TestApk
+  # Installation can restore a retained process/task. Recheck live ownership
+  # before proceeding; never force-stop an app that may have become active.
+  # Instrumentation owns its subsequent process and the same focus gate.
   Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
+  Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
 }
 Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
 Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
@@ -340,6 +358,10 @@ if ($ResumeStep -gt 0) {
 # Run the NICOPEDIA mode through the debug intent path. Existing processes and
 # result markers were checked above; lifecycle remains headless.
 Clear-PhoneLmResultMarker -Adb $adb -Device $device -Package $package
+# Revalidate both installed package identities immediately before launch. The
+# same identity was checked after installation; this closes the staging window.
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
 $instrumentDir = Join-Path $reportRoot "instrumentation-$RunId"
 if (Test-Path -LiteralPath $instrumentDir) { throw 'RUN_ID_REUSE: host instrumentation directory exists' }
 [IO.Directory]::CreateDirectory($instrumentDir) | Out-Null
@@ -348,6 +370,7 @@ $checkpointProgress = [ordered]@{
   Count = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir).Count
   LastProgressUtc = [DateTime]::UtcNow
 }
+$script:midTelemetryCaptured = $false
 try {
   $suite = if ($OneUpdateProbe) { 'nicopedia-dffn-probe' } else { 'nicopedia-long-training' }
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
@@ -361,6 +384,18 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
   -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-partial-status.json") `
   -StatusProgressAction {
     param($elapsed, $status)
+    if (-not $script:midTelemetryCaptured -and $auditTelemetryRoot -and $MidTelemetryAfterSeconds -gt 0 -and $elapsed -ge $MidTelemetryAfterSeconds) {
+      $script:midTelemetryCaptured = $true
+      $midPath = Join-Path $auditTelemetryRoot 'mid.json'
+      try {
+        & (Join-Path $PSScriptRoot 'capture_android_cpu_telemetry.ps1') -AdbPath $adb -Device $device -Package $package -Phase mid -OutputPath $midPath -RunId $RunId | Out-Null
+        Write-Host 'audit_telemetry_mid=CAPTURED'
+      } catch {
+        [IO.Directory]::CreateDirectory($auditTelemetryRoot) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $auditTelemetryRoot 'mid-error.txt'), 'NOT_AVAILABLE', [Text.UTF8Encoding]::new($false))
+        Write-Host 'audit_telemetry_mid=NOT_AVAILABLE'
+      }
+    }
     $phase = [regex]::Match($status, '"current_phase"\s*:\s*"([^"]*)"').Groups[1].Value
     $done = [regex]::Match($status, '"completed_tests"\s*:\s*(\d+)').Groups[1].Value
     $total = [regex]::Match($status, '"total_tests"\s*:\s*(\d+)').Groups[1].Value
@@ -391,6 +426,8 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
     if ((Get-PhoneLmTopPackage -Adb $adb -Device $device) -eq $package) { throw 'FOCUS_TAKEOVER_DETECTED' }
   }
 $result = Get-PhoneLmHeadlessReport -StatusJson $waited.StatusJson -Adb $adb -Device $device -Package $package
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package $package -LocalApk $apk
+Assert-PhoneLmInstalledApkMatches -Adb $adb -Device $device -Package "$package.test" -LocalApk $testApk
 # Preserve the private probe report before lifecycle assertions fail the host
 # wrapper.  This is needed to classify an activity/focus invariant violation
 # while retaining the native graph/QNN evidence; it is never committed.

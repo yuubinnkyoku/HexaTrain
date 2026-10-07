@@ -200,6 +200,12 @@ set_source_files_properties(
     ${PHONELM_QNN_RUNTIME_SOURCE}
     PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
 
+# The parameter registry and parameter lifetime code share the CPU-reference
+# translation unit. Optimize these per-sample/mixed-optimizer calls while
+# preserving this unit's existing FP contraction policy for the CPU oracle.
+set_source_files_properties(tiny_language_model_cpu.cpp
+    PROPERTIES COMPILE_OPTIONS "-O2")
+
 if(PHONELM_ENABLE_HVX_MUON)
     if(NOT PHONELM_ENABLE_QNN)
         message(FATAL_ERROR "HVX Muon is only valid in the QNN hybrid-training build")
