@@ -617,3 +617,106 @@ family are not rerun.
 This audit does not choose `LAND`, `CONDITION_DEPENDENT_GAIN`, or
 `NO_REPRODUCIBLE_GAIN`. The headline stays **STRONG_GAIN / LANDING_CANDIDATE;
 DEVICE_AUDIT_PENDING** until the balanced physical-device audit is complete.
+
+### 2026-10-07 physical-device audit (partial)
+
+Current evidence classification: **INSUFFICIENT_VALID_PAIRS**. The landing
+candidate remains fixed and its headline remains **STRONG_GAIN /
+LANDING_CANDIDATE; DEVICE_AUDIT_PENDING**. No final performance adoption is
+made.
+
+The single physical device was identified as NX741J / SM8850. The prepared
+before and candidate APKs both passed the pinned QAIRT 2.48.40.260702 / HTP
+V81 audit. The runner verified the installed app and androidTest APK bytes
+against the selected files after installation and before/after each run.
+Both arms used the same androidTest APK and versionCode/versionName (1 / 0.1.0);
+the app APK and native library hashes differed as expected. The APKs do not
+embed a build fingerprint, so the per-run source attribution remains
+`DECLARED_UNVERIFIED`. A private ignored build-provenance sidecar records the
+source commit/tree, build procedure, APK/native/QNN/HVX hashes, and the
+candidate CMake/compile fingerprints. It is not an embedded or signed
+attestation; the before compile-command fingerprint was not retained.
+
+The first Phase A attempt was stopped after two runs when the mid-telemetry
+callback was observed rewriting its snapshot at each progress callback. Those
+two runs and the unstarted run manifest remain preserved as protocol-deviation
+evidence and are not used below. The callback's state was moved to script scope
+in the isolated tooling commit `7f5d927`; a focused scope check produced
+`CAPTURE, SKIP, SKIP`. The subsequent Phase A recorded exactly one mid snapshot
+per run.
+
+#### Before-only 300/400
+
+The fixed-before sequence completed in balanced order 300, 400, 400, 300.
+All four runs reported QNN success, finite tensors, HVX backend, no fallback,
+and complete interval checkpoints. Thermal status remained 0 and battery
+temperature ranged from 31–34°C.
+
+| Phase (ms/update) | 300 median (n=2) | 400 median (n=2) | Pair 1: 400 vs 300 | Pair 2: 400 vs 300 |
+| --- | ---: | ---: | ---: | ---: |
+| QNN execute | 28.767 | 35.146 | +39.9% | +3.9% |
+| DSP span | 17.334 | 17.198 | -0.5% | -1.1% |
+| State move | 28.774 | 62.792 | +194.9% | +32.9% |
+| Registry validation | 27.808 | 56.620 | +183.3% | +23.0% |
+| Optimizer wall | 61.477 | 97.566 | +110.5% | +9.7% |
+| Training step | 191.635 | 351.327 | +148.3% | +17.5% |
+
+Both adjacent pairs were slower at 400 updates, but the size of the increase
+varied substantially. DSP span stayed nearly constant while state move and
+registry validation grew. Run length therefore explains part of the slow
+before behavior, but this two-pair comparison does not explain the full
+183-to-606 ms historical difference. Across these four observations, the
+descriptive Pearson correlations with `training_step_ms` were CPU frequency
+`r=-0.853`, elapsed time `r=0.955`, run order `r=-0.244`, and battery
+temperature `r=-0.215`. These small-sample associations do not establish a
+cause.
+
+#### Matched A/B (400 updates)
+
+The first complete balanced pair produced:
+
+| Model | Before | Candidate | Gain | Paired speedup | Fixed bootstrap 95% CI |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Control | 561.644 ms | 189.026 ms | 66.34% | 2.971x | [66.34%, 66.34%] |
+| G1 | 533.317 ms | 262.015 ms | 50.87% | 2.035x | [50.87%, 50.87%] |
+
+Each model has only one valid pair in this session; its bootstrap interval is
+degenerate and provides no useful uncertainty estimate. These numbers are
+interim observations, not an acceptance result or a general-device claim.
+Their roughly 58.6% mean gain is numerically close to the earlier 57% result,
+but this single pair per model cannot establish that the historical slow-state
+gain is a clean-state general speedup; the before arm was still around
+533–562 ms/update and the valid-pair count is below threshold.
+The matched pair's main phase changes were CPU-side: Control state move
+106.056→0.395 ms/update and registry validation 94.408→18.110; G1 state move
+97.486→0.608 and registry validation 96.770→29.730. DSP span stayed near
+17 ms/update. For this one pair, candidate G1 was 38.6% slower than candidate
+Control; the analyzer's all-completed-run G1-vs-Control summaries are also
+recorded in the private output, but include unmatched repetition-2 candidate
+runs and are not acceptance-grade.
+
+One before/Control repetition-2 training report completed 400/400 updates and
+reported QNN success, HVX_W8, finite outputs, and no fallback, but the runner
+failed while collecting post-run checkpoint artifacts. The manifest records
+`RUNNER_FAILURE`; the exact exception was not persisted, so its subcause is
+`UNKNOWN`. It is not excluded for being slow. The analyzer reports one
+excluded run and two incomplete model pairs, leaving one valid pair per model.
+The `single_flight_result=ALREADY_RUNNING` diagnostic also appears in a
+successful run and is not evidence of a new 6031 event. Issue 6031 remains
+**UNRESOLVED / DORMANT / WATCH**.
+
+Across six completed matched reports, thermal status remained 0 and battery
+temperature ranged from 33–34°C. Descriptive correlations with
+`training_step_ms` were CPU frequency `r=0.473`, battery temperature `r=0.489`,
+run order `r=-0.824`, and wall elapsed time `r=0.767`; the sample is small and
+arm/run order are confounded, so no DVFS causal claim is made.
+
+After the runner failure, three read-only preflight snapshots showed no active
+PhoneLM run, battery saver off, screen dozing, thermal status 0, and battery
+temperature 32–33°C. System load average rose from 9.27 to 14.42 to 17.77 for
+the one-minute value (the last five-minute value was 7.91), while little-core
+frequency remained at 883.2 MHz. This continuing device background activity
+failed the clean-session preflight, so no further matched runs were started.
+The audit analyzer's fixed result is **INSUFFICIENT_VALID_PAIRS**; the
+performance question remains pending until the device returns to a clean
+background-load state and enough new, complete pairs can be collected.
