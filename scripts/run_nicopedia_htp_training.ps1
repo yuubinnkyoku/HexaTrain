@@ -370,7 +370,7 @@ $checkpointProgress = [ordered]@{
   Count = @(Get-PhoneLmCheckpointNames -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir).Count
   LastProgressUtc = [DateTime]::UtcNow
 }
-$midTelemetryCaptured = $false
+$script:midTelemetryCaptured = $false
 try {
   $suite = if ($OneUpdateProbe) { 'nicopedia-dffn-probe' } else { 'nicopedia-long-training' }
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
@@ -384,8 +384,8 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
   -PartialPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-partial-status.json") `
   -StatusProgressAction {
     param($elapsed, $status)
-    if (-not $midTelemetryCaptured -and $auditTelemetryRoot -and $MidTelemetryAfterSeconds -gt 0 -and $elapsed -ge $MidTelemetryAfterSeconds) {
-      $midTelemetryCaptured = $true
+    if (-not $script:midTelemetryCaptured -and $auditTelemetryRoot -and $MidTelemetryAfterSeconds -gt 0 -and $elapsed -ge $MidTelemetryAfterSeconds) {
+      $script:midTelemetryCaptured = $true
       $midPath = Join-Path $auditTelemetryRoot 'mid.json'
       try {
         & (Join-Path $PSScriptRoot 'capture_android_cpu_telemetry.ps1') -AdbPath $adb -Device $device -Package $package -Phase mid -OutputPath $midPath -RunId $RunId | Out-Null
