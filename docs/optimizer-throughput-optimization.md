@@ -131,9 +131,13 @@ native training-step time.
 
 ## Measurement and compatibility
 
-The CPU build fix meets **STRONG_GAIN** in the complete balanced physical
-comparison and is kept on this branch. It has not been pushed, opened as a PR,
-or merged into main. Single prototype timings are diagnostic only.
+The balanced physical comparison is strong matched-session evidence for this
+candidate. Status remains **STRONG_GAIN / LANDING_CANDIDATE; DEVICE_AUDIT_PENDING**.
+The 57% result is not promoted to a final or general speedup: the matched
+before arm was much slower than the earlier profile, and a fresh device audit
+must establish whether the candidate gain reproduces outside that slow state.
+The candidate is not pushed, opened as a PR, or merged into main. Single
+prototype timings remain diagnostic only.
 
 | Matched arm medians | Control before | Control after | G1 before | G1 after |
 | --- | ---: | ---: | ---: | ---: |
@@ -151,9 +155,9 @@ this background session does not establish a universal architecture overhead.
 Each 400-update run sees 276,732 original target UTF-8 bytes.
 
 The absolute times differ substantially from the initial profile above.
-The accepted claim compares the same session's main and candidate arms, not
-the initial diagnostic run or the preceding optimization's historical values.
-Phone activity and DVFS were uncontrolled; CPU frequency was not measured.
+The matched-session ratios compare its own before and candidate arms; they do
+not establish that the gain generalizes from the initial profile. Phone
+activity and DVFS were uncontrolled; CPU frequency was not measured.
 The measured builds are pinned QAIRT/HVX-enabled debug APKs.
 
 ### Re-profile after the CPU build fix
@@ -310,3 +314,306 @@ allowed. Incident 6031 tooling is preserved; status remains
 Formal, external publication, main merge, long quality runs and SDK changes
 are outside this runtime follow-up. The measured device evidence supports a
 short-run throughput claim; it does not convert skipped Formal work into PASS.
+
+## Landing-candidate provenance audit (2026-10-07)
+
+This audit keeps the runtime candidate fixed. Exact base `origin/main` is
+`98d7c01f0904345a21d87ae6726dafda066d0b6a`; candidate HEAD before audit-only
+commits is `485651bfd64dd173af70654ed635e7a15a519085` on
+`codex/training-critical-path-v2`. The four candidate commits are
+`51c0047`, `35cf2c7`, `4016ca4`, and `485651b`.
+
+Candidate path inventory:
+
+- Build/runtime: `app/src/main/cpp/CMakeLists.txt` adds per-source `-O2` for
+  `tiny_language_model_cpu.cpp`. No candidate C++ source file changed.
+- Documentation: `docs/optimizer-throughput-optimization.md`,
+  `docs/research-priorities.md`, and `docs/training-throughput-optimization.md`.
+- Test-only: `host_tests/nicopedia_apk_cache_self_test.ps1`.
+- Build/audit/runner tooling: `scripts/audit_qnn_apk.ps1`,
+  `scripts/export_public_training_throughput_summary.ps1`,
+  `scripts/nicopedia_runner_common.ps1`,
+  `scripts/run_nicopedia_htp_training.ps1`, and
+  `scripts/run_qnn_headless_tests.ps1`.
+
+The only change compiled into the native library is the per-source compiler
+option. Runner changes affect audit orchestration, APK identity checking, and
+reporting, not the model's training math. The CMake build-system change affects
+every function in that translation unit, including CPU reference numerical
+routines, rather than only registry/lifetime routines. There are no generated
+candidate files in Git.
+
+### Effective compile command
+
+Clean `origin/main` and candidate configurations used the same host, Android
+NDK 26.2.11394342, Android arm64-v8a/API 26 target, QAIRT Build ID
+`2.48.40.260702151143`, Hexagon SDK 6.6.0.0, HVX Muon enabled, and QNN enabled.
+The complete generated commands are retained under ignored
+`build/provenance-audit-20261007-r1/` as `compile_commands.json` for both
+configurations. After normalizing only source/build directory tokens, the
+target command diff is exactly one argument:
+
+```diff
+  ... -std=gnu++17 -fPIC ... -Wall -Wextra -Wpedantic
++ -O2
+  -o CMakeFiles/phonelm_native.dir/tiny_language_model_cpu.cpp.o
+```
+
+Before had `-g` and no explicit optimization flag (therefore Clang's default
+unoptimized code); candidate adds source-level `-O2`. Inherited and target
+flags, `-D` definitions, include paths, architecture target, `-ffp-contract`,
+`NDEBUG`, sanitizer, debug-info, and LTO settings are otherwise identical.
+Neither command has `-ffast-math`, `-flto`, an explicit `-ffp-contract`, or
+`-march`/`-mcpu`/`-mfpu`. Both retain `-g`, warnings, `-D_FORTIFY_SOURCE=2`,
+and the same sysroot. There is no `-DNDEBUG`, so this change does not disable
+assertions. O2 enables normal compiler loop/vectorization and inlining passes;
+no explicit vectorization flag changed. `qnn_transformer_training.cpp` keeps
+its existing `-O2;-ffp-contract=off` policy in both revisions. The CPU TU's
+original contraction default is unchanged.
+
+The exact command result is the source/build graph comparison, not the short
+source diff. `scripts/compare_native_compile_commands.py` captures both
+normalized full commands and the token-level diff in ignored
+`build/provenance-audit-20261007-r1/compile-command-comparison-private.json`;
+it reports `ONLY_ADDED_-O2`. The generated compile databases contain host
+paths and are not committed.
+
+### Host native-object and source review
+
+The target translation unit compiled and the full `phonelm_native` shared
+library linked successfully from both clean configs. Its unstripped ARM
+object went from 166,668 to 85,164 bytes of `.text` across its text sections
+(48.9% smaller); the object file itself grew from 2,077,800 to 2,127,392 bytes
+because debug data is retained. In the complete library, `.text` went from
+1,996,768 to 1,985,344 bytes (11,424 bytes, 0.57% smaller). Dynamic dependency
+names and the set of 233 undefined imports were identical. `R_AARCH64_JUMP_SLOT`
+relocations fell from 1,500 to 1,434; the other reported relocation types were
+unchanged. The function-symbol table had 8,077 before and 7,754 after; among
+the changed symbols, `parameterRegistry` shrank 508→292 bytes,
+`validateParameterRegistry(vector<ParameterInfo>)` 1,636→956 bytes,
+`validateParameterRegistry(TinyTransformerParameters)` 496→468 bytes, and
+`TinyTransformerLayerParameters::~TinyTransformerLayerParameters()` grew
+160→212 bytes. `splitParameterRegistry` grew 860→1,016 bytes, consistent with
+inlining/code layout not uniformly shrinking every function. The private
+section/symbol/relocation report is generated by
+`scripts/compare_native_artifacts.py` and kept under ignored `build/`.
+These are compiler/linker outputs, not a device-time estimate. QNN/HTP Skel
+and unrelated DSP binaries were not changed by the candidate source diff.
+
+Static review found no new arithmetic, aliasing, uninitialized-read,
+object-lifetime, iterator-invalidation, or synchronization code: the candidate
+adds only a compiler option. Registry dimension products use checked
+`size_t` multiplication; existing vector moves use their normal ownership
+semantics. This review cannot prove absence of all undefined behavior. No
+sanitizer is present in the Android production command. A targeted host
+ASan/UBSan link attempt was blocked because the installed host G++ lacks
+`libasan` and `libubsan`; it produced no sanitizer findings. Existing exact
+training checkpoint/loss-curve parity and generation-oracle evidence remain
+valid for the adopted candidate. The rejected FP-contraction-off prototype
+and reverted DSP vectorization, APP_READ scan, and CPU finite-scan family were
+not re-experimented.
+
+### Why the two reported CPU phases can shrink
+
+`optimizer_result_move_ms` brackets four assignments of `std::move` for the
+current parameters, Muon momentum, and two Adam states. With the same default
+allocator, `std::vector` move assignment transfers vector ownership; it does
+not copy each float. The optimizer has already produced its result state
+outside this timer. Move assignment still releases the previous destination
+state, including nested layer vectors. O2 can inline the repeated vector and
+layer destructor/cleanup path and simplify short loops; earlier candidate
+disassembly showed the before `TinyTransformerLayerParameters` destructor
+calling the `std::vector<float>` destructor wrapper eleven times, while O2
+inlined those checks and release calls into direct pointer tests and
+`operator delete` calls. The same linked destructor grew 160→212 bytes because
+the calls were expanded inline. That gives a
+plausible host-code mechanism for a large timer reduction without changing
+state ownership or arithmetic. It does not establish why the measured
+absolute 115 ms became 0.6 ms on that device session, nor imply that all
+allocations were removed.
+
+For gradient validation, an update has eight microbatches. Per microbatch the
+code builds `accum` and `source` registries outside the timed interval, then
+times `nprtValidateRegistryIdentity`, which rebuilds two registries, validates
+both, and compares semantic entries, shapes, axes, and element counts. With
+19 layers and 13 metadata definitions, gated Control has 192 applicable
+entries and G1 has 211. Per Control update this means 32 registry
+constructions (6,144 `ParameterInfo` entries traversed), 16 validation passes
+(3,072 entry visits, including uniqueness/hash, shape/role/axis checks), and
+8 identity passes (1,536 entry comparisons). These are source-derived counts;
+`unordered_set` node/bucket allocations and string/shape-vector allocations
+depend on the standard library. Work is O(P) per registry/validation/identity
+pass, plus string hashing/comparison and shape-axis checks. No validation was
+removed. O2 can inline metadata assembly and iterator/loop machinery. These
+counts explain an opportunity, not a conversion from host work to device ms.
+
+### Initial profile versus matched comparison
+
+The initial profile used 300 updates; matched before and candidate used 400.
+Both used seed 2, L19/H2, V1024/T32/D64/F128, batch 8, Muon with eight HVX
+workers, the same LR schedule (`0.0033` Aux Adam peak, `0.0075` Muon rate,
+decay 4000–8000 of total 8000, target `0.00015`), and checkpoint interval 100.
+Both report `production_fast` host validation and the production minimal
+APP_READ ABI. Initial battery temperatures were 36–37°C; matched runs were
+31–33°C for candidate and 32–33°C for before; thermal status was 0. CPU
+frequency, governor, cpuset, battery saver, and screen/foreground state were
+not captured in the old runs.
+
+| Identity/setting | Initial 300-update profile | Matched 400-update before/candidate |
+| --- | --- | --- |
+| APK filename | `app-debug.apk`; exact run-to-artifact binding UNKNOWN | `app-debug.apk`; before and candidate app hashes differ |
+| Android test APK | Exact initial run hash UNKNOWN | Same filename and byte-identical APK for before/candidate |
+| Embedded build fingerprint | Not recorded; APK has no provenance asset | Not recorded; APK has no provenance asset |
+| Runner / instrumentation | `instrumentation-v2` family | Same family; exact per-run script hash UNKNOWN |
+| Seed / batch / model / optimizer / QAIRT / HVX | Same recipe listed above | Same recipe listed above |
+| Steps | 300 | 400 |
+| Checkpoints | 100, 200, 300 | 100, 200, 300, 400 |
+| Validation / ABI mode | `production_fast` / `production_minimal` | `production_fast` / `production_minimal` |
+| Battery / thermal | 36–37°C / status 0 | 31–33°C candidate, 32–33°C before / status 0 |
+| CPU/DVFS telemetry | UNKNOWN | UNKNOWN |
+| Exact app versionCode/versionName | UNKNOWN | UNKNOWN |
+
+The saved artifact manifest proves that matched before/candidate app APK bytes
+differ and their androidTest APK bytes match. Initial result files do not bind
+each run to that manifest by hash, so exact initial-to-matched APK identity is
+UNKNOWN. No raw APK hash is published. CLI args differ in steps, run ID,
+report path, and arm gate; complete per-run command lines were not preserved.
+Telemetry options were absent in old data. The 300/400 difference is not the
+only measurement difference; the large absolute drift in matched-before is
+unresolved.
+
+| Phase | Initial main | Matched before | Ratio |
+| --- | ---: | ---: | ---: |
+| QNN execute-call wall | 27.644 ms | 46.792 ms | 1.692 |
+| DSP span | 17.248 ms | 17.222 ms | 0.999 |
+| State move | 26.267 ms | 115.187 ms | 4.386 |
+| Registry validation | 26.462 ms | 104.035 ms | 3.931 |
+| Optimizer wall | 58.670 ms | 155.822 ms | 2.656 |
+| Training step | 182.973 ms | 606.550 ms | 3.315 |
+
+CPU-side measured phases and QNN execute-call wall were slower in matched
+before while DSP span was effectively unchanged. This supports a non-DSP
+source of drift but does not identify CPU DVFS, host activity, instrumentation
+overhead, or another cause. Candidate median 260.228 ms is also 1.42x slower
+than initial main 182.973 ms. Existing temperature, run order, arm, and elapsed
+samples are too few and lack CPU frequency to support a cause claim. Correlation
+output is descriptive only. In the saved legacy reports, run order and device
+CPU-frequency/governor telemetry are absent; run IDs reveal the experiment arm
+but cannot bind every measurement to an APK hash. Battery temperature is
+available for 16 matched runs and has a descriptive Pearson `r≈0.062` with
+`training_step_ms`; Android thermal status is 0 in those samples.
+`training_total_seconds` and `training_step_ms` come from the same timer/step
+count (`r≈1`), so that is tautological rather than an independent signal. Arm
+comparisons are available from paired results, but APK identity and arm are
+confounded for per-run correlation because old manifests do not bind each row
+to the artifact hash. Battery saver and screen/focus state are unknown.
+
+The 300/400 paths share the same per-update loop and eight microbatches. Both
+are below decay start 4000, so use the same schedule plateau and have no
+warmup branch. At 400, one more checkpoint is written; loss-curve points add
+325/350/375 and the final point, and the report/CSV has 100 additional update
+rows. Progress/heartbeat cadence is unchanged, and each update rebuilds the
+same registry. There is no periodic generation or validation hook. Final CPU
+replay follows the last checkpoint and is outside the per-update timer.
+
+### APK identity and future build provenance
+
+The runner installs content-addressed app and androidTest APK bytes, verifies
+device-cache and installed-package SHA256, and checks again after install. The
+new runner accepts explicit APK paths, rechecks both installed packages
+immediately before instrumentation and after the run, and pins runs to one
+stable physical-device serial. The prepared audit runner writes a private
+per-run manifest with app and androidTest hashes, app native library hash,
+QAIRT HTP Skel hash, HVX probe Skel hash, QAIRT Build ID, installed
+versionCode/versionName, declared source commit, host branch/commit/tree/dirty
+state, host CMake/compile-command fingerprints when available, arguments, and
+telemetry paths. If the APK has no embedded fingerprint it records
+`DECLARED_UNVERIFIED`; host checkout provenance is not proof of APK source.
+
+For future builds, embed a generated `assets/phonelm-build-provenance.json`
+with commit SHA, tree SHA, dirty flag, branch, build timestamp, CMake config
+hash, normalized target compile-flag fingerprint, QAIRT Build ID, HVX Skel
+SHA256, and `libphonelm_native.so` SHA256. Generate it from Gradle/CMake inputs
+and verify packaged values after assemble. Existing APKs do not contain this
+asset, so the sidecar helps the next audit but cannot prove source provenance
+retrospectively.
+
+### Prepared next-device audit
+
+`scripts/run_training_critical_path_device_audit.ps1` provides two modes:
+
+- `BeforeOnly300vs400`: Control-only 300, 400, 400, 300 on one before APK.
+- `MatchedAB`: 400 updates, four pairs per model by default, before/candidate
+  × Control/G1. Odd/even repetitions reverse arm and model order; three pairs
+  can be explicitly selected.
+
+It requires explicit pinned QAIRT/Hexagon SDK roots and APK paths, refuses to
+build, checks branch/candidate ancestry and runtime-source identity, pins one
+physical device, uses the active-run fail-closed and ownership-safe runner,
+and does not retry a failed run. Install occurs only when APK identity changes.
+All output remains below ignored `build/reports/`. `MatchedAB` order is
+before-Control, before-G1, candidate-G1, candidate-Control on odd repetitions;
+even repetitions reverse both arm and model order. Each run manifest stores its
+arm, model, pair, order, explicit APK/app-test hashes, and expected report path.
+
+Runner review: the exact app and androidTest APK bytes are staged through the
+content-addressed APK cache, then their installed package hashes are checked
+after install, before instrumentation, and after the run. The audit wrapper
+requires different app hashes and the same androidTest hash for the two A/B
+arms. The analyzer also rejects an A/B report if either arm changes app APK
+identity across runs or if the test APK differs between arms. Existing APKs
+have no embedded build fingerprint, so the manifest can identify which APK bytes ran
+but labels source provenance `DECLARED_UNVERIFIED`; it does not pretend the
+host checkout SHA proves APK origin. The runner checks stale/active heartbeat,
+test process, service/activity/task, and focus state before and after install;
+unknown live state fails closed. It polls status every two seconds, emits
+progress/heartbeat at the configured 30-second interval, enforces the declared
+checkpoint-stall and outer 30-minute bounds, and saves instrumentation stdout,
+stderr, status, result report, checkpoints, loss curve, and learning-rate CSV.
+There is no package-data/cache clear and no automatic measured-run retry. On a
+timeout it can stop only the instrumentation run carrying that exact run ID;
+after success it reclaims only the completed run's owned app/test process.
+No unrelated app process is force-stopped. Pre-run CPU/thermal sampling is one
+ADB shell call; the mid-run sample occurs at most once in the existing
+progress callback, and post-run sampling follows report collection.
+
+All output remains below ignored `build/reports/`. Example:
+
+```powershell
+./scripts/run_training_critical_path_device_audit.ps1 `
+  -Mode MatchedAB -QairtSdkRoot $PinnedQairtRoot `
+  -ExpectedBuildId '2.48.40.260702151143' -HexagonSdkRoot $PinnedHexagonRoot `
+  -BeforeApkPath 'build/audit-input/before/app-debug.apk' `
+  -BeforeAndroidTestApkPath 'build/audit-input/before/app-debug-androidTest.apk' `
+  -CandidateApkPath 'build/audit-input/candidate/app-debug.apk' `
+  -CandidateAndroidTestApkPath 'build/audit-input/candidate/app-debug-androidTest.apk'
+```
+
+`scripts/capture_android_cpu_telemetry.ps1` takes one combined ADB shell
+snapshot at pre, approximate mid-run, and post. It records online cores,
+per-core current/min/max frequency and governor, cpuset, process status/sched/
+cgroup, thermal status, battery temperature/saver, screen/foreground, uptime,
+and load average. Missing or permission-denied values become `NOT_AVAILABLE`.
+The mid-run snapshot is attempted once at a declared elapsed threshold, not by
+polling the training hot path. Old reports cannot be backfilled with CPU
+frequency data.
+
+`scripts/analyze_training_critical_path_audit.py` normalizes initial,
+matched-before/candidate, negative-result summary, and new reports. It emits
+per-run CSV, per-pair before/after, paired speedup, median and fixed-seed
+50,000-resample bootstrap CI, Control/G1 summaries, G1-vs-Control overhead,
+phase distributions, thermal ranges, descriptive correlations, the overall
+acceptance classification, and incomplete/excluded runs. The 300/400 script pairs adjacent runs as
+300→400 and 400→300; the analyzer reports the medians for each step count and
+the per-phase paired 400/300 ratios and per-update changes. This is descriptive
+with two pairs, not an acceptance verdict. Exclusions are fixed before runs:
+transport or
+heartbeat/process failure, missing/incomplete report, QNN/HVX failure,
+fallback, nonfinite tensors, and APK identity mismatch. Slow performance is
+never an exclusion reason. CPU-frequency correlation remains
+`NOT_AVAILABLE`. The FP-contraction-off prototype and reverted optimization
+family are not rerun.
+
+This audit does not choose `LAND`, `CONDITION_DEPENDENT_GAIN`, or
+`NO_REPRODUCIBLE_GAIN`. The headline stays **STRONG_GAIN / LANDING_CANDIDATE;
+DEVICE_AUDIT_PENDING** until the balanced physical-device audit is complete.
