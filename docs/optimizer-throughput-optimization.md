@@ -131,11 +131,11 @@ native training-step time.
 
 ## Measurement and compatibility
 
-The balanced physical comparison is strong matched-session evidence for this
-candidate. Status remains **STRONG_GAIN / LANDING_CANDIDATE; DEVICE_AUDIT_PENDING**.
-The 57% result is not promoted to a final or general speedup: the matched
-before arm was much slower than the earlier profile, and a fresh device audit
-must establish whether the candidate gain reproduces outside that slow state.
+The earlier balanced physical comparison was strong matched-session evidence
+for this candidate and had status **STRONG_GAIN / LANDING_CANDIDATE;
+DEVICE_AUDIT_PENDING** at that time. Its 57% result was not promoted to a
+general speedup. The later completed audit and current classification are
+recorded below; the earlier result remains historical slow-state evidence.
 The candidate is not pushed, opened as a PR, or merged into main. Single
 prototype timings remain diagnostic only.
 
@@ -614,16 +614,17 @@ never an exclusion reason. CPU-frequency correlation remains
 `NOT_AVAILABLE`. The FP-contraction-off prototype and reverted optimization
 family are not rerun.
 
-This audit does not choose `LAND`, `CONDITION_DEPENDENT_GAIN`, or
-`NO_REPRODUCIBLE_GAIN`. The headline stays **STRONG_GAIN / LANDING_CANDIDATE;
-DEVICE_AUDIT_PENDING** until the balanced physical-device audit is complete.
+At this point the device audit was still pending. It was later resumed with
+new balanced repetitions while retaining the existing valid pair; the final
+registered result is recorded below. The earlier 57% remains historical
+slow-state evidence and is not the current headline.
 
-### 2026-10-07 physical-device audit (partial)
+### 2026-10-07 physical-device audit (first partial session)
 
-Current evidence classification: **INSUFFICIENT_VALID_PAIRS**. The landing
-candidate remains fixed and its headline remains **STRONG_GAIN /
-LANDING_CANDIDATE; DEVICE_AUDIT_PENDING**. No final performance adoption is
-made.
+At this checkpoint the evidence classification was
+**INSUFFICIENT_VALID_PAIRS**. This records the first partial session; its
+classification was superseded by the completed matched audit below. The
+landing candidate remained fixed throughout.
 
 The single physical device was identified as NX741J / SM8850. The prepared
 before and candidate APKs both passed the pinned QAIRT 2.48.40.260702 / HTP
@@ -715,8 +716,111 @@ After the runner failure, three read-only preflight snapshots showed no active
 PhoneLM run, battery saver off, screen dozing, thermal status 0, and battery
 temperature 32–33°C. System load average rose from 9.27 to 14.42 to 17.77 for
 the one-minute value (the last five-minute value was 7.91), while little-core
-frequency remained at 883.2 MHz. This continuing device background activity
-failed the clean-session preflight, so no further matched runs were started.
-The audit analyzer's fixed result is **INSUFFICIENT_VALID_PAIRS**; the
-performance question remains pending until the device returns to a clean
-background-load state and enough new, complete pairs can be collected.
+frequency remained at 883.2 MHz. That session stopped at this point. Its
+analyzer result was **INSUFFICIENT_VALID_PAIRS**; the later continuation and
+final classification follow.
+
+### 2026-10-07 physical-device audit (final matched completion)
+
+The fixed before/candidate APKs were measured for 400 updates on the same
+physical NX741J / SM8850. The existing valid pair was retained, then two new
+repetitions were run with the pre-registered alternating order: repetition 3
+ran before Control, before G1, candidate G1, candidate Control; repetition 4
+ran the reverse order. No APK was rebuilt, no candidate runtime source was
+changed, and the analyzer, bootstrap seed/sample count, acceptance thresholds,
+and exclusion rules were unchanged.
+
+| Model / pair | Before (ms/update) | Candidate (ms/update) | Gain | Paired speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Control, retained pair 1 | 561.644 | 189.026 | 66.34% | 2.971x |
+| Control, added repetition 3 | 202.371 | 104.826 | 48.20% | 1.931x |
+| Control, added repetition 4 | 172.662 | 103.006 | 40.34% | 1.676x |
+| G1, retained pair 1 | 533.317 | 262.015 | 50.87% | 2.035x |
+| G1, added repetition 3 | 318.668 | 178.777 | 43.90% | 1.782x |
+| G1, added repetition 4 | 184.182 | 106.918 | 41.95% | 1.723x |
+
+The unchanged analyzer found three valid pairs for each model, all six gains
+positive. Control median gain was **48.20%** (median paired speedup **1.931x**;
+fixed 50,000-sample bootstrap 95% CI **[40.34%, 66.34%]**). G1 median gain
+was **43.90%** (median paired speedup **1.782x**; 95% CI **[41.95%, 50.87%]**).
+Both medians exceed 5% and both lower bounds are above zero, so the final
+pre-registered classification is **LAND**. A representative headline is
+**about 46% observed matched-device speedup across the two model medians**,
+reported as Control 48.2% and G1 43.9% for this device and recipe. This is not
+a claim for all Android devices. The earlier ~57% remains a historical
+slow-state result; it is not substituted for these three-pair medians.
+
+For the six accepted matched pairs, paired phase medians (ms/update) were:
+
+| Model | Phase | Before | Candidate |
+| --- | --- | ---: | ---: |
+| Control | Training step | 202.371 | 104.826 |
+| Control | Optimizer wall | 68.375 | 35.658 |
+| Control | State move | 33.047 | 0.219 |
+| Control | Registry validation | 28.862 | 8.391 |
+| Control | QNN execute-call wall | 28.275 | 29.550 |
+| Control | DSP span | 17.330 | 17.123 |
+| G1 | Training step | 318.668 | 178.777 |
+| G1 | Optimizer wall | 96.470 | 54.210 |
+| G1 | State move | 53.667 | 0.399 |
+| G1 | Registry validation | 54.127 | 18.309 |
+| G1 | QNN execute-call wall | 35.476 | 40.040 |
+| G1 | DSP span | 17.246 | 17.267 |
+
+QNN/DSP time was nearly unchanged in Control and DSP span was unchanged in
+G1; the largest paired reductions were state move, registry validation, and
+optimizer wall. Phase medians use only the three complete repetitions per
+model and do not include the unmatched repetition-2 candidate runs.
+
+The matched G1-versus-Control overhead, computed within each complete
+repetition, was **before: -5.04%, +57.47%, +6.67% (median +6.67%)** and
+**candidate: +38.61%, +70.55%, +3.80% (median +38.61%)**. G1 was slower than
+Control in all three candidate pairs, and this relative overhead increased
+from the before median. The registered landing gate has no G1-overhead
+threshold, so this does not change its **LAND** classification; it remains a
+material model-specific caveat. The analyzer's separate aggregate overhead
+field (before +57.47%, candidate +26.86%) compares arm medians, including
+completed but unmatched repetition-2 candidate reports, and is not the
+pair-matched overhead above.
+
+All eight added training reports completed 400/400 updates with QNN success,
+HVX_W8 backend, finite outputs, zero HVX failures/nonfinite/fallbacks, and
+verified checkpoint identities. All eight had pre/post telemetry. The single
+mid sample was captured at most once; it was present for five of the eight
+new runs. Three faster candidate runs ended before the existing 60-second
+mid-sample point, so their mid telemetry is absent; no extra polling or retry
+was added. Missing mid telemetry is recorded as a measurement limitation and
+is not an analyzer exclusion condition.
+
+Across the new audit snapshots, battery temperature ranged from **32–37°C**,
+Android thermal status stayed **0**, battery saver was off, and cores 0–7 were
+online under the WALT governor. Per-core current-frequency samples varied from
+**384 MHz to 4,396.8 MHz** across the collected snapshots; frequency was not
+locked. The one-minute load average ranged from about **4.95 to 7.12** in
+per-run samples and was **7.83** in the final read-only snapshot. The screen
+changed from dozing to awake and foreground activity varied while PhoneLM
+remained in the background. These states are retained as conditions, not used
+to create a post-hoc numerical gate. The small-sample exploratory correlation
+for training-step time versus sampled CPU frequency was `r=-0.571` (`n=14`);
+analyzer-local run order and battery temperature were `r=-0.583` and
+`r=-0.185`, respectively. Run order restarts for each audit ID, and arm/order
+are confounded. These are descriptive associations only and establish no DVFS
+cause.
+
+The analyzer found one excluded run: the earlier repetition-2 before/Control
+runner failure during post-run artifact collection. Its training report itself
+was 400/400, QNN-successful, finite, HVX_W8, and fallback-free, but the runner
+manifest was `FAILED`; the pre-fix tooling did not preserve its exception, so
+the subcause remains `UNKNOWN`. The two completed repetition-2 candidate arms
+remain in evidence but form two incomplete pairs because their before arms
+are missing. No run was excluded for being slow. `single_flight_result=
+ALREADY_RUNNING` also appears in successful reports and is not a 6031 event;
+6031 remains **UNRESOLVED / DORMANT / WATCH**.
+
+The per-run artifact source identity remains `DECLARED_UNVERIFIED`: APKs have
+no embedded build fingerprint. APK/native/QNN/HTP identities matched the fixed
+before/candidate artifacts, but the host commit/tree is not cryptographic
+proof of APK source. A separate audit-tooling commit now records future
+runner exception type, message, operation, stack, location, and run ID in the
+private evidence folder. The candidate runtime diff remains empty. No push,
+PR, or main merge was performed.
