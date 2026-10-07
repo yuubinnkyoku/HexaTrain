@@ -822,5 +822,5 @@ no embedded build fingerprint. APK/native/QNN/HTP identities matched the fixed
 before/candidate artifacts, but the host commit/tree is not cryptographic
 proof of APK source. A separate audit-tooling commit now records future
 runner exception type, message, operation, stack, location, and run ID in the
-private evidence folder. The candidate runtime diff remains empty. No push,
-PR, or main merge was performed.
+private evidence folder. At the time this audit section was recorded, the
+branch had not yet been pushed and the PR and main merge had not been created.
