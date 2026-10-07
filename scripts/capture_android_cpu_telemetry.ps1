@@ -68,14 +68,62 @@ else
 fi
 '@
 $snapshotScript = $snapshotScript.Replace('$PACKAGE', $Package)
-$adbResult = Get-PhoneLmAdbResult -Adb $AdbPath -Device $Device -Arguments @('shell','sh','-c',$snapshotScript) -TimeoutSeconds 60
-if ($adbResult.ExitCode -ne 0) { throw 'ADB_TELEMETRY_TRANSPORT_FAILURE' }
-$result = $adbResult.Output
+if ([string]::IsNullOrWhiteSpace($Device) -or $Device -match '[\s"]') { throw 'ADB_DEVICE_ARGUMENT_INVALID' }
+$adbProcess = [Diagnostics.Process]::new()
+$stdoutTask = $null
+$stderrTask = $null
+try {
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $AdbPath
+  # Device endpoints contain no whitespace.  Keep the command line to simple
+  # argv tokens, then send the multiline script over stdin instead of passing
+  # it through Start-Process -ArgumentList (which splits embedded whitespace).
+  $startInfo.Arguments = "-s $Device shell sh"
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $adbProcess.StartInfo = $startInfo
+  if (-not $adbProcess.Start()) { throw 'ADB_TELEMETRY_PROCESS_START_FAILED' }
+  $stdoutTask = $adbProcess.StandardOutput.ReadToEndAsync()
+  $stderrTask = $adbProcess.StandardError.ReadToEndAsync()
+  $adbProcess.StandardInput.WriteLine($snapshotScript)
+  $adbProcess.StandardInput.Close()
+  if (-not $adbProcess.WaitForExit(60000)) {
+    $adbProcess.Kill()
+    [void]$adbProcess.WaitForExit(5000)
+    throw 'ADB_TELEMETRY_PROCESS_TIMEOUT'
+  }
+  $adbProcess.WaitForExit()
+  $stdout = $stdoutTask.GetAwaiter().GetResult()
+  $stderr = $stderrTask.GetAwaiter().GetResult()
+  if ($adbProcess.ExitCode -ne 0) { throw 'ADB_TELEMETRY_COMMAND_FAILED' }
+} catch {
+  if ($null -ne $adbProcess -and -not $adbProcess.HasExited) {
+    try { $adbProcess.Kill() } catch { }
+  }
+  throw 'ADB_TELEMETRY_TRANSPORT_FAILURE'
+} finally {
+  if ($null -ne $adbProcess) { $adbProcess.Dispose() }
+}
+$result = @($stdout -split '\r?\n')
 $fields = [ordered]@{}
 foreach ($line in $result) {
   $text = [string]$line
   $separator = $text.IndexOf('=')
   if ($separator -gt 0) { $fields[$text.Substring(0, $separator)] = $text.Substring($separator + 1).Trim() }
+}
+$requiredFields = @(
+  'online_cores', 'cpuset_top_app_cpus', 'cpuset_foreground_cpus', 'uptime_seconds', 'loadavg',
+  'thermal_status', 'battery_temperature_deci_c', 'battery_saver', 'screen_state', 'foreground_activity',
+  'app_foreground_state', 'process_pid', 'process_status', 'process_sched', 'process_cgroup'
+)
+foreach ($key in $requiredFields) {
+  if (-not $fields.Contains($key) -or [string]::IsNullOrWhiteSpace([string]$fields[$key])) {
+    $fields[$key] = 'NOT_AVAILABLE'
+  }
 }
 $fields = [ordered]@{ schema_version = 1; run_id = $RunId; phase = $Phase; captured_utc = [DateTimeOffset]::UtcNow.ToString('o'); fields = $fields }
 [IO.Directory]::CreateDirectory((Split-Path -Parent $output)) | Out-Null
