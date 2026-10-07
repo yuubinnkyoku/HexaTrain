@@ -9,7 +9,8 @@ param(
   [Parameter(Mandatory=$true)][string]$BeforeAndroidTestApkPath,
   [string]$CandidateApkPath = '',
   [string]$CandidateAndroidTestApkPath = '',
-  [ValidateRange(3,4)][int]$PairCount = 4,
+  [ValidateRange(1,4)][int]$PairCount = 4,
+  [ValidateRange(1,999)][int]$PairStart = 1,
   [ValidatePattern('^[A-Za-z0-9._-]{1,32}$')][string]$AuditId = (Get-Date -Format 'yyyyMMdd-HHmmss')
 )
 $ErrorActionPreference = 'Stop'
@@ -157,7 +158,7 @@ if ($Mode -eq 'BeforeOnly300vs400') {
     $runSpecs.Add([pscustomobject]@{ arm='before'; model='control'; steps=$_.steps; repetition=$_.order; pair_id="steps-pair-$balancedPair"; order=$_.order })
   }
 } else {
-  for ($rep = 1; $rep -le $PairCount; $rep++) {
+  for ($rep = $PairStart; $rep -lt ($PairStart + $PairCount); $rep++) {
     if (($rep % 2) -eq 1) { $sequence = @(@('before','control'),@('before','g1'),@('candidate','g1'),@('candidate','control')) }
     else { $sequence = @(@('candidate','g1'),@('candidate','control'),@('before','control'),@('before','g1')) }
     foreach ($item in $sequence) { $runSpecs.Add([pscustomobject]@{ arm=$item[0]; model=$item[1]; steps=400; repetition=$rep; pair_id="r$rep-$($item[1])"; order=($runSpecs.Count + 1) }) }
@@ -193,9 +194,11 @@ foreach ($spec in $runSpecs) {
   }
   Write-Manifest $manifestPath $manifest
   $installedThisArm = ($artifact.app_apk_sha256 -ne $lastAppHash -or $artifact.android_test_apk_sha256 -ne $lastTestHash)
+  $failureStage = 'pre_run_gates'
   try {
     Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package 'com.yuubinnkyoku.phonelm'
     Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package 'com.yuubinnkyoku.phonelm'
+    $failureStage = 'pre_telemetry'
     & (Join-Path $PSScriptRoot 'capture_android_cpu_telemetry.ps1') -AdbPath $adb -Device $device -Package 'com.yuubinnkyoku.phonelm' -Phase pre -OutputPath (Join-Path $telemetryRoot 'pre.json') -RunId $runId | Out-Null
     $runnerArgs = @{
       QairtSdkRoot=$QairtSdkRoot; ExpectedBuildId=$ExpectedBuildId; SkipBuild=$true; AppApkPath=$appPath; AndroidTestApkPath=$testPath
@@ -207,21 +210,49 @@ foreach ($spec in $runSpecs) {
       AuditTelemetryDirectory=$telemetryRoot; MidTelemetryAfterSeconds=[math]::Max(30,[math]::Floor($spec.steps * 0.15)); ExpectedDeviceSerial=[string]$deviceInfo.Serial
     }
     if (-not $installedThisArm) { $runnerArgs.SkipInstall = $true }
+    $failureStage = 'training_runner'
     & (Join-Path $PSScriptRoot 'run_nicopedia_htp_training.ps1') @runnerArgs
+    $failureStage = 'post_run_package_identity'
     $manifest.device_package_version = Get-InstalledVersion $device 'com.yuubinnkyoku.phonelm'
     $manifest.status = 'COMPLETED'
     $manifest.failure_class = $null
     $lastAppHash = $artifact.app_apk_sha256
     $lastTestHash = $artifact.android_test_apk_sha256
   } catch {
-    $reason = $_.Exception.Message
+    $failureRecord = $_
+    $reason = $failureRecord.Exception.Message
     $manifest.status = 'FAILED'
+    $manifest.failure_stage = $failureStage
+    $manifest.failure_details_file = 'failure-details.json'
     if ($reason -match 'ADB_TRANSPORT') { $manifest.failure_class = 'TRANSPORT_FAILURE' }
     elseif ($reason -match 'HEARTBEAT|STALE') { $manifest.failure_class = 'STALE_HEARTBEAT' }
     elseif ($reason -match 'IDENTITY|APK_PROVENANCE') { $manifest.failure_class = 'IDENTITY_MISMATCH' }
     elseif ($reason -match 'PROCESS|RUN_STATE') { $manifest.failure_class = 'PROCESS_DISAPPEARANCE_OR_STATE' }
     else { $manifest.failure_class = 'RUNNER_FAILURE' }
     [IO.File]::WriteAllText((Join-Path $runRoot 'failure-class.txt'), [string]$manifest.failure_class, [Text.UTF8Encoding]::new($false))
+    $invocation = $failureRecord.InvocationInfo
+    $exception = $failureRecord.Exception
+    $failureDetails = [ordered]@{
+      schema_version = 1
+      run_id = $runId
+      operation = $failureStage
+      captured_utc = [DateTimeOffset]::UtcNow.ToString('o')
+      exception_type = if ($exception) { $exception.GetType().FullName } else { 'UNKNOWN' }
+      exception_message = if ($exception) { $exception.Message } else { [string]$failureRecord }
+      exception_full_text = if ($exception) { $exception.ToString() } else { $null }
+      exception_stack_trace = if ($exception) { $exception.StackTrace } else { $null }
+      powershell_script_stack_trace = $failureRecord.ScriptStackTrace
+      fully_qualified_error_id = $failureRecord.FullyQualifiedErrorId
+      error_category = if ($failureRecord.CategoryInfo) { [string]$failureRecord.CategoryInfo.Category } else { $null }
+      error_reason = if ($failureRecord.CategoryInfo) { $failureRecord.CategoryInfo.Reason } else { $null }
+      error_target_name = if ($failureRecord.CategoryInfo) { $failureRecord.CategoryInfo.TargetName } else { $null }
+      script_name = if ($invocation) { $invocation.ScriptName } else { $null }
+      script_line_number = if ($invocation) { $invocation.ScriptLineNumber } else { $null }
+      script_line = if ($invocation) { $invocation.Line } else { $null }
+      script_position_message = if ($invocation) { $invocation.PositionMessage } else { $null }
+    }
+    $failureJson = $failureDetails | ConvertTo-Json -Depth 8
+    [IO.File]::WriteAllText((Join-Path $runRoot 'failure-details.json'), $failureJson, [Text.UTF8Encoding]::new($false))
     try { & (Join-Path $PSScriptRoot 'capture_android_cpu_telemetry.ps1') -AdbPath $adb -Device $device -Package 'com.yuubinnkyoku.phonelm' -Phase post -OutputPath (Join-Path $telemetryRoot 'post.json') -RunId $runId | Out-Null } catch { }
     $manifest.finished_utc = [DateTimeOffset]::UtcNow.ToString('o')
     Write-Manifest $manifestPath $manifest
