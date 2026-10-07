@@ -713,7 +713,7 @@ run order `r=-0.824`, and wall elapsed time `r=0.767`; the sample is small and
 arm/run order are confounded, so no DVFS causal claim is made.
 
 After the runner failure, three read-only preflight snapshots showed no active
-PhoneLM run, battery saver off, screen dozing, thermal status 0, and battery
+training-app run, battery saver off, screen dozing, thermal status 0, and battery
 temperature 32–33°C. System load average rose from 9.27 to 14.42 to 17.77 for
 the one-minute value (the last five-minute value was 7.91), while little-core
 frequency remained at 883.2 MHz. That session stopped at this point. Its
@@ -798,8 +798,8 @@ online under the WALT governor. Per-core current-frequency samples varied from
 **384 MHz to 4,396.8 MHz** across the collected snapshots; frequency was not
 locked. The one-minute load average ranged from about **4.95 to 7.12** in
 per-run samples and was **7.83** in the final read-only snapshot. The screen
-changed from dozing to awake and foreground activity varied while PhoneLM
-remained in the background. These states are retained as conditions, not used
+changed from dozing to awake and foreground activity varied while the
+HexaTrain app remained in the background. These states are retained as conditions, not used
 to create a post-hoc numerical gate. The small-sample exploratory correlation
 for training-step time versus sampled CPU frequency was `r=-0.571` (`n=14`);
 analyzer-local run order and battery temperature were `r=-0.583` and
