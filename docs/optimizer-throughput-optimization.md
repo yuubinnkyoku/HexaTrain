@@ -136,8 +136,8 @@ for this candidate and had status **STRONG_GAIN / LANDING_CANDIDATE;
 DEVICE_AUDIT_PENDING** at that time. Its 57% result was not promoted to a
 general speedup. The later completed audit and current classification are
 recorded below; the earlier result remains historical slow-state evidence.
-The candidate is not pushed, opened as a PR, or merged into main. Single
-prototype timings remain diagnostic only.
+At that time, the branch had not yet been pushed or proposed; this is
+historical status. Single prototype timings remain diagnostic only.
 
 | Matched arm medians | Control before | Control after | G1 before | G1 after |
 | --- | ---: | ---: | ---: | ---: |
