@@ -38,13 +38,15 @@ WindowSet loadWindows(const std::string& cachePath,
   WindowSet out;
   out.contentHash = source.tokenizerHash;
   const std::uint32_t n =
-      std::min<std::uint32_t>(limit, static_cast<std::uint32_t>(source.records.size()));
+      std::min<std::uint32_t>(limit, static_cast<std::uint32_t>(source.recordCount()));
   out.windows.reserve(n);
   for (std::uint32_t i = 0; i < n; ++i) {
-    const auto& rec = source.records[i];
-    if (rec.window.size() < tokens) continue;
-    out.windows.emplace_back(rec.window.end() - static_cast<std::ptrdiff_t>(tokens),
-                             rec.window.end());
+    if (source.context < tokens) continue;
+    auto& window = out.windows.emplace_back();
+    window.reserve(tokens);
+    for (std::uint32_t token = source.context + 1u - tokens;
+         token <= source.context; ++token)
+      window.push_back(source.tokenAt(i, token));
   }
   return out;
 }

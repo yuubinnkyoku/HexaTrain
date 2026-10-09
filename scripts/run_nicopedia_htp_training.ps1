@@ -38,6 +38,7 @@ param(
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$MuonMomentum = '0.95',
   [ValidateRange(1,99)][int]$MuonNsSteps = 5,
   [string]$CachePath = "",
+  [string]$EvalCacheRoot = "",
   [string]$TokenizerModelPath = "",
   [string]$ReportRoot = "",
   [string]$AppApkPath = "",
@@ -52,6 +53,7 @@ param(
   [int]$ResumeStep = 0,
   [int]$CheckpointInterval = 250,
   [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff'),
+  [string]$CacheSourceRunId = "",
   [switch]$BuildInstallOnly,
   [switch]$OneUpdateProbe,
   [switch]$AllowQualityFailure,
@@ -79,6 +81,22 @@ function Get-PhoneLmExpectedLearningRate {
     return $TargetLearningRate + (($PeakLearningRate - $TargetLearningRate) * $shape)
   }
   return $PeakLearningRate + ($progress * ($TargetLearningRate - $PeakLearningRate))
+}
+
+function Get-PhoneLmMemAvailableKilobytes {
+  param([AllowEmptyString()][string]$MemInfoText)
+  $memoryMatch = [regex]::Match($MemInfoText, '(?im)^MemAvailable:\s*(\d+)\s*kB\s*$')
+  if (-not $memoryMatch.Success) { throw 'DEVICE_MEMAVAILABLE_UNAVAILABLE' }
+  return [long]$memoryMatch.Groups[1].Value
+}
+
+function Get-PhoneLmAppPrivateRoot {
+  param([AllowEmptyString()][string]$WorkingDirectory)
+  $root = $WorkingDirectory.Trim().TrimEnd('/')
+  if ($root -notmatch '^/data/(?:user/\d+|data)/com\.yuubinnkyoku\.phonelm$') {
+    throw 'APP_PRIVATE_ROOT_REJECTED'
+  }
+  return $root
 }
 
 if ($SelfTest) {
@@ -149,6 +167,23 @@ if ($SelfTest) {
       throw 'SELFTEST_CHECKPOINT_MODEL_IDENTITY'
   }
   if ($CheckpointInterval -lt 1 -or $PollSeconds -lt 1 -or $PollLimit -lt 1 -or $ProgressEverySeconds -lt 1 -or $CheckpointStallSeconds -lt 1) { throw 'SELFTEST_POLL_CONFIGURATION' }
+  if (-not (Test-PhoneLmHeadlessOwnerPid -StatusJson '{"status":"RUNNING","pid":1234}' -PidOutput '1234 9876') -or
+      (Test-PhoneLmHeadlessOwnerPid -StatusJson '{"status":"RUNNING","pid":1234}' -PidOutput '91234')) {
+    throw 'SELFTEST_HEADLESS_PROCESS_EXIT_DETECTION'
+  }
+  if ((Get-PhoneLmMemAvailableKilobytes -MemInfoText "MemTotal: 100000 kB`nMemAvailable:    5302244 kB`nBuffers: 10 kB") -ne 5302244) {
+    throw 'SELFTEST_MEMAVAILABLE_PARSE'
+  }
+  $memInfoRejected = $false
+  try { [void](Get-PhoneLmMemAvailableKilobytes -MemInfoText 'MemTotal: 100000 kB') } catch { $memInfoRejected = $_.Exception.Message -eq 'DEVICE_MEMAVAILABLE_UNAVAILABLE' }
+  if (-not $memInfoRejected) { throw 'SELFTEST_MEMAVAILABLE_FAIL_CLOSED' }
+  if ((Get-PhoneLmAppPrivateRoot -WorkingDirectory '/data/user/0/com.yuubinnkyoku.phonelm/') -ne '/data/user/0/com.yuubinnkyoku.phonelm' -or
+      (Get-PhoneLmAppPrivateRoot -WorkingDirectory '/data/data/com.yuubinnkyoku.phonelm/') -ne '/data/data/com.yuubinnkyoku.phonelm') {
+    throw 'SELFTEST_APP_PRIVATE_ROOT_ACCEPT'
+  }
+  $privateRootRejected = $false
+  try { [void](Get-PhoneLmAppPrivateRoot -WorkingDirectory '/data/local/tmp') } catch { $privateRootRejected = $_.Exception.Message -eq 'APP_PRIVATE_ROOT_REJECTED' }
+  if (-not $privateRootRejected) { throw 'SELFTEST_APP_PRIVATE_ROOT_REJECT' }
   $inactiveEvidence = @{ status_state = 'terminal'; status_uncertain = $false; process_present = $true; test_process_present = $false; fgs_present = $false; service_present = $false; service_uncertain = $false; activity_known = $true; activity_active = $false; task_present = $true }
   $inactiveDecision = Resolve-PhoneLmRunConflict $inactiveEvidence
   if ($inactiveDecision.active -or @($inactiveDecision.reasons) -notcontains 'CACHED_PROCESS_ONLY' -or @($inactiveDecision.reasons) -notcontains 'INACTIVE_TASK_ONLY') { throw 'SELFTEST_CACHED_PROCESS_FALSE_POSITIVE' }
@@ -174,7 +209,9 @@ if ($SelfTest) {
   exit 0
 }
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
-if ($Steps -lt 1 -or $Steps -gt 12000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..12000' }
+if ($CacheSourceRunId -and $CacheSourceRunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'CACHE_SOURCE_RUN_ID_INVALID' }
+$deviceCacheSourceRunId = if ($CacheSourceRunId) { $CacheSourceRunId } else { $RunId }
+if ($Steps -lt 1 -or $Steps -gt 100000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..100000' }
 try { $muonLearningRateValue = [double]::Parse($MuonLearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
 try { $muonMomentumValue = [double]::Parse($MuonMomentum, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_MOMENTUM_INVALID' }
 if (-not [double]::IsFinite($muonLearningRateValue) -or $muonLearningRateValue -le 0 -or $muonLearningRateValue -gt 1) { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
@@ -255,6 +292,66 @@ if (-not $CachePath) { $CachePath = Join-Path $root (Join-Path $trainingDataRoot
 if (-not (Test-Path -LiteralPath $CachePath -PathType Leaf)) { throw "PRIVATE_CACHE_MISSING: $CachePath" }
 $cacheResolved = [IO.Path]::GetFullPath($CachePath)
 $allowed = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
+$expandedTrainManifest = $null
+if ($Optimizer -eq 'Muon' -and [IO.Path]::GetFileName($cacheResolved) -eq 'train-expanded.bin') {
+  $cacheDirectory = Split-Path -Parent $cacheResolved
+  $privateDataDirectory = Split-Path -Parent $cacheDirectory
+  $expandedManifestPath = Join-Path $privateDataDirectory 'expanded-train-manifest.json'
+  if (-not (Test-Path -LiteralPath $expandedManifestPath -PathType Leaf)) { throw 'EXPANDED_TRAIN_MANIFEST_MISSING' }
+  $expandedTrainManifest = Get-Content -LiteralPath $expandedManifestPath -Raw | ConvertFrom-Json
+  if ($expandedTrainManifest.schema -ne 'NICOPEDIA_G1_EXPANDED_TRAIN_V1' -or
+      $expandedTrainManifest.final_test_opened -ne $false -or
+      $expandedTrainManifest.final_test_tokenized_for_training_or_evaluation -ne $false -or
+      $expandedTrainManifest.final_test_used_for_training_or_quality -ne $false -or
+      $expandedTrainManifest.final_test_evaluated -ne $false -or
+      $expandedTrainManifest.final_test_body_scan_scope -ne 'cleaning_and_exact_text_deduplication_only' -or
+      $expandedTrainManifest.final_test_dedupe_only_scan.performed -ne $true -or
+      $expandedTrainManifest.final_test_dedupe_only_scan.model_facing_or_quality_facing_access -ne $false -or
+      $expandedTrainManifest.cache.format -ne 'NPRTBPEV1' -or
+      [int]$expandedTrainManifest.cache.context -ne $Tokens -or
+      [long]$expandedTrainManifest.cache.records -lt 800000 -or
+      [long]$expandedTrainManifest.cache.records -gt 15000000 -or
+      $expandedTrainManifest.tokenizer.kind -ne 'byte_bpe' -or
+      [int]$expandedTrainManifest.tokenizer.vocabulary -ne $Vocabulary -or
+      $expandedTrainManifest.tokenizer.sha256 -ne 'sha256:9a70e5929e6556a147b0fbc6ada7afefa5e144cdfe2d83bd60e6b31a13252798' -or
+      [int]$expandedTrainManifest.training_order.hard_ceiling_steps -ne 100000 -or
+      [long]$expandedTrainManifest.training_order.selection_count -ne 800000 -or
+      $expandedTrainManifest.split_leakage.selected_train_intersects_validation -ne 0 -or
+      $expandedTrainManifest.split_leakage.selected_train_intersects_development -ne 0 -or
+      $expandedTrainManifest.split_leakage.selected_train_intersects_final_test -ne 0) {
+    throw 'EXPANDED_TRAIN_MANIFEST_IDENTITY_MISMATCH'
+  }
+  if ($Seed -ne 1 -or $Optimizer -ne 'Muon' -or $AttentionGate -ne 'headwise_g1_sigmoid' -or
+      $Vocabulary -ne 1024 -or $Tokens -ne 32 -or $Dimension -ne 64 -or
+      $FeedForwardDimension -ne 128 -or $Layers -ne 19 -or $BatchSize -ne 8 -or
+      $ScheduleTotalSteps -ne 100000 -or $LearningRate -ne '0.0033' -or
+      $LearningRateSchedule -ne 'linear_decay' -or $DecayStartStep -ne 4000 -or
+      $DecayEndStep -ne 8000 -or $TargetLearningRate -ne '0.00015' -or
+      -not $ExperimentFork -or $ParentLearningRate -ne '0.0033' -or
+      $MuonLearningRate -ne '0.0075' -or $MuonMomentum -ne '0.95' -or
+      $MuonNsSteps -ne 5 -or $CheckpointInterval -ne 1000) {
+    throw 'EXPANDED_G1_EXPERIMENT_IDENTITY_MISMATCH'
+  }
+  $expandedCacheSha256 = (Get-FileHash -LiteralPath $cacheResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($expandedTrainManifest.cache.sha256 -ne "sha256:$expandedCacheSha256") { throw 'EXPANDED_TRAIN_CACHE_SHA256_MISMATCH' }
+}
+$evalCacheRootCandidate = if ($EvalCacheRoot) {
+  if ([IO.Path]::IsPathRooted($EvalCacheRoot)) { $EvalCacheRoot } else { Join-Path $root $EvalCacheRoot }
+} else { Join-Path $root (Join-Path $trainingDataRoot 'caches') }
+$evalCacheRoot = [IO.Path]::GetFullPath($evalCacheRootCandidate)
+if (-not $evalCacheRoot.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'EvalCacheRoot must resolve below the repository build directory' }
+foreach ($heldoutName in @('validation.bin', 'development.bin')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $evalCacheRoot $heldoutName) -PathType Leaf)) { throw "HELDOUT_CACHE_MISSING: $heldoutName" }
+}
+if ($null -ne $expandedTrainManifest) {
+  foreach ($splitName in @('validation', 'development')) {
+    $heldoutPath = Join-Path $evalCacheRoot "$splitName.bin"
+    $heldoutSha256 = (Get-FileHash -LiteralPath $heldoutPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($expandedTrainManifest.heldout_cache_identity.$splitName.sha256 -ne "sha256:$heldoutSha256") {
+      throw "EXPANDED_TRAIN_HELDOUT_CACHE_SHA256_MISMATCH: $splitName"
+    }
+  }
+}
 if (-not $cacheResolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) {
   throw "CachePath must resolve below the repository build directory"
 }
@@ -264,6 +361,10 @@ if ($Vocabulary -eq 1024) {
   if (-not (Test-Path -LiteralPath $TokenizerModelPath -PathType Leaf)) { throw "PRIVATE_TOKENIZER_MODEL_MISSING: $TokenizerModelPath" }
   $tokenizerResolved = [IO.Path]::GetFullPath($TokenizerModelPath)
   if (-not $tokenizerResolved.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) { throw 'TokenizerModelPath must resolve below the repository build directory' }
+  if ($null -ne $expandedTrainManifest) {
+    $actualTokenizerSha256 = (Get-FileHash -LiteralPath $tokenizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($expandedTrainManifest.tokenizer.sha256 -ne "sha256:$actualTokenizerSha256") { throw 'EXPANDED_TRAIN_TOKENIZER_SHA256_MISMATCH' }
+  }
 }
 
 if (-not $SkipBuild -and $Optimizer -eq 'Muon' -and $MuonBackend -eq 'HVX') {
@@ -296,8 +397,13 @@ $serial = $deviceInfo.Serial
 $model = $deviceInfo.Model
 $soc = $deviceInfo.Soc
 
-function Adb([string[]]$Arguments) {
-  return (Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments $Arguments).Output
+function Adb {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [ValidateRange(1, 600)][int]$TimeoutSeconds = 60
+  )
+  return (Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments $Arguments `
+    -TimeoutSeconds $TimeoutSeconds).Output
 }
 
 if (-not $SkipInstall) {
@@ -324,15 +430,49 @@ if ($BuildInstallOnly) {
 $remoteDir = "files/headless-input/$RunId"
 Assert-PhoneLmHeadlessInputFresh -Adb $adb -Device $device -Package $package -RemoteDir $remoteDir
 Adb @('shell', 'run-as', $package, 'mkdir', '-p', $remoteDir) | Out-Null
-$tmpOnDevice = "/data/local/tmp/phonelm-headless-$RunId-train"
-Adb @('push', $cacheResolved, $tmpOnDevice) | Out-Null
-Adb @('shell', 'run-as', $package, 'cp', $tmpOnDevice, "$remoteDir/train_pilot.bin") | Out-Null
-Adb @('shell', 'rm', '-f', $tmpOnDevice) | Out-Null
+$cacheTransferTimeoutSeconds = 600
+$cacheSizeBytes = [IO.FileInfo]::new($cacheResolved).Length
+$cacheSha = (Get-FileHash -LiteralPath $cacheResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($CacheSourceRunId -and $CacheSourceRunId -ne $RunId) {
+  $cacheSourcePath = "files/headless-input/$CacheSourceRunId/train_pilot.bin"
+  $sourceIdentity = (Adb -Arguments @('shell', 'run-as', $package, 'sha256sum', $cacheSourcePath) `
+    -TimeoutSeconds $cacheTransferTimeoutSeconds).Trim()
+  if ($sourceIdentity -notmatch ('^' + [regex]::Escape($cacheSha) + '\s')) { throw 'CACHE_SOURCE_DEVICE_IDENTITY_MISMATCH' }
+  $appPrivateRootOutput = Adb @('shell', 'run-as', $package, 'pwd')
+  $appPrivateRoot = Get-PhoneLmAppPrivateRoot -WorkingDirectory ([string]::Join("`n", [string[]]$appPrivateRootOutput))
+  $cacheSourceAbsolutePath = "$($appPrivateRoot.TrimEnd('/'))/$cacheSourcePath"
+  $cacheLink = Invoke-PhoneLmAdb -Adb $adb -Device $device -Arguments @(
+    'shell', 'run-as', $package, 'ln', '-s', $cacheSourceAbsolutePath, "$remoteDir/train_pilot.bin") -AllowFailure
+  if ($cacheLink.ExitCode -ne 0) { throw "CACHE_SOURCE_SYMLINK_FAILED: $($cacheLink.Classification)" }
+  $linkedIdentity = (Adb -Arguments @('shell', 'run-as', $package, 'sha256sum', "$remoteDir/train_pilot.bin") `
+    -TimeoutSeconds $cacheTransferTimeoutSeconds).Trim()
+  if ($linkedIdentity -notmatch ('^' + [regex]::Escape($cacheSha) + '\s')) { throw 'CACHE_SYMLINK_IDENTITY_MISMATCH' }
+  Write-Host "TRAIN_CACHE_STAGE mode=app-private-symlink source_run_id=$CacheSourceRunId size_bytes=$cacheSizeBytes sha256=$cacheSha device_sha256=verified timeout_seconds=$cacheTransferTimeoutSeconds"
+} else {
+  $tmpOnDevice = "/data/local/tmp/phonelm-headless-$RunId-train"
+  Adb -Arguments @('push', $cacheResolved, $tmpOnDevice) `
+    -TimeoutSeconds $cacheTransferTimeoutSeconds | Out-Null
+  Adb -Arguments @('shell', 'run-as', $package, 'cp', $tmpOnDevice, "$remoteDir/train_pilot.bin") `
+    -TimeoutSeconds $cacheTransferTimeoutSeconds | Out-Null
+  Adb @('shell', 'rm', '-f', $tmpOnDevice) | Out-Null
+  $deviceCacheIdentity = (Adb -Arguments @('shell', 'run-as', $package, 'sha256sum', "$remoteDir/train_pilot.bin") `
+    -TimeoutSeconds $cacheTransferTimeoutSeconds).Trim()
+  if ($deviceCacheIdentity -notmatch ('^' + [regex]::Escape($cacheSha) + '\s')) {
+    throw 'CACHE_DEVICE_IDENTITY_MISMATCH'
+  }
+  Write-Host "TRAIN_CACHE_STAGE mode=copy size_bytes=$cacheSizeBytes sha256=$cacheSha device_sha256=verified timeout_seconds=$cacheTransferTimeoutSeconds"
+}
 if ($Vocabulary -eq 1024) {
   $tmpTokenizer = "/data/local/tmp/phonelm-headless-$RunId-tokenizer"
+  Write-Host 'TRAIN_STAGE_START name=tokenizer_push'
   Adb @('push', $tokenizerResolved, $tmpTokenizer) | Out-Null
+  Write-Host 'TRAIN_STAGE_COMPLETE name=tokenizer_push'
+  Write-Host 'TRAIN_STAGE_START name=tokenizer_copy'
   Adb @('shell', 'run-as', $package, 'cp', $tmpTokenizer, "$remoteDir/byte-bpe-v1024.model") | Out-Null
+  Write-Host 'TRAIN_STAGE_COMPLETE name=tokenizer_copy'
+  Write-Host 'TRAIN_STAGE_START name=tokenizer_temp_cleanup'
   Adb @('shell', 'rm', '-f', $tmpTokenizer) | Out-Null
+  Write-Host 'TRAIN_STAGE_COMPLETE name=tokenizer_temp_cleanup'
   Copy-Item -LiteralPath $tokenizerResolved -Destination (Join-Path $reportRoot 'byte-bpe-v1024.model') -Force
 }
 
@@ -376,7 +516,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant() } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant(); cacheSourceRunId = $deviceCacheSourceRunId } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -419,7 +559,10 @@ $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $dev
   -ConditionAction {
     param($elapsed)
     $state = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase "training-$elapsed-sec"
-    Write-Host "health elapsed_seconds=$elapsed thermal=$($state.thermal_status) battery_temp_c=$($state.battery_temperature_c) battery_voltage_mv=$($state.battery_voltage_mv)"
+    $memoryLines = Adb @('shell', 'cat', '/proc/meminfo')
+    $memoryText = [string]::Join("`n", [string[]]$memoryLines)
+    $memoryAvailableKb = Get-PhoneLmMemAvailableKilobytes -MemInfoText $memoryText
+    Write-Host "health elapsed_seconds=$elapsed thermal=$($state.thermal_status) battery_temp_c=$($state.battery_temperature_c) battery_voltage_mv=$($state.battery_voltage_mv) mem_available_kb=$memoryAvailableKb"
   } `
   -FocusAction {
     param($elapsed)
@@ -524,6 +667,31 @@ if (-not $reportMap.Contains('model_dimension') -or -not $reportMap.Contains('fe
     [int]$reportMap.model_dimension -ne $Dimension -or [int]$reportMap.feed_forward_dimension -ne $FeedForwardDimension) {
   throw 'TRAINING_REPORT_MODEL_IDENTITY_MISMATCH'
 }
+if ($null -ne $expandedTrainManifest) {
+  $expectedRecordsSeen = [long]$Steps * $BatchSize
+  $expectedTokensSeen = $expectedRecordsSeen * $Tokens
+  $expectedOrderHash = [string]$expandedTrainManifest.training_order.hash
+  foreach ($field in @('target_tokens_seen','records_seen','unique_records_seen','unique_articles_seen',
+      'cache_traversal_fraction','completed_epochs_equivalent','target_original_utf8_bytes_seen',
+      'training_order_hash','exposure_scope')) {
+    if (-not $reportMap.Contains($field)) { throw "EXPOSURE_REPORT_FIELD_MISSING: $field" }
+  }
+  $expectedTraversal = $expectedRecordsSeen / [double]$expandedTrainManifest.cache.records
+  if ([long]$reportMap.records_seen -ne $expectedRecordsSeen -or
+      [long]$reportMap.target_tokens_seen -ne $expectedTokensSeen -or
+      [long]$reportMap.unique_records_seen -le 0 -or
+      [long]$reportMap.unique_records_seen -gt [long]$expandedTrainManifest.cache.records -or
+      [long]$reportMap.unique_records_seen -gt $expectedRecordsSeen -or
+      [long]$reportMap.unique_articles_seen -le 0 -or
+      [long]$reportMap.unique_articles_seen -gt [long]$reportMap.unique_records_seen -or
+      [math]::Abs(([double]$reportMap.cache_traversal_fraction) - $expectedTraversal) -gt 1.0e-9 -or
+      [math]::Abs(([double]$reportMap.completed_epochs_equivalent) - $expectedTraversal) -gt 1.0e-9 -or
+      [long]$reportMap.target_original_utf8_bytes_seen -le 0 -or
+      $reportMap.training_order_hash -ne $expectedOrderHash -or
+      $reportMap.exposure_scope -ne 'cumulative_from_fresh_initialization') {
+    throw 'EXPOSURE_REPORT_ACCOUNTING_MISMATCH'
+  }
+}
 if (-not $reportMap.Contains('learning_rate') -or [single]$reportMap.learning_rate -ne [single]$LearningRate) {
   throw 'TRAINING_REPORT_LEARNING_RATE_MISMATCH'
 }
@@ -538,6 +706,7 @@ if (-not $reportMap.Contains('learning_rate_schedule') -or $reportMap.learning_r
 }
 $stateAfter = Get-PhoneLmThermalBatteryState -Adb $adb -Device $device -Phase 'after'
 $annotated = $result.TrimEnd() + "`n" +
+  "cache_source_run_id=$deviceCacheSourceRunId`n" +
   "device_model=$model`n" +
   "device_soc=$soc`n" +
   "android_thermal_status_before=$($stateBefore.thermal_status)`n" +
@@ -580,9 +749,11 @@ foreach ($expected in $expectedSteps) {
   $name = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $expected
   if ($checkpointNames -notcontains $name) { throw "CHECKPOINT_INTERVAL_MISSING: $name" }
 }
+$lightEvalRows = @()
 foreach ($name in $checkpointNames) {
   if ($name -notmatch "^htp-seed$Seed-l$Layers(-t$Tokens-d$Dimension-f$FeedForwardDimension)?-step(\d+)\.ckpt$") { continue }
   $stepName = [int]$Matches[2]
+  if ($stepName -le $ResumeStep) { continue }
   $local = Join-Path $reportRoot $name
   $pulled = Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
     -RemotePath "$remoteDir/$name" -LocalPath $local -MinimumBytes 1024
@@ -600,13 +771,12 @@ foreach ($name in $checkpointNames) {
       if ($header.TokenizerKind -ne 'byte_bpe' -or $header.TokenizerHash -ne $modelHash) { throw "CHECKPOINT_TOKENIZER_IDENTITY_MISMATCH: $name" }
     }
   }
-  # When the production evaluator and held-out caches are available, decode
-  # every pulled checkpoint through the same host path used by the eval runner
-  # (one chunk is sufficient for identity/finiteness; full-cap eval is a
-  # separate milestone).  Header validation above remains fail-closed.
+  # Run the same fixed one-record Val/Dev sample through the host evaluator at
+  # every 1k checkpoint. Full-cap HTP evaluations use separately predeclared
+  # milestone checkpoints. Header validation above remains fail-closed.
   $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
-  $validationHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\validation.bin')
-  $developmentHost = Join-Path $root (Join-Path $trainingDataRoot 'caches\development.bin')
+  $validationHost = Join-Path $evalCacheRoot 'validation.bin'
+  $developmentHost = Join-Path $evalCacheRoot 'development.bin'
   Ensure-PhoneLmHostCheckpointEvaluator -Root $root -ExePath $hostEvalExe | Out-Null
   if (-not (Test-Path -LiteralPath $hostEvalExe -PathType Leaf) -or -not (Test-Path -LiteralPath $validationHost -PathType Leaf) -or -not (Test-Path -LiteralPath $developmentHost -PathType Leaf)) {
     throw 'HOST_CHECKPOINT_EVALUATOR_UNAVAILABLE'
@@ -614,13 +784,46 @@ foreach ($name in $checkpointNames) {
   $hostDecoded = & $hostEvalExe $local $validationHost $developmentHost 1 1
   if ($LASTEXITCODE -ne 0) { throw "HOST_CHECKPOINT_EVALUATOR_DECODE_FAILED: $name" }
   $hostIdentity = Get-PhoneLmKeyValueMap -Text ($hostDecoded -join "`n")
-  # The host evaluator intentionally reports the compact identity fields
-  # (seed/layers/step); the full V2 architecture identity was already
-  # fail-closed against the checkpoint header above.  Do not require fields
-  # that older evaluator binaries do not emit here.
-  foreach ($field in @('seed', 'layers', 'step', 'parameter_hash', 'finite')) { if (-not $hostIdentity.Contains($field)) { throw "HOST_CHECKPOINT_EVALUATOR_FIELD_MISSING: $field" } }
+  foreach ($field in @('seed', 'layers', 'step', 'parameter_hash', 'finite',
+      'validation_nll', 'validation_top1', 'validation_chunks', 'validation_tokens',
+      'validation_target_utf8_bytes', 'validation_bits_per_utf8_byte',
+      'development_nll', 'development_top1', 'development_chunks',
+      'development_tokens', 'development_target_utf8_bytes',
+      'development_bits_per_utf8_byte')) {
+    if (-not $hostIdentity.Contains($field)) { throw "HOST_CHECKPOINT_EVALUATOR_FIELD_MISSING: $field" }
+  }
   if ([int]$hostIdentity.seed -ne $Seed -or [int]$hostIdentity.layers -ne $Layers -or [int]$hostIdentity.step -ne $stepName -or $hostIdentity.finite -ne 'true') { throw "HOST_CHECKPOINT_EVALUATOR_IDENTITY_MISMATCH: $name" }
+  if ([int]$hostIdentity.validation_chunks -ne 1 -or [int]$hostIdentity.development_chunks -ne 1 -or
+      [int]$hostIdentity.validation_tokens -ne $Tokens -or [int]$hostIdentity.development_tokens -ne $Tokens -or
+      [long]$hostIdentity.validation_target_utf8_bytes -le 0 -or
+      [long]$hostIdentity.development_target_utf8_bytes -le 0) {
+    throw "HOST_CHECKPOINT_EVALUATOR_SAMPLE_MISMATCH: $name"
+  }
+  $lightEvalRows += [pscustomobject]@{
+    step = $stepName
+    evaluator_backend = 'host_cpu'
+    validation_chunks = [int]$hostIdentity.validation_chunks
+    validation_tokens = [int]$hostIdentity.validation_tokens
+    validation_target_utf8_bytes = [long]$hostIdentity.validation_target_utf8_bytes
+    validation_nll = [string]$hostIdentity.validation_nll
+    validation_bpb = [string]$hostIdentity.validation_bits_per_utf8_byte
+    validation_top1 = [string]$hostIdentity.validation_top1
+    development_chunks = [int]$hostIdentity.development_chunks
+    development_tokens = [int]$hostIdentity.development_tokens
+    development_target_utf8_bytes = [long]$hostIdentity.development_target_utf8_bytes
+    development_nll = [string]$hostIdentity.development_nll
+    development_bpb = [string]$hostIdentity.development_bits_per_utf8_byte
+    development_top1 = [string]$hostIdentity.development_top1
+    parameter_hash = [string]$hostIdentity.parameter_hash
+    finite = [string]$hostIdentity.finite
+  }
   Write-Host "checkpoint step=$stepName size=$($pulled.Size) sha256=$($pulled.Sha256) identity=verified"
+}
+if ($Optimizer -eq 'Muon') {
+  if ($lightEvalRows.Count -ne $expectedSteps.Count) { throw 'LIGHTWEIGHT_HELDOUT_EVAL_BOUNDARY_COUNT_MISMATCH' }
+  $lightEvalPath = Join-Path $reportRoot "lightweight-heldout-evaluation-$RunId.csv"
+  $lightEvalRows | Sort-Object -Property step | Export-Csv -LiteralPath $lightEvalPath -NoTypeInformation -Encoding utf8
+  Write-Host "lightweight_heldout_evaluation=$lightEvalPath records=$($lightEvalRows.Count) sample=first_cache_record_per_split"
 }
 $finalCkptName = Get-PhoneLmCheckpointName -Seed $Seed -Layers $Layers -Tokens $Tokens -Dimension $Dimension -FeedForwardDimension $FeedForwardDimension -Step $Steps
 # The device writes the curve with an untagged name; the host keeps the
@@ -668,7 +871,90 @@ $requiredTelemetrySteps = @($requiredTelemetrySteps | Where-Object { $_ -gt $Res
 foreach ($requiredStep in $requiredTelemetrySteps) {
   if (@($telemetryRows | Where-Object { [int]$_.step -eq $requiredStep }).Count -ne 1) { throw "LEARNING_RATE_TELEMETRY_ANCHOR_MISSING: $requiredStep" }
 }
-Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveLocal + learning-rate-telemetry.csv"
+$expectedTelemetryBoundaries = @()
+$nextTelemetryBoundary = if ($ResumeStep -gt 0) {
+  ([Math]::Floor($ResumeStep / [double]$CheckpointInterval) + 1) * $CheckpointInterval
+} else { $CheckpointInterval }
+for ($s = $nextTelemetryBoundary; $s -le $Steps; $s += $CheckpointInterval) { $expectedTelemetryBoundaries += $s }
+if ($expectedTelemetryBoundaries -notcontains $Steps) { $expectedTelemetryBoundaries += $Steps }
+
+$optimizerHealthRows = @()
+if ($Optimizer -eq 'Muon') {
+  $optimizerHealthLocal = Join-Path $reportRoot "optimizer-health-telemetry-$RunId.csv"
+  Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
+    -RemotePath "$remoteDir/optimizer-health-telemetry.csv" -LocalPath $optimizerHealthLocal -MinimumBytes 1 | Out-Null
+  $optimizerHealthRows = @(Import-Csv -LiteralPath $optimizerHealthLocal)
+  if ($optimizerHealthRows.Count -ne $expectedTelemetryBoundaries.Count) { throw 'OPTIMIZER_HEALTH_TELEMETRY_BOUNDARY_COUNT_MISMATCH' }
+  $previousHealthBoundary = $ResumeStep
+  for ($i = 0; $i -lt $optimizerHealthRows.Count; $i++) {
+    $row = $optimizerHealthRows[$i]
+    $expectedBoundary = [int]$expectedTelemetryBoundaries[$i]
+    if ([int]$row.step -ne $expectedBoundary -or
+        [int]$row.window_start_step -ne ($previousHealthBoundary + 1) -or
+        [int]$row.window_updates -ne ($expectedBoundary - $previousHealthBoundary)) {
+      throw "OPTIMIZER_HEALTH_TELEMETRY_POSITION_MISMATCH: step=$($row.step)"
+    }
+    foreach ($field in @('gradient_finite','momentum_finite','normalized_finite','ns_output_finite','update_finite','parameters_finite','qnn_return_code_success','hvx_output_finite')) {
+      if ($row.$field -ne 'true') { throw "OPTIMIZER_HEALTH_TELEMETRY_FAILURE: step=$($row.step) field=$field" }
+    }
+    if ($row.nonfinite_detected -ne 'false') { throw "OPTIMIZER_HEALTH_TELEMETRY_NONFINITE_DETECTED: step=$($row.step)" }
+    if ($row.gradient_clipping_enabled -ne 'false' -or [int]$row.clipped_steps_window -ne 0 -or
+        [int]$row.hvx_rpc_status -ne 0 -or $row.hvx_fallback -ne 'false' -or
+        $row.cpu_fallback -ne 'false') { throw "OPTIMIZER_HEALTH_TELEMETRY_POLICY_MISMATCH: step=$($row.step)" }
+    foreach ($field in @('gradient_l2_norm_at_boundary','parameter_l2_norm_at_boundary','muon_parameter_delta_l2_last_update','aux_adam_parameter_delta_l2_last_update','muon_update_ms_window','aux_adam_update_ms_window','optimizer_update_ms_window')) {
+      $number = [double]$row.$field
+      if ([double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt 0) {
+        throw "OPTIMIZER_HEALTH_TELEMETRY_NONFINITE: step=$($row.step) field=$field"
+      }
+    }
+    $previousHealthBoundary = $expectedBoundary
+  }
+}
+
+$gateTelemetryRows = @()
+if ($AttentionGate -in @('headwise_g1_sigmoid','headwise_g1_scale2_identity')) {
+  $gateTelemetryLocal = Join-Path $reportRoot "gate-telemetry-$RunId.csv"
+  Receive-PhoneLmBinary -Adb $adb -Device $device -Package $package `
+    -RemotePath "$remoteDir/gate-telemetry.csv" -LocalPath $gateTelemetryLocal -MinimumBytes 1 | Out-Null
+  $gateTelemetryRows = @(Import-Csv -LiteralPath $gateTelemetryLocal)
+  $expectedGateRows = $expectedTelemetryBoundaries.Count * $Layers * 2
+  if ($gateTelemetryRows.Count -ne $expectedGateRows) { throw 'GATE_TELEMETRY_ROW_COUNT_MISMATCH' }
+  $previousGateBoundary = $ResumeStep
+  foreach ($boundary in $expectedTelemetryBoundaries) {
+    $windowRows = @($gateTelemetryRows | Where-Object { [int]$_.step -eq [int]$boundary })
+    if ($windowRows.Count -ne ($Layers * 2)) { throw "GATE_TELEMETRY_LAYER_HEAD_COUNT_MISMATCH: step=$boundary" }
+    $windowUpdates = [int]$boundary - $previousGateBoundary
+    $seenLayerHeads = @{}
+    foreach ($row in $windowRows) {
+      $layer = [int]$row.layer
+      $head = [int]$row.head
+      $key = "$layer`:$head"
+      if ($layer -lt 0 -or $layer -ge $Layers -or $head -notin @(0,1) -or $seenLayerHeads.ContainsKey($key)) {
+        throw "GATE_TELEMETRY_DUPLICATE_OR_INVALID_LAYER_HEAD: step=$boundary key=$key"
+      }
+      $seenLayerHeads[$key] = $true
+      if ([int]$row.window_start_step -ne ($previousGateBoundary + 1) -or
+          [int]$row.window_end_step -ne [int]$boundary -or
+          [int]$row.count -ne ($windowUpdates * 8 * $Tokens)) {
+        throw "GATE_TELEMETRY_POSITION_OR_COUNT_MISMATCH: step=$boundary key=$key"
+      }
+      foreach ($field in @('mean','stddev','min','max','below_0_1_fraction','above_0_9_fraction')) {
+        $number = [double]$row.$field
+        if ([double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt 0) {
+          throw "GATE_TELEMETRY_NONFINITE: step=$boundary key=$key field=$field"
+        }
+      }
+      if ([double]$row.min -gt [double]$row.max -or [double]$row.min -lt 0 -or
+          [double]$row.max -gt 1 -or [double]$row.mean -gt 1 -or
+          [double]$row.below_0_1_fraction -gt 1 -or
+          [double]$row.above_0_9_fraction -gt 1) {
+        throw "GATE_TELEMETRY_RANGE_MISMATCH: step=$boundary key=$key"
+      }
+    }
+    $previousGateBoundary = [int]$boundary
+  }
+}
+Write-Host "Pulled $($checkpointNames.Count) interval checkpoints + $curveLocal + learning-rate-telemetry.csv + $($optimizerHealthRows.Count) optimizer windows + $($gateTelemetryRows.Count) gate summaries"
 Write-Host "PASS NICOPEDIA_HTP seed=$Seed layers=$Layers steps=$Steps"
 Write-Host "Reports: $reportRoot"
 } finally {

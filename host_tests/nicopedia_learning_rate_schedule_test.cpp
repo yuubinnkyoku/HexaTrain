@@ -20,6 +20,16 @@ int main() {
   assert(std::abs(at(s4000, 7999) - .001500175f) < 1.0e-9f);
   assert(at(s4000, 8000) == .0015f);
 
+  // G1 long-horizon provenance keeps the validated cooldown unchanged and
+  // holds its terminal rate through the 100k hard ceiling.
+  Config g1Long{Kind::LINEAR_DECAY, .0033f, .00015f, 4000, 8000, true};
+  assert(validate(g1Long, 100000));
+  assert(at(g1Long, 4000) == .0033f);
+  assert(at(g1Long, 8000) == .00015f);
+  assert(at(g1Long, 8001) == .00015f);
+  assert(at(g1Long, 50000) == .00015f);
+  assert(at(g1Long, 100000) == .00015f);
+
   Config s6000{Kind::LINEAR_DECAY, .0022f, .0015f, 6000, 8000, true};
   assert(validate(s6000, 8000));
   assert(at(s6000, 6000) == .0022f);

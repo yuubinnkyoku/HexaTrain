@@ -18,6 +18,7 @@ param(
   [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
   [switch]$SkipBuild,
   [switch]$SkipInstall,
+  [switch]$SkipHostEvaluation,
   [int]$Seed = 1,
   [int]$Layers = 19,
   [int]$Heads = 2,
@@ -33,6 +34,7 @@ param(
   [string]$CacheRoot = "",
   [string]$TokenizerModelPath = "",
   [string]$ReportRoot = "",
+  [string]$ExpectedDeviceSerial = "",
   [int]$PollLimit = 7200,
   [int]$PollSeconds = 2,
   [int]$ProgressEverySeconds = 30,
@@ -131,6 +133,7 @@ if (-not $SkipBuild) {
 }
 $deviceInfo = Resolve-PhoneLmDevice -Adb $adb
 $device = $deviceInfo.Endpoint
+if ($ExpectedDeviceSerial -and $deviceInfo.Serial -ne $ExpectedDeviceSerial) { throw 'ADB_EXPECTED_DEVICE_IDENTITY_MISMATCH' }
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $device
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $device -Package $package
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $device -Package $package
@@ -236,31 +239,39 @@ $annotated = $result.TrimEnd() + "`n" +
   "battery_temperature_c_before=$($stateBefore.battery_temperature_c)`n" +
   "battery_temperature_c_after=$($stateAfter.battery_temperature_c)`n" +
   "compile_time_qairt_build_id=$ExpectedBuildId`n" +
+  "htp_eval_elapsed_seconds=$($waited.ElapsedSeconds)`n" +
+  "host_cpu_evaluation_skipped=$($SkipHostEvaluation.ToString().ToLowerInvariant())`n" +
   "private_serial_recorded_for_identity_only=true`n"
 $annotated | Set-Content -LiteralPath (Join-Path $reportRoot "$reportStem-htp.txt") -Encoding utf8
-# Host-side CPU evaluation of the same checkpoint + caches for comparison.
-$hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
-Ensure-PhoneLmHostCheckpointEvaluator -Root $root -ExePath $hostEvalExe | Out-Null
-$hostEval = & $hostEvalExe $CheckpointPath $validationCache $developmentCache $ValidationChunks $DevelopmentChunks
-if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval failed: $hostEval" }
-$hostEval | Set-Content -LiteralPath (Join-Path $reportRoot "$reportStem-cpu.txt") -Encoding utf8
-$hostMap = Get-PhoneLmKeyValueMap -Text ($hostEval -join "`n")
-foreach ($key in @('seed', 'layers', 'dimension', 'feed_forward_dimension', 'step', 'parameter_hash', 'finite', 'validation_nll', 'development_nll', 'validation_chunks', 'development_chunks', 'validation_tokens', 'development_tokens')) {
-  if (-not $hostMap.Contains($key)) { throw "HOST_EVALUATOR_FIELD_MISSING: $key" }
+if (-not $SkipHostEvaluation) {
+  # Host-side CPU evaluation is an optional cross-backend reference. Long-run
+  # callers may collect it at one anchor checkpoint and retain HTP as the
+  # primary full-cap metric at subsequent fixed boundaries.
+  $hostEvalExe = Join-Path $root 'build\host-tests\htp_checkpoint_eval.exe'
+  Ensure-PhoneLmHostCheckpointEvaluator -Root $root -ExePath $hostEvalExe | Out-Null
+  $hostEval = & $hostEvalExe $CheckpointPath $validationCache $developmentCache $ValidationChunks $DevelopmentChunks
+  if ($LASTEXITCODE -ne 0) { throw "htp_checkpoint_eval failed: $hostEval" }
+  $hostEval | Set-Content -LiteralPath (Join-Path $reportRoot "$reportStem-cpu.txt") -Encoding utf8
+  $hostMap = Get-PhoneLmKeyValueMap -Text ($hostEval -join "`n")
+  foreach ($key in @('seed', 'layers', 'dimension', 'feed_forward_dimension', 'step', 'parameter_hash', 'finite', 'validation_nll', 'development_nll', 'validation_chunks', 'development_chunks', 'validation_tokens', 'development_tokens')) {
+    if (-not $hostMap.Contains($key)) { throw "HOST_EVALUATOR_FIELD_MISSING: $key" }
+  }
+  if ([int]$hostMap.seed -ne $Seed -or [int]$hostMap.layers -ne $Layers -or [int]$hostMap.dimension -ne $Dimension -or [int]$hostMap.feed_forward_dimension -ne $FeedForwardDimension -or [int]$hostMap.step -ne $CheckpointStep -or $hostMap.finite -ne 'true') {
+    throw 'HOST_EVALUATOR_CHECKPOINT_IDENTITY_MISMATCH'
+  }
+  if ([int64]$hostMap.validation_chunks -ne $ValidationChunks -or
+      [int64]$hostMap.development_chunks -ne $DevelopmentChunks -or
+      [int64]$hostMap.validation_tokens -ne ([int64]$ValidationChunks * $Tokens) -or
+      [int64]$hostMap.development_tokens -ne ([int64]$DevelopmentChunks * $Tokens)) {
+    throw 'HOST_EVALUATOR_CAPACITY_MISMATCH'
+  }
+  if ($hostMap.parameter_hash -ne $reportMap.checkpoint_parameter_hash) {
+    throw "HOST_EVALUATOR_PARAMETER_HASH_MISMATCH: device and CPU checkpoint identities differ"
+  }
+  Write-Host "CPU evaluator decoded checkpoint identity=verified parameter_hash=$($hostMap.parameter_hash)"
+} else {
+  Write-Host 'host_cpu_evaluation=SKIPPED_BY_FIXED_PROTOCOL'
 }
-if ([int]$hostMap.seed -ne $Seed -or [int]$hostMap.layers -ne $Layers -or [int]$hostMap.dimension -ne $Dimension -or [int]$hostMap.feed_forward_dimension -ne $FeedForwardDimension -or [int]$hostMap.step -ne $CheckpointStep -or $hostMap.finite -ne 'true') {
-  throw 'HOST_EVALUATOR_CHECKPOINT_IDENTITY_MISMATCH'
-}
-if ([int64]$hostMap.validation_chunks -ne $ValidationChunks -or
-    [int64]$hostMap.development_chunks -ne $DevelopmentChunks -or
-    [int64]$hostMap.validation_tokens -ne ([int64]$ValidationChunks * $Tokens) -or
-    [int64]$hostMap.development_tokens -ne ([int64]$DevelopmentChunks * $Tokens)) {
-  throw 'HOST_EVALUATOR_CAPACITY_MISMATCH'
-}
-if ($hostMap.parameter_hash -ne $reportMap.checkpoint_parameter_hash) {
-  throw "HOST_EVALUATOR_PARAMETER_HASH_MISMATCH: device and CPU checkpoint identities differ"
-}
-Write-Host "CPU evaluator decoded checkpoint identity=verified parameter_hash=$($hostMap.parameter_hash)"
 Write-Host "HTP-native eval PASS: seed=$Seed layers=$Layers step=$CheckpointStep"
 Write-Host "Reports: $reportRoot"
 } finally {

@@ -48,13 +48,14 @@ std::vector<std::uint8_t> modelBytes() {
   return bytes;
 }
 
-std::vector<std::uint8_t> cacheBytes(const bpe::Model& model) {
+std::vector<std::uint8_t> cacheBytes(const bpe::Model& model,
+                                     std::uint64_t recordCount = 1) {
   std::vector<std::uint8_t> bytes(bpe::kCacheMagic,
                                   bpe::kCacheMagic + sizeof(bpe::kCacheMagic) - 1);
   appendU32(bytes, 4); appendU32(bytes, bpe::kVocabulary);
   const auto digest = hex(model.sha256);
   bytes.insert(bytes.end(), digest.begin(), digest.end());
-  appendU64(bytes, 1); appendU64(bytes, 0x123456789abcdef0ull);
+  appendU64(bytes, recordCount); appendU64(bytes, 0x123456789abcdef0ull);
   for (std::uint16_t token : {std::uint16_t(65), std::uint16_t(66), std::uint16_t(256),
                               std::uint16_t(257), std::uint16_t(1023)}) appendU16(bytes, token);
   return bytes;
@@ -93,9 +94,26 @@ int main(int argc, char** argv) {
             "BPE nats/bits per byte fixture");
 
     const auto cache = bpe::parseCache(cacheBytes(model), model);
-    require(cache.context == 4 && cache.vocabulary == 1024 && cache.records.size() == 1,
+    require(cache.context == 4 && cache.vocabulary == 1024 && cache.recordCount() == 1,
             "cache header");
-    require(cache.records[0].window.back() == 1023, "uint16 token round trip");
+    require(cache.tokenAt(0, 4) == 1023, "uint16 token round trip");
+    const auto expandedCountHeader =
+        cacheBytes(model, bpe::kDefaultCacheRecordLimit + 1);
+    try {
+      (void)bpe::parseCache(expandedCountHeader, model);
+      throw std::runtime_error("default BPE record ceiling changed");
+    } catch (const std::runtime_error& error) {
+      require(std::string(error.what()) == "BPE_CACHE_COUNT",
+              "default BPE record ceiling preserved");
+    }
+    try {
+      (void)bpe::parseCache(expandedCountHeader, model,
+                            bpe::kExpandedTrainingCacheRecordLimit);
+      throw std::runtime_error("expanded BPE cache size accepted without records");
+    } catch (const std::runtime_error& error) {
+      require(std::string(error.what()) == "BPE_CACHE_SIZE",
+              "expanded training record ceiling is opt-in");
+    }
     auto truncated = cacheBytes(model); truncated.pop_back();
     try { (void)bpe::parseCache(truncated, model); throw std::runtime_error("truncated accepted"); }
     catch (const std::runtime_error& error) {
@@ -124,7 +142,9 @@ int main(int argc, char** argv) {
       require(argc >= 3, "private model requires at least one cache");
       const auto privateModel = bpe::loadModel(argv[1]);
       for (int index = 2; index < argc; ++index)
-        privateRecords += bpe::loadCache(argv[index], privateModel).records.size();
+        privateRecords += bpe::loadCache(
+            argv[index], privateModel, bpe::kExpandedTrainingCacheRecordLimit)
+                              .recordCount();
       std::cout << "private_bpe_artifact_audit=PASS cache_count=" << (argc - 2)
                 << " record_count=" << privateRecords
                 << " tokenizer_hash=" << privateModel.identity() << '\n';

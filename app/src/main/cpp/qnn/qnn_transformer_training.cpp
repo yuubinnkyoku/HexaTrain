@@ -369,6 +369,28 @@ double paramNorm(const Params &p) {
   for (const auto &entry : tiny_lm::parameterRegistry(p)) add(*entry.values);
   return std::sqrt(s);
 }
+double parameterRoleUpdateNorm(const Params &current, const Params &next,
+                               tiny_lm::ParameterRole role) {
+  const auto currentRegistry = tiny_lm::parameterRegistry(current);
+  const auto nextRegistry = tiny_lm::parameterRegistry(next);
+  if (currentRegistry.size() != nextRegistry.size())
+    return std::numeric_limits<double>::infinity();
+  double sum = 0.0;
+  for (size_t entry = 0; entry < currentRegistry.size(); ++entry) {
+    const auto &before = currentRegistry[entry];
+    const auto &after = nextRegistry[entry];
+    if (before.name != after.name || before.role != after.role ||
+        before.values->size() != after.values->size())
+      return std::numeric_limits<double>::infinity();
+    if (before.role != role) continue;
+    for (size_t index = 0; index < before.values->size(); ++index) {
+      const double delta = double((*after.values)[index]) -
+                           (*before.values)[index];
+      sum += delta * delta;
+    }
+  }
+  return std::sqrt(sum);
+}
 std::string failure(const char *test, const std::string &e, Runtime &r) {
   return std::string("TINY_TRANSFORMER_TRAINING\ntest=") + test +
          "\nstatus=FAILED\nerror=" + e + "\ncpu_fallback=false\n" +
@@ -4855,18 +4877,34 @@ std::uint64_t nprtReadU64(std::istream &input) {
   return value;
 }
 
-struct NprtRecord {
-  std::uint64_t articleHash = 0;
-  std::vector<std::uint16_t> window;
-};
-
 struct NprtCache {
   uint32_t context = 0;
   uint32_t vocabulary = 0;
-  std::vector<NprtRecord> records;
+  std::vector<std::uint64_t> articleHashes;
+  std::vector<std::uint16_t> tokenIds;
+  nicopedia_bpe::Cache packedBpeCache;
+  bool usesPackedBpeCache = false;
   std::string contentHash;
   std::string tokenizerKind = "byte";
   std::string tokenizerHash;
+
+  std::size_t recordCount() const {
+    return usesPackedBpeCache ? packedBpeCache.recordCount() : articleHashes.size();
+  }
+
+  std::uint64_t articleHashAt(std::size_t recordIndex) const {
+    return usesPackedBpeCache ? packedBpeCache.articleHashAt(recordIndex)
+                              : articleHashes.at(recordIndex);
+  }
+
+  std::uint16_t tokenAt(std::size_t recordIndex,
+                        std::size_t tokenIndex) const {
+    if (recordIndex >= recordCount() || tokenIndex > context)
+      throw std::out_of_range("NPRT_CACHE_RECORD_INDEX");
+    if (usesPackedBpeCache)
+      return packedBpeCache.tokenAt(recordIndex, tokenIndex);
+    return tokenIds.at(recordIndex * (std::size_t(context) + 1u) + tokenIndex);
+  }
 };
 
 // Byte-for-byte compatible with host_tests/nicopedia_real_text_pilot.cpp
@@ -4882,29 +4920,35 @@ NprtCache loadNprtCache(const std::string &path,
   if (prefix == "NPRTBPEV1\n") {
     if (!bpeModel) throw std::runtime_error("NPRT_BPE_MODEL_REQUIRED");
     input.close();
-    const auto source = nicopedia_bpe::loadCache(path, *bpeModel);
+    auto source = nicopedia_bpe::loadCache(
+        path, *bpeModel, nicopedia_bpe::kExpandedTrainingCacheRecordLimit);
     NprtCache cache;
     cache.context = source.context;
     cache.vocabulary = source.vocabulary;
     cache.tokenizerKind = "byte_bpe";
     cache.tokenizerHash = source.tokenizerHash;
-    cache.records.reserve(source.records.size());
+    // Keep the validated packed records in one buffer. Decoding all records
+    // into individually allocated windows used several times the file size.
+    cache.packedBpeCache = std::move(source);
+    cache.usesPackedBpeCache = true;
     std::uint64_t hash = kNprtFnvOffset;
     hash = nprtFnvBytes(&cache.context, sizeof(cache.context), hash);
     hash = nprtFnvBytes(&cache.vocabulary, sizeof(cache.vocabulary), hash);
     hash = nprtFnvBytes(cache.tokenizerHash.data(), cache.tokenizerHash.size(), hash);
-    const std::uint64_t count = source.records.size();
+    const std::uint64_t count = cache.recordCount();
     hash = nprtFnvBytes(&count, sizeof(count), hash);
-    for (const auto &sourceRecord : source.records) {
-      NprtRecord record;
-      record.articleHash = sourceRecord.articleHash;
-      record.window = sourceRecord.window;
-      hash = nprtFnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
-      hash = nprtFnvBytes(record.window.data(), record.window.size() * sizeof(std::uint16_t), hash);
-      cache.records.push_back(std::move(record));
+    for (std::size_t recordIndex = 0; recordIndex < cache.recordCount();
+         ++recordIndex) {
+      const std::uint64_t articleHash = cache.articleHashAt(recordIndex);
+      hash = nprtFnvBytes(&articleHash, sizeof(articleHash), hash);
+      for (std::size_t tokenIndex = 0; tokenIndex <= cache.context;
+           ++tokenIndex) {
+        const std::uint16_t token = cache.tokenAt(recordIndex, tokenIndex);
+        hash = nprtFnvBytes(&token, sizeof(token), hash);
+      }
     }
     cache.contentHash = nprtHex64(hash);
-    if (cache.records.empty()) throw std::runtime_error("NPRT_CACHE_EMPTY");
+    if (cache.recordCount() == 0) throw std::runtime_error("NPRT_CACHE_EMPTY");
     return cache;
   }
   char finalMagic = 0;
@@ -4917,27 +4961,31 @@ NprtCache loadNprtCache(const std::string &path,
   if (cache.context < 8 || cache.context > 256 || cache.vocabulary != 256 ||
       count > 10000000)
     throw std::runtime_error("NPRT_CACHE_HEADER_INVALID");
-  cache.records.reserve(static_cast<std::size_t>(count));
+  if (count > std::numeric_limits<std::size_t>::max() /
+                  (std::size_t(cache.context) + 1u))
+    throw std::runtime_error("NPRT_CACHE_TOKEN_COUNT");
+  cache.articleHashes.reserve(static_cast<std::size_t>(count));
+  cache.tokenIds.reserve(static_cast<std::size_t>(count) *
+                         (std::size_t(cache.context) + 1u));
   std::uint64_t hash = kNprtFnvOffset;
   hash = nprtFnvBytes(&cache.context, sizeof(cache.context), hash);
   hash = nprtFnvBytes(&cache.vocabulary, sizeof(cache.vocabulary), hash);
   hash = nprtFnvBytes(&count, sizeof(count), hash);
   for (std::uint64_t i = 0; i < count; ++i) {
-    NprtRecord record;
-    record.articleHash = nprtReadU64(input);
+    const std::uint64_t articleHash = nprtReadU64(input);
     std::vector<std::uint8_t> byteWindow(cache.context + 1);
     input.read(reinterpret_cast<char *>(byteWindow.data()),
                static_cast<std::streamsize>(byteWindow.size()));
     if (!input) throw std::runtime_error("NPRT_CACHE_RECORD_TRUNCATED");
-    record.window.assign(byteWindow.begin(), byteWindow.end());
-    hash = nprtFnvBytes(&record.articleHash, sizeof(record.articleHash), hash);
+    cache.articleHashes.push_back(articleHash);
+    for (std::uint8_t token : byteWindow) cache.tokenIds.push_back(token);
+    hash = nprtFnvBytes(&articleHash, sizeof(articleHash), hash);
     hash = nprtFnvBytes(byteWindow.data(), byteWindow.size(), hash);
-    cache.records.push_back(std::move(record));
   }
   if (input.get() != std::char_traits<char>::eof())
     throw std::runtime_error("NPRT_CACHE_TRAILING_BYTES");
   cache.contentHash = nprtHex64(hash);
-  if (cache.records.empty()) throw std::runtime_error("NPRT_CACHE_EMPTY");
+  if (cache.recordCount() == 0) throw std::runtime_error("NPRT_CACHE_EMPTY");
   return cache;
 }
 
@@ -4992,11 +5040,10 @@ NprtBatch nprtBatch(const tiny_lm::Config &config, const NprtCache &cache,
                     std::size_t recordIndex,
                     NprtBatchTimings *timings = nullptr) {
   const auto totalStarted = std::chrono::steady_clock::now();
-  const auto &record = cache.records.at(recordIndex);
   std::vector<uint32_t> input(config.tokens), target(config.tokens);
   for (uint32_t i = 0; i < config.tokens; ++i) {
-    input[i] = record.window[i];
-    target[i] = record.window[i + 1];
+    input[i] = cache.tokenAt(recordIndex, i);
+    target[i] = cache.tokenAt(recordIndex, i + 1);
   }
   NprtBatch batch;
   auto phaseStarted = std::chrono::steady_clock::now();
@@ -5009,7 +5056,7 @@ NprtBatch nprtBatch(const tiny_lm::Config &config, const NprtCache &cache,
   if (timings)
     timings->oneHotTargetUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - phaseStarted).count();
-  batch.articleHash = record.articleHash;
+  batch.articleHash = cache.articleHashAt(recordIndex);
   if (timings)
     timings->totalUs += std::chrono::duration<double, std::micro>(
         std::chrono::steady_clock::now() - totalStarted).count();
@@ -7277,7 +7324,8 @@ std::string nicopediaMuonHybridTraining(
             &momentum, &adamM, &adamV, &error))
       return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=RESUME_CHECKPOINT_DECODE\nerror=" + error + "\n";
   }
-  const auto order = nprtTrainingOrder(cache.records.size(), steps, 8);
+  const uint32_t orderSteps = std::max(scheduleTotal, steps);
+  const auto order = nprtTrainingOrder(cache.recordCount(), orderSteps, 8);
   const std::string orderHash = nprtOrderHash(order);
   Runtime runtime;
   RuntimeOptions options;
@@ -7315,6 +7363,22 @@ std::string nicopediaMuonHybridTraining(
   std::ofstream telemetry(cachePath + "/learning-rate-telemetry.csv",
                           std::ios::trunc);
   telemetry << "step,scheduled_lr,aux_adam_lr,muon_lr,learning_rate_schedule\n" << std::setprecision(10);
+  std::ofstream optimizerHealthTelemetry(
+      cachePath + "/optimizer-health-telemetry.csv", std::ios::trunc);
+  optimizerHealthTelemetry
+      << "step,window_start_step,window_updates,aux_adam_lr,muon_lr,"
+         "gradient_l2_norm_at_boundary,parameter_l2_norm_at_boundary,"
+         "muon_parameter_delta_l2_last_update,"
+         "aux_adam_parameter_delta_l2_last_update,muon_update_ms_window,"
+         "aux_adam_update_ms_window,optimizer_update_ms_window,"
+         "gradient_clipping_enabled,clipped_steps_window,gradient_finite,"
+         "momentum_finite,normalized_finite,ns_output_finite,update_finite,"
+         "parameters_finite,nonfinite_detected,qnn_return_code_success,hvx_rpc_status,"
+         "hvx_fallback,hvx_output_finite,cpu_fallback\n"
+      << std::setprecision(10);
+  if (!telemetry || !optimizerHealthTelemetry)
+    return "NICOPEDIA_HTP\nstatus=FAILED\n"
+           "failure_classification=TELEMETRY_OPEN\n";
   double fwdBwdUs = 0.0, muonUs = 0.0, auxUs = 0.0;
   double inputBindUs = 0.0, outputBindUs = 0.0;
   double gradientAccumulationUs = 0.0, optimizerUpdateWallUs = 0.0;
@@ -7347,10 +7411,28 @@ std::string nicopediaMuonHybridTraining(
   const bool gated = tiny_lm::hasHeadwiseG1Gate(config.attentionGate);
   std::vector<GateAggregate> gateAggregates(
       gated ? size_t(config.numLayers) * config.numHeads : 0);
+  std::vector<GateAggregate> gateWindowAggregates(
+      gated ? size_t(config.numLayers) * config.numHeads : 0);
+  std::ofstream gateTelemetry;
+  if (gated) {
+    gateTelemetry.open(cachePath + "/gate-telemetry.csv", std::ios::trunc);
+    gateTelemetry
+        << "step,window_start_step,window_end_step,layer,head,count,mean,"
+           "stddev,min,max,below_0_1_fraction,above_0_9_fraction\n"
+        << std::setprecision(10);
+    if (!gateTelemetry)
+      return "NICOPEDIA_HTP\nstatus=FAILED\n"
+             "failure_classification=GATE_TELEMETRY_OPEN\n";
+  }
+  double intervalMuonUs = 0.0, intervalAuxUs = 0.0,
+         intervalOptimizerUpdateWallUs = 0.0;
+  uint32_t intervalUpdates = 0, intervalClippedSteps = 0;
+  uint32_t intervalStartStep = resumeStep + 1;
   float firstLoss = std::numeric_limits<float>::quiet_NaN(), lastLoss = firstLoss;
   const auto trainingStarted = std::chrono::steady_clock::now();
   TinyTransformerTrainingOutputs output;
   for (uint32_t step = resumeStep + 1; step <= steps; ++step) {
+    const bool telemetryBoundary = step % checkpointInterval == 0 || step == steps;
     const bool stopNow = stopRequested && stopRequested->load();
     incident_trace::stopCheck(static_cast<int>(step), stopNow);
     if (stopNow) { interrupted = true; break; }
@@ -7408,6 +7490,8 @@ std::string nicopediaMuonHybridTraining(
             for (uint32_t head = 0; head < config.numHeads; ++head) {
               const float value = values[size_t(token) * config.numHeads + head];
               auto& aggregate = gateAggregates[size_t(layerIndex) * config.numHeads + head];
+              auto& windowAggregate = gateWindowAggregates[
+                  size_t(layerIndex) * config.numHeads + head];
               ++aggregate.count;
               aggregate.sum += value;
               aggregate.sumSquares += double(value) * value;
@@ -7415,6 +7499,13 @@ std::string nicopediaMuonHybridTraining(
               aggregate.maximum = std::max(aggregate.maximum, value);
               if (value < 0.1f) ++aggregate.belowPointOne;
               if (value > 0.9f) ++aggregate.abovePointNine;
+              ++windowAggregate.count;
+              windowAggregate.sum += value;
+              windowAggregate.sumSquares += double(value) * value;
+              windowAggregate.minimum = std::min(windowAggregate.minimum, value);
+              windowAggregate.maximum = std::max(windowAggregate.maximum, value);
+              if (value < 0.1f) ++windowAggregate.belowPointOne;
+              if (value > 0.9f) ++windowAggregate.abovePointNine;
             }
           }
         }
@@ -7509,10 +7600,24 @@ std::string nicopediaMuonHybridTraining(
     }
     incident_trace::optimizerEnd(static_cast<int>(step), optimizerRpcStatus,
                                  optimizerFallback, optimizerOutputFinite);
-    optimizerUpdateWallUs += std::chrono::duration<double, std::micro>(
-        std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
+    const double stepOptimizerUpdateWallUs =
+        std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - optimizerUpdateStarted).count();
+    optimizerUpdateWallUs += stepOptimizerUpdateWallUs;
     if (!update.error.empty())
       return "NICOPEDIA_HTP\nstatus=FAILED\nfailure_classification=MUON_OPTIMIZER_UPDATE\nerror=" + update.error + "\n";
+    const double muonParameterDeltaAtBoundary = telemetryBoundary
+        ? parameterRoleUpdateNorm(current, update.parameters,
+                                  tiny_lm::ParameterRole::MUON)
+        : 0.0;
+    const double auxParameterDeltaAtBoundary = telemetryBoundary
+        ? parameterRoleUpdateNorm(current, update.parameters,
+                                  tiny_lm::ParameterRole::AUX_ADAM)
+        : 0.0;
+    const double gradientNormAtBoundary =
+        telemetryBoundary ? gradientNorm(gradient) : 0.0;
+    const double parameterNormAtBoundary =
+        telemetryBoundary ? paramNorm(update.parameters) : 0.0;
     incident_trace::parameterMoveBegin(static_cast<int>(step));
     const auto resultMoveStarted = std::chrono::steady_clock::now();
     current = std::move(update.parameters);
@@ -7524,6 +7629,10 @@ std::string nicopediaMuonHybridTraining(
     incident_trace::parameterMoveEnd(static_cast<int>(step));
     muonUs += update.muonMicroseconds;
     auxUs += update.auxiliaryAdamMicroseconds;
+    intervalMuonUs += update.muonMicroseconds;
+    intervalAuxUs += update.auxiliaryAdamMicroseconds;
+    intervalOptimizerUpdateWallUs += stepOptimizerUpdateWallUs;
+    ++intervalUpdates;
     allFinite = allFinite && update.health.gradientFinite &&
         update.health.momentumFinite && update.health.normalizedFinite &&
         update.health.nsOutputFinite && update.health.updateFinite &&
@@ -7545,7 +7654,7 @@ std::string nicopediaMuonHybridTraining(
     // leave `checkpoint_end written=false` unpaired on the steps that skip a
     // checkpoint, which is the common case at any large interval.
     incident_trace::checkpointBegin(static_cast<int>(step));
-    if (step % checkpointInterval == 0 || step == steps) {
+    if (telemetryBoundary) {
       const std::string path = cachePath + "/" + nprtCheckpointName(
           seed, config.numLayers, config.tokens, config.dimension,
           config.feedForwardDimension, step);
@@ -7560,6 +7669,68 @@ std::string nicopediaMuonHybridTraining(
       checkpointWritten = true;
     }
     incident_trace::checkpointEnd(static_cast<int>(step), checkpointWritten);
+    if (telemetryBoundary) {
+      optimizerHealthTelemetry
+          << step << ',' << intervalStartStep << ',' << intervalUpdates << ','
+          << auxLr << ',' << muonLr << ',' << gradientNormAtBoundary << ','
+          << parameterNormAtBoundary << ',' << muonParameterDeltaAtBoundary << ','
+          << auxParameterDeltaAtBoundary << ',' << intervalMuonUs / 1000.0 << ','
+          << intervalAuxUs / 1000.0 << ','
+          << intervalOptimizerUpdateWallUs / 1000.0
+          << ",false," << intervalClippedSteps << ','
+          << (update.health.gradientFinite ? "true" : "false") << ','
+          << (update.health.momentumFinite ? "true" : "false") << ','
+          << (update.health.normalizedFinite ? "true" : "false") << ','
+          << (update.health.nsOutputFinite ? "true" : "false") << ','
+          << (update.health.updateFinite ? "true" : "false") << ','
+          << (update.health.parametersFinite ? "true" : "false")
+          << ",false,true," << optimizerRpcStatus << ','
+          << (optimizerFallback ? "true" : "false") << ','
+          << (optimizerOutputFinite ? "true" : "false") << ",false\n";
+      optimizerHealthTelemetry.flush();
+      if (!optimizerHealthTelemetry)
+        return "NICOPEDIA_HTP\nstatus=FAILED\n"
+               "failure_classification=OPTIMIZER_TELEMETRY_WRITE\n";
+      if (gated) {
+        for (uint32_t layerIndex = 0; layerIndex < config.numLayers;
+             ++layerIndex) {
+          for (uint32_t head = 0; head < config.numHeads; ++head) {
+            const auto& aggregate = gateWindowAggregates[
+                size_t(layerIndex) * config.numHeads + head];
+            const double mean = aggregate.count
+                ? aggregate.sum / aggregate.count : 0.0;
+            const double variance = aggregate.count
+                ? std::max(0.0, aggregate.sumSquares / aggregate.count -
+                                    mean * mean)
+                : 0.0;
+            gateTelemetry << step << ',' << intervalStartStep << ',' << step
+                          << ',' << layerIndex << ',' << head << ','
+                          << aggregate.count << ',' << mean << ','
+                          << std::sqrt(variance) << ',' << aggregate.minimum
+                          << ',' << aggregate.maximum << ','
+                          << (aggregate.count
+                                  ? double(aggregate.belowPointOne) /
+                                        aggregate.count
+                                  : 0.0)
+                          << ','
+                          << (aggregate.count
+                                  ? double(aggregate.abovePointNine) /
+                                        aggregate.count
+                                  : 0.0)
+                          << '\n';
+          }
+        }
+        gateTelemetry.flush();
+        if (!gateTelemetry)
+          return "NICOPEDIA_HTP\nstatus=FAILED\n"
+                 "failure_classification=GATE_TELEMETRY_WRITE\n";
+        std::fill(gateWindowAggregates.begin(), gateWindowAggregates.end(),
+                  GateAggregate{});
+      }
+      intervalMuonUs = intervalAuxUs = intervalOptimizerUpdateWallUs = 0.0;
+      intervalUpdates = intervalClippedSteps = 0;
+      intervalStartStep = step + 1;
+    }
     if (progress && (step == resumeStep + 1 || checkpointWritten ||
                      step % kMuonProgressTelemetryCadenceSteps == 0 || step == steps)) {
       std::ostringstream status;
@@ -7638,11 +7809,30 @@ std::string nicopediaMuonHybridTraining(
   std::uint64_t runTargetUtf8BytesSeen = 0;
   for (std::size_t selection = std::size_t(resumeStep) * 8;
        selection < std::size_t(lastStep) * 8; ++selection) {
-    const auto& record = cache.records[order[selection]];
     for (uint32_t row = 1; row <= config.tokens; ++row)
       runTargetUtf8BytesSeen += bpeModel
-          ? bpeModel->tokenByteLength(record.window[row]) : 1u;
+          ? bpeModel->tokenByteLength(cache.tokenAt(order[selection], row)) : 1u;
   }
+  // Report cumulative exposure from fresh initialization as well as segment
+  // exposure. The deterministic order is indexed globally, so resumed segments
+  // account for the same prefix without relying on in-memory state from a
+  // previous process.
+  std::uint64_t targetUtf8BytesSeen = 0;
+  std::unordered_set<std::size_t> uniqueRecordsSeen;
+  std::unordered_set<std::uint64_t> uniqueArticlesSeen;
+  for (std::size_t selection = 0;
+       selection < std::size_t(lastStep) * 8; ++selection) {
+    const auto recordIndex = order[selection];
+    uniqueRecordsSeen.insert(recordIndex);
+    uniqueArticlesSeen.insert(cache.articleHashAt(recordIndex));
+    for (uint32_t row = 1; row <= config.tokens; ++row)
+      targetUtf8BytesSeen += bpeModel
+          ? bpeModel->tokenByteLength(cache.tokenAt(recordIndex, row)) : 1u;
+  }
+  const std::uint64_t recordsSeen = std::uint64_t(lastStep) * 8u;
+  const std::uint64_t targetTokensSeen = recordsSeen * config.tokens;
+  const double cacheTraversalFraction = cache.recordCount() == 0 ? 0.0
+      : static_cast<double>(recordsSeen) / cache.recordCount();
   tiny_lm::ParameterDimensions reportDimensions{
       static_cast<std::uint64_t>(config.vocabularySize),
       static_cast<std::uint64_t>(config.dimension),
@@ -7766,8 +7956,16 @@ std::string nicopediaMuonHybridTraining(
           << "\ntotal_update_ms=" << seconds * 1000.0
           << "\ntraining_total_seconds=" << seconds
           << "\ntraining_step_ms=" << (completed ? seconds * 1000.0 / completed : 0.0)
-          << "\nupdates_per_second=" << (seconds > 0.0 ? completed / seconds : 0.0)
-          << "\nrun_target_utf8_bytes_seen=" << runTargetUtf8BytesSeen
+         << "\nupdates_per_second=" << (seconds > 0.0 ? completed / seconds : 0.0)
+         << "\ntarget_tokens_seen=" << targetTokensSeen
+         << "\nrecords_seen=" << recordsSeen
+         << "\nunique_records_seen=" << uniqueRecordsSeen.size()
+         << "\nunique_articles_seen=" << uniqueArticlesSeen.size()
+         << "\ncache_traversal_fraction=" << cacheTraversalFraction
+         << "\ncompleted_epochs_equivalent=" << cacheTraversalFraction
+         << "\ntarget_original_utf8_bytes_seen=" << targetUtf8BytesSeen
+         << "\nexposure_scope=cumulative_from_fresh_initialization"
+         << "\nrun_target_utf8_bytes_seen=" << runTargetUtf8BytesSeen
           << "\noriginal_utf8_bytes_per_second="
           << (seconds > 0.0 ? runTargetUtf8BytesSeen / seconds : 0.0)
           << "\nthroughput_byte_semantics=original_utf8_bytes_of_training_targets_excluding_context_and_pre_resume"
@@ -7975,8 +8173,12 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
            "failure_classification=APP_CONFIGURATION_VALIDATION\n"
            "error=resume_step must be in 1..steps-1\n";
   if (progress) progress("phase=training_order");
-  const uint32_t orderSteps = resumeStep == 0 ? std::max(steps, 8u) : steps;
-  const auto order = nprtTrainingOrder(cache.records.size(), orderSteps, batchSize);
+  // Regenerate the canonical full-horizon sequence for every segment.  The
+  // prefix selected by a global optimizer step is unchanged, and checkpoints
+  // resumed at that step therefore see the same record sequence and the same
+  // order identity as an uninterrupted run.
+  const uint32_t orderSteps = std::max(scheduleTotalSteps, 8u);
+  const auto order = nprtTrainingOrder(cache.recordCount(), orderSteps, batchSize);
   const std::string orderHashValue = nprtOrderHash(order);
   if (progress) progress("phase=parameter_shape");
   const Params shape = tiny_lm::initialParameters(config, 1);
@@ -8452,20 +8654,21 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
   std::unordered_set<std::uint64_t> uniqueArticlesSeen, runUniqueArticlesSeen;
   const std::size_t exposureSelections =
       std::size_t(lastCompletedStep) * batchSize;
+  const std::size_t runExposureSelections =
+      std::size_t(completedSteps) * batchSize;
   const std::size_t runExposureStart = std::size_t(resumeStep) * batchSize;
   for (std::size_t selection = 0; selection < exposureSelections; ++selection) {
     const std::size_t recordIndex = order[selection];
-    const auto &record = cache.records[recordIndex];
     uniqueChunksSeen.insert(recordIndex);
-    uniqueArticlesSeen.insert(record.articleHash);
+    uniqueArticlesSeen.insert(cache.articleHashAt(recordIndex));
     const bool inRun = selection >= runExposureStart;
     if (inRun) {
       runUniqueChunksSeen.insert(recordIndex);
-      runUniqueArticlesSeen.insert(record.articleHash);
+      runUniqueArticlesSeen.insert(cache.articleHashAt(recordIndex));
     }
     for (uint32_t row = 1; row <= config.tokens; ++row) {
       const std::uint64_t bytes =
-          bpeModel ? bpeModel->tokenByteLength(record.window[row]) : 1u;
+          bpeModel ? bpeModel->tokenByteLength(cache.tokenAt(recordIndex, row)) : 1u;
       targetUtf8BytesSeen += bytes;
       if (inRun) runTargetUtf8BytesSeen += bytes;
     }
@@ -8643,12 +8846,23 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\nsteps=" << steps << "\nbatch_size=" << batchSize
          << "\ntarget_tokens_seen=" << targetTokensSeen
          << "\ntarget_utf8_bytes_seen=" << targetUtf8BytesSeen
+         << "\nrecords_seen=" << exposureSelections
          << "\nunique_chunks_seen=" << uniqueChunksSeen.size()
          << "\nunique_articles_seen=" << uniqueArticlesSeen.size()
+         << "\ncache_traversal_fraction="
+         << (cache.recordCount() == 0 ? 0.0 :
+             double(exposureSelections) / double(cache.recordCount()))
+         << "\ncompleted_epochs_equivalent="
+         << (cache.recordCount() == 0 ? 0.0 :
+             double(exposureSelections) / double(cache.recordCount()))
          << "\nrun_target_tokens_seen=" << runTargetTokensSeen
          << "\nrun_target_utf8_bytes_seen=" << runTargetUtf8BytesSeen
+         << "\nrun_records_seen=" << runExposureSelections
          << "\nrun_unique_chunks_seen=" << runUniqueChunksSeen.size()
          << "\nrun_unique_articles_seen=" << runUniqueArticlesSeen.size()
+         << "\nrun_cache_traversal_fraction="
+         << (cache.recordCount() == 0 ? 0.0 :
+             double(runExposureSelections) / double(cache.recordCount()))
          << "\nlearning_rate=" << lr
          << "\nlearning_rate_schedule=" << scheduleName
          << "\nlearning_rate_schedule_identity=" << scheduleName
@@ -8673,7 +8887,7 @@ std::string nicopediaHtpTraining(const tiny_lm::Config &config,
          << "\ntokenizer_hash=" << cache.tokenizerHash
          << "\ncache_context=" << cache.context
          << "\ncache_vocabulary=" << cache.vocabulary
-         << "\ncache_record_count=" << cache.records.size()
+         << "\ncache_record_count=" << cache.recordCount()
          << "\ncache_content_hash=" << cache.contentHash
          << "\ntraining_order_hash=" << orderHashValue
          << "\ninitial_parameter_hash=" << initialParameterHash
@@ -8890,7 +9104,7 @@ std::string runNicopediaHtpOneUpdateProbe(
   }
   if (cache.context != config.tokens || cache.vocabulary != config.vocabularySize)
     return emit("FAILED", "cache_load", "cache_config_mismatch", 0.0, 0);
-  if (cache.records.size() < static_cast<std::size_t>(trainingConfig.batchSize))
+  if (cache.recordCount() < static_cast<std::size_t>(trainingConfig.batchSize))
     return emit("FAILED", "cache_load", "cache_batch_capacity_mismatch", 0.0, 0);
 
   const Params shape = tiny_lm::initialParameters(
@@ -8938,7 +9152,7 @@ std::string runNicopediaHtpOneUpdateProbe(
   double lossSum = 0.0;
   outputsFinite = true;
   gradientFinite = true;
-  const auto order = nprtTrainingOrder(cache.records.size(), 1, 8);
+  const auto order = nprtTrainingOrder(cache.recordCount(), 1, 8);
   std::uint64_t executeBefore = runtime.metrics().graphExecuteCount;
   phase("first_execute_begin");
   for (std::uint32_t batch = 0; batch < 8; ++batch) {
@@ -9127,8 +9341,8 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
     return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
            "failure_classification=CACHE_CONFIG_MISMATCH\n"
            "error=cache context/vocabulary mismatch\n";
-  if (validation.records.size() < validationLimit ||
-      development.records.size() < developmentLimit)
+  if (validation.recordCount() < validationLimit ||
+      development.recordCount() < developmentLimit)
     return "NICOPEDIA_HTP_EVAL\nstatus=FAILED\n"
            "failure_classification=CACHE_CAPACITY_MISMATCH\n"
            "error=requested full-cap chunks exceed cache records\n";
@@ -9160,7 +9374,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
                                  const LogSink &splitProgress) -> SplitResult {
     SplitResult result;
     const std::size_t count =
-        std::min<std::size_t>(limit, cache.records.size());
+        std::min<std::size_t>(limit, cache.recordCount());
     double top1 = 0, top5 = 0, rankSum = 0, marginSum = 0, lossSum = 0;
     double graphLossSum = 0;
     for (std::size_t chunk = 0; chunk < count; ++chunk) {
@@ -9196,7 +9410,7 @@ std::string nicopediaHtpEvaluate(const tiny_lm::Config &config,
       // per-row NLL = max + log(sum(exp(logits - max))) - logit_truth.
       for (uint32_t row = 0; row < config.tokens; ++row) {
         const std::size_t base = std::size_t(row) * config.vocabularySize;
-        const uint32_t truth = cache.records[chunk].window[row + 1];
+        const uint32_t truth = cache.tokenAt(chunk, row + 1);
         const float truthLogit = output.logits[base + truth];
         float maximum = output.logits[base];
         float maximumOther = -std::numeric_limits<float>::infinity();

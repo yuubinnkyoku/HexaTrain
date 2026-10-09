@@ -85,11 +85,15 @@ Cache loadPilotCache(const std::string& path, const bpe::Model& model) {
   cache.vocabulary = source.vocabulary;
   cache.tokenizerKind = "byte_bpe";
   cache.tokenizerHash = source.tokenizerHash;
-  cache.records.reserve(source.records.size());
-  for (const auto& record : source.records) {
+  cache.records.reserve(source.recordCount());
+  for (std::size_t recordIndex = 0; recordIndex < source.recordCount();
+       ++recordIndex) {
     CacheRecord out;
-    out.articleHash = record.articleHash;
-    out.window = record.window;
+    out.articleHash = source.articleHashAt(recordIndex);
+    out.window.reserve(source.context + 1u);
+    for (std::size_t tokenIndex = 0; tokenIndex <= source.context;
+         ++tokenIndex)
+      out.window.push_back(source.tokenAt(recordIndex, tokenIndex));
     cache.records.push_back(std::move(out));
   }
   // Identity is checked against the checkpoint datasetHash by the caller.

@@ -79,8 +79,17 @@ Cache loadCache(const std::string& path,
     const auto source = phonelm::nicopedia_bpe::loadCache(path, *bpeModel);
     Cache cache;
     cache.context = source.context; cache.vocabulary = source.vocabulary;
-    for (const auto& item : source.records)
-      cache.records.push_back({item.articleHash, item.window});
+    cache.records.reserve(source.recordCount());
+    for (std::size_t recordIndex = 0; recordIndex < source.recordCount();
+         ++recordIndex) {
+      CacheRecord item;
+      item.articleHash = source.articleHashAt(recordIndex);
+      item.window.reserve(source.context + 1u);
+      for (std::size_t tokenIndex = 0; tokenIndex <= source.context;
+           ++tokenIndex)
+        item.window.push_back(source.tokenAt(recordIndex, tokenIndex));
+      cache.records.push_back(std::move(item));
+    }
     cache.contentHash = source.tokenizerHash;
     return cache;
   }

@@ -21,6 +21,8 @@ inline constexpr std::uint32_t kVocabulary = 1024;
 inline constexpr std::uint32_t kMergeCount = 768;
 inline constexpr char kModelMagic[] = "NPRTBPEM1\n";
 inline constexpr char kCacheMagic[] = "NPRTBPEV1\n";
+inline constexpr std::uint64_t kDefaultCacheRecordLimit = 10000000u;
+inline constexpr std::uint64_t kExpandedTrainingCacheRecordLimit = 15000000u;
 
 namespace detail {
 
@@ -216,20 +218,38 @@ inline Model loadModel(const std::string& path) {
   return parseModel(bytes);
 }
 
-struct CacheRecord {
-  std::uint64_t articleHash = 0;
-  std::vector<std::uint16_t> window;
-};
-
 struct Cache {
   std::uint32_t context = 0;
   std::uint32_t vocabulary = 0;
   std::string tokenizerHash;
-  std::vector<CacheRecord> records;
+  // Retain the validated, packed on-disk records. Decoding each T32 record
+  // into a vector-of-vectors multiplied the full 943 MB cache several times
+  // over and killed the Android process during expanded-cache loading.
+  std::vector<std::uint8_t> encodedBytes;
+  std::size_t recordsOffset = 0;
+  std::uint64_t records = 0;
+
+  std::size_t recordCount() const { return static_cast<std::size_t>(records); }
+
+  std::uint64_t articleHashAt(std::size_t recordIndex) const {
+    if (recordIndex >= recordCount()) throw std::out_of_range("BPE_CACHE_RECORD_INDEX");
+    const std::size_t recordSize = 8u + 2u * (std::size_t(context) + 1u);
+    std::size_t offset = recordsOffset + recordIndex * recordSize;
+    return detail::readU64(encodedBytes, &offset);
+  }
+
+  std::uint16_t tokenAt(std::size_t recordIndex, std::size_t tokenIndex) const {
+    if (recordIndex >= recordCount() || tokenIndex > context)
+      throw std::out_of_range("BPE_CACHE_TOKEN_INDEX");
+    const std::size_t recordSize = 8u + 2u * (std::size_t(context) + 1u);
+    std::size_t offset = recordsOffset + recordIndex * recordSize + 8u + 2u * tokenIndex;
+    return detail::readU16(encodedBytes, &offset);
+  }
 };
 
-inline Cache parseCache(const std::vector<std::uint8_t>& bytes,
-                        const Model& model) {
+inline Cache parseCache(std::vector<std::uint8_t> bytes,
+                        const Model& model,
+                        std::uint64_t recordLimit = kDefaultCacheRecordLimit) {
   constexpr std::size_t magicSize = sizeof(kCacheMagic) - 1;
   constexpr std::size_t fixedHeader = magicSize + 8 + 32 + 8;
   if (bytes.size() < fixedHeader ||
@@ -246,33 +266,32 @@ inline Cache parseCache(const std::vector<std::uint8_t>& bytes,
   if (cache.tokenizerHash != model.identity())
     throw std::runtime_error("BPE_CACHE_TOKENIZER_HASH");
   const std::uint64_t count = detail::readU64(bytes, &offset);
-  if (count > 10000000u) throw std::runtime_error("BPE_CACHE_COUNT");
+  if (count > recordLimit) throw std::runtime_error("BPE_CACHE_COUNT");
   const std::uint64_t recordSize = 8u + 2u * (std::uint64_t(cache.context) + 1u);
   if (count > (std::numeric_limits<std::size_t>::max() - offset) / recordSize ||
       bytes.size() != offset + static_cast<std::size_t>(count * recordSize))
     throw std::runtime_error("BPE_CACHE_SIZE");
-  cache.records.reserve(static_cast<std::size_t>(count));
+  cache.records = count;
+  cache.recordsOffset = offset;
   for (std::uint64_t recordIndex = 0; recordIndex < count; ++recordIndex) {
-    CacheRecord record;
-    record.articleHash = detail::readU64(bytes, &offset);
-    record.window.reserve(cache.context + 1);
+    (void)detail::readU64(bytes, &offset);
     for (std::uint32_t tokenIndex = 0; tokenIndex <= cache.context; ++tokenIndex) {
       const std::uint16_t token = detail::readU16(bytes, &offset);
       if (token >= cache.vocabulary) throw std::runtime_error("BPE_CACHE_TOKEN_RANGE");
-      record.window.push_back(token);
     }
-    cache.records.push_back(std::move(record));
   }
+  cache.encodedBytes = std::move(bytes);
   return cache;
 }
 
-inline Cache loadCache(const std::string& path, const Model& model) {
+inline Cache loadCache(const std::string& path, const Model& model,
+                       std::uint64_t recordLimit = kDefaultCacheRecordLimit) {
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("BPE_CACHE_OPEN");
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)),
                                   std::istreambuf_iterator<char>());
   if (!input.eof() && input.fail()) throw std::runtime_error("BPE_CACHE_READ");
-  return parseCache(bytes, model);
+  return parseCache(std::move(bytes), model, recordLimit);
 }
 
 inline std::vector<std::uint16_t> buildTokenContext(

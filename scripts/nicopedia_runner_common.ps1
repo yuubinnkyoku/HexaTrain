@@ -1064,6 +1064,16 @@ function Get-PhoneLmTopPackage {
     return 'UNKNOWN'
 }
 
+function Test-PhoneLmHeadlessOwnerPid {
+    param(
+        [AllowEmptyString()][string]$StatusJson,
+        [AllowEmptyString()][string]$PidOutput
+    )
+    $runnerPidMatch = [regex]::Match($StatusJson, '"pid"\s*:\s*(\d+)')
+    if (-not $runnerPidMatch.Success) { return $false }
+    return $PidOutput -match ('(?:^|\s)' + [regex]::Escape($runnerPidMatch.Groups[1].Value) + '(?:\s|$)')
+}
+
 function Wait-PhoneLmHeadlessStatus {
     param(
         [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
@@ -1086,6 +1096,7 @@ function Wait-PhoneLmHeadlessStatus {
     $lastCondition = -30
     $seenExpectedStatus = $false
     $transportFaults = 0
+    $ownerTransportFaults = 0
     try {
         for ($poll = 0; $poll -lt $PollLimit; $poll++) {
             $Process.Refresh()
@@ -1143,10 +1154,59 @@ function Wait-PhoneLmHeadlessStatus {
             if ($terminal -and $Process.HasExited) { break }
             # The adb `am instrument -w` wrapper can exit after a long period
             # without stdout even while the device-side instrumentation keeps
-            # running and updating the atomic heartbeat.  Do not classify that
-            # host-wrapper exit as a training timeout; continue using the
-            # device status as the source of truth until it becomes terminal.
+            # running and updating the atomic heartbeat. Continue in that case,
+            # but fail promptly if both app processes are gone: no terminal
+            # status can arrive after the device-side runner has died.
             if ($Process.HasExited -and -not $terminal) {
+                $runnerOwnerPresent = $false
+                $ownerCheckInterrupted = $false
+                foreach ($ownedPackage in @($Package, "$Package.test")) {
+                    $owner = Invoke-PhoneLmAdb -Adb $Adb -Device $Device `
+                        -Arguments @('shell', 'pidof', $ownedPackage) -AllowFailure
+                    if ($owner.ExitCode -ne 0 -and
+                        $owner.Classification -in @('ADB_TRANSPORT_FAILURE', 'ADB_TRANSPORT_TIMEOUT')) {
+                        $ownerTransportFaults++
+                        if ($ownerTransportFaults -ge 5) {
+                            throw "$($owner.Classification): runner owner check interrupted after $ownerTransportFaults consecutive transport faults"
+                        }
+                        $ownerCheckInterrupted = $true
+                        break
+                    }
+                    if (Test-PhoneLmHeadlessOwnerPid -StatusJson $lastStatus -PidOutput $owner.Text) {
+                        $runnerOwnerPresent = $true
+                        break
+                    }
+                }
+                if ($ownerCheckInterrupted) {
+                    # The device-side runner may keep going after adb's
+                    # instrumentation wrapper exits. Keep the exact run
+                    # attached via its atomic status on the next poll, but
+                    # never infer ownership from a failed pidof transport.
+                    $lastStatus = ''
+                    Start-Sleep -Seconds 10
+                    continue
+                }
+                $ownerTransportFaults = 0
+                if (-not $runnerOwnerPresent) {
+                    # The instrumentation process may publish its atomic
+                    # terminal status just after Android exits the package
+                    # process. Give that final write a bounded window before
+                    # classifying a fresh RUNNING heartbeat as an orphan.
+                    for ($terminalGrace = 0; $terminalGrace -lt 30; $terminalGrace++) {
+                        Start-Sleep -Seconds 1
+                        $freshStatus = Get-PhoneLmHeadlessStatus -Adb $Adb -Device $Device -Package $Package
+                        if ($freshStatus -ne '' -and $ExpectedRunId -ne '' -and
+                            $freshStatus -notmatch ('"run_id"\s*:\s*"' + [regex]::Escape($ExpectedRunId) + '"')) {
+                            throw 'HEADLESS_STATUS_IDENTITY_MISMATCH'
+                        }
+                        if ($freshStatus -ne '') { $lastStatus = $freshStatus }
+                        if ($lastStatus -match '"status"\s*:\s*"(PASSED|FAILED)"') { break }
+                    }
+                    if ($lastStatus -notmatch '"status"\s*:\s*"(PASSED|FAILED)"') {
+                        throw 'HEADLESS_INSTRUMENTATION_PROCESS_EXITED'
+                    }
+                    break
+                }
                 Start-Sleep -Seconds $PollSeconds
                 continue
             }
@@ -1154,9 +1214,16 @@ function Wait-PhoneLmHeadlessStatus {
             Start-Sleep -Seconds $PollSeconds
         }
     } catch {
-        [void](Stop-PhoneLmOwnedHeadlessRun -Adb $Adb -Device $Device -Package $Package -ExpectedRunId $ExpectedRunId)
+        # Once both app processes are gone, there is no owned device run to
+        # force-stop. Preserve the last atomic status as private evidence.
+        if ($_.Exception.Message -ne 'HEADLESS_INSTRUMENTATION_PROCESS_EXITED') {
+            [void](Stop-PhoneLmOwnedHeadlessRun -Adb $Adb -Device $Device -Package $Package -ExpectedRunId $ExpectedRunId)
+        }
         $Process.Refresh()
         if (-not $Process.HasExited) { $Process.Kill() }
+        if ($PartialPath -ne '') {
+            try { $lastStatus | Set-Content -LiteralPath $PartialPath -Encoding utf8 } catch { }
+        }
         throw
     }
     $Process.Refresh()

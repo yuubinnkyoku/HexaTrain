@@ -404,7 +404,7 @@ class HeadlessDeviceTestRunner {
         require(dimension % heads == 0) { "$suite requires dimension divisible by heads" }
         if (suite == "nicopedia-long-training") {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
-            require(steps in 1..12_000) { "nicopedia-long-training hard ceiling is step 12000" }
+            require(steps in 1..100_000) { "nicopedia-long-training hard ceiling is step 100000" }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
             if (optimizer == 1 || optimizer == 2) {
                 require(vocabulary == 1024 && tokens == 32 && dimension == 64 && feedForwardDimension == 128) {
@@ -578,6 +578,28 @@ class HeadlessDeviceTestRunner {
         return file
     }
 
+    private fun requiredTrainingCacheFile(
+        context: Context,
+        runDirectory: File,
+        runId: String,
+        cacheSourceRunId: String,
+    ): File {
+        require(cacheSourceRunId.length in 1..64 && cacheSourceRunId.matches(Regex("[A-Za-z0-9._-]+"))) {
+            "cacheSourceRunId must match [A-Za-z0-9._-]+ and be at most 64 characters"
+        }
+        if (cacheSourceRunId == runId) {
+            return requiredInputFile(runDirectory, "train_pilot.bin")
+        }
+        val sourceDirectory = nicopediaInputDirectory(context, cacheSourceRunId)
+        val sourceFile = requiredInputFile(sourceDirectory, "train_pilot.bin")
+        val stagedFile = File(runDirectory, "train_pilot.bin").canonicalFile
+        require(stagedFile == sourceFile) {
+            "headless training cache link does not match declared source run"
+        }
+        require(stagedFile.isFile) { "headless input file is unavailable: train_pilot.bin" }
+        return stagedFile
+    }
+
     private fun runNicopediaLongTraining(
         context: Context,
         arguments: android.os.Bundle,
@@ -586,7 +608,8 @@ class HeadlessDeviceTestRunner {
     ): String {
         val config = parseNicopediaArguments(arguments, "nicopedia-long-training")
         val directory = nicopediaInputDirectory(context, runId)
-        requiredInputFile(directory, "train_pilot.bin")
+        val cacheSourceRunId = arguments.getString("cacheSourceRunId") ?: runId
+        requiredTrainingCacheFile(context, directory, runId, cacheSourceRunId)
         if (config.vocabulary == 1024) requiredInputFile(directory, "byte-bpe-v1024.model")
         if (config.resumeStep > 0) {
             requiredInputFile(directory, nicopediaCheckpointName(config.seed, config.layers, config.tokens, config.dimension, config.feedForwardDimension, config.resumeStep))
