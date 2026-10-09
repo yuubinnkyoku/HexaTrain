@@ -305,6 +305,7 @@ class HeadlessDeviceTestRunner {
         val muonMomentum: Float,
         val muonNsSteps: Int,
         val muonNesterov: Boolean,
+        val g1LongLinear200k: Boolean,
         val steps: Int,
         val batchSize: Int,
         val resumeStep: Int,
@@ -328,6 +329,11 @@ class HeadlessDeviceTestRunner {
         // malformed numeric text instead of silently falling back to a
         // different trajectory.
         val seed = longArgument(arguments, "seed", 1L, 1L..99_999L)
+        val g1LongLinear200k = booleanArgument(arguments, "g1LongLinear200k", false)
+        val stepLimit = if (g1LongLinear200k) 200_000 else 100_000
+        require(!g1LongLinear200k || suite == "nicopedia-long-training" || suite == "nicopedia-eval") {
+            "g1LongLinear200k is only supported by long training and evaluation suites"
+        }
         val vocabulary = intArgument(arguments, "vocabulary", 256, 256..1024)
         require(vocabulary == 256 || vocabulary == 1024) { "vocabulary must be 256 or 1024" }
         val layers = intArgument(arguments, "layers", 19, 1..100)
@@ -336,7 +342,7 @@ class HeadlessDeviceTestRunner {
         val dimension = intArgument(arguments, "dimension", 32, 2..256)
         val feedForwardDimension = intArgument(arguments, "feedForwardDimension", 32, 2..1024)
         val learningRate = floatArgument(arguments, "learningRate", 0.003f, 0.000001f..1f)
-        val steps = intArgument(arguments, "steps", 1_000, 1..100_000)
+        val steps = intArgument(arguments, "steps", 1_000, 1..stepLimit)
         val scheduleName = stringArgument(arguments, "learningRateSchedule", "constant")
         val learningRateSchedule = when (scheduleName) {
             "constant" -> 0
@@ -346,9 +352,9 @@ class HeadlessDeviceTestRunner {
                 "learningRateSchedule must be constant, linear_decay, or sqrt_decay",
             )
         }
-        val decayStartStep = intArgument(arguments, "decayStartStep", 0, 0..100_000)
-        val decayEndStep = intArgument(arguments, "decayEndStep", 0, 0..100_000)
-        val scheduleTotalSteps = intArgument(arguments, "scheduleTotalSteps", steps, 1..100_000)
+        val decayStartStep = intArgument(arguments, "decayStartStep", 0, 0..stepLimit)
+        val decayEndStep = intArgument(arguments, "decayEndStep", 0, 0..stepLimit)
+        val scheduleTotalSteps = intArgument(arguments, "scheduleTotalSteps", steps, 1..stepLimit)
         val targetLearningRate = floatArgument(arguments, "targetLearningRate", learningRate, 0f..1f)
         val experimentFork = booleanArgument(arguments, "experimentFork", false)
         val parentLearningRate = floatArgument(arguments, "parentLearningRate", learningRate, 0.000001f..1f)
@@ -381,11 +387,11 @@ class HeadlessDeviceTestRunner {
         val muonNsSteps = intArgument(arguments, "muonNsSteps", 5, 1..99)
         val muonNesterov = booleanArgument(arguments, "muonNesterov", true)
         val batchSize = intArgument(arguments, "batchSize", 8, 1..4_096)
-        val resumeStep = intArgument(arguments, "resumeStep", 0, 0..100_000)
+        val resumeStep = intArgument(arguments, "resumeStep", 0, 0..stepLimit)
         val checkpointInterval = intArgument(arguments, "checkpointInterval", 250, 1..10_000)
         val validationChunks = intArgument(arguments, "validationChunks", 8_192, 1..1_000_000)
         val developmentChunks = intArgument(arguments, "developmentChunks", 16_384, 1..1_000_000)
-        val checkpointStep = intArgument(arguments, "checkpointStep", 1_000, 1..100_000)
+        val checkpointStep = intArgument(arguments, "checkpointStep", 1_000, 1..stepLimit)
         val generateMode = stringArgument(arguments, "generateMode", "greedy")
         require(generateMode == "greedy" || generateMode == "sample") {
             "generateMode must be greedy or sample"
@@ -404,7 +410,20 @@ class HeadlessDeviceTestRunner {
         require(dimension % heads == 0) { "$suite requires dimension divisible by heads" }
         if (suite == "nicopedia-long-training") {
             require(batchSize == 8) { "nicopedia-long-training requires batchSize=8" }
-            require(steps in 1..100_000) { "nicopedia-long-training hard ceiling is step 100000" }
+            if (g1LongLinear200k) {
+                require(seed == 1L && vocabulary == 1024 && tokens == 32 && dimension == 64 &&
+                    feedForwardDimension == 128 && layers == 19 && heads == 2 && batchSize == 8 &&
+                    optimizer == 2 && attentionGate == 1 && muonLearningRate.toBits() == 0.0075f.toBits() &&
+                    muonMomentum.toBits() == 0.95f.toBits() && muonNsSteps == 5 && muonNesterov &&
+                    learningRateSchedule == 1 && learningRate.toBits() == 0.0033f.toBits() &&
+                    targetLearningRate.toBits() == 0.00015f.toBits() && decayStartStep == 4_000 &&
+                    decayEndStep == 200_000 && scheduleTotalSteps == 200_000 && experimentFork &&
+                    parentLearningRate.toBits() == 0.0033f.toBits() && checkpointInterval == 1_000) {
+                    "G1 long-linear 200k training identity mismatch"
+                }
+            } else {
+                require(steps in 1..100_000) { "nicopedia-long-training hard ceiling is step 100000" }
+            }
             require(resumeStep < steps) { "resumeStep must be smaller than steps" }
             if (optimizer == 1 || optimizer == 2) {
                 require(vocabulary == 1024 && tokens == 32 && dimension == 64 && feedForwardDimension == 128) {
@@ -461,6 +480,13 @@ class HeadlessDeviceTestRunner {
         if (suite == "nicopedia-eval" || suite == "nicopedia-generate") {
             require(checkpointStep >= 1) { "$suite requires checkpointStep >= 1" }
         }
+        if (g1LongLinear200k && suite == "nicopedia-eval") {
+            require(seed == 1L && vocabulary == 1024 && tokens == 32 && dimension == 64 &&
+                feedForwardDimension == 128 && layers == 19 && heads == 2 && attentionGate == 1 &&
+                checkpointStep <= 200_000) {
+                "G1 long-linear 200k evaluation identity mismatch"
+            }
+        }
         return NicopediaArguments(
             seed = seed,
             vocabulary = vocabulary,
@@ -483,6 +509,7 @@ class HeadlessDeviceTestRunner {
             muonMomentum = muonMomentum,
             muonNsSteps = muonNsSteps,
             muonNesterov = muonNesterov,
+            g1LongLinear200k = g1LongLinear200k,
             steps = steps,
             batchSize = batchSize,
             resumeStep = resumeStep,

@@ -30,6 +30,22 @@ int main() {
   assert(at(g1Long, 50000) == .00015f);
   assert(at(g1Long, 100000) == .00015f);
 
+  // G1 long-linear uses the same inclusive 1-indexed convention, but carries
+  // the peak through 4k and decays over the complete 4k->200k interval.
+  Config g1LongLinear{Kind::LINEAR_DECAY, .0033f, .00015f, 4000, 200000,
+                      true};
+  assert(validate(g1LongLinear, 200000));
+  assert(at(g1LongLinear, 1) == .0033f);
+  assert(at(g1LongLinear, 4000) == .0033f);
+  assert(at(g1LongLinear, 4001) < .0033f);
+  assert(std::abs(at(g1LongLinear, 100000) - .001757142857142857f) <
+         1.0e-9f);
+  assert(std::abs((.0075f * (at(g1LongLinear, 100000) / .0033f)) -
+                  .003993506493506493f) < 1.0e-9f);
+  assert(at(g1LongLinear, 199999) > .00015f);
+  assert(at(g1LongLinear, 200000) == .00015f);
+  assert(at(g1LongLinear, 200001) == .00015f);
+
   Config s6000{Kind::LINEAR_DECAY, .0022f, .0015f, 6000, 8000, true};
   assert(validate(s6000, 8000));
   assert(at(s6000, 6000) == .0022f);

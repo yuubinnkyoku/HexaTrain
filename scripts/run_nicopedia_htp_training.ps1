@@ -24,9 +24,11 @@ param(
   [int]$BatchSize = 8,   # canonical pilot config (protocol.json): 8 samples/step
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$LearningRate = '0.003',
   [ValidateSet('constant','linear_decay','sqrt_decay')][string]$LearningRateSchedule = 'constant',
-  [ValidateRange(0,100000)][int]$DecayStartStep = 0,
-  [ValidateRange(0,100000)][int]$DecayEndStep = 0,
-  [ValidateRange(0,100000)][int]$ScheduleTotalSteps = 0,
+  [ValidateRange(0,200000)][int]$DecayStartStep = 0,
+  [ValidateRange(0,200000)][int]$DecayEndStep = 0,
+  [ValidateRange(0,200000)][int]$ScheduleTotalSteps = 0,
+  [string]$ExpectedTrainingOrderHash = "",
+  [switch]$G1LongLinear200kExperiment,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$TargetLearningRate = '',
   [switch]$ExperimentFork,
   [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ParentLearningRate = '0',
@@ -211,7 +213,8 @@ if ($SelfTest) {
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 if ($CacheSourceRunId -and $CacheSourceRunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'CACHE_SOURCE_RUN_ID_INVALID' }
 $deviceCacheSourceRunId = if ($CacheSourceRunId) { $CacheSourceRunId } else { $RunId }
-if ($Steps -lt 1 -or $Steps -gt 100000) { throw 'NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..100000' }
+$maximumSteps = if ($G1LongLinear200kExperiment) { 200000 } else { 100000 }
+if ($Steps -lt 1 -or $Steps -gt $maximumSteps) { throw "NICOPEDIA_L19_HARD_CEILING: Steps must be in 1..$maximumSteps" }
 try { $muonLearningRateValue = [double]::Parse($MuonLearningRate, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
 try { $muonMomentumValue = [double]::Parse($MuonMomentum, [Globalization.CultureInfo]::InvariantCulture) } catch { throw 'NICOPEDIA_MUON_MOMENTUM_INVALID' }
 if (-not [double]::IsFinite($muonLearningRateValue) -or $muonLearningRateValue -le 0 -or $muonLearningRateValue -gt 1) { throw 'NICOPEDIA_MUON_LEARNING_RATE_INVALID' }
@@ -321,7 +324,20 @@ if ($Optimizer -eq 'Muon' -and [IO.Path]::GetFileName($cacheResolved) -eq 'train
       $expandedTrainManifest.split_leakage.selected_train_intersects_final_test -ne 0) {
     throw 'EXPANDED_TRAIN_MANIFEST_IDENTITY_MISMATCH'
   }
-  if ($Seed -ne 1 -or $Optimizer -ne 'Muon' -or $AttentionGate -ne 'headwise_g1_sigmoid' -or
+  if ($G1LongLinear200kExperiment) {
+    if ($Seed -ne 1 -or $Optimizer -ne 'Muon' -or $AttentionGate -ne 'headwise_g1_sigmoid' -or
+        $Vocabulary -ne 1024 -or $Tokens -ne 32 -or $Dimension -ne 64 -or
+        $FeedForwardDimension -ne 128 -or $Layers -ne 19 -or $BatchSize -ne 8 -or
+        $ScheduleTotalSteps -ne 200000 -or $LearningRate -ne '0.0033' -or
+        $LearningRateSchedule -ne 'linear_decay' -or $DecayStartStep -ne 4000 -or
+        $DecayEndStep -ne 200000 -or $TargetLearningRate -ne '0.00015' -or
+        -not $ExperimentFork -or $ParentLearningRate -ne '0.0033' -or
+        $MuonLearningRate -ne '0.0075' -or $MuonMomentum -ne '0.95' -or
+        $MuonNsSteps -ne 5 -or $CheckpointInterval -ne 1000 -or
+        $ExpectedTrainingOrderHash -ne 'fnv1a64:83f9c96cf10261a0') {
+      throw 'EXPANDED_G1_LONG_LINEAR_200K_IDENTITY_MISMATCH'
+    }
+  } elseif ($Seed -ne 1 -or $Optimizer -ne 'Muon' -or $AttentionGate -ne 'headwise_g1_sigmoid' -or
       $Vocabulary -ne 1024 -or $Tokens -ne 32 -or $Dimension -ne 64 -or
       $FeedForwardDimension -ne 128 -or $Layers -ne 19 -or $BatchSize -ne 8 -or
       $ScheduleTotalSteps -ne 100000 -or $LearningRate -ne '0.0033' -or
@@ -334,6 +350,12 @@ if ($Optimizer -eq 'Muon' -and [IO.Path]::GetFileName($cacheResolved) -eq 'train
   }
   $expandedCacheSha256 = (Get-FileHash -LiteralPath $cacheResolved -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($expandedTrainManifest.cache.sha256 -ne "sha256:$expandedCacheSha256") { throw 'EXPANDED_TRAIN_CACHE_SHA256_MISMATCH' }
+}
+if ($G1LongLinear200kExperiment -and $null -eq $expandedTrainManifest) {
+  throw 'G1_LONG_LINEAR_200K_REQUIRES_EXPANDED_TRAIN_CACHE'
+}
+if (-not $G1LongLinear200kExperiment -and $ExpectedTrainingOrderHash) {
+  throw 'EXPECTED_TRAINING_ORDER_HASH_REQUIRES_G1_LONG_LINEAR_200K'
 }
 $evalCacheRootCandidate = if ($EvalCacheRoot) {
   if ([IO.Path]::IsPathRooted($EvalCacheRoot)) { $EvalCacheRoot } else { Join-Path $root $EvalCacheRoot }
@@ -516,7 +538,7 @@ try {
   $instrumentSteps = if ($OneUpdateProbe) { 1 } else { $Steps }
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite $suite -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant(); cacheSourceRunId = $deviceCacheSourceRunId } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = 2; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; learningRate = $LearningRate; learningRateSchedule = $LearningRateSchedule; decayStartStep = $DecayStartStep; decayEndStep = $DecayEndStep; scheduleTotalSteps = $ScheduleTotalSteps; targetLearningRate = $TargetLearningRate; experimentFork = $ExperimentFork.ToString().ToLowerInvariant(); parentLearningRate = $ParentLearningRate; optimizer = $Optimizer; muonBackend = $MuonBackend; muonLearningRate = $MuonLearningRate; muonMomentum = $MuonMomentum; muonNsSteps = $MuonNsSteps; muonNesterov = 'true'; g1LongLinear200k = $G1LongLinear200kExperiment.ToString().ToLowerInvariant(); steps = $instrumentSteps; batchSize = $BatchSize; resumeStep = $(if ($OneUpdateProbe) { 0 } else { $ResumeStep }); checkpointInterval = $CheckpointInterval; allowQualityFailure = $AllowQualityFailure.ToString().ToLowerInvariant(); cacheSourceRunId = $deviceCacheSourceRunId } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "training-step-$Steps" `
@@ -670,7 +692,11 @@ if (-not $reportMap.Contains('model_dimension') -or -not $reportMap.Contains('fe
 if ($null -ne $expandedTrainManifest) {
   $expectedRecordsSeen = [long]$Steps * $BatchSize
   $expectedTokensSeen = $expectedRecordsSeen * $Tokens
-  $expectedOrderHash = [string]$expandedTrainManifest.training_order.hash
+  $expectedOrderHash = if ($G1LongLinear200kExperiment) {
+    $ExpectedTrainingOrderHash
+  } else {
+    [string]$expandedTrainManifest.training_order.hash
+  }
   foreach ($field in @('target_tokens_seen','records_seen','unique_records_seen','unique_articles_seen',
       'cache_traversal_fraction','completed_epochs_equivalent','target_original_utf8_bytes_seen',
       'training_order_hash','exposure_scope')) {
@@ -860,7 +886,14 @@ foreach ($row in $telemetryRows) {
   if ($telemetryStep -lt ($ResumeStep + 1) -or $telemetryStep -gt $Steps) { throw 'LEARNING_RATE_TELEMETRY_STEP_RANGE_MISMATCH' }
   if (-not $row.PSObject.Properties['learning_rate_schedule'] -or $row.learning_rate_schedule -ne $LearningRateSchedule) { throw "LEARNING_RATE_TELEMETRY_SCHEDULE_MISMATCH: step=$telemetryStep" }
   $expectedLr = Get-PhoneLmExpectedLearningRate -Schedule $LearningRateSchedule -PeakLearningRate $learningRateValue -TargetLearningRate $targetLearningRateValue -DecayStartStep $DecayStartStep -DecayEndStep $DecayEndStep -Step $telemetryStep
-  if ([math]::Abs(([double]$row.scheduled_lr) - $expectedLr) -gt 2.0e-8) { throw "LEARNING_RATE_TELEMETRY_MISMATCH: step=$telemetryStep" }
+  $expectedMuonLr = $muonLearningRateValue * ($expectedLr / $learningRateValue)
+  if (-not $row.PSObject.Properties['aux_adam_lr'] -or
+      -not $row.PSObject.Properties['muon_lr'] -or
+      [math]::Abs(([double]$row.scheduled_lr) - $expectedLr) -gt 2.0e-8 -or
+      [math]::Abs(([double]$row.aux_adam_lr) - $expectedLr) -gt 2.0e-8 -or
+      [math]::Abs(([double]$row.muon_lr) - $expectedMuonLr) -gt 2.0e-8) {
+    throw "LEARNING_RATE_TELEMETRY_MISMATCH: step=$telemetryStep"
+  }
 }
 $requiredTelemetrySteps = if ($LearningRateSchedule -eq 'sqrt_decay') {
   @(6000,6250,6500,6750,7000,7250,7500,7750,8000)
@@ -893,6 +926,12 @@ if ($Optimizer -eq 'Muon') {
         [int]$row.window_start_step -ne ($previousHealthBoundary + 1) -or
         [int]$row.window_updates -ne ($expectedBoundary - $previousHealthBoundary)) {
       throw "OPTIMIZER_HEALTH_TELEMETRY_POSITION_MISMATCH: step=$($row.step)"
+    }
+    $expectedBoundaryAuxLr = Get-PhoneLmExpectedLearningRate -Schedule $LearningRateSchedule -PeakLearningRate $learningRateValue -TargetLearningRate $targetLearningRateValue -DecayStartStep $DecayStartStep -DecayEndStep $DecayEndStep -Step $expectedBoundary
+    $expectedBoundaryMuonLr = $muonLearningRateValue * ($expectedBoundaryAuxLr / $learningRateValue)
+    if ([math]::Abs(([double]$row.aux_adam_lr) - $expectedBoundaryAuxLr) -gt 2.0e-8 -or
+        [math]::Abs(([double]$row.muon_lr) - $expectedBoundaryMuonLr) -gt 2.0e-8) {
+      throw "OPTIMIZER_HEALTH_TELEMETRY_LR_MISMATCH: step=$($row.step)"
     }
     foreach ($field in @('gradient_finite','momentum_finite','normalized_finite','ns_output_finite','update_finite','parameters_finite','qnn_return_code_success','hvx_output_finite')) {
       if ($row.$field -ne 'true') { throw "OPTIMIZER_HEALTH_TELEMETRY_FAILURE: step=$($row.step) field=$field" }

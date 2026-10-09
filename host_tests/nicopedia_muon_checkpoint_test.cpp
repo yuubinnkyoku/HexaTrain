@@ -617,6 +617,30 @@ void testResumeParity() {
           "fresh 8-step and 4+resume+4 production trajectories differ");
 }
 
+void testLongHorizonCursorRoundTrip() {
+  mc::Checkpoint original = makeCheckpoint();
+  original.identity.globalStep = 200000;
+  original.identity.dataCursor.recordIndex = 1600000;
+  original.identity.dataCursor.tokenOffset = 0;
+  original.identity.dataCursor.epoch = 0;
+  original.identity.dataCursor.exposedTokens = 51200000;
+  original.hyperparameters.decayStartStep = 4000;
+  original.hyperparameters.decayEndStep = 200000;
+  original.hyperparameters.scheduleTotalSteps = 200000;
+
+  std::vector<std::uint8_t> bytes;
+  std::string error;
+  require(mc::validateCheckpoint(original, &error),
+          "200k checkpoint identity rejected");
+  require(mc::encodeCheckpoint(original, &bytes, &error),
+          "200k checkpoint encode failed");
+  mc::Checkpoint decoded;
+  require(mc::decodeCheckpoint(bytes, &decoded, &error),
+          "200k checkpoint decode failed");
+  require(same(original, decoded),
+          "200k schedule or data cursor changed across checkpoint roundtrip");
+}
+
 }  // namespace
 
 int main() {
@@ -624,6 +648,7 @@ int main() {
     testRegistry();
     testRoundTripAndRejections();
     testResumeParity();
+    testLongHorizonCursorRoundTrip();
     std::cout << "nicopedia_muon_checkpoint=PASS\n";
     return 0;
   } catch (const std::exception& exception) {

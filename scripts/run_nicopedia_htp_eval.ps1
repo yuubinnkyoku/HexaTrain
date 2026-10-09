@@ -27,7 +27,8 @@ param(
   [int]$Dimension = 32,
   [int]$FeedForwardDimension = 32,
   [ValidateSet('none','headwise_g1_sigmoid','headwise_g1_scale2_identity','fixed_half')][string]$AttentionGate = 'none',
-  [int]$CheckpointStep = 1000,
+  [ValidateRange(1,200000)][int]$CheckpointStep = 1000,
+  [switch]$G1LongLinear200kExperiment,
   [int]$ValidationChunks = 8192,
   [int]$DevelopmentChunks = 16384,
   [string]$CheckpointPath = "",
@@ -59,6 +60,13 @@ if ($SelfTest) {
 if ($Tokens -lt 8 -or $Tokens -gt 256) { throw 'NICOPEDIA_TOKENS_INVALID: Tokens must be in 8..256' }
 if ($Dimension -lt 2 -or $Dimension -gt 256 -or ($Dimension % 2) -ne 0) { throw 'NICOPEDIA_DIMENSION_INVALID: Dimension must be even and in 2..256' }
 if ($FeedForwardDimension -lt 2 -or $FeedForwardDimension -gt 1024) { throw 'NICOPEDIA_FFN_INVALID: FeedForwardDimension must be in 2..1024' }
+if ($CheckpointStep -gt 100000 -and -not $G1LongLinear200kExperiment) { throw 'NICOPEDIA_EVAL_STEP_REQUIRES_G1_LONG_LINEAR_200K_FLAG' }
+if ($G1LongLinear200kExperiment -and
+    ($Seed -ne 1 -or $Layers -ne 19 -or $Heads -ne 2 -or $Tokens -ne 32 -or
+     $Vocabulary -ne 1024 -or $Dimension -ne 64 -or $FeedForwardDimension -ne 128 -or
+     $AttentionGate -ne 'headwise_g1_sigmoid')) {
+  throw 'G1_LONG_LINEAR_200K_EVAL_IDENTITY_MISMATCH'
+}
 if ($RunId -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'RUN_ID_INVALID' }
 $root = Split-Path -Parent $PSScriptRoot
 $adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
@@ -179,7 +187,7 @@ $instrument = $null
 try {
   $instrument = Start-PhoneLmHeadlessInstrumentation -Adb $adb -Device $device -Package $package `
   -Class "$package.HeadlessDeviceTestRunner" -Suite 'nicopedia-eval' -RunId $RunId `
-  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = $Heads; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks } `
+  -Arguments @{ seed = $Seed; vocabulary = $Vocabulary; layers = $Layers; heads = $Heads; tokens = $Tokens; dimension = $Dimension; feedForwardDimension = $FeedForwardDimension; attentionGate = $AttentionGate; checkpointStep = $CheckpointStep; validationChunks = $ValidationChunks; developmentChunks = $DevelopmentChunks; g1LongLinear200k = $G1LongLinear200kExperiment.ToString().ToLowerInvariant() } `
   -StdoutPath (Join-Path $instrumentDir 'stdout.txt') -StderrPath (Join-Path $instrumentDir 'stderr.txt')
 $waited = Wait-PhoneLmHeadlessStatus -Process $instrument -Adb $adb -Device $device -Package $package `
   -PollLimit $PollLimit -PollSeconds $PollSeconds -ProgressEverySeconds $ProgressEverySeconds -Label "eval-step-$CheckpointStep" `
