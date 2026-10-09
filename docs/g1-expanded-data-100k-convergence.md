@@ -9,6 +9,10 @@
 
 This experiment measures the G1 baseline on the full eligible Nicopedia train split under a fixed 100k-step policy. It does not change production defaults, architecture, optimizer mathematics, tokenizer, batch size, or weight decay. The run must reach 100,000 updates unless a systems or numerical health failure prevents continuation. There is no quality-based early stop.
 
+![G1 100k convergence trajectory](figures/g1-expanded-data-100k-convergence.png)
+
+[Vector SVG version](figures/g1-expanded-data-100k-convergence.svg)
+
 ## Dataset and provenance
 
 - Source aggregate SHA-256: `b3185ea689ffa64c71f5ea8fe25f3779dbf1f0cd0d103b6e2fe05792e635bf86`.
