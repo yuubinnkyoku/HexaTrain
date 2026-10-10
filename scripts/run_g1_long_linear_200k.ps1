@@ -33,10 +33,26 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
   else { [IO.File]::Move($temporary, $Path) }
 }
 function Assert-NoG1UnresolvedSegmentRecovery([object]$Plan) {
-  if ($Plan.status -eq 'RECOVERY_REQUIRED' -or
-      @($Plan.incomplete_segments | Where-Object { $_.status -eq 'ARTIFACT_RECOVERY_REQUIRED' }).Count -gt 0) {
+  $unresolvedSegments = @()
+  if ($null -ne $Plan.PSObject.Properties['incomplete_segments']) {
+    $unresolvedSegments = @($Plan.incomplete_segments | Where-Object { $_.status -eq 'ARTIFACT_RECOVERY_REQUIRED' })
+  }
+  if ($Plan.status -eq 'RECOVERY_REQUIRED' -or $unresolvedSegments.Count -gt 0) {
     throw 'G1_SEGMENT_ARTIFACT_RECOVERY_REQUIRED'
   }
+}
+function New-StorageHeadroomSnapshot([long]$HostFreeBytes, [long]$HostRequiredBytes, [long]$DeviceFreeBytes, [long]$DeviceRequiredBytes) {
+  return [pscustomobject]@{
+    host_free_bytes = $HostFreeBytes; host_required_bytes = $HostRequiredBytes
+    device_free_bytes = $DeviceFreeBytes; device_required_bytes = $DeviceRequiredBytes
+    host_headroom_ok = ($HostFreeBytes -ge $HostRequiredBytes)
+    device_headroom_ok = ($DeviceFreeBytes -ge $DeviceRequiredBytes)
+  }
+}
+function Assert-StorageHeadroomSnapshot([object]$Snapshot) {
+  if (-not $Snapshot.host_headroom_ok) { throw "HOST_STORAGE_HEADROOM_LOW: free=$($Snapshot.host_free_bytes) required=$($Snapshot.host_required_bytes)" }
+  if (-not $Snapshot.device_headroom_ok) { throw "DEVICE_STORAGE_HEADROOM_LOW: free=$($Snapshot.device_free_bytes) required=$($Snapshot.device_required_bytes)" }
+  return $Snapshot
 }
 if ($SelfTest) {
   if ($segmentEnds[-1] -ne 200000 -or $segmentEnds.Count -ne 41 -or
@@ -55,9 +71,27 @@ if ($SelfTest) {
     })
   } catch { $recoveryGuardRejected = $_.Exception.Message -eq 'G1_SEGMENT_ARTIFACT_RECOVERY_REQUIRED' }
   if (-not $recoveryGuardRejected) { throw 'G1_LONG_LINEAR_200K_RECOVERY_GUARD_SELF_TEST_FAILED' }
+  $storageGateProbe = New-StorageHeadroomSnapshot -HostFreeBytes 70GB -HostRequiredBytes 20GB -DeviceFreeBytes (12GB - 1) -DeviceRequiredBytes 12GB
+  if (-not $storageGateProbe.host_headroom_ok -or $storageGateProbe.device_headroom_ok -or
+      $storageGateProbe.host_required_bytes -ne 20GB -or $storageGateProbe.device_required_bytes -ne 12GB) {
+    throw 'G1_LONG_LINEAR_200K_STORAGE_SNAPSHOT_SELF_TEST_FAILED'
+  }
+  $storageGateRejected = $false
+  try { Assert-StorageHeadroomSnapshot -Snapshot $storageGateProbe | Out-Null }
+  catch { $storageGateRejected = $_.Exception.Message -like 'DEVICE_STORAGE_HEADROOM_LOW:*' }
+  if (-not $storageGateRejected) { throw 'G1_LONG_LINEAR_200K_STORAGE_GATE_SELF_TEST_FAILED' }
+  $pendingEvaluationProbe = @($fullEvaluationSteps | Where-Object { $_ -le 1000 -and $_ -notin @() })
+  if ($pendingEvaluationProbe.Count -ne 1 -or $pendingEvaluationProbe[0] -ne 1000) {
+    throw 'G1_LONG_LINEAR_200K_RESUME_EVALUATION_SELF_TEST_FAILED'
+  }
+
   Assert-NoG1UnresolvedSegmentRecovery -Plan ([pscustomobject]@{
     status = 'RUNNING'
     incomplete_segments = @([pscustomobject]@{ status = 'HEALTHY_COMPLETE' })
+  })
+  Assert-NoG1UnresolvedSegmentRecovery -Plan ([pscustomobject]@{
+    status = 'RUNNING'
+    segments = @([pscustomobject]@{ status = 'HEALTHY_COMPLETE' })
   })
   $completionPropertyPlan = [pscustomobject]@{ status = 'COMPLETED_200000' }
   $completionPropertyPlan | Add-Member -MemberType NoteProperty -Name completed_utc `
@@ -103,7 +137,7 @@ if ($SelfTest) {
   if ($LASTEXITCODE -ne 0 -or ($orderOutput -join "`n") -notmatch 'g1_training_order_identity_self_test=PASS') {
     throw 'G1_LONG_LINEAR_200K_ORDER_IDENTITY_SELF_TEST_FAILED'
   }
-  Write-Host 'g1_long_linear_200k_plan_self_test=PASS segments=41 full_eval_boundaries=15 order_identity=PASS recovery_guard=PASS completion_property=PASS run_ledger=PASS atomic_replace=PASS result_name=PASS'
+  Write-Host 'g1_long_linear_200k_plan_self_test=PASS segments=41 full_eval_boundaries=15 order_identity=PASS recovery_guard=PASS completion_property=PASS run_ledger=PASS atomic_replace=PASS result_name=PASS storage_gate=PASS resume_evaluation=PASS'
   exit 0
 }
 
@@ -129,11 +163,20 @@ function Assert-StorageHeadroom([string]$Adb, [string]$Device, [long]$CacheBytes
   $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
   $checkpointReserve = [long]($CheckpointBytes * 200 * 1.5)
   $hostRequired = [math]::Max(20GB, [long]($CacheBytes * 1.5) + $checkpointReserve + 10GB)
-  if ($drive.AvailableFreeSpace -lt $hostRequired) { throw "HOST_STORAGE_HEADROOM_LOW: free=$($drive.AvailableFreeSpace) required=$hostRequired" }
   $deviceFree = Get-DeviceFreeBytes -Adb $Adb -Device $Device
   $deviceRequired = [math]::Max(12GB, [long]($CacheBytes * 2) + $checkpointReserve + 3GB)
-  if ($deviceFree -lt $deviceRequired) { throw "DEVICE_STORAGE_HEADROOM_LOW: free=$deviceFree required=$deviceRequired" }
-  return [pscustomobject]@{ host_free_bytes = $drive.AvailableFreeSpace; host_required_bytes = $hostRequired; device_free_bytes = $deviceFree; device_required_bytes = $deviceRequired }
+  $snapshot = New-StorageHeadroomSnapshot -HostFreeBytes $drive.AvailableFreeSpace -HostRequiredBytes $hostRequired `
+    -DeviceFreeBytes $deviceFree -DeviceRequiredBytes $deviceRequired
+  return (Assert-StorageHeadroomSnapshot -Snapshot $snapshot)
+}
+function Get-StorageHeadroomSnapshot([string]$Adb, [string]$Device, [long]$CacheBytes, [long]$CheckpointBytes) {
+  $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
+  $checkpointReserve = [long]($CheckpointBytes * 200 * 1.5)
+  $hostRequired = [math]::Max(20GB, [long]($CacheBytes * 1.5) + $checkpointReserve + 10GB)
+  $deviceFree = Get-DeviceFreeBytes -Adb $Adb -Device $Device
+  $deviceRequired = [math]::Max(12GB, [long]($CacheBytes * 2) + $checkpointReserve + 3GB)
+  return (New-StorageHeadroomSnapshot -HostFreeBytes $drive.AvailableFreeSpace -HostRequiredBytes $hostRequired `
+    -DeviceFreeBytes $deviceFree -DeviceRequiredBytes $deviceRequired)
 }
 function New-RunId([int]$FromStep, [int]$ToStep) {
   return ('g1long200k-p-{0:D6}-{1:D6}-{2}' -f $FromStep, $ToStep, [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -303,6 +346,62 @@ if ($ResumeFromStep -eq 0) {
 $previousStep = $ResumeFromStep
 $checkpointSizeEstimate = [long]$plan.initial_checkpoint_size_estimate_bytes
 $completedEvaluationSteps = @($plan.full_evaluations | ForEach-Object { [int]$_.step })
+function Invoke-G1RegisteredFullCapEvaluation([int]$EvalStep, [string]$Adb, [string]$Device) {
+  $evalCheckpoint = Get-CheckpointPath -Directory $trainingReportRoot -Step $EvalStep
+  if (-not (Test-Path -LiteralPath $evalCheckpoint -PathType Leaf)) { throw "FULL_EVAL_CHECKPOINT_MISSING: $EvalStep" }
+  $checkpointBytes = [IO.FileInfo]::new($evalCheckpoint).Length
+  Assert-StorageHeadroom -Adb $Adb -Device $Device -CacheBytes ([IO.FileInfo]::new($cachePath).Length) -CheckpointBytes $checkpointBytes | Out-Null
+  $evalAttempt = [guid]::NewGuid().ToString('N').Substring(0, 6)
+  $evalRunId = "g1long200k-eval-$('{0:D6}' -f $EvalStep)-$evalAttempt"
+  $evalDirectory = Join-Path $fullEvalRoot ("step-{0:D6}" -f $EvalStep)
+  [IO.Directory]::CreateDirectory($evalDirectory) | Out-Null
+  $evalArguments = @{
+    QairtSdkRoot = $QairtSdkRoot; ExpectedBuildId = $ExpectedBuildId; SkipBuild = $true; SkipInstall = $true
+    Seed = 1; Layers = 19; Heads = 2; Tokens = 32; Vocabulary = 1024; Dimension = 64; FeedForwardDimension = 128
+    AttentionGate = 'headwise_g1_sigmoid'; CheckpointStep = $EvalStep; G1LongLinear200kExperiment = $true
+    SkipHostEvaluation = $true
+    ValidationChunks = [int]$manifest.heldout_cache_identity.validation.records
+    DevelopmentChunks = [int]$manifest.heldout_cache_identity.development.records
+    CheckpointPath = $evalCheckpoint; CacheRoot = $cacheRoot; TokenizerModelPath = $tokenizerPath
+    ReportRoot = $evalDirectory; ExpectedDeviceSerial = $plan.device_serial_private; RunId = $evalRunId
+    PollLimit = 86400; PollSeconds = 5; ProgressEverySeconds = 30
+  }
+  $evalStarted = [DateTime]::UtcNow
+  Write-Host "full_cap_eval_start step=$EvalStep validation_chunks=$($evalArguments.ValidationChunks) development_chunks=$($evalArguments.DevelopmentChunks)"
+  & $evalScript @evalArguments
+  $modelTag = '-t32-d64-f128'
+  $capacityTag = "-v$($evalArguments.ValidationChunks)-d$($evalArguments.DevelopmentChunks)"
+  $evalTextPath = Join-Path $evalDirectory "seed1-l19$modelTag-step$EvalStep$capacityTag-htp.txt"
+  if (-not (Test-Path -LiteralPath $evalTextPath -PathType Leaf)) { throw "FULL_EVAL_RESULT_MISSING: $EvalStep" }
+  $evalMap = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $evalTextPath -Raw)
+  foreach ($field in @('status','validation_chunks','development_chunks','validation_nll','development_nll','validation_top1','development_top1','validation_bits_per_utf8_byte','development_bits_per_utf8_byte','qnn_return_code_success','output_tensors_finite')) {
+    if (-not $evalMap.Contains($field)) { throw "FULL_EVAL_FIELD_MISSING: step=$EvalStep field=$field" }
+  }
+  if ($evalMap.status -ne 'SUCCESS' -or $evalMap.qnn_return_code_success -ne 'true' -or
+      $evalMap.output_tensors_finite -ne 'true' -or
+      [int]$evalMap.validation_chunks -ne $evalArguments.ValidationChunks -or
+      [int]$evalMap.development_chunks -ne $evalArguments.DevelopmentChunks) {
+    throw "FULL_EVAL_HEALTH_OR_CAP_REJECTED: $EvalStep"
+  }
+  $evalResult = [pscustomobject]@{
+    step = $EvalStep; run_id_private = $evalRunId; status = 'SUCCESS'
+    started_utc = $evalStarted.ToString('o'); completed_utc = [DateTime]::UtcNow.ToString('o')
+    elapsed_seconds = ([DateTime]::UtcNow - $evalStarted).TotalSeconds
+    validation_nll = [string]$evalMap.validation_nll; validation_bpb = [string]$evalMap.validation_bits_per_utf8_byte
+    validation_top1 = [string]$evalMap.validation_top1; validation_chunks = [int]$evalArguments.ValidationChunks
+    development_nll = [string]$evalMap.development_nll; development_bpb = [string]$evalMap.development_bits_per_utf8_byte
+    development_top1 = [string]$evalMap.development_top1; development_chunks = [int]$evalArguments.DevelopmentChunks
+    result_sha256 = 'sha256:' + (Get-FileHash -LiteralPath $evalTextPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+  $plan.full_evaluations = @($plan.full_evaluations) + @($evalResult)
+  $script:completedEvaluationSteps = @($script:completedEvaluationSteps) + @($EvalStep)
+  $plan.updated_utc = [DateTime]::UtcNow.ToString('o')
+  Write-JsonAtomic -Path $planPath -Value $plan
+  Write-Host "full_cap_eval_complete step=$EvalStep validation_nll=$($evalResult.validation_nll) development_nll=$($evalResult.development_nll)"
+}
+foreach ($evalStep in @($fullEvaluationSteps | Where-Object { $_ -le $ResumeFromStep -and $_ -notin $completedEvaluationSteps })) {
+  Invoke-G1RegisteredFullCapEvaluation -EvalStep $evalStep -Adb $adb -Device $device
+}
 foreach ($targetStep in @($segmentEnds | Where-Object { $_ -gt $ResumeFromStep -and $_ -le $StopAfterStep })) {
   $deviceInfo = Resolve-PhoneLmDevice -Adb $adb
   if ($deviceInfo.Serial -ne $plan.device_serial_private) { throw 'ADB_STABLE_DEVICE_CHANGED' }
@@ -369,7 +468,7 @@ foreach ($targetStep in @($segmentEnds | Where-Object { $_ -gt $ResumeFromStep -
   if (-not (Test-Path -LiteralPath $finalCheckpoint -PathType Leaf)) { throw "SEGMENT_CHECKPOINT_MISSING: $targetStep" }
   $checkpointHash = 'sha256:' + (Get-FileHash -LiteralPath $finalCheckpoint -Algorithm SHA256).Hash.ToLowerInvariant()
   $checkpointSizeEstimate = [IO.FileInfo]::new($finalCheckpoint).Length
-  $storageAfter = Assert-StorageHeadroom -Adb $adb -Device $device -CacheBytes ([IO.FileInfo]::new($cachePath).Length) -CheckpointBytes $checkpointSizeEstimate
+  $storageAfter = Get-StorageHeadroomSnapshot -Adb $adb -Device $device -CacheBytes ([IO.FileInfo]::new($cachePath).Length) -CheckpointBytes $checkpointSizeEstimate
   $segmentResult = [pscustomobject]@{
     from_step = $previousStep; steps = $targetStep; run_id_private = $runId
     started_utc = $started.ToString('o'); finished_utc = [DateTime]::UtcNow.ToString('o')
@@ -385,6 +484,8 @@ foreach ($targetStep in @($segmentEnds | Where-Object { $_ -gt $ResumeFromStep -
     hvx_fallback_count = [int]$trainingMap.hvx_fallback_count
     hvx_nonfinite_count = [int]$trainingMap.hvx_nonfinite_count
     host_free_bytes_after = $storageAfter.host_free_bytes; device_free_bytes_after = $storageAfter.device_free_bytes
+    host_required_bytes_after = $storageAfter.host_required_bytes; device_required_bytes_after = $storageAfter.device_required_bytes
+    host_headroom_after_ok = $storageAfter.host_headroom_ok; device_headroom_after_ok = $storageAfter.device_headroom_ok
     segment_log_path = $segmentLogName
     segment_log_sha256 = 'sha256:' + (Get-FileHash -LiteralPath $segmentLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
     result_file_sha256 = 'sha256:' + (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -395,58 +496,10 @@ foreach ($targetStep in @($segmentEnds | Where-Object { $_ -gt $ResumeFromStep -
   $plan.updated_utc = [DateTime]::UtcNow.ToString('o')
   Write-JsonAtomic -Path $planPath -Value $plan
   Write-Host "segment_complete step=$targetStep checkpoint_sha256=$checkpointHash host_free_bytes=$($storageAfter.host_free_bytes) device_free_bytes=$($storageAfter.device_free_bytes)"
+  Assert-StorageHeadroomSnapshot -Snapshot $storageAfter | Out-Null
 
-  foreach ($evalStep in @($fullEvaluationSteps | Where-Object { $_ -le $targetStep -and $_ -gt $previousStep })) {
-    if ($evalStep -in $completedEvaluationSteps) { continue }
-    $evalCheckpoint = Get-CheckpointPath -Directory $trainingReportRoot -Step $evalStep
-    if (-not (Test-Path -LiteralPath $evalCheckpoint -PathType Leaf)) { throw "FULL_EVAL_CHECKPOINT_MISSING: $evalStep" }
-    $evalAttempt = [guid]::NewGuid().ToString('N').Substring(0, 6)
-    $evalRunId = "g1long200k-eval-$('{0:D6}' -f $evalStep)-$evalAttempt"
-    $evalDirectory = Join-Path $fullEvalRoot ("step-{0:D6}" -f $evalStep)
-    [IO.Directory]::CreateDirectory($evalDirectory) | Out-Null
-    $evalArguments = @{
-      QairtSdkRoot = $QairtSdkRoot; ExpectedBuildId = $ExpectedBuildId; SkipBuild = $true; SkipInstall = $true
-      Seed = 1; Layers = 19; Heads = 2; Tokens = 32; Vocabulary = 1024; Dimension = 64; FeedForwardDimension = 128
-      AttentionGate = 'headwise_g1_sigmoid'; CheckpointStep = $evalStep; G1LongLinear200kExperiment = $true
-      SkipHostEvaluation = $true
-      ValidationChunks = [int]$manifest.heldout_cache_identity.validation.records
-      DevelopmentChunks = [int]$manifest.heldout_cache_identity.development.records
-      CheckpointPath = $evalCheckpoint; CacheRoot = $cacheRoot; TokenizerModelPath = $tokenizerPath
-      ReportRoot = $evalDirectory; ExpectedDeviceSerial = $plan.device_serial_private; RunId = $evalRunId
-      PollLimit = 86400; PollSeconds = 5; ProgressEverySeconds = 30
-    }
-    $evalStarted = [DateTime]::UtcNow
-    Write-Host "full_cap_eval_start step=$evalStep validation_chunks=$($evalArguments.ValidationChunks) development_chunks=$($evalArguments.DevelopmentChunks)"
-    & $evalScript @evalArguments
-    $modelTag = '-t32-d64-f128'
-    $capacityTag = "-v$($evalArguments.ValidationChunks)-d$($evalArguments.DevelopmentChunks)"
-    $evalTextPath = Join-Path $evalDirectory "seed1-l19$modelTag-step$evalStep$capacityTag-htp.txt"
-    if (-not (Test-Path -LiteralPath $evalTextPath -PathType Leaf)) { throw "FULL_EVAL_RESULT_MISSING: $evalStep" }
-    $evalMap = Get-PhoneLmKeyValueMap -Text (Get-Content -LiteralPath $evalTextPath -Raw)
-    foreach ($field in @('status','validation_chunks','development_chunks','validation_nll','development_nll','validation_top1','development_top1','validation_bits_per_utf8_byte','development_bits_per_utf8_byte','qnn_return_code_success','output_tensors_finite')) {
-      if (-not $evalMap.Contains($field)) { throw "FULL_EVAL_FIELD_MISSING: step=$evalStep field=$field" }
-    }
-    if ($evalMap.status -ne 'SUCCESS' -or $evalMap.qnn_return_code_success -ne 'true' -or
-        $evalMap.output_tensors_finite -ne 'true' -or
-        [int]$evalMap.validation_chunks -ne $evalArguments.ValidationChunks -or
-        [int]$evalMap.development_chunks -ne $evalArguments.DevelopmentChunks) {
-      throw "FULL_EVAL_HEALTH_OR_CAP_REJECTED: $evalStep"
-    }
-    $evalResult = [pscustomobject]@{
-      step = $evalStep; run_id_private = $evalRunId; status = 'SUCCESS'
-      started_utc = $evalStarted.ToString('o'); completed_utc = [DateTime]::UtcNow.ToString('o')
-      elapsed_seconds = ([DateTime]::UtcNow - $evalStarted).TotalSeconds
-      validation_nll = [string]$evalMap.validation_nll; validation_bpb = [string]$evalMap.validation_bits_per_utf8_byte
-      validation_top1 = [string]$evalMap.validation_top1; validation_chunks = [int]$evalMap.validation_chunks
-      development_nll = [string]$evalMap.development_nll; development_bpb = [string]$evalMap.development_bits_per_utf8_byte
-      development_top1 = [string]$evalMap.development_top1; development_chunks = [int]$evalMap.development_chunks
-      result_sha256 = 'sha256:' + (Get-FileHash -LiteralPath $evalTextPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    $plan.full_evaluations = @($plan.full_evaluations) + @($evalResult)
-    $completedEvaluationSteps += $evalStep
-    $plan.updated_utc = [DateTime]::UtcNow.ToString('o')
-    Write-JsonAtomic -Path $planPath -Value $plan
-    Write-Host "full_cap_eval_complete step=$evalStep validation_nll=$($evalResult.validation_nll) development_nll=$($evalResult.development_nll)"
+  foreach ($evalStep in @($fullEvaluationSteps | Where-Object { $_ -le $targetStep -and $_ -gt $previousStep -and $_ -notin $completedEvaluationSteps })) {
+    Invoke-G1RegisteredFullCapEvaluation -EvalStep $evalStep -Adb $adb -Device $device
   }
   $previousStep = $targetStep
 }

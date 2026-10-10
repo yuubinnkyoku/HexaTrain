@@ -1,6 +1,6 @@
 # HexaTrain G1 Long-Horizon Linear Decay, 200k
 
-**Status: BLOCKED BEFORE START — preflight and the 8k fresh sanity passed; the primary trajectory has not started because the required storage headroom gate is unmet.**
+**Status: BLOCKED AFTER 1,000 PRIMARY UPDATES — the C: host gate passed, but the device fell below its 12 GiB storage gate after the first healthy segment. The step-1,000 full-cap evaluation and all later updates remain pending.**
 
 This is a fresh-initialization schedule comparison with a hard ceiling of 200,000 updates. The independent variable is the learning-rate schedule. No quality result may change the schedule or stop the run early. A single seed describes this trajectory and does not establish statistical generalization.
 
@@ -16,6 +16,18 @@ This is a fresh-initialization schedule comparison with a hard ceiling of 200,00
 - Original result: `SUCCESS / STILL_IMPROVING`, seed 1, 100,000 updates, 25,600,000 target tokens.
 - Final 100k baseline: Val BPB 2.026486192, Dev BPB 2.135994049, Val NLL 3.728428748, Dev NLL 3.705932880.
 - Fresh initialization anchor: `fnv1a64:01b81108b8c8b842`.
+
+## C: migration and execution environment
+
+- The execution workspace is a separate checkout on C: on branch `experiment/g1-long-linear-200k`. Its source SHA at the first primary update was `024aaef44784355e8e278ef642e2752ae79846bb` and the working tree was clean. The committed report omits the local absolute workspace path.
+- The branch was fetched from the D: local repository, so it contains both required local commits: `55a26b4` (tooling) and `024aaef` (experiment record). D: and the 100k workspace remain intact and unchanged.
+- C: free space was 74.54 GiB before migration, about 70.76 GiB immediately before the first segment, and 68.07 GiB after final Fast verification. D: free space was 19.63 GiB. No existing files were deleted to create this headroom.
+- The host gate checks the workspace volume. C: holds the source checkout, Android build intermediates, CMake output, Gradle cache, Android SDK, private cache, checkpoints, reports, telemetry, and temporary build output. The runner observed 75,980,914,688 host-free bytes at segment start against the unchanged 20 GiB minimum.
+- Measured C: sizes during migration: Android `app/build` 1.77 GiB; `app/.cxx` 2.73 GiB; the copied expanded-train cache 0.88 GiB; primary reports and telemetry about 0.01 GiB after the first segment; pinned MNN source 0.32 GiB. The existing 100k C: workspace was about 7.75 GiB and was not reused as an output directory.
+- The C: cache copy matches the registered cache SHA-256 `bbbf966f07a65b64cf5e2a85f942cecf95c8f349c9d6b1bfb5d28191a0ce3fcf`, manifest file SHA-256 `e8a77e06abab3da5ff7e26eb9744c3bffad8cf5fbf006bbf4c7f582393961e4`, tokenizer SHA-256 `9a70e5929e6556a147b0fbc6ada7afefa5e144cdfe2d83bd60e6b31a13252798`, validation SHA-256 `fd3fce2f61837435338127f165c15137051acaf8edf39d18f45c762bd310fd4f`, and development SHA-256 `a74bc959328fc6602d87f7e420ae9c4cb771084b8965c3d37e01e824ee3f028b`. No re-tokenization or data reselection occurred.
+- C: build and audit used pinned QAIRT Build ID `2.48.40.260702151143`, QNN API 2.37.0, Hexagon SDK 6.6.0.0 / Tools 19.0.07, and HTP V81. The QNN+HVX APK audit passed; required libraries matched the pinned SDK. The APK hash remains in ignored private preflight evidence and is not committed.
+- The C: device preflight confirmed a single stable physical device and no active run. Device free space was 13,802,455,040 bytes before staging the cache. After staging and the first segment it was 12,826,243,072 bytes, 58,658,816 bytes below the unchanged 12 GiB minimum. A later read-only resume preflight measured 12,726,960,128 bytes, 157,941,760 bytes below the minimum. Device storage is the current blocker; C: host storage is not.
+- Existing C: preflight, Android/QNN/HVX build audits, 8k sanity, and resume-equivalence evidence were retained under ignored build output. No checkpoint, private cache, raw telemetry, device identifier, or APK hash was added to Git.
 
 ## Fixed model, optimizer, and data
 
@@ -64,17 +76,17 @@ Steps 1–4,000 receive peak LR. Step 4,001 begins decay. Step 200,000 receives 
 | Checkpoint codec and 200k cursor representation | PASS | Host round-trip covers global step 200k, 1,600,000 selections, 51,200,000 exposed tokens, and the 200k schedule identity. |
 | Fast / Host / Android | PASS | `verify.ps1` Fast, Host, and Android profiles passed. |
 | Pinned QNN build and APK audit | PASS | QAIRT `2.48.40.260702151143`; QNN APK audit succeeded with required library hashes matching and no forbidden 2.47 strings or host SDK paths. The QNN profile reported optional SDK samples as `QAIRT_INVENTORY_INCOMPLETE`; this is advisory in the repository checker and did not fail the pinned phone-build audit. |
-| QNN+HVX build and audit | PASS | Fresh debug and androidTest APKs built with Hexagon SDK 6.6.0.0 / Tools 19.0.07. Audited training APK SHA-256: `4cebd539f89e46df7d72cfb4f654d5af072dd0edddc9d0f15171d2f54a49f4bc`. SDK manifest SHA-256: `8bb7a783a59b7b929355f643e78580addf80bbc1e5f4762c244ce2e06be9478f`; compiler SHA-256: `039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047`. |
+| QNN+HVX build and audit | PASS | Fresh debug and androidTest APKs built with Hexagon SDK 6.6.0.0 / Tools 19.0.07. The audit passed; APK hash is retained in ignored private evidence. SDK manifest SHA-256: `8bb7a783a59b7b929355f643e78580addf80bbc1e5f4762c244ce2e06be9478f`; compiler SHA-256: `039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047`. |
 | Device smoke and G1 health | PASS | Device profile passed. Stable physical device identity and clean active-run gates were confirmed; sanity used HTP with HVX_W8, Aux Adam on CPU, no fallback, and pinned QAIRT. Thermal status stayed 0; observed battery temperature was 31–38 °C. |
 | Resume equivalence | PASS | Fresh uninterrupted 0→2k and segmented 0→1k→resume→2k produced byte-identical step-2k checkpoints (SHA-256 `92930af7b1f3bb80ebb92ba631063ae6f931723fdf082097fed599bf8f6cad1d`). |
 | Fresh 8k sanity | PASS | Fresh 0→1k→resume→8k reached step 8k with matching initialization, cache, order, QNN, finite, HVX, and checkpoint evidence. Details below. |
-| Primary storage headroom | **BLOCKED** | The run requires at least 20 GiB free before each segment; measured free space was 19.71 GiB. No primary update or evaluation was started. |
+| C: host and device storage headroom | C: host PASS / device BLOCKED | C: had 75,980,914,688 bytes free at the first segment against the unchanged 20 GiB host gate. Device free space after cache staging and step 1,000 was 12,826,243,072 bytes against 12,884,901,888 required. |
 
-The primary run must not start if any data, optimizer, LR, order, checkpoint, resume, QNN/HVX, or storage gate fails. All technical preflight and sanity gates passed, but the unmet storage gate keeps the primary run blocked.
+The C: migration cleared the host-space blocker without changing the 20 GiB host gate. The fresh primary 0→1,000 segment completed with matching data/order/initialization identity, QNN/HVX success, finite outputs, and a verified checkpoint. The device-space gate then blocked the step-1,000 full-cap evaluation and any later segment. The experiment remains blocked until device free space exceeds 12 GiB with operating margin; no threshold or recipe was changed.
 
 ## Primary result
 
-**Status: NOT STARTED — blocked before step 1 by storage headroom.** No production checkpoint, segment, or full-cap evaluation exists. The sanity and resume-equivalence trajectories are separate fresh runs and are not part of the primary trajectory.
+**Status: BLOCKED_STORAGE_HEADROOM after step 1,000.** The production trajectory started from fresh G1 seed 1. Its 0→1,000 segment passed QNN/HVX, finite, optimizer, data-order, initialization, and checkpoint checks. The step-1,000 full-cap evaluation is still pending because device free space was below 12 GiB. The plan records step 1,000 as the last completed primary update; no sanity checkpoint was used.
 
 ### Resume-equivalence and sanity evidence
 
@@ -96,7 +108,7 @@ Checkpoint SHA-256 by global step (all checkpoints were 6,652,678 bytes):
 
 | Step | SHA-256 | Trajectory |
 | ---: | --- | --- |
-| 1,000 | `aee1d40468ad553891c40a72b06fc3c01da4425f65ffba23556ef3a7384ee05b` | Uninterrupted, segmented, sanity |
+| 1,000 | `aee1d40468ad553891c40a72b06fc3c01da4425f65ffba23556ef3a7384ee05b` | Uninterrupted, segmented, sanity, primary |
 | 2,000 | `92930af7b1f3bb80ebb92ba631063ae6f931723fdf082097fed599bf8f6cad1d` | Uninterrupted, segmented, sanity |
 | 3,000 | `84072c9a87d736f6b63664daa17e48a5e87c4d60f594d9b9fc0c428477147c53` | Sanity |
 | 4,000 | `61a8331d58323bbcba4ba86db6ae01ef6f3f3910f89b1d4ead44d3398db3bd6f` | Sanity |
@@ -115,7 +127,7 @@ Checkpoint SHA-256 by global step (all checkpoints were 6,652,678 bytes):
 | Resume-equivalence: 1k→2k resumed | SUCCESS | `92930af7b1f3bb80ebb92ba631063ae6f931723fdf082097fed599bf8f6cad1d` | 256,000 | — | Resumed same checkpoint; final bytes match uninterrupted. |
 | Sanity: 0→1k | SUCCESS | `aee1d40468ad553891c40a72b06fc3c01da4425f65ffba23556ef3a7384ee05b` | 256,000 | — | Fresh initialization. |
 | Sanity: 1k→8k resumed | SUCCESS | `d3e983c3898ad3bcd7c5e2e8fc03d1e34cdec92e361d43447555f7e0a37c9` | 1,792,000 | — | Checkpoint saved each 1k; per-step hashes listed above. |
-| Primary: planned 0→1k | BLOCKED before start | — | 0 | — | Required headroom is ≥20 GiB; measured 19.71 GiB. Primary trajectory remains fresh and separate. |
+| Primary: 0→1k | HEALTHY_COMPLETE; orchestration BLOCKED_STORAGE_HEADROOM | `aee1d40468ad553891c40a72b06fc3c01da4425f65ffba23556ef3a7384ee05b` | 256,000 | 107.990 s model-training time; runner completed the segment at 125 s | QNN/HVX and finite checks passed. The post-segment device gate blocked before the 1k full-cap evaluation. The run-plan was reconciled from verified result, log, and checkpoint artifacts. |
 
 ### Fixed full-cap quality
 
@@ -124,6 +136,7 @@ Delta convention: new result minus the 100k baseline at the same 100k step; nega
 | Step | Val NLL | Val BPB | Val top-1 | Dev NLL | Dev BPB | Dev top-1 | QNN / finite |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 100k baseline | 3.728428748 | 2.026486192 | 0.248132176 | 3.705932880 | 2.135994049 | 0.245884229 | PASS / PASS |
+| 1k Long Linear | Full-cap evaluation pending | — | — | Full-cap evaluation pending | — | — | QNN PASS / finite PASS |
 | 100k Long Linear | Not measured | Not measured | Not measured | Not measured | Not measured | Not measured | Not run |
 | 120k | Not measured | Not measured | Not measured | Not measured | Not measured | Not measured | Not run |
 | 140k | Not measured | Not measured | Not measured | Not measured | Not measured | Not measured | Not run |
@@ -143,16 +156,16 @@ Delta convention: new result minus the 100k baseline at the same 100k step; nega
 
 ### Gate, optimizer, and systems telemetry
 
-Primary-boundary telemetry was not produced because the run did not start. Sanity telemetry is recorded above. If resumed, every fixed evaluation boundary must report gate mean/stddev, layer/head distribution, fraction below 0.1, fraction above 0.9, and observed min/max. Report optimizer finite checks, QNN return-code success separately from tensor/parameter finiteness, HVX success/fallbacks, CPU fallback, clipped steps, and both LR values. Gate saturation alone does not stop the run or change architecture.
+At the primary step-1,000 boundary, training telemetry recorded train loss 7.25189352→4.543793201, 256,000 target tokens, 7,997 unique records, 7,355 unique articles, and cache traversal fraction 0.0006278713. The fixed full-cap Val/Dev evaluation was not run. LR telemetry at step 1,000 was Aux Adam 0.003299999982 and Muon 0.007499999832, both at peak. The 1,000-update optimizer window was finite with gradient clipping disabled and zero clipped steps; QNN return-code success was true, application-visible outputs and parameters were finite, Muon backend was HVX_W8 with HVX RPC status 0, and CPU/HVX fallback counts were zero. QNN graph execution succeeded for all 8,000 batch executions. Thermal status remained 0 with observed battery temperature 40 °C. The segment used 107.990 s of training time; orchestration reported completion after 125 s. Gate telemetry covered 19 layers × 2 heads (38 summaries): weighted mean 0.122361645, stddev 0.117555923, min 0, max 0.943359375, 58.3824% below 0.1, and 0.0003701% above 0.9. Head means were 0.118403 (head 0) and 0.126320 (head 1). No full-cap quality or time-to-quality result exists for the primary trajectory. Exact layer/head and optimizer windows remain in ignored local telemetry. If resumed, each fixed evaluation boundary must report the same gate and optimizer fields. Gate saturation alone does not stop the run or change architecture.
 
 ### Incidents and negative findings
 
 The first setup attempt used a QNN-only APK and failed native initialization with `HVX_MUON_NOT_BUILT` at step 0; zero updates were applied. The preflight was corrected to build and audit the pinned QNN+HVX APK before device use, and the successful r3 resume/sanity gates used that APK. A second attempt correctly built and audited QNN+HVX, but a wrapper check misread CRLF line endings in the audit report; it stopped before installation or training. The wrapper now normalizes line endings, and the final preflight passed.
 
-The primary storage gate then measured 19.71 GiB free against its 20 GiB minimum. A request to remove task-generated build intermediates to reclaim space was rejected by automatic approval review; no deletion occurred and no alternate execution route was tried. This is the current blocking condition. The primary runner must resume only when its storage check passes. If a future transport or infrastructure failure occurs after launch, classify it separately from numerical or QNN/HVX failures and recover only from a verified checkpoint with matching schedule, dataset/order, optimizer, and device identity. No result may be omitted because it is unfavorable.
+The original D: host-space block measured 19.71 GiB against the 20 GiB host minimum; C: migration resolved it without deleting D: data. The first primary segment reached step 1,000 and produced checkpoint SHA-256 `aee1d40468ad553891c40a72b06fc3c01da4425f65ffba23556ef3a7384ee05b`. QNN/HVX health and finiteness passed. After dataset staging, the device had 12,826,243,072 free bytes against the 12,884,901,888-byte gate, so the runner stopped before evaluation and step 5,000. A no-op resume preflight later confirmed the checkpoint and clean-device gates, then stopped before evaluation when device free space measured 12,726,960,128 bytes. These are storage/infrastructure blocks, not numerical failures; no additional updates or evaluations occurred. The original runner wrote the healthy segment ledger after the post-segment storage assertion, so the stopped run-plan initially omitted the completed boundary. We reconciled it only after rechecking the result fields, checkpoint SHA, log identity, LR telemetry, optimizer health, and all 38 gate summaries. The runner is corrected to persist a validated checkpoint boundary before applying the post-segment capacity gate and to preflight pending evaluations on resume. Its resume guard also now tolerates an absent optional incomplete-segment list while still rejecting RECOVERY_REQUIRED. Runner SelfTest and Fast passed after these changes. Device data was not deleted, and the 20 GiB host and 12 GiB device gates were not altered. Resume only this step-1,000 primary checkpoint after the device gate passes; do not restart from step 0 or use a sanity/100k checkpoint.
 
 ### Convergence and next research decision
 
-**Current classification: `INCOMPLETE`.** The primary trajectory has no updates or quality measurements, so no statement about the 100k matched-step result, 200k final quality, or late-stage slope is supported. The 8k sanity gate result is not a convergence measurement. The 200k hard ceiling does not presume convergence.
+**Current classification: `INCOMPLETE`.** Only the first 1,000 primary updates completed. There is no full-cap quality result, no matched 100k comparison, and no late-stage slope; the 8k sanity run is not part of the primary trajectory. The 200k hard ceiling does not presume convergence.
 
-The next action is to resume this registered primary trajectory once the existing ≥20 GiB storage gate passes; do not alter the schedule, data, optimizer, or seed. No recommendation about whether Linear improves 100k quality or whether to run the matched fixed-terminal 200k control can be made until the primary trajectory has results. The strict 200k schedule comparison still requires a separate matched control: continue the 100k baseline checkpoint to 200k while holding terminal LR fixed. Linear 200k versus Baseline 100k alone is not a superiority claim. `6031` remains `UNRESOLVED / DORMANT / WATCH`.
+The next action is to continue the registered fresh trajectory from its verified step-1,000 checkpoint after the same device reports at least 12 GiB free with operating margin. The runner will perform the pending step-1,000 full-cap evaluation before the next segment. Do not change the schedule, data, optimizer, seed, or safety gate. No conclusion about Long Linear versus the 100k baseline or the need for a matched fixed-terminal 200k control is supported yet. Linear 200k versus Baseline 100k alone is not a superiority claim. `6031` remains `UNRESOLVED / DORMANT / WATCH`.
