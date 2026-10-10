@@ -33,6 +33,9 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
   else { [IO.File]::Move($temporary, $Path) }
 }
 function Assert-NoG1UnresolvedSegmentRecovery([object]$Plan) {
+  if ($Plan.status -eq 'UNSTABLE') {
+    throw 'G1_RUN_PLAN_UNSTABLE_NO_RESUME'
+  }
   $unresolvedSegments = @()
   if ($null -ne $Plan.PSObject.Properties['incomplete_segments']) {
     $unresolvedSegments = @($Plan.incomplete_segments | Where-Object { $_.status -eq 'ARTIFACT_RECOVERY_REQUIRED' })
@@ -71,6 +74,14 @@ if ($SelfTest) {
     })
   } catch { $recoveryGuardRejected = $_.Exception.Message -eq 'G1_SEGMENT_ARTIFACT_RECOVERY_REQUIRED' }
   if (-not $recoveryGuardRejected) { throw 'G1_LONG_LINEAR_200K_RECOVERY_GUARD_SELF_TEST_FAILED' }
+  $unstableGuardRejected = $false
+  try {
+    Assert-NoG1UnresolvedSegmentRecovery -Plan ([pscustomobject]@{
+      status = 'UNSTABLE'
+      failed_segments = @([pscustomobject]@{ classification = 'UNSTABLE_NONFINITE' })
+    })
+  } catch { $unstableGuardRejected = $_.Exception.Message -eq 'G1_RUN_PLAN_UNSTABLE_NO_RESUME' }
+  if (-not $unstableGuardRejected) { throw 'G1_LONG_LINEAR_200K_UNSTABLE_GUARD_SELF_TEST_FAILED' }
   $storageGateProbe = New-StorageHeadroomSnapshot -HostFreeBytes 70GB -HostRequiredBytes 20GB -DeviceFreeBytes (12GB - 1) -DeviceRequiredBytes 12GB
   if (-not $storageGateProbe.host_headroom_ok -or $storageGateProbe.device_headroom_ok -or
       $storageGateProbe.host_required_bytes -ne 20GB -or $storageGateProbe.device_required_bytes -ne 12GB) {
@@ -137,7 +148,7 @@ if ($SelfTest) {
   if ($LASTEXITCODE -ne 0 -or ($orderOutput -join "`n") -notmatch 'g1_training_order_identity_self_test=PASS') {
     throw 'G1_LONG_LINEAR_200K_ORDER_IDENTITY_SELF_TEST_FAILED'
   }
-  Write-Host 'g1_long_linear_200k_plan_self_test=PASS segments=41 full_eval_boundaries=15 order_identity=PASS recovery_guard=PASS completion_property=PASS run_ledger=PASS atomic_replace=PASS result_name=PASS storage_gate=PASS resume_evaluation=PASS'
+  Write-Host 'g1_long_linear_200k_plan_self_test=PASS segments=41 full_eval_boundaries=15 order_identity=PASS recovery_guard=PASS unstable_guard=PASS completion_property=PASS run_ledger=PASS atomic_replace=PASS result_name=PASS storage_gate=PASS resume_evaluation=PASS'
   exit 0
 }
 
