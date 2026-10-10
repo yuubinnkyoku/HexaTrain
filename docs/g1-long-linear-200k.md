@@ -1,6 +1,6 @@
 # HexaTrain G1 Long-Horizon Linear Decay, 200k
 
-**Status: PAUSED AT STEP 10,000 — the checkpoint is verified and all registered full-cap evaluations through 8,000 passed. C: and device storage gates pass. The device is at 31% battery with no external power; the next segment is deferred pending the power-status response.**
+**Status: PAUSED AT STEP 10,000 — the checkpoint is verified and all registered full-cap evaluations through 8,000 passed. C: and device storage gates pass. The latest read-only check measured 30% battery (31% at the boundary), with no external power; the next segment is deferred pending the power-status response.**
 
 This is a fresh-initialization schedule comparison with a hard ceiling of 200,000 updates. The independent variable is the learning-rate schedule. No quality result may change the schedule or stop the run early. A single seed describes this trajectory and does not establish statistical generalization.
 
