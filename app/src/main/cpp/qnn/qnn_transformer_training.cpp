@@ -7556,6 +7556,10 @@ std::string nicopediaMuonHybridTraining(
             rawSaved = rawSaved && file.good();
           };
           raw("forensic-logits.f32", output.logits);
+          std::vector<float> flatGradients;
+          for (const auto& entry : tiny_lm::parameterRegistry(output.gradients))
+            flatGradients.insert(flatGradients.end(), entry.values->begin(), entry.values->end());
+          raw("forensic-gradients.f32", flatGradients);
           for (std::size_t i = 0; i < output.taps.size(); ++i)
             raw("forensic-tap-" + std::to_string(i) + ".f32", output.taps[i].values);
           health.flush();

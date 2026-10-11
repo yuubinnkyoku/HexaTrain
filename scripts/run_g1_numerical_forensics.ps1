@@ -127,12 +127,22 @@ try {
 if ($ledger.classification -in @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STATE')) {
   try {
   $observation=Get-Content (Join-Path $report 'forensic-failure.txt') -Raw
+  if ($ProbeBatch -ge 0 -and $TapScope -eq 'LN1_SQUARE') {
+    # Intentional square overflow is a separate procedural probe, never a
+    # waiver for nonzero QNN results, transport errors or unexpected outputs.
+    foreach($condition in @(@{input='-269.75';finite=0;inf=1},@{input='-134.875';finite=1;inf=0})) {
+      foreach($repeat in 0..2){
+        $pattern='(?m)^minimal_square input='+[regex]::Escape($condition.input)+' repeat='+$repeat+' cpu_fp32=[^ ]+ execute_ok=true qnn_return=0 count=1 finite='+$condition.finite+' pos_inf='+$condition.inf+' nan=0 output=[^ ]+ error=\s*$'
+        if([regex]::Matches($observation,$pattern).Count -ne 1){throw 'MINIMAL_SQUARE_INVARIANT_NOT_ESTABLISHED'}
+      }
+    }
+  }
   if ($observation -notmatch '(?m)^forensic_pre_update_checkpoint_saved=true\s*$' -or
       $observation -notmatch '(?m)^forensic_summary_saved=true\s*$' -or
       $observation -notmatch '(?m)^forensic_raw_saved=true\s*$') { throw 'FORENSIC_CAPTURE_INCOMPLETE' }
   $tapCount=[regex]::Match($observation,'(?m)^forensic_tap_count=(\d+)').Groups[1].Value
   if (-not $tapCount -or [int]$tapCount -gt 4096) { throw 'FORENSIC_TAP_COUNT_INVALID' }
-  $rawFiles=@('forensic-logits.f32')
+  $rawFiles=@('forensic-logits.f32','forensic-gradients.f32')
   for($i=0;$i -lt [int]$tapCount;$i++){ $rawFiles+="forensic-tap-$i.f32" }
   foreach($name in $rawFiles) {
     Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `

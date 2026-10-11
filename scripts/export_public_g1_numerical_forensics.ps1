@@ -70,7 +70,19 @@ foreach ($item in $index.runs) {
   }
   $public+=$row
 }
-$result=[ordered]@{schema='G1_FORENSICS_PUBLIC_AGGREGATES_V1'; runs=$public}
+$snapshots=@()
+foreach($step in @(40000,41646)){
+  $file=Join-Path $base "step$step-host-inspect.txt"
+  if(Test-Path $file){
+    $states=@(Get-Content $file | Where-Object {$_ -match '^all_(parameters|momentum|adam_m|adam_v),'} | ConvertFrom-Csv -Header state,count,nonfinite,max_abs,l2,raw_sha256)
+    if($states.Count -ne 4){throw 'HOST_STATE_AGGREGATES_INCOMPLETE'}
+    foreach($s in $states){
+      if([int]$s.nonfinite -ne 0 -or $s.raw_sha256 -notmatch '^[a-f0-9]{64}$'){throw 'INVALID_HOST_STATE'}
+      $snapshots+=[ordered]@{step=$step;state=$s.state;count=[int]$s.count;nonfinite=0;max_abs=[double]$s.max_abs;l2=[double]$s.l2;raw_f32_le_sha256=$s.raw_sha256}
+    }
+  }
+}
+$result=[ordered]@{schema='G1_FORENSICS_PUBLIC_AGGREGATES_V1'; runs=$public;state_snapshots=$snapshots}
 $text=$result|ConvertTo-Json -Depth 12
 if ($text -match '(?i)g1forensic-|[A-Z]:[\\/]|device_identity|apk_sha256|run_id_private') { throw 'PRIVATE_MATERIAL_IN_EXPORT' }
 [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($Destination))))|Out-Null
