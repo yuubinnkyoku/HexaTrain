@@ -108,9 +108,15 @@ try {
   } else { $ledger.classification='BLOCKED_UNCLASSIFIED_FAILURE' }
   $artifacts=@('forensic-pre-update.ckpt','forensic-failure.csv','forensic-failure.txt')
   if ($ProbeBatch -lt 0) { $artifacts+=@('learning-rate-telemetry.csv','optimizer-health-telemetry.csv') }
-  foreach ($name in $artifacts) {
-    Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
-      -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
+  try {
+    foreach ($name in $artifacts) {
+      Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
+        -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
+    }
+  } catch {
+    $ledger.status='BLOCKED'; $ledger.classification='FORENSIC_TRANSFER_INCOMPLETE'
+    $ledger.failure=$_.Exception.Message
+    throw
   }
 } finally {
   if ((Get-FileHash $planPath).Hash -ne $protectedPlanHash -or (Get-FileHash $sourceCheckpoint).Hash.ToLowerInvariant() -ne $CheckpointSha256) {
@@ -119,12 +125,13 @@ try {
   $ledger['completed_utc']=[DateTime]::UtcNow.ToString('o'); Save-Ledger
 }
 if ($ledger.classification -in @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STATE')) {
+  try {
   $observation=Get-Content (Join-Path $report 'forensic-failure.txt') -Raw
   if ($observation -notmatch '(?m)^forensic_pre_update_checkpoint_saved=true\s*$' -or
       $observation -notmatch '(?m)^forensic_summary_saved=true\s*$' -or
       $observation -notmatch '(?m)^forensic_raw_saved=true\s*$') { throw 'FORENSIC_CAPTURE_INCOMPLETE' }
   $tapCount=[regex]::Match($observation,'(?m)^forensic_tap_count=(\d+)').Groups[1].Value
-  if (-not $tapCount) { throw 'FORENSIC_TAP_COUNT_MISSING' }
+  if (-not $tapCount -or [int]$tapCount -gt 4096) { throw 'FORENSIC_TAP_COUNT_INVALID' }
   $rawFiles=@('forensic-logits.f32')
   for($i=0;$i -lt [int]$tapCount;$i++){ $rawFiles+="forensic-tap-$i.f32" }
   foreach($name in $rawFiles) {
@@ -133,6 +140,11 @@ if ($ledger.classification -in @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STA
   }
   & (Join-Path $root 'build/host-tests/nicopedia_muon_checkpoint_compare.exe') (Join-Path $report 'forensic-pre-update.ckpt') (Join-Path $report 'forensic-pre-update.ckpt') forensic_state *> (Join-Path $report 'pre-update-decode.txt')
   if ($LASTEXITCODE -ne 0) { throw 'FORENSIC_PRE_UPDATE_STATE_INVALID' }
+  } catch {
+    $ledger.status='BLOCKED'; $ledger.classification='FORENSIC_CAPTURE_INCOMPLETE'
+    $ledger.failure=$_.Exception.Message; Save-Ledger
+    throw
+  }
 }
 Write-Host "forensic_status=$($ledger.status) classification=$($ledger.classification) private_report=$report"
 if ($ledger.classification -eq 'BLOCKED_UNCLASSIFIED_FAILURE' -or $ledger.status -eq 'BLOCKED') { throw $ledger.classification }

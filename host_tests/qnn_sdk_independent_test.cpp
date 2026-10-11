@@ -234,6 +234,14 @@ void testGraphShapeValidator() {
     require(std::fabs(transformedInverse(1.0) -
                       transformedInverse(8.0)) < 1.0e-12,
             "LayerNorm centered-scale transform is not equivalent");
+    require(std::fabs(transformedInverse(1.0) -
+                      transformedInverse(0.5)) < 1.0e-12,
+            "LayerNorm forensic half-scale transform is not equivalent");
+    const float longHorizonInput = -269.75f;
+    require(longHorizonInput * longHorizonInput == 72765.0625f &&
+                    (0.5f * longHorizonInput) * (0.5f * longHorizonInput) ==
+                            18191.265625f,
+            "long-horizon square range fixture changed");
     const auto attentionContext = makeShapeNode(
             "layer_00_attention_context", Op::MatMul,
             {{"probabilities", {8, 8}}, {"value", {8, 16}}},

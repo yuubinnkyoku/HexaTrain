@@ -7493,6 +7493,11 @@ std::string nicopediaMuonHybridTraining(
           data.input, data.target, current, 0.0f, output, error);
       incident_trace::endExecute(executeId, executeOk);
       if (!executeOk || forensicProbeBatch >= 0) {
+        // Freeze the training trace before checkpoint-independent operator
+        // probes add their own calls. Never count probe calls as training.
+        const std::string trainingResult = executeOk ?
+            runtime.apiTraceSummary() + runtime.diagnostics() :
+            failure("nicopedia_muon_fwd_bwd", error, runtime);
         // Detection order is the APP_READ registry, not causal operator order.
         // Save the still-finite PRE-update state; never save failed gradients as
         // resumable optimizer state. The source run remains untouched.
@@ -7556,14 +7561,41 @@ std::string nicopediaMuonHybridTraining(
                    << "\nforensic_raw_saved=" << (rawSaved ? "true" : "false")
                    << "\nforensic_tap_count=" << output.taps.size()
                    << "\nforensic_capture_error=" << captureError << '\n';
+          if (forensicProbeBatch >= 0 &&
+              forensicTaps == TinyTransformerTrainingTapSet::LN1_SQUARE) {
+            // Procedural fixture from the observed finite square input; no
+            // checkpoint/data/optimizer is bound to this one-node graph.
+            std::string probeError;
+            const bool prepared = runtime.prepareElementwiseSquare(1, probeError);
+            location << "minimal_square_prepared=" << (prepared ? "true" : "false")
+                     << "\nminimal_square_prepare_error=" << probeError << '\n';
+            if (prepared) {
+              for (const float value : {-269.75f, -134.875f}) {
+                for (int repeat = 0; repeat < 3; ++repeat) {
+                  std::vector<float> actual;
+                  const bool ok = runtime.executeElementwiseSquare({value}, actual, probeError);
+                  const auto s = first_nonfinite::summarize(actual);
+                  location << "minimal_square input=" << value
+                           << " repeat=" << repeat
+                           << " cpu_fp32=" << value * value
+                           << " execute_ok=" << (ok ? "true" : "false")
+                           << " qnn_return=" << runtime.apiTrace().lastQnnResult
+                           << " count=" << s.count << " finite=" << s.finite
+                           << " pos_inf=" << s.positiveInfinity << " nan=" << s.nan
+                           << " output=" << (actual.empty() ? 0.0f : actual.front())
+                           << " error=" << probeError << '\n';
+                }
+              }
+            }
+          }
           std::ofstream metadata(cachePath + "/forensic-failure.txt", std::ios::trunc);
           metadata << location.str() << "original_error=" << error << '\n';
         }
         if (executeOk)
           return "G1_FORENSIC_PROBE\ntest=g1_fixed_state_probe\nstatus=SUCCESS\n"
                  "optimizer_update_applied=false\noutput_tensors_finite=true\n" +
-                 runtime.apiTraceSummary() + runtime.diagnostics() + location.str();
-        return failure("nicopedia_muon_fwd_bwd", error, runtime) + location.str();
+                 trainingResult + location.str();
+        return trainingResult + location.str();
       }
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)
         fwdBwdUs += runtime.metrics().executeUs[i];
