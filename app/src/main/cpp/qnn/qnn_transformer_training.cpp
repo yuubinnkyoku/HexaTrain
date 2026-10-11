@@ -7347,6 +7347,7 @@ std::string nicopediaMuonHybridTraining(
   }
   std::ifstream forensicMarker(cachePath + "/numerical_forensics");
   const bool numericalForensics = forensicMarker.good();
+  int forensicProbeBatch = -1;
   TinyTransformerTrainingTapSet forensicTaps = TinyTransformerTrainingTapSet::NONE;
   if (numericalForensics) {
     std::string scope;
@@ -7354,6 +7355,10 @@ std::string nicopediaMuonHybridTraining(
     if (!(forensicMarker >> scope >> layer) || layer >= config.numLayers)
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_LAYER_INVALID\n";
     options.diagnosticLayerIndex = layer;
+    if (!(forensicMarker >> forensicProbeBatch)) forensicProbeBatch = -1;
+    if (forensicProbeBatch < -1 || forensicProbeBatch > 7 ||
+        (forensicProbeBatch >= 0 && steps != resumeStep + 1))
+      return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_PROBE_BOUND_INVALID\n";
     if (scope == "COARSE_LAYER_BOUNDARIES")
       forensicTaps = TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES;
     else if (scope == "NICOPEDIA_FINE")
@@ -7457,7 +7462,7 @@ std::string nicopediaMuonHybridTraining(
     Params gradient = zeroLanguageParameters(current);
     incident_trace::zeroParametersEnd(static_cast<int>(step));
     double loss = 0.0;
-    for (uint32_t batch = 0; batch < 8; ++batch) {
+    for (uint32_t batch = forensicProbeBatch < 0 ? 0u : uint32_t(forensicProbeBatch); batch < 8; ++batch) {
       incident_trace::scope(static_cast<int>(step), static_cast<int>(batch));
       incident_trace::batchPrepareBegin(static_cast<int>(step),
                                         static_cast<int>(batch));
@@ -7478,15 +7483,15 @@ std::string nicopediaMuonHybridTraining(
       const bool executeOk = runtime.executeTinyTransformerTraining(
           data.input, data.target, current, 0.0f, output, error);
       incident_trace::endExecute(executeId, executeOk);
-      if (!executeOk) {
+      if (!executeOk || forensicProbeBatch >= 0) {
         // Detection order is the APP_READ registry, not causal operator order.
         // Save the still-finite PRE-update state; never save failed gradients as
         // resumable optimizer state. The source run remains untouched.
         std::ostringstream location;
-        location << "\nfirst_detected_update=" << step
-                 << "\nfirst_detected_microbatch=" << batch
+        location << (executeOk ? "\nprobe_update=" : "\nfirst_detected_update=") << step
+                 << (executeOk ? "\nprobe_microbatch=" : "\nfirst_detected_microbatch=") << batch
                  << "\nlast_completed_finite_update=" << lastStep
-                 << "\nfirst_detected_phase=QNN_FORWARD_BACKWARD"
+                 << "\nobserved_phase=QNN_FORWARD_BACKWARD"
                  << "\ntraining_selection_index=" << (std::uint64_t(step - 1) * 8 + batch)
                  << "\ntraining_record_index=" << order[std::size_t(step - 1) * 8 + batch]
                  << '\n';
@@ -7524,13 +7529,30 @@ std::string nicopediaMuonHybridTraining(
           for (std::size_t layer = 0; layer < output.attentionGates.size(); ++layer)
             emit("gate/" + std::to_string(layer), output.attentionGates[layer]);
           for (const auto& tap : output.taps) emit(tap.name, tap.values);
+          bool rawSaved = true;
+          const auto raw = [&](const std::string& name, const std::vector<float>& values) {
+            std::ofstream file(cachePath + "/" + name, std::ios::binary | std::ios::trunc);
+            file.write(reinterpret_cast<const char*>(values.data()),
+                       static_cast<std::streamsize>(values.size() * sizeof(float)));
+            file.flush();
+            rawSaved = rawSaved && file.good();
+          };
+          raw("forensic-logits.f32", output.logits);
+          for (std::size_t i = 0; i < output.taps.size(); ++i)
+            raw("forensic-tap-" + std::to_string(i) + ".f32", output.taps[i].values);
           health.flush();
           location << "forensic_pre_update_checkpoint_saved=" << (saved ? "true" : "false")
                    << "\nforensic_summary_saved=" << (health.good() ? "true" : "false")
+                   << "\nforensic_raw_saved=" << (rawSaved ? "true" : "false")
+                   << "\nforensic_tap_count=" << output.taps.size()
                    << "\nforensic_capture_error=" << captureError << '\n';
           std::ofstream metadata(cachePath + "/forensic-failure.txt", std::ios::trunc);
           metadata << location.str() << "original_error=" << error << '\n';
         }
+        if (executeOk)
+          return "G1_FORENSIC_PROBE\ntest=g1_fixed_state_probe\nstatus=SUCCESS\n"
+                 "optimizer_update_applied=false\noutput_tensors_finite=true\n" +
+                 runtime.apiTraceSummary() + runtime.diagnostics() + location.str();
         return failure("nicopedia_muon_fwd_bwd", error, runtime) + location.str();
       }
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)

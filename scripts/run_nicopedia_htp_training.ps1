@@ -61,6 +61,7 @@ param(
   [switch]$NumericalForensics,
   [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE')][string]$ForensicTapScope = 'NONE',
   [ValidateRange(0,18)][int]$ForensicLayerIndex = 18,
+  [ValidateRange(-1,7)][int]$ForensicProbeBatch = -1,
   [switch]$AllowQualityFailure,
   [switch]$SelfTest
 )
@@ -525,11 +526,11 @@ if ($NumericalForensics) {
     throw 'FORENSICS_REQUIRES_INDEPENDENT_NAMESPACE'
   }
   $forensicMarker = Join-Path $reportRoot 'numerical-forensics.txt'
-  [IO.File]::WriteAllText($forensicMarker, "$ForensicTapScope $ForensicLayerIndex`n", [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($forensicMarker, "$ForensicTapScope $ForensicLayerIndex $ForensicProbeBatch`n", [Text.UTF8Encoding]::new($false))
   Adb @('push', $forensicMarker, "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
   Adb @('shell', 'run-as', $package, 'cp', "/data/local/tmp/phonelm-headless-$RunId-forensics", "$remoteDir/numerical_forensics") | Out-Null
   Adb @('shell', 'rm', '-f', "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
-} elseif ($ForensicTapScope -ne 'NONE') { throw 'FORENSIC_TAPS_REQUIRE_NUMERICAL_FORENSICS' }
+} elseif ($ForensicTapScope -ne 'NONE' -or $ForensicProbeBatch -ne -1) { throw 'FORENSIC_TAPS_REQUIRE_NUMERICAL_FORENSICS' }
 
 # Run the NICOPEDIA mode through the debug intent path. Existing processes and
 # result markers were checked above; lifecycle remains headless.
@@ -614,6 +615,14 @@ if ($OneUpdateProbe) {
   $result | Set-Content -LiteralPath (Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt") -Encoding utf8
 }
 Assert-PhoneLmHeadlessNoActivity -Text $result
+if ($NumericalForensics -and $ForensicProbeBatch -ge 0 -and
+    $result -match '(?m)^test=g1_fixed_state_probe\s*$' -and
+    $result -match '(?m)^status=SUCCESS\s*$' -and
+    $waited.StatusJson -match '"status"\s*:\s*"PASSED"') {
+  [IO.File]::WriteAllText((Join-Path $reportRoot "seed$Seed-l$Layers$modelTag-steps$Steps-result.txt"), $result, [Text.UTF8Encoding]::new($false))
+  Write-Host 'g1_fixed_state_probe=FINITE_NO_OPTIMIZER_UPDATE'
+  return
+}
 $deviceCompleted = $waited.StatusJson -match '"status"\s*:\s*"PASSED"' -and
   (($result -match '(?m)^status=SUCCESS\s*$') -or ($AllowQualityFailure -and $result -match '(?m)^status=FAILED\s*$'))
 if (-not $deviceCompleted) {

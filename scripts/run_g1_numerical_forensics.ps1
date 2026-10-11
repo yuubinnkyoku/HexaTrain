@@ -7,6 +7,7 @@ param(
   [Parameter(Mandatory=$true)][ValidateRange(40001,45000)][int]$ToStep,
   [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE')][string]$TapScope='NONE',
   [ValidateRange(0,18)][int]$LayerIndex=18,
+  [ValidateRange(-1,7)][int]$ProbeBatch=-1,
   [switch]$Install
 )
 $ErrorActionPreference='Stop'
@@ -16,6 +17,7 @@ $sdk='C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
 $buildId='2.48.40.260702151143'
 $hexagon='C:\Qualcomm\Hexagon_SDK\6.6.0.0'
 if ($ToStep -le $FromStep -or $ToStep-$FromStep -gt 2000) { throw 'FORENSIC_BOUND_EXCEEDED' }
+if ($ProbeBatch -ge 0 -and $ToStep -ne $FromStep+1) { throw 'FIXED_PROBE_MUST_BE_ONE_UPDATE_BOUND' }
 $sourceCheckpoint=[IO.Path]::GetFullPath((Join-Path $root $CheckpointPath))
 $allowed=[IO.Path]::GetFullPath((Join-Path $root 'build'))+[IO.Path]::DirectorySeparatorChar
 if (-not $sourceCheckpoint.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)) { throw 'PRIVATE_CHECKPOINT_REQUIRED' }
@@ -58,6 +60,7 @@ $ledger=[ordered]@{
   schema='G1_NUMERICAL_FORENSICS_V1'; run_id_private=$runId; source_sha=$sourceSha
   source_checkpoint_sha256=$CheckpointSha256; from_step=$FromStep; to_step=$ToStep
   tap_scope=$TapScope; layer_index=$LayerIndex; status='RUNNING'; classification='UNRESOLVED'
+  probe_microbatch=$ProbeBatch
   qairt_build_id=$buildId; apk_sha256=(Get-FileHash $apk).Hash.ToLowerInvariant()
   hexagon_manifest_sha256=$hexManifestHash; hexagon_compiler_sha256=$hexCompilerHash
   device_identity_private=$device.Serial; host_free_bytes=$hostFree; device_free_bytes=$deviceFree
@@ -81,17 +84,27 @@ $arguments=@{
   RunId=$runId; CacheSourceRunId=$plan.first_cache_run_id_private; AllowQualityFailure=$true
   PollSeconds=2; ProgressEverySeconds=30; CheckpointStallSeconds=7200
   NumericalForensics=$true; ForensicTapScope=$TapScope; ForensicLayerIndex=$LayerIndex
+  ForensicProbeBatch=$ProbeBatch
 }
 try {
   & (Join-Path $PSScriptRoot 'run_nicopedia_htp_training.ps1') @arguments *> (Join-Path $report 'runner.log')
   $ledger.status='FINITE_BOUND_COMPLETE'; $ledger.classification='NO_FAILURE_IN_BOUND'
+  if ($ProbeBatch -ge 0) {
+    $ledger.status='FINITE_FIXED_STATE_PROBE'; $ledger.classification='NO_FAILURE_AT_FIXED_STATE'
+    foreach ($name in @('forensic-pre-update.ckpt','forensic-failure.csv','forensic-failure.txt')) {
+      Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
+        -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
+    }
+  }
 } catch {
   $ledger.status='FAILED'; $ledger.failure=$_.Exception.Message
   $resultPath=Join-Path $report "seed1-l19-v1024-t32-d64-f128-steps$ToStep-result.txt"
   if ((Test-Path $resultPath) -and (Get-Content $resultPath -Raw) -match 'generalized tiny training APP_READ residual poison=0, nonfinite=[1-9]') {
     $ledger.classification='REPRODUCED_NONFINITE'
   } else { $ledger.classification='BLOCKED_UNCLASSIFIED_FAILURE' }
-  foreach ($name in @('forensic-pre-update.ckpt','forensic-failure.csv','forensic-failure.txt','learning-rate-telemetry.csv','optimizer-health-telemetry.csv')) {
+  $artifacts=@('forensic-pre-update.ckpt','forensic-failure.csv','forensic-failure.txt')
+  if ($ProbeBatch -lt 0) { $artifacts+=@('learning-rate-telemetry.csv','optimizer-health-telemetry.csv') }
+  foreach ($name in $artifacts) {
     Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
       -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
   }
@@ -100,6 +113,22 @@ try {
     $ledger.status='BLOCKED'; $ledger.classification='PROTECTED_EVIDENCE_IDENTITY_MISMATCH'
   }
   $ledger['completed_utc']=[DateTime]::UtcNow.ToString('o'); Save-Ledger
+}
+if ($ledger.classification -in @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STATE')) {
+  $observation=Get-Content (Join-Path $report 'forensic-failure.txt') -Raw
+  if ($observation -notmatch '(?m)^forensic_pre_update_checkpoint_saved=true\s*$' -or
+      $observation -notmatch '(?m)^forensic_summary_saved=true\s*$' -or
+      $observation -notmatch '(?m)^forensic_raw_saved=true\s*$') { throw 'FORENSIC_CAPTURE_INCOMPLETE' }
+  $tapCount=[regex]::Match($observation,'(?m)^forensic_tap_count=(\d+)').Groups[1].Value
+  if (-not $tapCount) { throw 'FORENSIC_TAP_COUNT_MISSING' }
+  $rawFiles=@('forensic-logits.f32')
+  for($i=0;$i -lt [int]$tapCount;$i++){ $rawFiles+="forensic-tap-$i.f32" }
+  foreach($name in $rawFiles) {
+    Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
+      -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
+  }
+  & (Join-Path $root 'build/host-tests/nicopedia_muon_checkpoint_compare.exe') (Join-Path $report 'forensic-pre-update.ckpt') (Join-Path $report 'forensic-pre-update.ckpt') forensic_state *> (Join-Path $report 'pre-update-decode.txt')
+  if ($LASTEXITCODE -ne 0) { throw 'FORENSIC_PRE_UPDATE_STATE_INVALID' }
 }
 Write-Host "forensic_status=$($ledger.status) classification=$($ledger.classification) private_report=$report"
 if ($ledger.classification -eq 'BLOCKED_UNCLASSIFIED_FAILURE' -or $ledger.status -eq 'BLOCKED') { throw $ledger.classification }

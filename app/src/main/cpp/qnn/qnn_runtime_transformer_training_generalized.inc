@@ -802,6 +802,27 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       }
     }
   }
+  // Append connected head/gate forward values after the established fine
+  // activation taps. H>1's layer-shared score tensors have no producer, so
+  // expose the actual per-head path instead. NONE is unchanged.
+  if (tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE && numHeads > 1) {
+    const uint32_t layer = g.diagnosticLayerIndex < numLayers
+        ? g.diagnosticLayerIndex : numLayers - 1;
+    const auto& record = g.layers[layer];
+    const auto expose = [&](uint32_t id) {
+      if (g.tensors[id].v1.type == QNN_TENSOR_TYPE_APP_READ) return;
+      g.tensors[id].v1.type = QNN_TENSOR_TYPE_APP_READ;
+      g.tapRegistry.push_back(id);
+    };
+    if (headwiseG1Gate) expose(record.gateLogits);
+    for (const auto& head : record.heads) {
+      for (uint32_t id : {head.query, head.key, head.value, head.scores,
+                         head.scaled, head.masked, head.probabilities,
+                         head.context, head.contextScatter}) expose(id);
+      if (headwiseG1Gate) expose(head.gate);
+      if (headwiseG1Gate || fixedHalfGate) expose(head.gatedContext);
+    }
+  }
   g.appReadRegistry.insert(g.appReadRegistry.end(), g.gradientRegistry.begin(),
                            g.gradientRegistry.end());
   if (diagnosticOutputs && !g.forwardOnly) {
