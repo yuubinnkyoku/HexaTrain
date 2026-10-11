@@ -51,7 +51,7 @@ if ($deviceFree -lt 12GB) { throw 'DEVICE_STORAGE_HEADROOM_LOW' }
 if ($LASTEXITCODE -notin @(0,3)) { throw 'QAIRT_GATE_FAILED' }
 $apk=Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk'
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath $apk -QairtSdkRoot $sdk -ExpectedBuildId $buildId -ReportPath (Join-Path $report 'apk-audit.txt') | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'APK_AUDIT_FAILED' }
+if ((Get-Content (Join-Path $report 'apk-audit.txt') -Raw) -notmatch '(?m)^status=SUCCESS\s*$') { throw 'APK_AUDIT_FAILED' }
 $checkpointName=Get-PhoneLmCheckpointName -Seed 1 -Layers 19 -Tokens 32 -Dimension 64 -FeedForwardDimension 128 -Step $FromStep
 Copy-Item -LiteralPath $sourceCheckpoint -Destination (Join-Path $report $checkpointName)
 $ledger=[ordered]@{
