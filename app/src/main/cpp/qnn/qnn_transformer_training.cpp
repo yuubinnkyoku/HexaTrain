@@ -7372,6 +7372,8 @@ std::string nicopediaMuonHybridTraining(
       forensicTaps = TinyTransformerTrainingTapSet::LN1_SQUARE;
     else if (scope == "LN2_SQUARE")
       forensicTaps = TinyTransformerTrainingTapSet::LN2_SQUARE;
+    else if (scope == "ALL_LAYER_NORM_SQUARES")
+      forensicTaps = TinyTransformerTrainingTapSet::ALL_LAYER_NORM_SQUARES;
     else if (scope != "NONE")
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_SCOPE_INVALID\n";
   }

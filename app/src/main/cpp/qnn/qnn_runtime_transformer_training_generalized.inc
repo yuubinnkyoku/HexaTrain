@@ -58,7 +58,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
        tapSet != TinyTransformerTrainingTapSet::LN2_AFFINE &&
        tapSet != TinyTransformerTrainingTapSet::ALL_INTERNAL &&
        tapSet != TinyTransformerTrainingTapSet::NICOPEDIA_FINE &&
-       tapSet != TinyTransformerTrainingTapSet::LN1_SQUARE)) {
+       tapSet != TinyTransformerTrainingTapSet::LN1_SQUARE &&
+       tapSet != TinyTransformerTrainingTapSet::ALL_LAYER_NORM_SQUARES)) {
     return fail("APP_CONFIGURATION_VALIDATION: generalized tiny training "
                 "requires valid diagnostic language-model FULL configuration");
   }
@@ -354,6 +355,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     XHAT_TIMES_SUM1, BRACKET1, INV_STD_OVER_D1, DINPUT_NORM, DINPUT,
   };
   const auto tapActivation = [&](const std::string &name) {
+    if (tapSet == TinyTransformerTrainingTapSet::ALL_LAYER_NORM_SQUARES)
+      return name == "ln1_centered_s" || name == "ln1_square" ||
+             name == "ln2_centered_s" || name == "ln2_square";
     if (tapSet == TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES)
       return name == "output";
     if (tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS)
@@ -404,6 +408,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
         tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE ||
         tapSet == TinyTransformerTrainingTapSet::LN1_SQUARE ||
+        tapSet == TinyTransformerTrainingTapSet::ALL_LAYER_NORM_SQUARES ||
         (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
          tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE))
       return false;

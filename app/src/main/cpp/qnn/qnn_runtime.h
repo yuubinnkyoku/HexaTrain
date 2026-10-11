@@ -52,6 +52,7 @@ enum class TinyTransformerTrainingTapSet {
     ALL_INTERNAL,
     NICOPEDIA_FINE,
     LN1_SQUARE,
+    ALL_LAYER_NORM_SQUARES,
 };
 
 const char* backendKindName(QnnBackendKind kind);

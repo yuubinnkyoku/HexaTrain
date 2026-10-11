@@ -59,7 +59,7 @@ param(
   [switch]$BuildInstallOnly,
   [switch]$OneUpdateProbe,
   [switch]$NumericalForensics,
-  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE')][string]$ForensicTapScope = 'NONE',
+  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE','ALL_LAYER_NORM_SQUARES')][string]$ForensicTapScope = 'NONE',
   [ValidateRange(0,18)][int]$ForensicLayerIndex = 18,
   [ValidateRange(-1,7)][int]$ForensicProbeBatch = -1,
   [ValidateSet('1','0.5')][string]$ForensicCenteredScale = '1',

@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{64}$')][string]$CheckpointSha256,
   [Parameter(Mandatory=$true)][ValidateRange(40000,44999)][int]$FromStep,
   [Parameter(Mandatory=$true)][ValidateRange(40001,45000)][int]$ToStep,
-  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE')][string]$TapScope='NONE',
+  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE','ALL_LAYER_NORM_SQUARES')][string]$TapScope='NONE',
   [ValidateRange(0,18)][int]$LayerIndex=18,
   [ValidateRange(-1,7)][int]$ProbeBatch=-1,
   [ValidateSet('1','0.5')][string]$CenteredScale='1',
@@ -108,16 +108,18 @@ try {
   } else { $ledger.classification='BLOCKED_UNCLASSIFIED_FAILURE' }
   $artifacts=@('forensic-pre-update.ckpt','forensic-failure.csv','forensic-failure.txt')
   if ($ProbeBatch -lt 0) { $artifacts+=@('learning-rate-telemetry.csv','optimizer-health-telemetry.csv') }
-  try {
+  if (-not (Test-Path $resultPath)) {
+    $ledger.status='BLOCKED'; $ledger.classification='FAILURE_BEFORE_NATIVE_REPORT'
+  } else { try {
     foreach ($name in $artifacts) {
       Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
         -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
     }
   } catch {
     $ledger.status='BLOCKED'; $ledger.classification='FORENSIC_TRANSFER_INCOMPLETE'
-    $ledger.failure=$_.Exception.Message
+    $ledger['capture_failure']=$_.Exception.Message
     throw
-  }
+  } }
 } finally {
   if ((Get-FileHash $planPath).Hash -ne $protectedPlanHash -or (Get-FileHash $sourceCheckpoint).Hash.ToLowerInvariant() -ne $CheckpointSha256) {
     $ledger.status='BLOCKED'; $ledger.classification='PROTECTED_EVIDENCE_IDENTITY_MISMATCH'
