@@ -7493,6 +7493,9 @@ std::string nicopediaMuonHybridTraining(
           data.input, data.target, current, 0.0f, output, error);
       incident_trace::endExecute(executeId, executeOk);
       if (!executeOk || forensicProbeBatch >= 0) {
+        const bool trainingQnnOk = runtime.apiTrace().graphExecuteFailureCount == 0 &&
+            runtime.apiTrace().graphExecuteLastResult == 0 &&
+            runtime.apiTrace().lastQnnResult == 0;
         // Freeze the training trace before checkpoint-independent operator
         // probes add their own calls. Never count probe calls as training.
         const std::string trainingResult = executeOk ?
@@ -7592,9 +7595,10 @@ std::string nicopediaMuonHybridTraining(
           metadata << location.str() << "original_error=" << error << '\n';
         }
         if (executeOk)
-          return "G1_FORENSIC_PROBE\ntest=g1_fixed_state_probe\nstatus=SUCCESS\n"
-                 "optimizer_update_applied=false\noutput_tensors_finite=true\n" +
-                 trainingResult + location.str();
+          return std::string("NICOPEDIA_HTP\ntest=g1_fixed_state_probe\nstatus=SUCCESS\n"
+                 "optimizer_update_applied=false\noutput_tensors_finite=true\n"
+                 "nan_detected=false\ninf_detected=false\nqnn_return_code_success=") +
+                 (trainingQnnOk ? "true\n" : "false\n") + trainingResult + location.str();
         return trainingResult + location.str();
       }
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)

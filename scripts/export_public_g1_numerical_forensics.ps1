@@ -46,6 +46,28 @@ foreach ($item in $index.runs) {
     $raw=Join-Path $dir 'forensic-logits.f32'
     if (Test-Path $raw) {$row['logits_raw_sha256']=(Get-FileHash $raw).Hash.ToLowerInvariant()}
   }
+  $metadata=Join-Path $dir 'forensic-failure.txt'
+  if (Test-Path $metadata) {
+    $m=Get-Content $metadata -Raw
+    foreach($key in @('first_detected_update','first_detected_microbatch','last_completed_finite_update','probe_update','probe_microbatch')) {
+      $match=[regex]::Match($m,"(?m)^$key=(\d+)\s*$")
+      if($match.Success){$row[$key]=[int]$match.Groups[1].Value}
+    }
+    $minimal=@([regex]::Matches($m,'(?m)^minimal_square input=([^ ]+) repeat=(\d+) cpu_fp32=([^ ]+) execute_ok=true qnn_return=0 count=1 finite=(\d+) pos_inf=(\d+) nan=0 output=([^ ]+) error=\s*$'))
+    if($minimal.Count -gt 0){
+      if($minimal.Count -ne 6){throw 'MINIMAL_REPRODUCER_INCOMPLETE'}
+      $row['minimal_square']=@($minimal | ForEach-Object {[ordered]@{input=[double]$_.Groups[1].Value;repeat=[int]$_.Groups[2].Value;finite=[int]$_.Groups[4].Value;pos_inf=[int]$_.Groups[5].Value;qnn_return=0}})
+    }
+  }
+  $resultFile=Join-Path $dir "seed1-l19-v1024-t32-d64-f128-steps$($p.to_step)-result.txt"
+  if(Test-Path $resultFile){
+    $r=Get-Content $resultFile -Raw
+    foreach($key in @('api_trace_graph_execute_attempt_count','api_trace_graph_execute_success_count','api_trace_graph_execute_failure_count','generalized_tiny_training_output_nonfinite_count','generalized_tiny_training_output_poison_count')){
+      $match=[regex]::Match($r,"(?m)^$key=(\d+)\s*$")
+      if($match.Success){$row[$key]=[long]$match.Groups[1].Value}
+    }
+    $row['cpu_fallback_false']=($r -match '(?m)^cpu_fallback=false\s*$')
+  }
   $public+=$row
 }
 $result=[ordered]@{schema='G1_FORENSICS_PUBLIC_AGGREGATES_V1'; runs=$public}
