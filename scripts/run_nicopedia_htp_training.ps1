@@ -58,6 +58,9 @@ param(
   [string]$CacheSourceRunId = "",
   [switch]$BuildInstallOnly,
   [switch]$OneUpdateProbe,
+  [switch]$NumericalForensics,
+  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE')][string]$ForensicTapScope = 'NONE',
+  [ValidateRange(0,18)][int]$ForensicLayerIndex = 18,
   [switch]$AllowQualityFailure,
   [switch]$SelfTest
 )
@@ -516,6 +519,17 @@ if ($ResumeStep -gt 0) {
   Adb @('shell', 'rm', '-f', $tmpCkpt) | Out-Null
   Write-Host "RESUME_STAGE checkpoint=$resumeCheckpointName"
 }
+
+if ($NumericalForensics) {
+  if ($RunId -notmatch '^g1forensic-' -or $reportRoot -notlike '*g1-long-linear-forensics*') {
+    throw 'FORENSICS_REQUIRES_INDEPENDENT_NAMESPACE'
+  }
+  $forensicMarker = Join-Path $reportRoot 'numerical-forensics.txt'
+  [IO.File]::WriteAllText($forensicMarker, "$ForensicTapScope $ForensicLayerIndex`n", [Text.UTF8Encoding]::new($false))
+  Adb @('push', $forensicMarker, "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
+  Adb @('shell', 'run-as', $package, 'cp', "/data/local/tmp/phonelm-headless-$RunId-forensics", "$remoteDir/numerical_forensics") | Out-Null
+  Adb @('shell', 'rm', '-f', "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
+} elseif ($ForensicTapScope -ne 'NONE') { throw 'FORENSIC_TAPS_REQUIRE_NUMERICAL_FORENSICS' }
 
 # Run the NICOPEDIA mode through the debug intent path. Existing processes and
 # result markers were checked above; lifecycle remains headless.

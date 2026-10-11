@@ -7345,6 +7345,22 @@ std::string nicopediaMuonHybridTraining(
       fullHostValidation = std::ifstream(
           cachePath.substr(0, slash) + "/host_validation_full").good();
   }
+  std::ifstream forensicMarker(cachePath + "/numerical_forensics");
+  const bool numericalForensics = forensicMarker.good();
+  TinyTransformerTrainingTapSet forensicTaps = TinyTransformerTrainingTapSet::NONE;
+  if (numericalForensics) {
+    std::string scope;
+    std::uint32_t layer = 0;
+    if (!(forensicMarker >> scope >> layer) || layer >= config.numLayers)
+      return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_LAYER_INVALID\n";
+    options.diagnosticLayerIndex = layer;
+    if (scope == "COARSE_LAYER_BOUNDARIES")
+      forensicTaps = TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES;
+    else if (scope == "NICOPEDIA_FINE")
+      forensicTaps = TinyTransformerTrainingTapSet::NICOPEDIA_FINE;
+    else if (scope != "NONE")
+      return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_SCOPE_INVALID\n";
+  }
   options.validateAppWriteImmutability = fullHostValidation;
   options.validateAppWriteParameterFiniteness = fullHostValidation;
   runtime.setOptions(options);
@@ -7356,7 +7372,7 @@ std::string nicopediaMuonHybridTraining(
           config.tokens, config.dimension, config.feedForwardDimension,
           config.epsilon, fullHostValidation, error, config.vocabularySize,
           TinyTransformerTrainingVariant::FULL,
-          TinyTransformerTrainingTapSet::NONE, config.numLayers,
+          forensicTaps, config.numLayers,
           config.numHeads,
           static_cast<uint32_t>(config.attentionGate)))
     return failure("nicopedia_muon_prepare", error, runtime);
@@ -7462,8 +7478,61 @@ std::string nicopediaMuonHybridTraining(
       const bool executeOk = runtime.executeTinyTransformerTraining(
           data.input, data.target, current, 0.0f, output, error);
       incident_trace::endExecute(executeId, executeOk);
-      if (!executeOk)
-        return failure("nicopedia_muon_fwd_bwd", error, runtime);
+      if (!executeOk) {
+        // Detection order is the APP_READ registry, not causal operator order.
+        // Save the still-finite PRE-update state; never save failed gradients as
+        // resumable optimizer state. The source run remains untouched.
+        std::ostringstream location;
+        location << "\nfirst_detected_update=" << step
+                 << "\nfirst_detected_microbatch=" << batch
+                 << "\nlast_completed_finite_update=" << lastStep
+                 << "\nfirst_detected_phase=QNN_FORWARD_BACKWARD"
+                 << "\ntraining_selection_index=" << (std::uint64_t(step - 1) * 8 + batch)
+                 << "\ntraining_record_index=" << order[std::size_t(step - 1) * 8 + batch]
+                 << '\n';
+        if (numericalForensics) {
+          std::string captureError;
+          const bool saved = nprtWriteMuonCheckpoint(
+              cachePath + "/forensic-pre-update.ckpt", config, seed, lastStep,
+              current, momentum, adamM, adamV, cache, checkpointHparams, 8,
+              &captureError);
+          std::ofstream health(cachePath + "/forensic-failure.csv", std::ios::trunc);
+          health << "tensor,count,finite,nan,pos_inf,neg_inf,min,max,rms,first_bad,hash\n"
+                 << std::setprecision(17);
+          const auto emit = [&](const std::string& name, const std::vector<float>& values) {
+            const auto s = first_nonfinite::summarize(values);
+            std::size_t bad = values.size();
+            for (std::size_t i = 0; i < values.size(); ++i)
+              if (!std::isfinite(values[i])) { bad = i; break; }
+            health << name << ',' << s.count << ',' << s.finite << ',' << s.nan
+                   << ',' << s.positiveInfinity << ',' << s.negativeInfinity
+                   << ',' << s.minimum << ',' << s.maximum << ',' << s.rms
+                   << ',' << (bad == values.size() ? -1LL : static_cast<long long>(bad))
+                   << ',' << canonicalFloatSha256(values) << '\n';
+          };
+          emit("input", data.input);
+          emit("target", data.target);
+          for (const auto* state : {&current, &momentum, &adamM, &adamV}) {
+            const std::string prefix = state == &current ? "parameter/" :
+                state == &momentum ? "momentum/" : state == &adamM ? "adam_m/" : "adam_v/";
+            for (const auto& entry : tiny_lm::parameterRegistry(*state))
+              emit(prefix + entry.name, *entry.values);
+          }
+          emit("logits", output.logits);
+          for (const auto& entry : tiny_lm::parameterRegistry(output.gradients))
+            emit("gradient/" + entry.name, *entry.values);
+          for (std::size_t layer = 0; layer < output.attentionGates.size(); ++layer)
+            emit("gate/" + std::to_string(layer), output.attentionGates[layer]);
+          for (const auto& tap : output.taps) emit(tap.name, tap.values);
+          health.flush();
+          location << "forensic_pre_update_checkpoint_saved=" << (saved ? "true" : "false")
+                   << "\nforensic_summary_saved=" << (health.good() ? "true" : "false")
+                   << "\nforensic_capture_error=" << captureError << '\n';
+          std::ofstream metadata(cachePath + "/forensic-failure.txt", std::ios::trunc);
+          metadata << location.str() << "original_error=" << error << '\n';
+        }
+        return failure("nicopedia_muon_fwd_bwd", error, runtime) + location.str();
+      }
       for (size_t i = executeBefore; i < runtime.metrics().executeUs.size(); ++i)
         fwdBwdUs += runtime.metrics().executeUs[i];
       for (size_t i = inputBefore; i < runtime.metrics().inputBindUs.size(); ++i)
