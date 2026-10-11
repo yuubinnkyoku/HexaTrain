@@ -101,7 +101,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                        1
                  : 0);
   const size_t registryCapacityWithGateScale =
-      registryCapacity + gateScaleExtraTensors;
+      registryCapacity + gateScaleExtraTensors +
+      (options_.tinyTransformerAdaptiveCenteredScale ? size_t(numLayers) * 10u + 3u : 0u);
   g.tensors.reserve(registryCapacityWithGateScale);
   g.names.reserve(registryCapacityWithGateScale);
   g.dimensions.reserve(registryCapacityWithGateScale);
@@ -122,6 +123,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   g.diagnosticLayerIndex = options_.diagnosticLayerIndex;
   g.attentionScale = 1.0f / std::sqrt(float(dimension / numHeads));
   g.centeredScale = options_.tinyTransformerCenteredScale;
+  const bool adaptiveScale = options_.tinyTransformerAdaptiveCenteredScale;
+  if (adaptiveScale && (variant != TinyTransformerTrainingVariant::FULL ||
+      !headwiseG1Gate || g.centeredScale != 1.0f ||
+      tapSet != TinyTransformerTrainingTapSet::ALL_LAYER_NORM_SQUARES ||
+      options_.htpNativeTensorFp16))
+    return fail("APP_CONFIGURATION_VALIDATION: adaptive G1 scale requires FULL, s=1 and square monitoring");
   if (!std::isfinite(g.centeredScale) || g.centeredScale <= 0.0f) {
     return fail("generalized tiny training invalid LayerNorm scaling");
   }
@@ -133,6 +140,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     return fail("generalized tiny training centered scale makes epsilon unrepresentable");
   }
   g.epsilonScaled = float(epsilonScaled);
+  g.adaptiveHalfEpsilon = g.epsilonScaled * 0.25f;
+  if (adaptiveScale && (!std::isfinite(g.adaptiveHalfEpsilon) || g.adaptiveHalfEpsilon <= 0))
+    return fail("APP_CONFIGURATION_VALIDATION: adaptive epsilon is unrepresentable");
   const auto zeroPadded = [](uint32_t value) {
     std::ostringstream stream;
     stream << std::setw(3) << std::setfill('0') << value;
@@ -230,6 +240,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
                            QNN_DATATYPE_UINT_32);
   const auto centerScale = add("center_scale", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto epsScaled = add("epsilon_scaled", QNN_TENSOR_TYPE_STATIC, {1, 1});
+  const auto adaptiveThreshold = adaptiveScale ? add("ln_safe_threshold", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0;
+  const auto adaptiveHalf = adaptiveScale ? add("ln_safe_half", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0;
+  const auto adaptiveHalfEpsilon = adaptiveScale ? add("ln_safe_half_epsilon", QNN_TENSOR_TYPE_STATIC, {1, 1}) : 0;
   const auto dim = add("dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto inverseDim = add("inverse_dimension", QNN_TENSOR_TYPE_STATIC, {1, 1});
   const auto gateOne = headwiseG1Gate
@@ -448,6 +461,18 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     record.parameters.resize(perLayerParameterDefinitions);
     if (!g.forwardOnly) record.gradients.resize(perLayerParameterDefinitions);
     const std::string prefix = "layer_" + zeroPadded(layer) + "_";
+    if (adaptiveScale) {
+      for (std::size_t norm = 0; norm < 2; ++norm) {
+        const auto p = prefix + (norm == 0 ? "ln1_safe_" : "ln2_safe_");
+        auto& ids = record.adaptiveNorm[norm];
+        ids[0] = add(p + "abs", QNN_TENSOR_TYPE_NATIVE, {tokens, dimension});
+        ids[1] = add(p + "max", QNN_TENSOR_TYPE_NATIVE, {tokens, 1});
+        ids[2] = add(p + "condition", QNN_TENSOR_TYPE_NATIVE, {tokens, 1}, QNN_DATATYPE_BOOL_8);
+        ids[3] = add(p + "scale", QNN_TENSOR_TYPE_APP_READ, {tokens, 1});
+        ids[4] = add(p + "epsilon", QNN_TENSOR_TYPE_NATIVE, {tokens, 1});
+        g.tapRegistry.push_back(ids[3]);
+      }
+    }
     const auto createGateTensors = [&](std::size_t slot,
                                        const std::vector<uint32_t> &shape) {
       record.gateLogits = add(prefix + "attention_gate_logits",
@@ -971,6 +996,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         g.lastLogitsRanges, sizeof(g.lastLogitsRanges)};
   }
   g.tensors[centerScale].v1.clientBuf = {&g.centeredScale, sizeof(float)};
+  if (adaptiveScale) {
+    g.tensors[adaptiveThreshold].v1.clientBuf = {&g.adaptiveThreshold, sizeof(float)};
+    g.tensors[adaptiveHalf].v1.clientBuf = {&g.adaptiveHalf, sizeof(float)};
+    g.tensors[adaptiveHalfEpsilon].v1.clientBuf = {&g.adaptiveHalfEpsilon, sizeof(float)};
+  }
   g.tensors[epsScaled].v1.clientBuf = {&g.epsilonScaled, sizeof(float)};
   if (headwiseG1Gate)
     g.tensors[gateOne].v1.clientBuf = {&g.gateOne, sizeof(float)};
@@ -1024,6 +1054,34 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
   const auto shapeOf = [&](uint32_t id) {
     return std::vector<size_t>(g.dimensions[id].begin(), g.dimensions[id].end());
   };
+  if (adaptiveScale) {
+    const auto tensor = [&](uint32_t id) {
+      return shape::Tensor{g.names[id], shapeOf(id),
+          g.tensors[id].v1.dataType == QNN_DATATYPE_BOOL_8 ? "BOOL_8" : "FLOAT_32"};
+    };
+    for (const auto& record : g.layers) {
+      for (size_t norm = 0; norm < 2; ++norm) {
+        const auto& ids = record.adaptiveNorm[norm];
+        const auto centered = record.activations[norm == 0 ? LN1_CENTERED : LN2_CENTERED];
+        std::vector<shape::Node> nodes;
+        const auto node = [&](shape::Op op, std::initializer_list<uint32_t> inputs, uint32_t out) {
+          shape::Node n{}; n.name = g.names[out]; n.op = op;
+          for (auto id : inputs) n.inputs.push_back(tensor(id));
+          n.outputs.push_back(tensor(out)); return n;
+        };
+        nodes.push_back(node(shape::Op::ElementWiseUnary, {centered}, ids[0]));
+        auto maximum = node(shape::Op::ReduceMax, {ids[0]}, ids[1]);
+        maximum.axes = {1}; maximum.keepDims = true; nodes.push_back(maximum);
+        nodes.push_back(node(shape::Op::ElementWiseComparison, {ids[1], adaptiveThreshold}, ids[2]));
+        nodes.push_back(node(shape::Op::ElementWiseSelect, {ids[2], adaptiveHalf, centerScale}, ids[3]));
+        nodes.push_back(node(shape::Op::ElementWiseSelect, {ids[2], adaptiveHalfEpsilon, epsScaled}, ids[4]));
+        for (const auto& n : nodes) {
+          const auto result = shape::validate(n);
+          if (!result.ok) return fail("APP_SHAPE_VALIDATION: " + result.error);
+        }
+      }
+    }
+  }
   for (uint32_t layer = 0; layer < numLayers; ++layer) {
     const auto &record = g.layers[layer];
     auto &declared = topology[layer];
@@ -1275,6 +1333,9 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       impl_->api, g.graph, g.tensors.data(), int(lastAxis), int(rowAxis),
       int(centerScale), int(epsScaled), int(dim), int(inverseDim), error,
       g.graphAddNodeSuccessCount, &nodeNames};
+  layerNorm.adaptiveThreshold = int(adaptiveThreshold);
+  layerNorm.adaptiveHalf = int(adaptiveHalf);
+  layerNorm.adaptiveHalfEpsilon = int(adaptiveHalfEpsilon);
   for (uint32_t layer = 0; layer < numLayers; ++layer) {
     const auto &record = g.layers[layer];
     const auto cache = [&](LayerActivation activation) {
@@ -1282,6 +1343,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     };
     const std::string prefix =
         topologyName + "_layer_" + zeroPadded(layer) + '_';
+    if (adaptiveScale)
+      for (std::size_t i = 0; i < 5; ++i) layerNorm.adaptiveIds[i] = int(record.adaptiveNorm[0][i]);
     if (!layerNorm.forward((prefix + "ln1").c_str(), int(record.input),
                            int(parameterTensor(record, &LayerParameters::gamma1)),
                            int(parameterTensor(record, &LayerParameters::beta1)),
@@ -1390,6 +1453,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
         !binary(prefix + "residual1", QNN_OP_ELEMENT_WISE_ADD, record.input,
                 cache(ATTENTION_PROJECTED), cache(RESIDUAL1), "residual1"))
       return fail(error);
+    if (adaptiveScale)
+      for (std::size_t i = 0; i < 5; ++i) layerNorm.adaptiveIds[i] = int(record.adaptiveNorm[1][i]);
     if (!layerNorm.forward((prefix + "ln2").c_str(), int(cache(RESIDUAL1)),
                            int(parameterTensor(record, &LayerParameters::gamma2)),
                            int(parameterTensor(record, &LayerParameters::beta2)),

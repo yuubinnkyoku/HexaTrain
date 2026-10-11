@@ -15,6 +15,8 @@ struct TransformerTrainingLayerNormBuilder {
   std::string &error;
   uint32_t &nodeCount;
   std::unordered_set<std::string> *nodeNames = nullptr;
+  std::array<int, 5> adaptiveIds{{-1, -1, -1, -1, -1}};
+  int adaptiveThreshold = -1, adaptiveHalf = -1, adaptiveHalfEpsilon = -1;
 
   bool unique(const std::string &name) {
     if (!nodeNames || nodeNames->insert(name).second) return true;
@@ -72,14 +74,38 @@ struct TransformerTrainingLayerNormBuilder {
                int varianceEpsilon, int inverseScaled, int inverse, int xhat,
                int xhatGamma, int output) {
     const std::string p(prefix);
-    return reduce(p + "_mean", QNN_OP_REDUCE_MEAN,
+    if (!(reduce(p + "_mean", QNN_OP_REDUCE_MEAN,
                   QNN_OP_REDUCE_MEAN_PARAM_AXES,
                   QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, x, lastAxis, true, mean,
                   "ln mean") &&
            binary(p + "_center", QNN_OP_ELEMENT_WISE_SUBTRACT, x, mean,
-                  centered, "ln center") &&
+                  centered, "ln center"))) return false;
+    int scaleId = centeredScale, epsilonId = epsilonScaled;
+    if (adaptiveIds[0] >= 0) {
+      // Positive row scaling cancels in real-arithmetic LayerNorm:
+      // s*rsqrt(mean((s*c)^2)+s^2*eps). Backward consumes the unscaled
+      // inverse and xhat. Device trajectory parity is a separate gate.
+      const auto select = [&](const std::string& name, int yes, int no, int out) {
+        if (!unique(name)) return false;
+        Qnn_Tensor_t inputs[3] = {tensors[adaptiveIds[2]], tensors[yes], tensors[no]};
+        return ok(addSimpleNode(api, graph, name.c_str(),
+                  QNN_OP_ELEMENT_WISE_SELECT, inputs, 3, &tensors[out]), "ln safe select");
+      };
+      if (!unary(p + "_safe_abs", QNN_OP_ELEMENT_WISE_ABS, centered,
+                 adaptiveIds[0], "ln safe abs") ||
+          !reduce(p + "_safe_max", QNN_OP_REDUCE_MAX,
+                  QNN_OP_REDUCE_MAX_PARAM_AXES, QNN_OP_REDUCE_MAX_PARAM_KEEP_DIMS,
+                  adaptiveIds[0], lastAxis, true, adaptiveIds[1], "ln safe max") ||
+          !binary(p + "_safe_condition", QNN_OP_ELEMENT_WISE_GREATER,
+                  adaptiveIds[1], adaptiveThreshold, adaptiveIds[2], "ln safe condition") ||
+          !select(p + "_safe_scale", adaptiveHalf, centeredScale, adaptiveIds[3]) ||
+          !select(p + "_safe_epsilon", adaptiveHalfEpsilon, epsilonScaled, adaptiveIds[4]))
+        return false;
+      scaleId = adaptiveIds[3]; epsilonId = adaptiveIds[4];
+    }
+    return
            binary(p + "_center_scale", QNN_OP_ELEMENT_WISE_MULTIPLY, centered,
-                  centeredScale, centeredScaled, "ln center scale") &&
+                  scaleId, centeredScaled, "ln center scale") &&
            binary(p + "_square", QNN_OP_ELEMENT_WISE_MULTIPLY,
                   centeredScaled, centeredScaled, square, "ln square") &&
            reduce(p + "_var", QNN_OP_REDUCE_MEAN,
@@ -87,11 +113,11 @@ struct TransformerTrainingLayerNormBuilder {
                   QNN_OP_REDUCE_MEAN_PARAM_KEEP_DIMS, square, lastAxis, true,
                   variance, "ln var") &&
            binary(p + "_eps", QNN_OP_ELEMENT_WISE_ADD, variance,
-                  epsilonScaled, varianceEpsilon, "ln eps") &&
+                  epsilonId, varianceEpsilon, "ln eps") &&
            unary(p + "_rsqrt", QNN_OP_ELEMENT_WISE_RSQRT, varianceEpsilon,
                  inverseScaled, "ln rsqrt") &&
            binary(p + "_unscale", QNN_OP_ELEMENT_WISE_MULTIPLY,
-                  inverseScaled, centeredScale, inverse, "ln unscale") &&
+                  inverseScaled, scaleId, inverse, "ln unscale") &&
            binary(p + "_xhat", QNN_OP_ELEMENT_WISE_MULTIPLY, centered,
                   inverse, xhat, "ln xhat") &&
            binary(p + "_gamma", QNN_OP_ELEMENT_WISE_MULTIPLY, xhat, gamma,

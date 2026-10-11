@@ -8,7 +8,7 @@ param(
   [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE','ALL_LAYER_NORM_SQUARES')][string]$TapScope='NONE',
   [ValidateRange(0,18)][int]$LayerIndex=18,
   [ValidateRange(-1,7)][int]$ProbeBatch=-1,
-  [ValidateSet('1','0.5')][string]$CenteredScale='1',
+  [ValidateSet('1','0.5','adaptive')][string]$CenteredScale='1',
   [switch]$Install
 )
 $ErrorActionPreference='Stop'
@@ -20,6 +20,7 @@ $hexagon='C:\Qualcomm\Hexagon_SDK\6.6.0.0'
 if ($ToStep -le $FromStep -or $ToStep-$FromStep -gt 2000) { throw 'FORENSIC_BOUND_EXCEEDED' }
 if ($ProbeBatch -ge 0 -and $ToStep -ne $FromStep+1) { throw 'FIXED_PROBE_MUST_BE_ONE_UPDATE_BOUND' }
 if ($CenteredScale -ne '1' -and $ProbeBatch -lt 0 -and $FromStep -ne 40000) { throw 'SCALED_TRAJECTORY_MUST_FORK_PROTECTED_40K' }
+if ($CenteredScale -eq 'adaptive' -and $TapScope -ne 'ALL_LAYER_NORM_SQUARES') { throw 'ADAPTIVE_REQUIRES_SQUARE_MONITORING' }
 $sourceCheckpoint=[IO.Path]::GetFullPath((Join-Path $root $CheckpointPath))
 $allowed=[IO.Path]::GetFullPath((Join-Path $root 'build'))+[IO.Path]::DirectorySeparatorChar
 if (-not $sourceCheckpoint.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)) { throw 'PRIVATE_CHECKPOINT_REQUIRED' }
@@ -63,7 +64,7 @@ $ledger=[ordered]@{
   source_checkpoint_sha256=$CheckpointSha256; from_step=$FromStep; to_step=$ToStep
   tap_scope=$TapScope; layer_index=$LayerIndex; status='RUNNING'; classification='UNRESOLVED'
   probe_microbatch=$ProbeBatch
-  layernorm_centered_scale=$CenteredScale; independent_variable='LayerNorm numerical range scaling; optimizer LR unchanged'
+  layernorm_centered_scale=$CenteredScale; independent_variable=$(if($CenteredScale -eq '1'){'Observation scope only'}else{'LayerNorm range scaling; optimizer LR unchanged'})
   qairt_build_id=$buildId; apk_sha256=(Get-FileHash $apk).Hash.ToLowerInvariant()
   hexagon_manifest_sha256=$hexManifestHash; hexagon_compiler_sha256=$hexCompilerHash
   device_identity_private=$device.Serial; host_free_bytes=$hostFree; device_free_bytes=$deviceFree
@@ -156,6 +157,28 @@ if ($ledger.classification -in @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STA
     $ledger.status='BLOCKED'; $ledger.classification='FORENSIC_CAPTURE_INCOMPLETE'
     $ledger.failure=$_.Exception.Message; Save-Ledger
     throw
+  }
+}
+if ($CenteredScale -eq 'adaptive' -and $ledger.status -ne 'BLOCKED') {
+  try {
+    $resultPath=Join-Path $report "seed1-l19-v1024-t32-d64-f128-steps$ToStep-result.txt"
+    $result=Get-Content $resultPath -Raw
+    $match=[regex]::Match($result,'(?m)^forensic_first_scaled_update=(\d+)\s*$')
+    if (-not $match.Success) { throw 'ADAPTIVE_SUMMARY_MISSING' }
+    $ledger['first_scaled_update']=[int]$match.Groups[1].Value
+    if ($ledger.first_scaled_update -gt 0) {
+      if ($result -notmatch '(?m)^forensic_first_scaled_checkpoint_saved=true\s*$') { throw 'FIRST_SCALE_CAPTURE_MISSING' }
+      $name='forensic-first-scaled-pre-update.ckpt'
+      Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `
+        -RemotePath "files/headless-input/$runId/$name" -LocalPath (Join-Path $report $name) -MinimumBytes 1 | Out-Null
+      & (Join-Path $root 'build/host-tests/nicopedia_muon_checkpoint_compare.exe') (Join-Path $report $name) (Join-Path $report $name) first_scaled_state *> (Join-Path $report 'first-scaled-decode.txt')
+      if ($LASTEXITCODE -ne 0) { throw 'FIRST_SCALE_STATE_INVALID' }
+      $ledger['first_scaled_checkpoint_sha256']=(Get-FileHash (Join-Path $report $name)).Hash.ToLowerInvariant()
+    }
+    Save-Ledger
+  } catch {
+    $ledger.status='BLOCKED'; $ledger.classification='ADAPTIVE_CAPTURE_INCOMPLETE'
+    $ledger.failure=$_.Exception.Message; Save-Ledger; throw
   }
 }
 Write-Host "forensic_status=$($ledger.status) classification=$($ledger.classification) private_report=$report"

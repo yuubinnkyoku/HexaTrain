@@ -7,7 +7,8 @@
 namespace phonelm::qnn::shape {
 
 enum class Op { ReduceSum, ReduceMean, MatMul, Transpose, ElementWiseBinary,
-                Softmax, Reshape, Concat, Split, LayerNorm };
+                Softmax, Reshape, Concat, Split, LayerNorm, ReduceMax,
+                ElementWiseUnary, ElementWiseComparison, ElementWiseSelect };
 
 struct Tensor {
   std::string name;

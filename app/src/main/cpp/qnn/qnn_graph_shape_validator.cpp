@@ -72,11 +72,21 @@ Result validate(const Node& node) {
   if (node.name.empty() || node.inputs.empty() || node.outputs.empty()) return fail(node, "missing node name, input, or output");
   for (const auto& t : node.inputs) { std::size_t ignored; if (!count(t.shape, &ignored)) return fail(node, "invalid input element count"); }
   for (const auto& t : node.outputs) { std::size_t ignored; if (!count(t.shape, &ignored)) return fail(node, "invalid declared output element count"); }
-  if (!sameDtype(node)) return fail(node, "dtype mismatch");
+  if (node.op == Op::ElementWiseSelect) {
+    if (node.inputs.size() != 3 || node.outputs.size() != 1 ||
+        node.inputs[0].dtype != "BOOL_8" ||
+        node.inputs[1].dtype != node.inputs[2].dtype ||
+        node.inputs[1].dtype != node.outputs[0].dtype)
+      return fail(node, "Select requires BOOL_8 condition and matching value dtypes");
+  } else if (node.op == Op::ElementWiseComparison) {
+    if (node.inputs.size() != 2 || node.outputs.size() != 1 ||
+        node.inputs[0].dtype != node.inputs[1].dtype || node.outputs[0].dtype != "BOOL_8")
+      return fail(node, "comparison requires matching inputs and BOOL_8 output");
+  } else if (!sameDtype(node)) return fail(node, "dtype mismatch");
   std::vector<std::vector<std::size_t>> expected;
   const auto& input = node.inputs.front().shape;
   switch (node.op) {
-    case Op::ReduceSum: case Op::ReduceMean: {
+    case Op::ReduceSum: case Op::ReduceMean: case Op::ReduceMax: {
       if (node.inputs.size() != 1 || node.outputs.size() != 1 || !axesValid(node.axes, input.size())) return fail(node, "invalid reduction inputs or axes");
       auto out = input;
       if (node.keepDims) for (auto axis : node.axes) out[axis] = 1;
@@ -101,7 +111,7 @@ Result validate(const Node& node) {
       auto permutation = node.permutation; std::sort(permutation.begin(), permutation.end()); for (std::size_t i=0;i<permutation.size();++i) if (permutation[i] != i) return fail(node, "invalid transpose permutation");
       std::vector<std::size_t> out; for (auto axis : node.permutation) out.push_back(input[axis]); expected.push_back(std::move(out)); break;
     }
-    case Op::ElementWiseBinary: {
+    case Op::ElementWiseComparison: case Op::ElementWiseBinary: {
       if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return fail(node, "binary op requires two inputs");
       }
@@ -111,6 +121,15 @@ Result validate(const Node& node) {
       }
       expected.push_back(std::move(out));
       break;
+    }
+    case Op::ElementWiseUnary:
+      if (node.inputs.size()!=1 || node.outputs.size()!=1) return fail(node, "unary requires one input/output");
+      expected.push_back(input); break;
+    case Op::ElementWiseSelect: {
+      std::vector<std::size_t> pair, all;
+      if (!broadcast(input, node.inputs[1].shape, &pair) ||
+          !broadcast(pair, node.inputs[2].shape, &all)) return fail(node, "Select broadcast mismatch");
+      expected.push_back(std::move(all)); break;
     }
     case Op::Softmax: if (node.inputs.size()!=1 || node.outputs.size()!=1 || node.softmaxAxis >= input.size()) return fail(node, "invalid Softmax axis"); expected.push_back(input); break;
     case Op::Reshape: { if (node.inputs.size()!=1 || node.outputs.size()!=1) return fail(node, "Reshape requires one input and output"); std::size_t inCount, outCount; if (!count(input,&inCount) || !count(node.reshape,&outCount) || inCount != outCount) return fail(node, "Reshape element count mismatch"); expected.push_back(node.reshape); break; }

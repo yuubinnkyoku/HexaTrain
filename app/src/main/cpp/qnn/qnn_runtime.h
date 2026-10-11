@@ -179,6 +179,9 @@ struct RuntimeOptions {
     // square(s*(x-mean)). The LayerNorm transform remains
     // rsqrt(s^2*(variance+epsilon))*s = rsqrt(variance+epsilon).
     float tinyTransformerCenteredScale = 1.0f;
+    // Private G1/FULL diagnostic: keep s=1 on ordinary rows; select s=0.5
+    // only above a conservative square-range threshold. Requires square taps.
+    bool tinyTransformerAdaptiveCenteredScale = false;
     std::uint32_t diagnosticLayerIndex = 0xffffffffu;
     // HTP graph precision control (QAIRT 2.48.40.260702 QnnHtpGraph
     // QNN_HTP_GRAPH_CONFIG_OPTION_PRECISION). 0 = unset (backend default,

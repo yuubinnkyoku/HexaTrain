@@ -559,6 +559,8 @@ struct Runtime::Impl {
         };
         struct LayerRegistry {
             std::uint32_t input = 0, output = 0;
+            // abs, row maximum, BOOL condition, selected scale, selected eps.
+            std::array<std::array<std::uint32_t, 5>, 2> adaptiveNorm{};
             std::uint32_t gateLogits = 0, gates = 0, dGates = 0,
                           oneMinusGates = 0, gateDerivative = 0,
                           dGateSigmoid = 0, gateSigmoid = 0,
@@ -607,6 +609,10 @@ struct Runtime::Impl {
               dimensionValue = 1.0f, inverseDimensionValue = 1.0f,
               gateOne = 1.0f, gateOutputScale = 1.0f,
               gateInvOutputScale = 1.0f, branchHalf = 0.5f;
+        // Conservative square headroom for the observed range behavior;
+        // not a statement about every HTP operation's internal precision.
+        float adaptiveThreshold = 255.875f, adaptiveHalf = 0.5f,
+              adaptiveHalfEpsilon = 2.5e-6f;
         std::uint32_t lastAxisData[1]{1}, rowAxisData[1]{0};
         std::int32_t lastLogitsRanges[6]{};
         std::uint32_t tokens = 0, dimension = 0, feedForwardDimension = 0;

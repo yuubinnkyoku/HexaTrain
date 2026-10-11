@@ -238,6 +238,31 @@ void testGraphShapeValidator() {
                       transformedInverse(0.5)) < 1.0e-12,
             "LayerNorm forensic half-scale transform is not equivalent");
     const float longHorizonInput = -269.75f;
+    auto comparison = makeShapeNode("safe_condition", Op::ElementWiseComparison,
+        {{"max", {32,1}}, {"threshold", {1,1}}}, {{"condition", {32,1}, "BOOL_8"}});
+    require(validate(comparison).ok, "adaptive comparison rejected");
+    comparison.outputs[0].dtype = "FLOAT_32";
+    require(!validate(comparison).ok, "comparison accepted non-bool output");
+    auto selection = makeShapeNode("safe_scale", Op::ElementWiseSelect,
+        {{"condition", {32,1}, "BOOL_8"}, {"half", {1,1}}, {"one", {1,1}}}, {{"scale", {32,1}}});
+    require(validate(selection).ok, "adaptive Select broadcast rejected");
+    selection.inputs[0].dtype = "FLOAT_32";
+    require(!validate(selection).ok, "Select accepted non-bool condition");
+    selection.inputs[0].dtype = "BOOL_8"; selection.outputs[0].shape = {32,64};
+    require(!validate(selection).ok, "Select accepted invented output broadcast");
+    auto maximum = makeShapeNode("safe_max", Op::ReduceMax,
+        {{"abs", {32,64}}}, {{"max", {32,1}}});
+    maximum.axes={1}; maximum.keepDims=true;
+    require(validate(maximum).ok, "adaptive ReduceMax rejected");
+    maximum.keepDims=false;
+    require(!validate(maximum).ok, "ReduceMax accepted wrong keep_dims");
+    for (double magnitude : {0.0, 1.0e-7, 1.0, 255.875, 256.0, 269.75, 512.0}) {
+        const double scale = magnitude > 255.875 ? 0.5 : 1.0;
+        const double original = 1.0 / std::sqrt(magnitude*magnitude + 1.0e-5);
+        const double scaled = scale / std::sqrt(scale*scale*(magnitude*magnitude + 1.0e-5));
+        require(std::fabs(original-scaled) <= 1.0e-12 * std::max(1.0, original),
+                "adaptive LayerNorm inverse changes mathematical semantics");
+    }
     require(longHorizonInput * longHorizonInput == 72765.0625f &&
                     (0.5f * longHorizonInput) * (0.5f * longHorizonInput) ==
                             18191.265625f,

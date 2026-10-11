@@ -7356,11 +7356,14 @@ std::string nicopediaMuonHybridTraining(
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_LAYER_INVALID\n";
     options.diagnosticLayerIndex = layer;
     if (!(forensicMarker >> forensicProbeBatch)) forensicProbeBatch = -1;
-    float centeredScale = 1.0f;
-    if (!(forensicMarker >> centeredScale)) centeredScale = 1.0f;
-    if (centeredScale != 1.0f && centeredScale != 0.5f)
+    std::string scaleMode = "1";
+    if (!(forensicMarker >> scaleMode)) scaleMode = "1";
+    if (scaleMode != "1" && scaleMode != "0.5" && scaleMode != "adaptive")
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_SCALE_INVALID\n";
-    options.tinyTransformerCenteredScale = centeredScale;
+    options.tinyTransformerCenteredScale = scaleMode == "0.5" ? 0.5f : 1.0f;
+    options.tinyTransformerAdaptiveCenteredScale = scaleMode == "adaptive";
+    if (options.tinyTransformerAdaptiveCenteredScale && scope != "ALL_LAYER_NORM_SQUARES")
+      return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_ADAPTIVE_MONITOR_REQUIRED\n";
     if (forensicProbeBatch < -1 || forensicProbeBatch > 7 ||
         (forensicProbeBatch >= 0 && steps != resumeStep + 1))
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_PROBE_BOUND_INVALID\n";
@@ -7432,6 +7435,23 @@ std::string nicopediaMuonHybridTraining(
   incident_trace::trainingStart(static_cast<int>(steps),
                                 static_cast<int>(resumeStep), muonBackendName);
   uint32_t completed = 0, lastStep = resumeStep, checkpointCount = 0;
+  uint32_t firstScaledUpdate = 0;
+  int firstScaledBatch = -1;
+  std::size_t firstScaledRow = 0;
+  std::string firstScaledTensor;
+  std::uint64_t scaledRows = 0;
+  bool firstScaledCheckpointSaved = false;
+  const auto adaptiveSummary = [&]() {
+    std::ostringstream text;
+    text << "\nforensic_adaptive_scale=" << (options.tinyTransformerAdaptiveCenteredScale ? "true" : "false")
+         << "\nforensic_first_scaled_update=" << firstScaledUpdate
+         << "\nforensic_first_scaled_microbatch=" << firstScaledBatch
+         << "\nforensic_first_scaled_tensor=" << firstScaledTensor
+         << "\nforensic_first_scaled_row=" << firstScaledRow
+         << "\nforensic_scaled_norm_rows=" << scaledRows
+         << "\nforensic_first_scaled_checkpoint_saved=" << (firstScaledCheckpointSaved ? "true" : "false") << '\n';
+    return text.str();
+  };
   std::vector<std::pair<uint32_t, float>> curve;
   bool allFinite = true, interrupted = false;
   struct GateAggregate {
@@ -7494,6 +7514,32 @@ std::string nicopediaMuonHybridTraining(
       const bool executeOk = runtime.executeTinyTransformerTraining(
           data.input, data.target, current, 0.0f, output, error);
       incident_trace::endExecute(executeId, executeOk);
+      if (executeOk && options.tinyTransformerAdaptiveCenteredScale) {
+        std::size_t scaleTaps = 0;
+        for (const auto& tap : output.taps) {
+          if (tap.name.size() < 11 || tap.name.substr(tap.name.size() - 11) != "_safe_scale") continue;
+          ++scaleTaps;
+          if (tap.values.size() != config.tokens)
+            return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_ADAPTIVE_SCALE_SHAPE\n";
+          for (std::size_t row = 0; row < tap.values.size(); ++row) {
+            if (tap.values[row] != 1.0f && tap.values[row] != 0.5f)
+              return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_ADAPTIVE_SCALE_VALUE\n";
+            if (tap.values[row] == 1.0f) continue;
+            ++scaledRows;
+            if (firstScaledUpdate != 0) continue;
+            firstScaledUpdate = step; firstScaledBatch = int(batch);
+            firstScaledTensor = tap.name; firstScaledRow = row;
+            std::string saveError;
+            firstScaledCheckpointSaved = nprtWriteMuonCheckpoint(
+                cachePath + "/forensic-first-scaled-pre-update.ckpt", config, seed, lastStep,
+                current, momentum, adamM, adamV, cache, checkpointHparams, 8, &saveError);
+            if (!firstScaledCheckpointSaved)
+              return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_FIRST_SCALE_CAPTURE:" + saveError + '\n';
+          }
+        }
+        if (scaleTaps != config.numLayers * 2)
+          return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_ADAPTIVE_SCALE_REGISTRY\n";
+      }
       if (!executeOk || forensicProbeBatch >= 0) {
         const bool trainingQnnOk = runtime.apiTrace().graphExecuteFailureCount == 0 &&
             runtime.apiTrace().graphExecuteLastResult == 0 &&
@@ -7512,6 +7558,7 @@ std::string nicopediaMuonHybridTraining(
                  << "\nlast_completed_finite_update=" << lastStep
                  << "\nobserved_phase=QNN_FORWARD_BACKWARD"
                  << "\nlayernorm_centered_scale=" << options.tinyTransformerCenteredScale
+                 << adaptiveSummary()
                  << "\ntraining_selection_index=" << (std::uint64_t(step - 1) * 8 + batch)
                  << "\ntraining_record_index=" << order[std::size_t(step - 1) * 8 + batch]
                  << '\n';
@@ -8174,6 +8221,7 @@ std::string nicopediaMuonHybridTraining(
       }
     }
   }
+  if (numericalForensics) report << adaptiveSummary();
   return report.str();
 }
 
