@@ -51,6 +51,7 @@ enum class TinyTransformerTrainingTapSet {
     // regular APP_READ outputs are not rebound as taps.
     ALL_INTERNAL,
     NICOPEDIA_FINE,
+    LN1_SQUARE,
 };
 
 const char* backendKindName(QnnBackendKind kind);

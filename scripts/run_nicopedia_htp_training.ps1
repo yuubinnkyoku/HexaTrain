@@ -59,9 +59,10 @@ param(
   [switch]$BuildInstallOnly,
   [switch]$OneUpdateProbe,
   [switch]$NumericalForensics,
-  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE')][string]$ForensicTapScope = 'NONE',
+  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE')][string]$ForensicTapScope = 'NONE',
   [ValidateRange(0,18)][int]$ForensicLayerIndex = 18,
   [ValidateRange(-1,7)][int]$ForensicProbeBatch = -1,
+  [ValidateSet('1','0.5')][string]$ForensicCenteredScale = '1',
   [switch]$AllowQualityFailure,
   [switch]$SelfTest
 )
@@ -526,11 +527,11 @@ if ($NumericalForensics) {
     throw 'FORENSICS_REQUIRES_INDEPENDENT_NAMESPACE'
   }
   $forensicMarker = Join-Path $reportRoot 'numerical-forensics.txt'
-  [IO.File]::WriteAllText($forensicMarker, "$ForensicTapScope $ForensicLayerIndex $ForensicProbeBatch`n", [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($forensicMarker, "$ForensicTapScope $ForensicLayerIndex $ForensicProbeBatch $ForensicCenteredScale`n", [Text.UTF8Encoding]::new($false))
   Adb @('push', $forensicMarker, "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
   Adb @('shell', 'run-as', $package, 'cp', "/data/local/tmp/phonelm-headless-$RunId-forensics", "$remoteDir/numerical_forensics") | Out-Null
   Adb @('shell', 'rm', '-f', "/data/local/tmp/phonelm-headless-$RunId-forensics") | Out-Null
-} elseif ($ForensicTapScope -ne 'NONE' -or $ForensicProbeBatch -ne -1) { throw 'FORENSIC_TAPS_REQUIRE_NUMERICAL_FORENSICS' }
+} elseif ($ForensicTapScope -ne 'NONE' -or $ForensicProbeBatch -ne -1 -or $ForensicCenteredScale -ne '1') { throw 'FORENSIC_TAPS_REQUIRE_NUMERICAL_FORENSICS' }
 
 # Run the NICOPEDIA mode through the debug intent path. Existing processes and
 # result markers were checked above; lifecycle remains headless.

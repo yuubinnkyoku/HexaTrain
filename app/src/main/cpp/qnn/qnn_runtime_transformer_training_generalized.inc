@@ -57,7 +57,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
        tapSet != TinyTransformerTrainingTapSet::LN2_NORMALIZED &&
        tapSet != TinyTransformerTrainingTapSet::LN2_AFFINE &&
        tapSet != TinyTransformerTrainingTapSet::ALL_INTERNAL &&
-       tapSet != TinyTransformerTrainingTapSet::NICOPEDIA_FINE)) {
+       tapSet != TinyTransformerTrainingTapSet::NICOPEDIA_FINE &&
+       tapSet != TinyTransformerTrainingTapSet::LN1_SQUARE)) {
     return fail("APP_CONFIGURATION_VALIDATION: generalized tiny training "
                 "requires valid diagnostic language-model FULL configuration");
   }
@@ -372,6 +373,8 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       return name == "ln2_centered" || name == "ln2_centered_s";
     if (tapSet == TinyTransformerTrainingTapSet::LN2_SQUARE)
       return name == "ln2_centered_s" || name == "ln2_square";
+    if (tapSet == TinyTransformerTrainingTapSet::LN1_SQUARE)
+      return name == "ln1_centered_s" || name == "ln1_square";
     if (tapSet == TinyTransformerTrainingTapSet::LN2_REDUCTION)
       return name == "ln2_variance" || name == "ln2_variance_eps";
     if (tapSet == TinyTransformerTrainingTapSet::LN2_INVERSE)
@@ -400,6 +403,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     if (tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
         tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
         tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE ||
+        tapSet == TinyTransformerTrainingTapSet::LN1_SQUARE ||
         (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
          tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE))
       return false;
@@ -529,6 +533,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
           tapSet == TinyTransformerTrainingTapSet::LAYER_SUBBLOCKS ||
           tapSet == TinyTransformerTrainingTapSet::LAYER_OPS ||
           tapSet == TinyTransformerTrainingTapSet::NICOPEDIA_FINE ||
+          tapSet == TinyTransformerTrainingTapSet::LN1_SQUARE ||
           (tapSet >= TinyTransformerTrainingTapSet::LN2_CENTER_SCALE &&
            tapSet <= TinyTransformerTrainingTapSet::LN2_AFFINE);
       const bool selectedTap = tapActivation(activationName) &&

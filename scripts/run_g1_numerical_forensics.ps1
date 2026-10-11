@@ -5,9 +5,10 @@ param(
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{64}$')][string]$CheckpointSha256,
   [Parameter(Mandatory=$true)][ValidateRange(40000,44999)][int]$FromStep,
   [Parameter(Mandatory=$true)][ValidateRange(40001,45000)][int]$ToStep,
-  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE')][string]$TapScope='NONE',
+  [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE')][string]$TapScope='NONE',
   [ValidateRange(0,18)][int]$LayerIndex=18,
   [ValidateRange(-1,7)][int]$ProbeBatch=-1,
+  [ValidateSet('1','0.5')][string]$CenteredScale='1',
   [switch]$Install
 )
 $ErrorActionPreference='Stop'
@@ -18,6 +19,7 @@ $buildId='2.48.40.260702151143'
 $hexagon='C:\Qualcomm\Hexagon_SDK\6.6.0.0'
 if ($ToStep -le $FromStep -or $ToStep-$FromStep -gt 2000) { throw 'FORENSIC_BOUND_EXCEEDED' }
 if ($ProbeBatch -ge 0 -and $ToStep -ne $FromStep+1) { throw 'FIXED_PROBE_MUST_BE_ONE_UPDATE_BOUND' }
+if ($CenteredScale -ne '1' -and $ProbeBatch -lt 0 -and $FromStep -ne 40000) { throw 'SCALED_TRAJECTORY_MUST_FORK_PROTECTED_40K' }
 $sourceCheckpoint=[IO.Path]::GetFullPath((Join-Path $root $CheckpointPath))
 $allowed=[IO.Path]::GetFullPath((Join-Path $root 'build'))+[IO.Path]::DirectorySeparatorChar
 if (-not $sourceCheckpoint.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)) { throw 'PRIVATE_CHECKPOINT_REQUIRED' }
@@ -61,6 +63,7 @@ $ledger=[ordered]@{
   source_checkpoint_sha256=$CheckpointSha256; from_step=$FromStep; to_step=$ToStep
   tap_scope=$TapScope; layer_index=$LayerIndex; status='RUNNING'; classification='UNRESOLVED'
   probe_microbatch=$ProbeBatch
+  layernorm_centered_scale=$CenteredScale; independent_variable='LayerNorm numerical range scaling; optimizer LR unchanged'
   qairt_build_id=$buildId; apk_sha256=(Get-FileHash $apk).Hash.ToLowerInvariant()
   hexagon_manifest_sha256=$hexManifestHash; hexagon_compiler_sha256=$hexCompilerHash
   device_identity_private=$device.Serial; host_free_bytes=$hostFree; device_free_bytes=$deviceFree
@@ -85,6 +88,7 @@ $arguments=@{
   PollSeconds=2; ProgressEverySeconds=30; CheckpointStallSeconds=7200
   NumericalForensics=$true; ForensicTapScope=$TapScope; ForensicLayerIndex=$LayerIndex
   ForensicProbeBatch=$ProbeBatch
+  ForensicCenteredScale=$CenteredScale
 }
 try {
   & (Join-Path $PSScriptRoot 'run_nicopedia_htp_training.ps1') @arguments *> (Join-Path $report 'runner.log')

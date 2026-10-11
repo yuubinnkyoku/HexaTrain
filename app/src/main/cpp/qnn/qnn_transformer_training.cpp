@@ -7356,6 +7356,11 @@ std::string nicopediaMuonHybridTraining(
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_LAYER_INVALID\n";
     options.diagnosticLayerIndex = layer;
     if (!(forensicMarker >> forensicProbeBatch)) forensicProbeBatch = -1;
+    float centeredScale = 1.0f;
+    if (!(forensicMarker >> centeredScale)) centeredScale = 1.0f;
+    if (centeredScale != 1.0f && centeredScale != 0.5f)
+      return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_SCALE_INVALID\n";
+    options.tinyTransformerCenteredScale = centeredScale;
     if (forensicProbeBatch < -1 || forensicProbeBatch > 7 ||
         (forensicProbeBatch >= 0 && steps != resumeStep + 1))
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_PROBE_BOUND_INVALID\n";
@@ -7363,6 +7368,10 @@ std::string nicopediaMuonHybridTraining(
       forensicTaps = TinyTransformerTrainingTapSet::COARSE_LAYER_BOUNDARIES;
     else if (scope == "NICOPEDIA_FINE")
       forensicTaps = TinyTransformerTrainingTapSet::NICOPEDIA_FINE;
+    else if (scope == "LN1_SQUARE")
+      forensicTaps = TinyTransformerTrainingTapSet::LN1_SQUARE;
+    else if (scope == "LN2_SQUARE")
+      forensicTaps = TinyTransformerTrainingTapSet::LN2_SQUARE;
     else if (scope != "NONE")
       return "NICOPEDIA_HTP\nstatus=FAILED\nerror=FORENSIC_SCOPE_INVALID\n";
   }
@@ -7492,6 +7501,7 @@ std::string nicopediaMuonHybridTraining(
                  << (executeOk ? "\nprobe_microbatch=" : "\nfirst_detected_microbatch=") << batch
                  << "\nlast_completed_finite_update=" << lastStep
                  << "\nobserved_phase=QNN_FORWARD_BACKWARD"
+                 << "\nlayernorm_centered_scale=" << options.tinyTransformerCenteredScale
                  << "\ntraining_selection_index=" << (std::uint64_t(step - 1) * 8 + batch)
                  << "\ntraining_record_index=" << order[std::size_t(step - 1) * 8 + batch]
                  << '\n';
