@@ -66,7 +66,8 @@ foreach($v in $variants){
  $fields=@();foreach($field in @('dx','dg','db','ln_tail_residual')){
   $values=@($runs.metrics|Where-Object field -eq $field);if(!$values.Count){continue}
   $fields+=[ordered]@{field=$field;max_fp_abs=($values.fp_abs|Measure-Object -Maximum).Maximum;max_double_abs=($values.double_abs|Measure-Object -Maximum).Maximum;
-   max_bits=($values.bits|Measure-Object -Maximum).Maximum;failed_checks=@($values|Where-Object gate -eq 0).Count}
+   max_bits=($values.bits|Measure-Object -Maximum).Maximum;failed_checks=@($values|Where-Object gate -eq 0).Count;
+   double_failed_checks=@($values|Where-Object {$_.double_abs -gt .02}).Count}
  }
  $out.routes+=[ordered]@{variant=$v;processes=3;io_digest=$runs[0].io_digest;fields=$fields;required_failure_count=$runs[0].failures;
   steady_execute_median_us=@($runs.median);first_execute_us=@($runs|ForEach-Object{$_.api.graphExecute});
