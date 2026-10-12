@@ -291,11 +291,13 @@ source/binary/runtime/device identity、independent-process digestを確認し�
 | 検証 | 結果 |
 | --- | --- |
 | Fast（Forward source） | PASS、96.7s |
+| Fast（final source/exporter/report） | PASS、92.6s |
 | Qnn profile | PASS、577.3s。Host contracts/shape、100-case double finite differences/FP32 oracle、QNN build/APK audit |
 | QNN+HVX APK build | PASS、66s。W8 headless runnerでfixed APK audit |
 | Muon W8 regression | PASS、114/114、maxAbs1.490116119e-8、relativeL2 4.40269854e-8、cosine1、RPC/finite成功、fallbackfalse |
 | final device numerical matrix | Lane A PASS、Lane B accuracy FAILを別保存。全process API/ownership/finite gate成功 |
 | exporter SelfTest / process consistency | PASS |
+| device-probe smoke | PASS、BACKGROUND_CORRECTNESS、fixed APK audit、foreground takeover0 |
 
 一度top-resumed不明で最終確認を実行前に停止した。端末同一性/awake/top-resumed/残存processなしをread-onlyで確認し、
 全guardを再実行して新しいprocessで再開した。失敗artifactは保存し、数値失敗や6031と混同していない。
@@ -306,7 +308,8 @@ build manifestにはsource files SHA256、compiler SHA256、SDK build/architectu
 最終documentation HEADは完了メッセージとprivate final identitiesへ記録し、実機sourceと区別する。
 
 private evidence: ignored `build/reports/htp-fp32-layernorm-matmul/`、`build/fp32-custom/`、同prefix qnn-headless reports。
-保護5主要artifactsと3 forensic identities（複製を含む5 forensic paths）、全既存branch refs、過去private indexを照合する。
+保護5主要artifactsと3 forensic identities（複製を含む5 forensic paths）、全既存branch refs、過去private indexを終了時にも照合した。
 40k checkpointはhashだけ読み、deserializeしていない。100k baseline/41,647/42k evidenceとUNSTABLEは保存。
 source以外のraw tensor、checkpoint、corpus、device identifiers、SDK binaries、private logsはcommitしない。
 Push/PR/merge/main変更、history rewrite、学習updatesは0。
+最終working treeはclean。Host20GiB/Device12GiBとactive runなしをprivate closeoutで再確認する。
