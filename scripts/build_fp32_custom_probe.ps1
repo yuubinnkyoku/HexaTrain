@@ -20,7 +20,7 @@ $src=Join-Path $root 'host_tests/fp32_custom/package.cpp'
 $inc=Join-Path $QairtSdkRoot 'include/QNN'
 & $hex -std=c++17 -mv81 -O2 -G0 -fPIC -shared -ffp-contract=off -fno-vectorize -fno-slp-vectorize -DPREPARE_DISABLED "-I$inc" "-I$HexagonSdkRoot/incs" "-I$HexagonSdkRoot/incs/stddef" "-I$HexagonSdkRoot/rtos/qurt/computev81/include/qurt" $src -o "$out/libHexaFp32Dsp.so"
 if($LASTEXITCODE){throw 'CUSTOM_DSP_BUILD_FAILED'}
-& $arm --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -ffp-contract=off "-I$inc" $src -o "$out/libHexaFp32Host.so"
+& $arm --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -ffp-contract=off "-I$inc" $src "-L$QairtSdkRoot/lib/aarch64-android" -lQnnHtpPrepare -o "$out/libHexaFp32Host.so"
 if($LASTEXITCODE){throw 'CUSTOM_HOST_BUILD_FAILED'}
 if(Test-Path (Join-Path $root 'host_tests/fp32_custom/probe.cpp')) {
  & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -ffp-contract=off -static-libstdc++ "-I$inc" (Join-Path $root 'host_tests/fp32_custom/probe.cpp') -ldl -o "$out/fp32_probe"

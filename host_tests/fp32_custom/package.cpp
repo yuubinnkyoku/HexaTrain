@@ -4,6 +4,9 @@
 #include <QnnSdkBuildId.h>
 #include <HTP/QnnHtpCommon.h>
 #include <HTP/core/qhpi.h>
+#ifdef __hexagon__
+#include <HAP_perf.h>
+#endif
 
 namespace {
 constexpr const char* package = "HexaFp32";
@@ -48,9 +51,18 @@ template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Ten
     float* y=static_cast<float*>(qhpi_tensor_raw_data(o[0]));
     auto* receipt=static_cast<unsigned*>(qhpi_tensor_raw_data(o[1]));
     if(!x || !y || !receipt)return QHPI_ERROR_FATAL;
-    receipt[0]=0x48383100u+Kind; receipt[1]=++calls; receipt[2]=n;
+    #ifdef __hexagon__
+    receipt[0]=0x48383100u+Kind;
+    const auto started=HAP_perf_get_time_us();
+    #else
+    receipt[0]=0x43505500u+Kind;
+    #endif
+    receipt[1]=++calls; receipt[2]=n;receipt[3]=ni;
+    for(unsigned i=0;i<3;++i)for(unsigned j=0;j<n;++j) {
+        receipt[8+i*n+j]=0;
+        if(i<ni)std::memcpy(receipt+8+i*n+j,static_cast<const float*>(qhpi_tensor_raw_data(in[i]))+j,4);
+    }
     for(unsigned j=0;j<n;++j) {
-        std::memcpy(receipt+3+j,x+j,4);
         if constexpr(Kind==0) std::memcpy(y+j,x+j,4);
         else {
             const float* b=static_cast<const float*>(qhpi_tensor_raw_data(in[1]));
@@ -62,6 +74,12 @@ template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Ten
             }
         }
     }
+    #ifdef __hexagon__
+    receipt[4]=unsigned(HAP_perf_get_time_us()-started);
+    #else
+    receipt[4]=0;
+    #endif
+    receipt[5]=81;receipt[6]=32;receipt[7]=0;
     return QHPI_SUCCESS;
 }
 QHPI_Kernel_v1 kernels[4] = {};
@@ -79,7 +97,7 @@ extern "C" const char* qhpi_init() {
     const char* fullNames[]={"HexaFp32::Copy","HexaFp32::Add","HexaFp32::Multiply","HexaFp32::Affine"};
     for(unsigned j=0;j<4;++j) {
         auto& k=kernels[j];k.function_name=fullNames[j];k.function=functions[j];
-        k.resources=QHPI_RESOURCE_MAIN;k.min_inputs=j==0?1:j==3?3:2;
+        k.resources=QHPI_RESOURCE_HVX;k.min_inputs=j==0?1:j==3?3:2;
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
