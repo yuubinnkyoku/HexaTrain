@@ -47,6 +47,12 @@ template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Ten
     if(no!=2 || ni!=(Kind==0?1u:Kind==3?3u:2u)) return QHPI_ERROR_FATAL;
     auto shape=qhpi_tensor_shape(in[0]); unsigned n=1;
     for(unsigned d=0;d<shape.rank;++d)n*=shape.dims[d];
+    if(!n || n>4096)return QHPI_ERROR_FATAL;
+    auto count=[](const QHPI_Tensor* t){auto s=qhpi_tensor_shape(t);unsigned total=1;
+        for(unsigned d=0;d<s.rank;++d)total*=s.dims[d];return total;};
+    if(count(o[0])!=n || count(o[1])!=3*n+8)return QHPI_ERROR_FATAL;
+    for(unsigned i=0;i<ni;++i)if(count(in[i])!=n || qhpi_tensor_type(in[i])!=QHPI_FLOAT32)return QHPI_ERROR_FATAL;
+    if(qhpi_tensor_type(o[0])!=QHPI_FLOAT32 || qhpi_tensor_type(o[1])!=QHPI_INT32)return QHPI_ERROR_FATAL;
     const float* x=static_cast<const float*>(qhpi_tensor_raw_data(in[0]));
     float* y=static_cast<float*>(qhpi_tensor_raw_data(o[0]));
     auto* receipt=static_cast<unsigned*>(qhpi_tensor_raw_data(o[1]));

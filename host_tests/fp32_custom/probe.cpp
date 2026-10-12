@@ -23,11 +23,14 @@ void checkImpl(const char* stage,Qnn_ErrorHandle_t rc) {
 void log(const char* f,QnnLog_Level_t,uint64_t,va_list a){std::vfprintf(stderr,f,a);std::fputc('\n',stderr);}
 uint32_t word(float f){uint32_t u;std::memcpy(&u,&f,4);return u;}
 float from(uint32_t u){float f;std::memcpy(&f,&u,4);return f;}
+uint64_t hashWords(const std::vector<float>& values,uint64_t hash=14695981039346656037ull){
+ for(float f:values){uint32_t u=word(f);for(unsigned j=0;j<4;++j){hash^=(u>>(8*j))&255;hash*=1099511628211ull;}}return hash;
+}
 struct Graph {
  Qnn_GraphHandle_t graph{}; std::vector<Qnn_Tensor_t> tensors;
  std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;
  std::vector<unsigned> inputs,outputs; std::vector<std::vector<float>> data;
- std::vector<std::vector<uint32_t>> receipts; bool custom;std::string variant;double executeUs=0;
+ std::vector<std::vector<uint32_t>> receipts; bool custom;std::string variant;double executeUs=0;unsigned lastCounter=0;
  Graph(const std::string& variant,size_t n,bool tap=false):custom(variant!="standardAdd"&&variant!="standardMultiply"),variant(variant) {
   tensors.reserve(16);names.reserve(16);shapes.reserve(16);
   check("graphCreate",api.graphCreate(context,variant.c_str(),nullptr,&graph));
@@ -80,6 +83,7 @@ struct Graph {
   std::printf("execute_us,%.3f\n",us);
   for(size_t k=0;k<outputs.size();++k)if(tensors[outputs[k]].v1.dataType==QNN_DATATYPE_INT_32){
    auto& r=buffers[k];if((r[0]&0xffffff00)!=0x48383100 || !r[1] ||r[2]!=x.size()){std::puts("KERNEL_RECEIPT_FAIL");std::exit(3);}
+   if(r[1]<=lastCounter){std::puts("KERNEL_COUNTER_FAIL");std::exit(3);}lastCounter=r[1];
    std::printf("kernel_receipt,%u,%u,%u,kernel_us=%u\n",r[0],r[1],r[2],r[4]);
    if(r[5]!=81||r[6]!=32||r[7]!=0){std::puts("KERNEL_IDENTITY_FAIL");std::exit(3);}
    for(unsigned a=0;a<3;++a)for(size_t j=0;j<x.size();++j){
@@ -98,6 +102,7 @@ struct Graph {
    for(size_t j=0;j<buffers[k].size();++j)if(!std::isfinite(from(buffers[k][j]))){std::puts("TAP_NONFINITE_OR_POISON");std::exit(3);}
   }
   for(float f:y)if(!std::isfinite(f)){std::puts("NONFINITE_OR_POISON");std::exit(3);}
+  std::printf("io_hash,%016llx,%016llx\n",(unsigned long long)hashWords(c,hashWords(b,hashWords(x))),(unsigned long long)hashWords(y));
   std::printf("host_receipt_finite_validation_us,%.3f\n",std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count()-us);
   return y;
  }
@@ -123,7 +128,7 @@ int main(int argc,char** argv){
  std::printf("result,%s,bit_mismatch=%u,max_abs=%.12g\n",variant.c_str(),mismatches,err);
  unsigned failures=0;
  auto evaluate=[&](const char* recipe,const char* field,const std::vector<float>& input,const std::vector<double>& ideal,
-                   const std::vector<float>& coeff,const std::vector<float>& addend){
+                   const std::vector<float>& coeff,const std::vector<float>& addend,const std::vector<double>* exactOutput=nullptr){
   auto out=g.run(input,coeff,addend);double fpError=0,doubleError=0;unsigned bitError=0;
   for(size_t j=0;j<input.size();++j){
    float fp=input[j];double d=ideal[j];
@@ -131,6 +136,7 @@ int main(int argc,char** argv){
    else if(variant=="Multiply"||variant=="standardMultiply"||variant=="reshape"){fp=input[j]*coeff[j];d*=coeff[j];}
    else if(variant=="htpMultiply"){volatile float p=input[j]*coeff[j];fp=p*addend[j];d=d*coeff[j]*addend[j];}
    else if(variant!="Copy"){volatile float p=input[j]*coeff[j];fp=p+addend[j];d=d*coeff[j]+addend[j];}
+   if(exactOutput)d=(*exactOutput)[j];
    fpError=std::max(fpError,std::abs(double(out[j])-fp));doubleError=std::max(doubleError,std::abs(double(out[j])-d));bitError+=word(out[j])!=word(fp);
   }
   bool pass=doubleError<=.02 && (!g.custom||bitError==0);
@@ -161,9 +167,9 @@ int main(int argc,char** argv){
   // Inputs are independently derived double stages rounded to FP32. No LN
   // kernel is claimed here. Consumer double oracle is ideal dX + residual.
   if(variant=="chain"||variant=="Affine"){
-   auto stage=ln::stages(fixture,64);std::vector<float> bracket(128);std::vector<double> ideal(128);
-   for(unsigned j=0;j<128;++j){bracket[j]=float(stage[19][j]);ideal[j]=stage[19][j];b[j]=float(stage[20][j/64]);c[j]=fixture.dy[j];}
-   evaluate(fixture.name.c_str(),"ln_tail_residual",bracket,ideal,b,c);
+   auto stage=ln::stages(fixture,64);std::vector<float> bracket(128);std::vector<double> ideal(128),exact(128);
+   for(unsigned j=0;j<128;++j){bracket[j]=float(stage[19][j]);ideal[j]=stage[19][j];b[j]=float(stage[20][j/64]);c[j]=fixture.dy[j];exact[j]=ref.dx[j]+double(c[j]);}
+   evaluate(fixture.name.c_str(),"ln_tail_residual",bracket,ideal,b,c,&exact);
   }
  }
  std::printf("summary,%s,required_failures=%u,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0\n",variant.c_str(),failures);
