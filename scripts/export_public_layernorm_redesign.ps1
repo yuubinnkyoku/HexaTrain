@@ -32,7 +32,7 @@ if($SelfTest){
 }
 if(-not $PrivateIndex -or -not $Destination){throw 'INDEX_AND_DESTINATION_REQUIRED'}
 $root=Split-Path -Parent $PSScriptRoot;$base=Join-Path $root 'build/reports/htp-layernorm-redesign'
-$runs=@()
+$runs=@();$primaryHash=$null
 foreach($item in (Get-Content -LiteralPath $PrivateIndex -Raw|ConvertFrom-Json).runs){
  if($item.label -notmatch '^[A-Z_]{2,32}$' -or $item.directory -notmatch '^lnredesign-[a-f0-9]{32}$'){throw 'INDEX_INVALID'}
  $dir=Join-Path $base $item.directory;$p=Get-Content (Join-Path $dir 'validation-plan.json') -Raw|ConvertFrom-Json
@@ -53,7 +53,15 @@ foreach($item in (Get-Content -LiteralPath $PrivateIndex -Raw|ConvertFrom-Json).
  }
  $accepted=@($candidates|Where-Object{$_.gate -eq 'PASS'}).Count -gt 0
  if(($text -match '(?m)^accepted_leaf_candidate=1$') -ne $accepted){throw 'FINAL_CLASSIFICATION_MISMATCH'}
- $runs+=[ordered]@{label=$item.label;source_sha=$p.source_sha;qairt_build_id=$p.qairt_build_id;qnn_execute_attempts=1326;qnn_execute_success=1326;qnn_execute_failure=0;accepted_leaf_candidate=$accepted;training_updates=0;records=$records}
+ $numericJson=$records|ConvertTo-Json -Depth 8 -Compress
+ $numericHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($numericJson))).ToLowerInvariant()
+ if($null -eq $primaryHash){$primaryHash=$numericHash
+  $selected=@($records|Where-Object{$_.kind -ne 'metric' -or $_.d -eq 64})
+ }else{
+  if($numericHash -ne $primaryHash){throw 'INDEPENDENT_PROCESS_NUMERICAL_MISMATCH'}
+  $selected=@() # Exact duplicate numeric records stay private; publish equality hash.
+ }
+ $runs+=[ordered]@{label=$item.label;source_sha=$p.source_sha;qairt_build_id=$p.qairt_build_id;qnn_execute_attempts=1326;qnn_execute_success=1326;qnn_execute_failure=0;accepted_leaf_candidate=$accepted;training_updates=0;full_numeric_record_count=$records.Count;full_numeric_records_sha256=$numericHash;matches_primary_numeric_records=($numericHash -eq $primaryHash);records=$selected}
 }
 $bundle=[ordered]@{schema='HTP_LAYERNORM_REDESIGN_V1';gradient_abs_limit=.02;ordinary_forward_abs_limit=.002;low_variance_forward_abs_limit=.06;stress_60k='NOT_EXECUTED';runs=$runs}
 $json=$bundle|ConvertTo-Json -Depth 12
