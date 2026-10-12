@@ -263,11 +263,13 @@ training runnerがHost FP32で各microbatch gradientを`0.125f`倍してaccumula
 | 工程 | 結果 |
 | --- | --- |
 | Fast（初期probe/runner） | PASS、52.6s |
+| Fast（最終source/文書/exporter） | PASS、54.5s |
 | Qnn profile | PASS、303.5s。pinned core/check、Host contracts/shape/numerical diagnostic、QNN APK build/audit |
 | final custom package/probe build | PASS、固定V81/ARM compilers、source/binary hash manifest |
 | final custom device probes | 11 variants×3 process。API/finite/ownership PASS、custom accuracy PASS、standard consumer accuracy FAILを区別 |
 | QNN+HVX APK build/audit | 初回shell引用不足でFAIL、修正後42s build成功・audit PASS |
 | Muon W8 headless regression | PASS、114/114、maxAbs1.490116119e-8、worst relativeL2 4.40269854e-8、RPC成功、finite、fallbackfalse |
+| device-probe headless smoke | PASS、BACKGROUND_CORRECTNESS、fixed APK identity、focus takeover0、thermal0、40°C |
 | typed exporter | SelfTest PASS、3-process count/同一binary/同一device/input-output digest、既存0.02 gateを確認 |
 
 今回のprofileはfeasibility diagnostic検証であり、Formal training/release promotionは未実施。
@@ -292,7 +294,8 @@ source/archive hashes、SDK actual file audit、disassembly、33 process reports
 ignored `build/reports/htp-fp32-custom-consumer/`と`build/fp32-custom/`に保持する。
 W8 evidenceは同prefixのprivate qnn-headless report。
 
-既存8 protected artifacts、base研究branch、100k baseline/UNSTABLE/forensic refsを開始時と終了時に照合する。
+既存8 protected artifacts、base研究branch、100k baseline/UNSTABLE/forensic refsを開始時と終了時に照合した。
+今回の専用作業branchの通常commit進行を除き、既存refsは不変。
 最終closeoutは保護artifact PASS、UNSTABLE維持、storage gateとclean working treeをprivateで記録する。
 
 ## 保護とscope
