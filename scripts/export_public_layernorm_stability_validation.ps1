@@ -56,10 +56,11 @@ foreach($item in $index.runs){
  $runs+=[ordered]@{label=$item.label;source_sha=$p.source_sha;qairt_build_id=$p.qairt_build_id;
   candidate_correctness=$gate;legacy_backward_gate='PASS';training_updates_executed=0;
   qnn_execute_attempts=$calls;qnn_execute_success=$calls;qnn_execute_failure=0;
-  limits=@{ordinary_forward_abs=0.002;low_variance_forward_abs=0.06;gradient_abs=0.02;central_difference_abs=0.0005};
+  limits=[ordered]@{ordinary_forward_abs=0.002;low_variance_forward_abs=0.06;gradient_abs=0.02;central_difference_abs=0.0005};
   scope='Procedural LayerNorm graphs; legacy microtest executes excluded from counts';records=$records}
 }
-$public=[ordered]@{schema='LAYER_NORM_VALIDATION_PUBLIC_V1';stress_60k_status='BLOCKED_CORRECTNESS_PREREQUISITE';runs=$runs}
+$stressStatus=if(@($runs|Where-Object{$_.candidate_correctness -eq 'FAIL'}).Count -gt 0){'BLOCKED_CORRECTNESS_PREREQUISITE'}else{'NOT_EXECUTED'}
+$public=[ordered]@{schema='LAYER_NORM_VALIDATION_PUBLIC_V1';stress_60k_status=$stressStatus;runs=$runs}
 $json=$public|ConvertTo-Json -Depth 12
 if($json -match 'run_id|private_path|device_identity|[A-Z]:\\|lnvalidation-[a-f0-9]{32}|APK|Nicopedia本文'){throw 'PUBLIC_PRIVACY_SCAN_FAILED'}
 [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($Destination))))|Out-Null
