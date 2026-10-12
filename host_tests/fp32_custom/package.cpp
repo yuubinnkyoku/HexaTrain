@@ -11,9 +11,9 @@
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 5, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 7, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -27,6 +27,8 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
        std::strcmp(c.v1.packageName,package) || c.v1.numOfParams)
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"LnForward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"LnBackward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"LnResidual"))return c.v1.numOfInputs==5 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(c.v1.numOfOutputs!=2)return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     for(unsigned k=0;k<4;++k) if(!std::strcmp(c.v1.typeName,names[k]))
         return c.v1.numOfInputs==(k==0?1u:k==3?3u:2u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
