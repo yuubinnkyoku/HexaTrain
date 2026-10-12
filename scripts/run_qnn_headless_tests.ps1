@@ -4,7 +4,7 @@ param(
     [string]$HexagonSdkRoot,
     [ValidateSet(
         "device-probe", "qnn-forward", "linear", "mlp-split", "mlp-fused", "mlp-full-step",
-        "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward",
+        "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward", "layernorm-stability",
         "transformer-mse", "tiny-lm-ce", "sgd-one-step", "momentum-one-step", "adam-one-step",
         "tiny-lm-stability", "phase01-adam", "generation-diagnostics", "api-trace", "callback-bound",
         "qnn-reproducibility", "qnn-graph-bisection",

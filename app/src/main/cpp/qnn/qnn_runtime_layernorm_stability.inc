@@ -1,7 +1,7 @@
 // Diagnostic graph: use the production shared forward/backward builder, with
 // application-visible intermediates. No optimizer, dataset, or CPU fallback.
 bool Runtime::prepareLayerNormStability(uint32_t rows, uint32_t dimension,
-                                      float epsilon, bool adaptive, std::string& error) {
+                                      float epsilon, bool adaptive, std::string& error, bool observe) {
   if (!impl_ || !impl_->context || !rows || rows > 64 || !dimension ||
       dimension > 256 || !std::isfinite(epsilon) || epsilon <= 0 ||
       impl_->layerNormStability.graph) { error = "LN_STABILITY_INVALID_CONFIGURATION"; return false; }
@@ -27,13 +27,14 @@ bool Runtime::prepareLayerNormStability(uint32_t rows, uint32_t dimension,
   };
   const std::vector<uint32_t> full{rows, dimension}, row{rows, 1}, scalar{1, 1}, param{dimension};
   const auto W = QNN_TENSOR_TYPE_APP_WRITE, R = QNN_TENSOR_TYPE_APP_READ, N = QNN_TENSOR_TYPE_NATIVE, S = QNN_TENSOR_TYPE_STATIC;
+  const auto I = observe ? R : N;
   add("x", W, full); add("dy", W, full); add("gamma", W, param); add("beta", W, param);
   // Order is part of the diagnostic API; intermediate taps follow final outputs.
   const int y = add("y", R, full), xhat = add("xhat", R, full), dx = add("dx", R, full);
   const int dg = add("dg", R, param), db = add("db", R, param);
-  const int mean = add("mean", R, row), c = add("centered", R, full), cs = add("centered_s", R, full);
-  const int square = add("square", R, full), var = add("var_s", R, row), ve = add("var_eps_s", R, row);
-  const int is = add("inverse_s", R, row), inv = add("inverse", R, row), xg = add("xhat_gamma", N, full);
+  const int mean = add("mean", I, row), c = add("centered", I, full), cs = add("centered_s", I, full);
+  const int square = add("square", I, full), var = add("var_s", I, row), ve = add("var_eps_s", I, row);
+  const int is = add("inverse_s", I, row), inv = add("inverse", I, row), xg = add("xhat_gamma", N, full);
   const int axis = add("last_axis", S, {1}, QNN_DATATYPE_UINT_32, &g.lastAxis, 4);
   const int ra = add("row_axis", S, {1}, QNN_DATATYPE_UINT_32, &g.rowAxis, 4);
   auto stat = [&](const char* n, float& value) { return add(n, S, scalar, QNN_DATATYPE_FLOAT_32, &value, 4); };
@@ -41,14 +42,14 @@ bool Runtime::prepareLayerNormStability(uint32_t rows, uint32_t dimension,
   const int th = stat("threshold", g.threshold), half = stat("half", g.half), he = stat("half_epsilon", g.halfEpsilon);
   std::array<int, 5> aids{{-1,-1,-1,-1,-1}};
   if (adaptive) {
-    aids = {{add("abs_c", N, full), add("max_c", R, row),
+    aids = {{add("abs_c", N, full), add("max_c", I, row),
              add("condition", N, row, QNN_DATATYPE_BOOL_8),
-             add("selected_scale", R, row), add("selected_epsilon", R, row)}};
+             add("selected_scale", I, row), add("selected_epsilon", I, row)}};
   }
-  const int dh = add("dxhat", R, full), sum = add("sum_dxhat", R, row), prod = add("dxhat_xhat", R, full);
-  const int dyx = add("dy_xhat", R, full), sump = add("sum_prod", R, row), ddh = add("d_dxhat", R, full);
-  const int first = add("first", R, full), xs = add("xhat_sum", R, full), bracket = add("bracket", R, full);
-  const int ivd = add("inv_over_d", R, row);
+  const int dh = add("dxhat", I, full), sum = add("sum_dxhat", I, row), prod = add("dxhat_xhat", I, full);
+  const int dyx = add("dy_xhat", I, full), sump = add("sum_prod", I, row), ddh = add("d_dxhat", I, full);
+  const int first = add("first", I, full), xs = add("xhat_sum", I, full), bracket = add("bracket", I, full);
+  const int ivd = add("inv_over_d", I, row);
   for (auto& t : g.tensors) {
     status = impl_->api.tensorCreateGraphTensor(g.graph, &t);
     if (status != QNN_SUCCESS) { error = "LN_STABILITY_TENSOR=" + std::to_string(QNN_GET_ERROR_CODE(status)); return false; }

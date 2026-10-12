@@ -41,7 +41,7 @@ function Save-Ledger { [IO.File]::WriteAllText((Join-Path $directory 'validation
 Save-Ledger
 try {
  & (Join-Path $PSScriptRoot 'run_qnn_headless_tests.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId `
-   -Suite layernorm-backward -RunId $id -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
+   -Suite layernorm-stability -RunId $id -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
    -TestMode BACKGROUND_CORRECTNESS *> (Join-Path $directory 'runner.txt')
  $ledger.status='PASS'
 } catch { $ledger.status='FAIL';$ledger.failure=$_.Exception.Message

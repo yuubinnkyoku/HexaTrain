@@ -108,6 +108,7 @@ const char* executionModeName(ExecutionMode mode) {
         case ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK: return "QNN_HTP_SOFTMAX_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK: return "QNN_HTP_ATTENTION_BACKWARD_CHECK";
         case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK: return "QNN_HTP_LAYER_NORM_BACKWARD_CHECK";
+        case ExecutionMode::QNN_HTP_LAYER_NORM_STABILITY_VALIDATION: return "QNN_HTP_LAYER_NORM_STABILITY_VALIDATION";
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP";
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP: return "QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP";
         case ExecutionMode::QNN_HTP_CROSS_ENTROPY_CHECK: return "QNN_HTP_CROSS_ENTROPY_CHECK";
@@ -235,6 +236,7 @@ std::string TrainingEngine::run(ExecutionMode mode,
         case ExecutionMode::QNN_HTP_SOFTMAX_BACKWARD_CHECK:
         case ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK:
         case ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK:
+        case ExecutionMode::QNN_HTP_LAYER_NORM_STABILITY_VALIDATION:
             return qnn::runTransformerExperiment(mode);
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP:
         case ExecutionMode::QNN_HTP_TINY_TRANSFORMER_TRAINING_MULTI_STEP:

@@ -6,6 +6,7 @@
 #include "layernorm_stability_reference.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -965,6 +966,8 @@ std::string runTransformerExperiment(ExecutionMode mode) {
   if (mode == ExecutionMode::QNN_HTP_ATTENTION_BACKWARD_CHECK)
     return attentionBackwardCheck();
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_BACKWARD_CHECK)
+    return layerNormBackwardCheck();
+  if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_STABILITY_VALIDATION)
     return layerNormStabilityCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "
          "mode\n";

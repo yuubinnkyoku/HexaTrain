@@ -49,6 +49,11 @@ inline std::vector<Case> cases(size_t d) {
       c.dy[i]=float(int(i%7)-3)*.125f;}
     out.push_back(std::move(c));
   }
+  for(float a:{269.75f,400.f}){
+    Case c=out.front();c.name=a<300?"sparse_known_failure":"sparse_large";
+    std::fill(c.x.begin(),c.x.begin()+d,0.f);c.x[0]=-a;c.x[1]=a;
+    out.push_back(std::move(c));
+  }
   return out;
 }
 template<class T> std::vector<T> cast(const std::vector<float>& v){return {v.begin(),v.end()};}
@@ -66,7 +71,8 @@ inline double finiteDifferenceError(const Case& c,size_t d,double h,bool scaled)
  return maxError;
 }
 template<class T,class U> double error(const std::vector<T>& a,const std::vector<U>& b){
- if(a.size()!=b.size()) return INFINITY;double e=0;
+ if(a.size()!=b.size()) return INFINITY;
+ double e=0;
  for(size_t i=0;i<a.size();++i){if(!std::isfinite(a[i])||!std::isfinite(b[i]))return INFINITY;e=std::max(e,std::abs(double(a[i])-double(b[i])));}return e;
 }
 } // namespace phonelm::qnn::lnvalidation

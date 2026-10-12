@@ -420,7 +420,7 @@ public:
     bool prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
                                   float epsilon, std::string& error);
     bool prepareLayerNormStability(uint32_t rows, uint32_t dimension,
-                                   float epsilon, bool adaptive, std::string& error);
+                                   float epsilon, bool adaptive, std::string& error, bool observe = true);
     bool executeLayerNormStability(const std::vector<float>& input,
                                    const std::vector<float>& upstream,
                                    const std::vector<float>& gamma,
