@@ -13,6 +13,10 @@ function Number([string]$text){
 function Parse-Metric([string]$line){
  $m=[regex]::Match($line,'^metric,(Copy|Add|Multiply|Affine|chain|reshape|htpAdd|htpMultiply|standardAdd|standardMultiply),([a-z0-9_]+),(dx|dg|db|ln_tail_residual),fp_abs=([^,]+),double_abs=([^,]+),bits=(\d+),gate=([01])$')
  if(!$m.Success){throw 'UNRECOGNIZED_TYPED_METRIC'}
+ $recipes=@('ordinary','small_centered','low_variance','epsilon_dominated','constant','large_mean_low_variance',
+ 'boundary_below','boundary_equal','boundary_above','known_failure','large_signed','half_scale_limit','very_large_signed','large_mean',
+ 'sparse_known_failure','sparse_large','random_seed1','random_seed7','random_seed31','random_seed97')
+ if($m.Groups[2].Value -notin $recipes){throw 'RECIPE_NOT_ALLOWLISTED'}
  return [pscustomobject]@{route=$m.Groups[1].Value;recipe=$m.Groups[2].Value;field=$m.Groups[3].Value;
   fp_abs=(Number $m.Groups[4].Value);double_abs=(Number $m.Groups[5].Value);bits=[int]$m.Groups[6].Value;gate=[int]$m.Groups[7].Value}
 }
@@ -41,7 +45,8 @@ foreach($directory in Get-ChildItem -LiteralPath $PrivateRoot -Directory){
  $standard=$j.variant -in @('htpAdd','htpMultiply','standardAdd','standardMultiply')
  $failures=@($metrics|Where-Object gate -eq 0).Count
  if(!$standard -and ($failures -ne 0 -or $j.exit_code -ne 0 -or @($metrics|Where-Object bits -ne 0).Count)){throw 'CUSTOM_ACCURACY_FAILURE'}
- if(!$standard -and $lines -notmatch '^summary,\w+,required_failures=0,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0$'){throw 'CUSTOM_SAFETY_SUMMARY_MISSING'}
+ if(!$standard -and @($lines -match '^summary,\w+,required_failures=0,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0$').Count -ne 1){throw 'CUSTOM_SAFETY_SUMMARY_MISSING'}
+ if(!$standard -and @($metrics|Where-Object {$_.double_abs -gt .02}).Count){throw 'CUSTOM_DOUBLE_GATE_FAILED'}
  if($standard -and $j.exit_code -ne 4){throw 'EXPECTED_STANDARD_FAILURE_MISSING'}
  $perf=@($lines|Where-Object{$_ -match '^perf,'}|ForEach-Object{if($_ -match ',(\d+),execute_us=([0-9.]+)$' -and [int]$Matches[1] -gt 0){Number $Matches[2]}})
  $median=$null;if($perf.Count){$s=@($perf|Sort-Object);$median=($s[15]+$s[16])/2}
