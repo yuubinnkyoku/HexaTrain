@@ -1,6 +1,10 @@
 #pragma once
 // Lane B is independent of the DSP LayerNorm kernels.
 struct MatShape {const char* name;unsigned aRows,aCols,bRows,bCols;bool ta,tb,gradientLeft;};
+inline std::vector<double> matDouble(const std::vector<double>& a,const std::vector<double>& b,const MatShape& s){
+ unsigned m=s.ta?s.aCols:s.aRows,k=s.ta?s.aRows:s.aCols,n=s.tb?s.bRows:s.bCols;std::vector<double> out(m*n);
+ for(unsigned i=0;i<m;++i)for(unsigned j=0;j<n;++j){double sum=0;for(unsigned h=0;h<k;++h)sum+=a[s.ta?h*s.aCols+i:i*s.aCols+h]*b[s.tb?j*s.bCols+h:h*s.bCols+j];out[i*n+j]=sum;}return out;
+}
 inline std::vector<double> matRef(const std::vector<float>& a,const std::vector<float>& b,const MatShape& s,bool fp32){
  unsigned m=s.ta?s.aCols:s.aRows,k=s.ta?s.aRows:s.aCols,n=s.tb?s.bRows:s.bCols;
  std::vector<double> out(m*n);for(unsigned i=0;i<m;++i)for(unsigned j=0;j<n;++j){double sum=0;float fsum=0;
@@ -36,7 +40,13 @@ inline unsigned laneB(){
     auto ref=matRef(aa,bb,s,false),fp=matRef(aa,bb,s,true);auto out=g.run({{a,aa},{b,bb}});auto actual=decode(out[y]);
     if(copied){auto& r=out[receipt];if(r[0]!=0x48383100||r[2]!=2048||r[3]!=1){std::puts("RECEIPT_FAIL");std::exit(3);}for(unsigned j=0;j<2048;++j)if(r[8+j]!=word(gradient[j])||r[8+2048+j]||r[8+4096+j]){std::puts("COPY_PRECISION_FAIL");std::exit(3);}std::printf("kernel_receipt,0,%u,kernel_us=%u\n",r[1],r[4]);}
     auto e=phonelm::qnn::lnvalidation::errors(ref,actual),f=phonelm::qnn::lnvalidation::errors(fp,actual);bool pass=e.absolute<=.03&&e.nonfinite==0;failures+=!pass;
-    std::printf("mmmetric,%s,%d,%s,%u,m=%u,k=%u,n=%u,abs=%.12g,rms=%.12g,relative=%.12g,fp_abs=%.12g,hash=%016llx,input_hash=%016llx,gate=%d,extra002=%d\n",s.name,copied,c.name.c_str(),control,m,k,n,e.absolute,e.rms,e.relative,f.absolute,(unsigned long long)hashWords(actual),(unsigned long long)hashWords(bb,hashWords(aa)),pass,e.absolute<=.02);
+    std::vector<double> da(aa.begin(),aa.end()),db(bb.begin(),bb.end());auto& gd=s.gradientLeft?da:db;for(unsigned j=0;j<2048;++j)gd[j]=ideal.dx[j]+c.dy[j];auto idealOut=matDouble(da,db,s);double idealError=phonelm::qnn::lnvalidation::errors(idealOut,actual).absolute;
+    // Counterfactual models only: these do not expose HTP internal arithmetic.
+    for(unsigned j=0;j<da.size();++j)da[j]=phonelm::qnn::lnvalidation::halfLattice(aa[j]);for(unsigned j=0;j<db.size();++j)db[j]=phonelm::qnn::lnvalidation::halfLattice(bb[j]);
+    auto roundedInput=matDouble(da,db,s),roundedOutput=ref,both=roundedInput;
+    for(auto& v:roundedOutput)v=phonelm::qnn::lnvalidation::halfLattice(v);for(auto& v:both)v=phonelm::qnn::lnvalidation::halfLattice(v);
+    double ei=phonelm::qnn::lnvalidation::errors(roundedInput,actual).absolute,eo=phonelm::qnn::lnvalidation::errors(roundedOutput,actual).absolute,eb=phonelm::qnn::lnvalidation::errors(both,actual).absolute;
+    std::printf("mmmetric,%s,%d,%s,%u,m=%u,k=%u,n=%u,abs=%.12g,rms=%.12g,relative=%.12g,fp_abs=%.12g,ideal_abs=%.12g,input_half_model=%.12g,output_half_model=%.12g,both_half_model=%.12g,hash=%016llx,input_hash=%016llx,gate=%d,extra002=%d\n",s.name,copied,c.name.c_str(),control,m,k,n,e.absolute,e.rms,e.relative,f.absolute,idealError,ei,eo,eb,(unsigned long long)hashWords(actual),(unsigned long long)hashWords(bb,hashWords(aa)),pass,e.absolute<=.02);
    }
   }
  }
