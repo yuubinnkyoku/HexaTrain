@@ -40,7 +40,7 @@ std::string layerNormRedesignCheck(){
   // Direct LayerNorm is a forward-only isolation, not a backward candidate.
   for(uint32_t d:{8u,16u,32u,64u,128u}){Runtime p;RuntimeOptions o;o.captureQnnCallback=false;o.qnnLogLevel=2;p.setOptions(o);std::string e;
     if(!p.initialize(QnnBackendKind::HTP,e)||!p.prepareLayerNorm(1,2,d,1e-5f,e))return failure("ln_direct",e,p);
-    for(const auto& c:redesignCases(d)){std::vector<float> out;if(!p.executeLayerNorm(c.x,out,e))return failure("ln_direct_execute",e,p);++calls;
+    for(const auto& c:redesignCases(d)){std::vector<float> out(c.x.size(),std::numeric_limits<float>::quiet_NaN());if(!p.executeLayerNorm(c.x,out,e))return failure("ln_direct_execute",e,p);++calls;
       metric("DIRECT_FORWARD_ONLY",d,c.name,"xhat",doubleReference(c,d).xhat,out);}
     r<<p.apiTraceSummary()<<p.diagnostics();
   }

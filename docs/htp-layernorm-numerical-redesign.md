@@ -105,6 +105,9 @@ constantで**0.04788665352**。いずれも0.02より大きい。
 この格子制約を保つ最終出力では、途中計算をexactにしてもgateに到達しない。
 SCALE8のconstant dX errorは0.04788665352まで改善したが、なおFAILである。
 より高精度なdXの生成・保存経路が必要であり、許容誤差の拡大やupstream縮小を解決策にしない。
+最終reviewで、診断用格子距離helperのrange外処理を「IEEE変換のInf」から「最も近い有限endpoint」へ修正した。
+±65505/1e8のHost edge testsを追加。測定matrixのideal/finite HTP dXは全て±65504内で、
+今回の格子下限やdevice recordsに影響しない。これはmodel値をclampする処理ではない。
 
 ### 大offsetの情報消失
 
@@ -260,9 +263,11 @@ accuracy成立後に行うべきpaired finalization/time、RSS/peak、full-step 
 | --- | --- |
 | pre-device Fast | PASS、53.5s（最初のFast77.8sもPASS） |
 | report/export後のFast | PASS、61.0s。privacy/diff/parser、通常host/JVM gate |
+| 最終review Fast | PASS、54.1s。格子helper edge補強後。100-case oracle metricsはbyte一致 |
 | Qnn gate | PASS、633.9s。pinned check、全Host258.8s、build366.1s、audit3.5s。optional inventoryはadvisory、core complete |
 | 最終Host | PASS、277.6s。100-case independent/dynamic gradientsとFP32 oracle、shape、optimizer/registry/checkpoint/resume、既存diagnostic/parity battery |
 | 新suite PRIMARY / INDEPENDENT_REPEAT | **accuracy FAIL**、各1,326/1,326 QNN成功、failure0、fallback0 |
+| 最終Device legacy backward | PASS、63.9s、BACKGROUND_CORRECTNESS。旧0.005低分散upstream fixtureの合格であり、新accuracy FAILを置き換えない |
 | headless build / installed APK / foreground | pinned build/audit、同一APK identity確認、両process focus takeover0 |
 | thermal / storage | 両process thermal0、battery temperature34°C、Host20GiB/Device12GiB launch gateを維持 |
 | exporter | typed allow-list SelfTest、2 private reports検証、独立再exportのbyte hash一致 |
@@ -287,6 +292,7 @@ optimizer/data cursor/storage/thermal/QNN/HVXをfail-closedで確認する。
 
 両新device runsのexact sourceは`29da9599f84ae171cc7b897714c08e21a50b3e46`。
 そのcommitに事前criteriaと候補実装を保存。final docs/exportのcommitはGit履歴とprivate最終identityで解決。
+public report/export確定commitは`4f20bc313c626a43dfbeb923a831aa237b421e14`。
 原experiment `6bca2a7a24f04f8b8b2d4084feb337a12c21e00a`、旧investigation
 `1a57e3ae214fd320004b8f9f32715ab86f50c986`、旧validation `bc6b977482fdf3e355a6b86b50aab53eb46e9c0d`は保護。
 

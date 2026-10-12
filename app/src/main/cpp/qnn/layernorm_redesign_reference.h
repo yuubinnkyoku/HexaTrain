@@ -40,8 +40,11 @@ inline std::vector<std::vector<double>> stages(const Case& c,size_t d){
     for(size_t j=0;j<d;++j){size_t i=r*d+j;t[16][i]=d*t[11][i];t[17][i]=t[16][i]-sum;t[18][i]=ref.xhat[i]*prod;t[19][i]=t[17][i]-t[18][i];}
   }return t;
 }
-// Nearest IEEE binary16 lattice, diagnostic only; not an HTP precision assumption.
-inline double halfLattice(double x){if(!std::isfinite(x)||std::abs(x)>65504)return std::copysign(INFINITY,x);
+// Nearest FINITE IEEE binary16 lattice, diagnostic only; not model arithmetic
+// or an HTP precision assumption. Outside the finite range the nearest finite
+// endpoint, rather than IEEE conversion-to-Inf, defines the distance bound.
+inline double halfLattice(double x){if(!std::isfinite(x))return x;
+  if(std::abs(x)>65504)return std::copysign(65504.,x);
   int exponent=0;std::frexp(std::abs(x),&exponent);double step=std::ldexp(1.,std::max(-24,exponent-11));return std::nearbyint(x/step)*step;}
 inline double latticeLowerBound(const std::vector<double>& x){double e=0;for(double v:x)e=std::max(e,std::abs(v-halfLattice(v)));return e;}
 // Design oracle for a future FP32 DSP kernel, NOT wired to Runtime/training.
