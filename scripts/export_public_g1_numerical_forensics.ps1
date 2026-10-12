@@ -29,6 +29,10 @@ foreach ($item in $index.runs) {
   $p=Get-Content (Join-Path $dir 'forensic-plan.json') -Raw | ConvertFrom-Json
   if ($p.status -eq 'BLOCKED' -or $p.classification -eq 'BLOCKED_UNCLASSIFIED_FAILURE') { throw 'BLOCKED_EVIDENCE_CANNOT_SUPPORT_CLAIM' }
   if ($p.qairt_build_id -ne '2.48.40.260702151143' -or $p.order_hash -ne 'fnv1a64:83f9c96cf10261a0') { throw 'IDENTITY_MISMATCH' }
+  if ($p.source_sha -notmatch '^[a-f0-9]{40}$' -or $p.source_checkpoint_sha256 -notmatch '^[a-f0-9]{64}$' -or
+      $p.from_step -lt 40000 -or $p.to_step -gt 45000 -or $p.to_step -le $p.from_step -or
+      $p.to_step-$p.from_step -gt 2000 -or
+      $p.classification -notin @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STATE','NO_FAILURE_IN_BOUND')) {throw 'INVALID_PUBLIC_PROVENANCE'}
   $row=[ordered]@{label=$item.label; source_sha=$p.source_sha
     from_step=$p.from_step; to_step=$p.to_step; probe_microbatch=$p.probe_microbatch
     centered_scale_mode= $(if($null -eq $p.layernorm_centered_scale){'1'}else{[string]$p.layernorm_centered_scale})
@@ -62,6 +66,8 @@ foreach ($item in $index.runs) {
   $resultFile=Join-Path $dir "seed1-l19-v1024-t32-d64-f128-steps$($p.to_step)-result.txt"
   if(Test-Path $resultFile){
     $r=Get-Content $resultFile -Raw
+    $match=[regex]::Match($r,'(?m)^forensic_first_scaled_tensor=(layer_\d{3}_ln[12]_safe_scale)\s*$')
+    if($match.Success){$row['forensic_first_scaled_tensor']=$match.Groups[1].Value}
     foreach($key in @('forensic_first_scaled_update','forensic_first_scaled_microbatch','forensic_first_scaled_row','forensic_scaled_norm_rows')) {
       $match=[regex]::Match($r,"(?m)^$key=(-?\d+)\s*$")
       if($match.Success){$row[$key]=[long]$match.Groups[1].Value}
@@ -106,7 +112,7 @@ foreach($name in @('unscaled-prefix-repeat-compare','scaled-prefix-compare','ada
   $comparisons+=[ordered]@{label=$name.ToUpperInvariant().Replace('-','_');states=$states}
 }
 $rawParity=@()
-foreach($name in @('healthy-logit-parity','healthy-gradient-parity','adaptive-healthy-logit-parity','adaptive-healthy-gradient-parity')) {
+foreach($name in @('healthy-logit-parity','healthy-gradient-parity','adaptive-healthy-logit-parity','adaptive-healthy-gradient-parity','adaptive-versus-constant-fixed-logit-parity')) {
   $file=Join-Path $base "$name.json"
   if(-not(Test-Path $file)){continue}
   $v=Get-Content $file -Raw|ConvertFrom-Json

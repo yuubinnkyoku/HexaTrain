@@ -5,6 +5,9 @@ param(
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{64}$')][string]$CheckpointSha256,
   [Parameter(Mandatory=$true)][ValidateRange(40000,44999)][int]$FromStep,
   [Parameter(Mandatory=$true)][ValidateRange(40001,45000)][int]$ToStep,
+  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
+  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
+  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,
   [ValidateSet('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE','ALL_LAYER_NORM_SQUARES')][string]$TapScope='NONE',
   [ValidateRange(0,18)][int]$LayerIndex=18,
   [ValidateRange(-1,7)][int]$ProbeBatch=-1,
@@ -14,9 +17,11 @@ param(
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
-$sdk='C:\Qualcomm\AIStack\QAIRT\2.48.40.260702'
-$buildId='2.48.40.260702151143'
-$hexagon='C:\Qualcomm\Hexagon_SDK\6.6.0.0'
+$sdk=$QairtSdkRoot
+$buildId=$ExpectedBuildId
+$hexagon=$HexagonSdkRoot
+. (Join-Path $PSScriptRoot 'qairt_version.ps1')
+Assert-PhoneLmQairtPinnedArguments -SdkRoot $sdk -ExpectedBuildId $buildId
 if ($ToStep -le $FromStep -or $ToStep-$FromStep -gt 2000) { throw 'FORENSIC_BOUND_EXCEEDED' }
 if ($ProbeBatch -ge 0 -and $ToStep -ne $FromStep+1) { throw 'FIXED_PROBE_MUST_BE_ONE_UPDATE_BOUND' }
 if ($CenteredScale -ne '1' -and $ProbeBatch -lt 0 -and $FromStep -ne 40000) { throw 'SCALED_TRAJECTORY_MUST_FORK_PROTECTED_40K' }
@@ -65,6 +70,9 @@ $ledger=[ordered]@{
   tap_scope=$TapScope; layer_index=$LayerIndex; status='RUNNING'; classification='UNRESOLVED'
   probe_microbatch=$ProbeBatch
   layernorm_centered_scale=$CenteredScale; independent_variable=$(if($CenteredScale -eq '1'){'Observation scope only'}else{'LayerNorm range scaling; optimizer LR unchanged'})
+  model=@{architecture='G1';vocabulary=1024;tokens=32;dimension=64;ffn=128;layers=19;heads=2;parameters=760960;seed=1;batch=8}
+  optimizer=@{muon_backend='HVX_W8';ns_steps=5;momentum=0.95;nesterov=$true;aux_adam=$true;weight_decay=0;gradient_clipping=$false}
+  lr_schedule=@{kind='linear_decay';decay_start=4000;decay_end=200000;muon_peak=0.0075;muon_terminal=(0.0075*0.00015/0.0033);aux_peak=0.0033;aux_terminal=0.00015}
   qairt_build_id=$buildId; apk_sha256=(Get-FileHash $apk).Hash.ToLowerInvariant()
   hexagon_manifest_sha256=$hexManifestHash; hexagon_compiler_sha256=$hexCompilerHash
   device_identity_private=$device.Serial; host_free_bytes=$hostFree; device_free_bytes=$deviceFree
