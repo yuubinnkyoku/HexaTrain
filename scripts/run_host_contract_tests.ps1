@@ -77,6 +77,14 @@ Invoke-PhoneLmHostCppCompile -Label "Independent LayerNorm double/FP32 gradients
 Invoke-PhoneLmHostCppRun -Label "Independent LayerNorm double/FP32 gradients" `
     -Executable $LayerNormReferenceExecutable
 
+$LayerNormOracleExecutable = Join-Path $OutputDirectory "layernorm_anchored_fp32_oracle_test.exe"
+Invoke-PhoneLmHostCppCompile -Label "LayerNorm anchored FP32 design oracle (not DSP)" `
+    -Output $LayerNormOracleExecutable `
+    -Sources @(Join-Path $Root "host_tests\layernorm_anchored_fp32_oracle_test.cpp") `
+    -IncludeDirs @($CppInclude)
+Invoke-PhoneLmHostCppRun -Label "LayerNorm anchored FP32 design oracle (not DSP)" `
+    -Executable $LayerNormOracleExecutable
+
 # Headwise G1 gate capacity / identity contract.
 $HeadwiseGateExecutable = Join-Path $OutputDirectory "headwise_g1_gate_test.exe"
 Invoke-PhoneLmHostCppCompile -Label "Headwise G1 gate host test" `

@@ -10,14 +10,14 @@ template<class T> struct Result {
   std::vector<T> mean, variance, inverse, xhat, y, dx, dg, db;
 };
 template<class T> Result<T> reference(const std::vector<T>& x, const std::vector<T>& dy,
-    const std::vector<T>& gamma, const std::vector<T>& beta, size_t d, T epsilon, bool scaled=false) {
+    const std::vector<T>& gamma, const std::vector<T>& beta, size_t d, T epsilon, bool scaled=false, bool dynamic=false) {
   Result<T> o; const size_t rows=x.size()/d;
   o.mean.resize(rows); o.variance.resize(rows); o.inverse.resize(rows);
   o.xhat.resize(x.size()); o.y.resize(x.size()); o.dx.resize(x.size()); o.dg.assign(d,0); o.db.assign(d,0);
   for(size_t r=0;r<rows;++r){
     T mean=0; for(size_t j=0;j<d;++j) mean+=x[r*d+j]; mean/=T(d);
     T vmax=0; for(size_t j=0;j<d;++j) vmax=std::max(vmax,std::abs(x[r*d+j]-mean));
-    T s=scaled && vmax>T(255.875)?T(.5):T(1), variance=0;
+    T s=dynamic?T(128)/std::max(T(128),vmax):(scaled && vmax>T(255.875)?T(.5):T(1)), variance=0;
     for(size_t j=0;j<d;++j){T c=s*(x[r*d+j]-mean);variance+=c*c;} variance/=T(d);
     T inv=s/std::sqrt(variance+epsilon*s*s), sum=0, prod=0;
     o.mean[r]=mean;o.variance[r]=variance/(s*s);o.inverse[r]=inv;
@@ -60,10 +60,10 @@ template<class T> std::vector<T> cast(const std::vector<float>& v){return {v.beg
 inline Result<double> doubleReference(const Case& c,size_t d,bool scaled=false){
  return reference(cast<double>(c.x),cast<double>(c.dy),cast<double>(c.gamma),cast<double>(c.beta),d,1e-5,scaled);
 }
-inline double finiteDifferenceError(const Case& c,size_t d,double h,bool scaled){
+inline double finiteDifferenceError(const Case& c,size_t d,double h,bool scaled,bool dynamic=false){
  auto x=cast<double>(c.x),dy=cast<double>(c.dy),g=cast<double>(c.gamma),b=cast<double>(c.beta);
- auto analytic=reference(x,dy,g,b,d,1e-5,scaled);double maxError=0;
- auto loss=[&](){auto o=reference(x,dy,g,b,d,1e-5,scaled);double l=0;for(size_t i=0;i<x.size();++i)l+=o.y[i]*dy[i];return l;};
+ auto analytic=reference(x,dy,g,b,d,1e-5,scaled,dynamic);double maxError=0;
+ auto loss=[&](){auto o=reference(x,dy,g,b,d,1e-5,scaled,dynamic);double l=0;for(size_t i=0;i<x.size();++i)l+=o.y[i]*dy[i];return l;};
  for(int variable=0;variable<3;++variable){auto& v=variable==0?x:variable==1?g:b;
   const auto& a=variable==0?analytic.dx:variable==1?analytic.dg:analytic.db;
   for(size_t i=0;i<v.size();++i){double old=v[i];v[i]=old+h;double plus=loss();v[i]=old-h;double minus=loss();v[i]=old;

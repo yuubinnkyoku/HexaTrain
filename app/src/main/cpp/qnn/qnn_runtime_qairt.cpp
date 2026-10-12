@@ -281,6 +281,7 @@ struct Runtime::Impl {
         uint32_t lastAxis = 1, rowAxis = 0;
         float scale = 1, epsilon = 1e-5f, halfEpsilon = 2.5e-6f;
         float threshold = 255.875f, half = .5f, d = 1, invD = 1;
+        float rangeTarget = 128.f;
     } layerNormStability;
     struct LayerNormBackwardGraph {
         Qnn_GraphHandle_t graph = nullptr;

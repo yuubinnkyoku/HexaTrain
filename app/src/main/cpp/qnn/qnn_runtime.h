@@ -420,7 +420,11 @@ public:
     bool prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
                                   float epsilon, std::string& error);
     bool prepareLayerNormStability(uint32_t rows, uint32_t dimension,
-                                   float epsilon, bool adaptive, std::string& error, bool observe = true);
+                                   float epsilon, bool adaptive, std::string& error, bool observe = true,
+                                   uint32_t diagnosticVariant = 0);
+    bool prepareLayerNormArithmetic(uint32_t rows, uint32_t dimension, std::string& error);
+    bool executeLayerNormArithmetic(const std::vector<float>& a, const std::vector<float>& b,
+                                   std::vector<std::vector<float>>& outputs, std::string& error);
     bool executeLayerNormStability(const std::vector<float>& input,
                                    const std::vector<float>& upstream,
                                    const std::vector<float>& gamma,

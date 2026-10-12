@@ -131,6 +131,7 @@ enum class ExecutionMode : int {
     // this is the HTP-native model-health metric.
     QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL = 102,
     QNN_HTP_LAYER_NORM_STABILITY_VALIDATION = 103,
+    QNN_HTP_LAYER_NORM_REDESIGN = 104,
 };
 
 const char* executionModeName(ExecutionMode mode);

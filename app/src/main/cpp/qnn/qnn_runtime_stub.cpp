@@ -94,7 +94,9 @@ bool Runtime::executeLayerNorm(const std::vector<float>&,std::vector<float>&,std
 bool Runtime::prepareElementwiseSquare(uint32_t,std::string&e){e="QNN_DISABLED: elementwise square unavailable";return false;}
 bool Runtime::executeElementwiseSquare(const std::vector<float>&,std::vector<float>&,std::string&e){e="QNN_DISABLED: elementwise square unavailable";return false;}
 bool Runtime::prepareLayerNormBackward(uint32_t,uint32_t,float,std::string&e){e="QNN_DISABLED: LayerNorm backward unavailable";return false;}
-bool Runtime::prepareLayerNormStability(uint32_t,uint32_t,float,bool,std::string&e,bool){e="QNN_DISABLED: LayerNorm stability unavailable";return false;}
+bool Runtime::prepareLayerNormStability(uint32_t,uint32_t,float,bool,std::string&e,bool,uint32_t){e="QNN_DISABLED: LayerNorm stability unavailable";return false;}
+bool Runtime::prepareLayerNormArithmetic(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: LayerNorm arithmetic unavailable";return false;}
+bool Runtime::executeLayerNormArithmetic(const std::vector<float>&,const std::vector<float>&,std::vector<std::vector<float>>&,std::string&e){e="QNN_DISABLED: LayerNorm arithmetic unavailable";return false;}
 bool Runtime::executeLayerNormStability(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,LayerNormStabilityOutputs&,std::string&e){e="QNN_DISABLED: LayerNorm stability unavailable";return false;}
 bool Runtime::executeLayerNormBackward(const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,const std::vector<float>&,LayerNormBackwardOutputs&,std::string&e){e="QNN_DISABLED: LayerNorm backward unavailable";return false;}
 bool Runtime::prepareSoftmax(uint32_t,uint32_t,std::string&e){e="QNN_DISABLED: Softmax unavailable";return false;}

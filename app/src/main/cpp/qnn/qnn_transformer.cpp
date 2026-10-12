@@ -4,11 +4,13 @@
 #include "qnn_transformer.h"
 #include "qnn_runtime.h"
 #include "layernorm_stability_reference.h"
+#include "layernorm_redesign_reference.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <numeric>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -951,6 +953,7 @@ std::string tinyTransformerCheck() {
   return report.str();
 }
 #include "qnn_layernorm_stability_check.inc"
+#include "qnn_layernorm_redesign_check.inc"
 } // namespace
 std::string runTransformerExperiment(ExecutionMode mode) {
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_CHECK)
@@ -969,6 +972,8 @@ std::string runTransformerExperiment(ExecutionMode mode) {
     return layerNormBackwardCheck();
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_STABILITY_VALIDATION)
     return layerNormStabilityCheck();
+  if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_REDESIGN)
+    return layerNormRedesignCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "
          "mode\n";
 }

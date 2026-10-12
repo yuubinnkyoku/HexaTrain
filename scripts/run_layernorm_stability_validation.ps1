@@ -2,6 +2,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
   [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
+  [ValidateSet('layernorm-stability','layernorm-redesign')][string]$Suite='layernorm-stability',
   [switch]$SkipBuild,
   [switch]$SkipInstall
 )
@@ -31,17 +32,19 @@ $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%
 if ($line.Count -ne 1) { throw 'DEVICE_STORAGE_STATUS_UNKNOWN' }
 $deviceFree=[long](($line[0] -split '\s+')[3])*1024L
 if ($deviceFree -lt 12GB) { throw 'DEVICE_STORAGE_HEADROOM_LOW' }
-$id='lnvalidation-'+[guid]::NewGuid().ToString('N')
-$directory=Join-Path $root "build/reports/g1-layernorm-validation/$id"
+$prefix=if($Suite -eq 'layernorm-redesign'){'lnredesign'}else{'lnvalidation'}
+$id=$prefix+'-'+[guid]::NewGuid().ToString('N')
+$base=if($Suite -eq 'layernorm-redesign'){'htp-layernorm-redesign'}else{'g1-layernorm-validation'}
+$directory=Join-Path $root "build/reports/$base/$id"
 [IO.Directory]::CreateDirectory($directory)|Out-Null
-$ledger=[ordered]@{schema='LAYER_NORM_VALIDATION_V1';source_sha=$source;run_id_private=$id;
+$ledger=[ordered]@{schema='LAYER_NORM_VALIDATION_V1';suite=$Suite;source_sha=$source;run_id_private=$id;
  qairt_build_id=$ExpectedBuildId;device_identity_private=$device.Serial;host_free_bytes=$hostFree;device_free_bytes=$deviceFree;
  protected_identity_verified=$true;started_utc=[DateTime]::UtcNow.ToString('o');status='RUNNING';failure=$null}
 function Save-Ledger { [IO.File]::WriteAllText((Join-Path $directory 'validation-plan.json'),($ledger|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false)) }
 Save-Ledger
 try {
  & (Join-Path $PSScriptRoot 'run_qnn_headless_tests.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId `
-   -Suite layernorm-stability -RunId $id -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
+   -Suite $Suite -RunId $id -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
    -TestMode BACKGROUND_CORRECTNESS *> (Join-Path $directory 'runner.txt')
  $ledger.status='PASS'
 } catch { $ledger.status='FAIL';$ledger.failure=$_.Exception.Message
