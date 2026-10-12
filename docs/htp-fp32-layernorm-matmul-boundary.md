@@ -9,7 +9,7 @@ branch `investigation/htp-fp32-layernorm-matmul-boundary`。
 - **DSP_LAYERNORM_FORWARD_VERIFIED / DSP_LAYERNORM_BACKWARD_VERIFIED / DSP_LAYERNORM_RESIDUAL_VERIFIED**。
   D64の2×64/32×64と、D8/16/32/64/128の100-case matrixを両row shapeで検証した。
 - **BLOCKED_MATMUL_PRECISION / MATMUL_PRECISION_STAGE_UNRESOLVED**。
-  標準HTP MatMulは5種類のshapeでaccuracy gateを満たさない。Copy/native境界は精度保持する。
+  標準HTP MatMulは5種類のshapeでaccuracy gateを満たさない。Custom間のnative保持はLane Aで確認したが、MatMul内部operandは直接観測していない。
 - full G1 integrationは**UNRESOLVED**。両lane PASSを条件とするone-layer統合へは進まなかった。
   BLOCKED_GRAPH_INTEGRATIONとは分類しない。API/graph接続不能ではなく、MatMul accuracyの問題である。
 
@@ -173,7 +173,7 @@ CPU double dot、逐次FP32 dot（product round32、FMAなし）、HTP outputを
 
 各pathは20 recipes×random/selector/cancellation controls=60 checks。
 各3 process、direct/native計1,800 checksで166/600 FAIL/processが一致した。
-Copyは全2,048 words bit-exact。direct/nativeの最終output hashは全300組で一致した。
+Copyのinput receiptは全2,048 words bit-exact。direct/nativeの最終output hashは全300組で一致した。
 
 | Path | maxAbs vs double（供給したFP32入力） | 理想LN依存からのmaxAbs | FAIL / 60（各direct/native） |
 | --- | ---: | ---: | ---: |
@@ -193,7 +193,9 @@ OneHotは0/1、反復token位置を持つ。checkpoint読込みは不要と判�
 
 ### Precision-loss位置
 
-Custom output storeとnative Copy境界は精度保持。最初の観測損失はstandard MatMulの後。
+Lane AではCustom output storeとnative consumer receiptの一致を確認した。
+Lane BではCopy input receiptが一致し、最初の観測損失はstandard MatMulの出力である。
+このgraph内のCopy store/native/MatMul operand境界を直接観測した証拠とはしない。
 内部operand conversion/accumulation/result storeを直接tapできていない。
 
 FP16 latticeへ丸めたoperandでdouble dotし、FP16 outputへ丸めるcounterfactual modelは
@@ -292,6 +294,7 @@ source/binary/runtime/device identity、independent-process digestを確認し�
 | --- | --- |
 | Fast（Forward source） | PASS、96.7s |
 | Fast（final source/exporter/report） | PASS、92.6s |
+| Fast（追加Copy control/closeout） | PASS、84.3s。追加controlのDevice PASSを意味しない |
 | Qnn profile | PASS、577.3s。Host contracts/shape、100-case double finite differences/FP32 oracle、QNN build/APK audit |
 | QNN+HVX APK build | PASS、66s。W8 headless runnerでfixed APK audit |
 | Muon W8 regression | PASS、114/114、maxAbs1.490116119e-8、relativeL2 4.40269854e-8、cosine1、RPC/finite成功、fallbackfalse |
@@ -308,8 +311,19 @@ build manifestにはsource files SHA256、compiler SHA256、SDK build/architectu
 最終documentation HEADは完了メッセージとprivate final identitiesへ記録し、実機sourceと区別する。
 
 private evidence: ignored `build/reports/htp-fp32-layernorm-matmul/`、`build/fp32-custom/`、同prefix qnn-headless reports。
+主要15 processの実測binary/build manifestは同report配下の`frozen-numerical-build/`にも保存した。
+追加のT32 `Copy → native → Copy → APP_READ` control sourceは
+`163a594d032e31cc0a96c25da75e928d32270da0`。固定toolchainでbuild成功したが、
+実行直前のtop-resumed guardで停止した。read-only確認では端末sleep/top-resumed不明、probe processなし。
+関連実機作業を停止し、このcontrolは**BLOCKED / DEVICE NOT RUN**として保持する。
+3独立processの成功証拠には含めず、主要15 processのsource/binaryと区別する。
+再buildのDSP package hashは変化した。package/kernel source hashesとcompiler hashesは同一だが、
+binary同一性は成立していないため新binaryへ既存数値結果を転用しない。hash変化の原因は未確定。
+この未実行controlとMatMul内部の観測限界を理由に、Lane Bのprecision stage分類を未確定のまま維持する。
 保護5主要artifactsと3 forensic identities（複製を含む5 forensic paths）、全既存branch refs、過去private indexを終了時にも照合した。
 40k checkpointはhashだけ読み、deserializeしていない。100k baseline/41,647/42k evidenceとUNSTABLEは保存。
 source以外のraw tensor、checkpoint、corpus、device identifiers、SDK binaries、private logsはcommitしない。
 Push/PR/merge/main変更、history rewrite、学習updatesは0。
-最終working treeはclean。Host20GiB/Device12GiBとactive runなしをprivate closeoutで再確認する。
+最終working treeはclean。Host20GiBをcloseoutで再確認した。
+主要15 processと追加controlの実行前guardでDevice12GiB/active runなしを確認したが、
+closeout時はsleep/top-resumed不明による実機停止を維持し、完全なDevice安全gate PASSとは報告しない。
