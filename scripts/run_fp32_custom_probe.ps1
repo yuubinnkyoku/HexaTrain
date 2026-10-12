@@ -23,7 +23,11 @@ if($d.Serial -ne $plan.device_serial_private){throw 'PHYSICAL_IDENTITY_MISMATCH'
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $d.Endpoint
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
-function Adb([string[]]$Arguments){$r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments;return $r.Text}
+function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+ $r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments
+ if($r.ExitCode -ne 0){throw 'ADB_OPERATION_FAILED'}
+ return $r.Text
+}
 $df=Adb @('shell','df','-k','/data/user/0')
 $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%'})
 if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){throw 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'}
@@ -41,7 +45,7 @@ $hashes=@{}
 foreach($file in $files){
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
  Adb @('push',$file,$remote)|Out-Null
- $remoteHash=(Adb @('shell','sha256sum',"$remote/$name") -split '\s+')[0]
+ $remoteHash=((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0]
  if($remoteHash -ne $hash){throw 'STAGED_ARTIFACT_MISMATCH'};$hashes[$name]=$hash
 }
 Adb @('shell','chmod','700',"$remote/fp32_probe")|Out-Null
