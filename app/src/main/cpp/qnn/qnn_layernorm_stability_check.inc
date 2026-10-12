@@ -1,6 +1,7 @@
 // Fixed criteria, chosen before device execution from the existing LN tests:
 // analytic/numeric 5e-4; all gradients 2e-2; ordinary normalized forward 2e-3.
-// Low variance forward retains the previous primitive-composition 6e-2 bound;
+// Low variance forward has a new 6e-2 diagnostic bound fixed before measurement,
+// based on the historical reported 5.873e-2 error (not an old acceptance gate);
 // upstream is deliberately NOT reduced (previous test multiplied it by .005).
 std::string layerNormStabilityCheck() {
   using namespace lnvalidation;
