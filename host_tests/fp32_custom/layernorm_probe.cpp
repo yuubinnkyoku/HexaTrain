@@ -15,6 +15,18 @@ void checkReceipt(const std::vector<uint32_t>& r,unsigned kind,const std::vector
 }
 int main(int argc,char** argv){
  if(argc!=2)return 1;std::string mode=argv[1];initializeProbe();
+ if(mode=="copyNative"){
+  DiagnosticGraph g("gradient_native_copy_control");auto x=g.tensor("gradient",QNN_TENSOR_TYPE_APP_WRITE,{32,64});
+  auto n=g.tensor("native",QNN_TENSOR_TYPE_NATIVE,{32,64}),y=g.tensor("readback",QNN_TENSOR_TYPE_APP_READ,{32,64});
+  auto a=g.tensor("a_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,6152},QNN_DATATYPE_INT_32),b=g.tensor("b_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,6152},QNN_DATATYPE_INT_32);
+  g.node("producer","Copy","HexaFp32",{x},{n,a});g.node("consumer","Copy","HexaFp32",{n},{y,b});g.finalize();
+  for(auto c:ln::redesignCases(64)){
+   c=expand(c,64,32);auto host=ln::anchoredFp32Oracle(c,64);auto gradient=host.dx;for(unsigned j=0;j<2048;++j)gradient[j]+=c.dy[j];
+   auto out=g.run({{x,gradient}});unsigned bad=0;for(unsigned id:{a,b}){auto& q=out[id];if(q[0]!=0x48383100||!q[1]||q[2]!=2048||q[3]!=1){std::puts("RECEIPT_FAIL");return 3;}for(unsigned j=0;j<2048;++j)bad+=(q[8+j]!=word(gradient[j])||q[8+2048+j]||q[8+4096+j]);}
+   for(unsigned j=0;j<2048;++j)bad+=out[y][j]!=word(gradient[j]);failures+=bad!=0;
+   std::printf("copycontrol,%s,words=2048,bit_mismatch=%u,hash=%016llx\n",c.name.c_str(),bad,(unsigned long long)hashWords(decode(out[y])));
+  }closeProbe();std::printf("summary,copyNative,required_failures=%u,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0\n",failures);return failures?4:0;
+ }
  if(mode=="matmul"){unsigned failed=laneB();closeProbe();return failed?4:0;}
  bool backward=mode!="lnForward",residual=mode.find("Residual")!=std::string::npos,fused=mode=="lnResidualFused",tap=mode=="lnBackward"||mode=="lnResidualTap";
  std::vector<unsigned> dimensions=mode=="lnMatrix"?std::vector<unsigned>{8,16,32,64,128}:std::vector<unsigned>{64};

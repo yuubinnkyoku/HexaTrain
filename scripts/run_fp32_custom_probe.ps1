@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -39,7 +39,7 @@ function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arg
 $df=Adb @('shell','df','-k','/data/user/0')
 $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%'})
 if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){throw 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'}
-$research=$Variant -match '^ln|^matmul'
+$research=$Variant -match '^ln|^matmul|^copyNative'
 $executable=if($research){'layernorm_probe'}else{'fp32_probe'}
 $id='customfp32-'+[guid]::NewGuid().ToString('N')
 $reportBase=if($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
