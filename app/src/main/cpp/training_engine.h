@@ -132,6 +132,7 @@ enum class ExecutionMode : int {
     QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_EVAL = 102,
     QNN_HTP_LAYER_NORM_STABILITY_VALIDATION = 103,
     QNN_HTP_LAYER_NORM_REDESIGN = 104,
+    QNN_HTP_HVX_BOUNDARY = 105,
 };
 
 const char* executionModeName(ExecutionMode mode);

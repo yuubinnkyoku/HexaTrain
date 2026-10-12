@@ -877,6 +877,7 @@ class HeadlessDeviceTestRunner {
         "layernorm-backward" -> ExecutionMode.QNN_HTP_LAYER_NORM_BACKWARD_CHECK
         "layernorm-stability" -> ExecutionMode.QNN_HTP_LAYER_NORM_STABILITY_VALIDATION
         "layernorm-redesign" -> ExecutionMode.QNN_HTP_LAYER_NORM_REDESIGN
+        "htp-hvx-boundary" -> ExecutionMode.QNN_HTP_HVX_BOUNDARY
         "transformer-mse" -> ExecutionMode.QNN_HTP_TINY_TRANSFORMER_TRAINING_STEP
         "tiny-lm-ce" -> ExecutionMode.QNN_HTP_CROSS_ENTROPY_CHECK
         "sgd-one-step" -> ExecutionMode.QNN_HTP_SGD_CHECK

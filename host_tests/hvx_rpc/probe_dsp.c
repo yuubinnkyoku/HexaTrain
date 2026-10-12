@@ -2,6 +2,7 @@
 // Copyright 2026 yuubinnkyoku
 // Research wrapper only; all QHL implementation is linked from the local SDK.
 #include "hexatrain_hvx_probe.h"
+#include "fp32_boundary_fixture.h"
 #include "original_qhl.h"
 #include <HAP_compute_res.h>
 #include <HAP_power.h>
@@ -357,6 +358,29 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
       (mode == 7 && metadataLen < 64))
     return 1003;
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
+  // Default-off diagnostic using the existing float-sequence ABI. No arithmetic.
+  if (mode == 8) {
+    if ((m != 0 && m != 1) || k != leftLen || n != 0 ||
+        leftLen < 1 || leftLen > 4096 || rightLen != leftLen || resultLen != leftLen)
+      return 1010;
+    const uint64_t started = HAP_perf_get_time_us();
+    int mismatches = 0;
+    for (int i = 0; i < leftLen; ++i) {
+      uint32_t actual, expected;
+      memcpy(&actual, left + i, 4);
+      if (m == 1) expected = hexatrain_boundary_bits((unsigned)i);
+      else memcpy(&expected, right + i, 4);
+      mismatches += actual != expected;
+      memcpy(result + i, &actual, 4);
+    }
+    metadata[0] = 0x46503332;
+    metadata[1] = mismatches;
+    metadata[2] = leftLen;
+    metadata[3] = (int)(HAP_perf_get_time_us() - started);
+    metadata[4] = (int)((uintptr_t)left & 127);
+    metadata[5] = (int)((uintptr_t)result & 127);
+    return mismatches ? 1011 : 0;
+  }
   const int wrapper_profile = mode == 6;
   const uint64_t validation_start = wrapper_profile ? HAP_perf_get_time_us() : 0;
   if (mode == 0) {

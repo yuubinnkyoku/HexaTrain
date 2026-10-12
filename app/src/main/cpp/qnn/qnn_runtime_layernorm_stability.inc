@@ -116,6 +116,37 @@ bool Runtime::prepareLayerNormStability(uint32_t rows, uint32_t dimension,
   return true;
 }
 
+// Boundary diagnostic: one node, no precision-config re-exploration.
+bool Runtime::prepareFp32Boundary(uint32_t operation,std::string& error) {
+  if(!impl_||!impl_->context||operation>3||impl_->layerNormStability.graph){error="BOUNDARY_CONFIG";return false;}
+  auto& g=impl_->layerNormStability;g.rows=2;g.dimension=64;
+  auto status=impl_->api.graphCreate(impl_->context,"fp32_boundary",nullptr,&g.graph);++metrics_.graphCreateCount;
+  if(status!=QNN_SUCCESS){error="BOUNDARY_CREATE="+std::to_string(QNN_GET_ERROR_CODE(status));return false;}
+  g.tensors.reserve(3);g.names.reserve(3);g.dims.reserve(3);
+  const int count=operation==0?2:3;
+  for(int i=0;i<count;++i){g.names.push_back("boundary_"+std::to_string(i));g.dims.push_back({2,64});g.tensors.push_back(QNN_TENSOR_INIT);
+    tensor(g.tensors.back(),g.names.back().c_str(),i==count-1?QNN_TENSOR_TYPE_APP_READ:QNN_TENSOR_TYPE_APP_WRITE,g.dims.back().data(),QNN_DATATYPE_FLOAT_32,2);
+    status=impl_->api.tensorCreateGraphTensor(g.graph,&g.tensors.back());if(status!=QNN_SUCCESS){error="BOUNDARY_TENSOR="+std::to_string(QNN_GET_ERROR_CODE(status));return false;}}
+  g.outputs.push_back(count-1);
+  std::unordered_set<std::string> names;
+  TransformerTrainingLayerNormBuilder b{impl_->api,g.graph,g.tensors.data(),0,0,0,0,0,0,error,g.nodes,&names};
+  bool ok=operation==0?b.unary("reshape",QNN_OP_RESHAPE,0,1,"reshape"):
+    b.binary("consumer",operation==1?QNN_OP_ELEMENT_WISE_ADD:operation==2?QNN_OP_ELEMENT_WISE_MULTIPLY:QNN_OP_ELEMENT_WISE_SUBTRACT,0,1,2,"consumer");
+  if(!ok)return false;
+  status=impl_->api.graphFinalize(g.graph,nullptr,nullptr);++metrics_.graphFinalizeCount;
+  if(status!=QNN_SUCCESS){error="BOUNDARY_FINALIZE="+std::to_string(QNN_GET_ERROR_CODE(status));return false;}return true;
+}
+bool Runtime::executeFp32Boundary(const std::vector<float>& input,const std::vector<float>& rhs,std::vector<float>& output,std::string& error){
+  auto& g=impl_->layerNormStability;
+  if(!g.graph||input.size()!=128||rhs.size()!=128||g.outputs.size()!=1){error="BOUNDARY_SHAPE";return false;}
+  const uint32_t count=uint32_t(g.tensors.size()-1);Qnn_Tensor_t inputs[2]{g.tensors[0],g.tensors[1]};
+  inputs[0].v1.clientBuf={const_cast<float*>(input.data()),512};if(count==2)inputs[1].v1.clientBuf={const_cast<float*>(rhs.data()),512};
+  output.assign(128,std::numeric_limits<float>::quiet_NaN());auto out=g.tensors.back();out.v1.clientBuf={output.data(),512};
+  auto status=impl_->api.graphExecute(g.graph,inputs,count,&out,1,nullptr,nullptr);++metrics_.graphExecuteCount;
+  recordGraphExecuteResult(QNN_GET_ERROR_CODE(status),QNN_GET_ERROR_CODE(status),status==QNN_SUCCESS);
+  if(status!=QNN_SUCCESS){error="BOUNDARY_EXECUTE="+std::to_string(QNN_GET_ERROR_CODE(status));return false;}return true;
+}
+
 // Independent primitive probe; no LayerNorm composition or CPU execution path.
 bool Runtime::prepareLayerNormArithmetic(uint32_t rows,uint32_t dimension,std::string& error) {
   if(!impl_||!impl_->context||!rows||rows>64||!dimension||dimension>256||impl_->layerNormStability.graph){error="LN_ARITH_CONFIG";return false;}

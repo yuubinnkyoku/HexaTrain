@@ -14,6 +14,13 @@
 #include <map>
 #include <sstream>
 #include <vector>
+#include <chrono>
+#if PHONELM_ENABLE_HVX_MUON
+#include "hexatrain_hvx_probe.h"
+#include <remote.h>
+#include <rpcmem.h>
+#include "../../../../../host_tests/hvx_rpc/fp32_boundary_fixture.h"
+#endif
 
 namespace phonelm::qnn {
 namespace {
@@ -955,6 +962,7 @@ std::string tinyTransformerCheck() {
 }
 #include "qnn_layernorm_stability_check.inc"
 #include "qnn_layernorm_redesign_check.inc"
+#include "qnn_hvx_boundary_check.inc"
 } // namespace
 std::string runTransformerExperiment(ExecutionMode mode) {
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_CHECK)
@@ -973,6 +981,7 @@ std::string runTransformerExperiment(ExecutionMode mode) {
     return layerNormBackwardCheck();
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_STABILITY_VALIDATION)
     return layerNormStabilityCheck();
+  if (mode == ExecutionMode::QNN_HTP_HVX_BOUNDARY) return hvxBoundaryCheck();
   if (mode == ExecutionMode::QNN_HTP_LAYER_NORM_REDESIGN)
     return layerNormRedesignCheck();
   return "TRANSFORMER_MICRO\nstatus=FAILED\nerror=unsupported transformer "

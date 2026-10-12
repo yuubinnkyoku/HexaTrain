@@ -77,6 +77,11 @@ Invoke-PhoneLmHostCppCompile -Label "Independent LayerNorm double/FP32 gradients
 Invoke-PhoneLmHostCppRun -Label "Independent LayerNorm double/FP32 gradients" `
     -Executable $LayerNormReferenceExecutable
 
+$BoundaryFixtureExecutable = Join-Path $OutputDirectory "fp32_boundary_fixture_test.exe"
+Invoke-PhoneLmHostCppCompile -Label "FP32 raw boundary fixture" -Output $BoundaryFixtureExecutable `
+    -Sources @(Join-Path $Root "host_tests\fp32_boundary_fixture_test.cpp") -IncludeDirs @($CppInclude)
+Invoke-PhoneLmHostCppRun -Label "FP32 raw boundary fixture" -Executable $BoundaryFixtureExecutable
+
 $LayerNormOracleExecutable = Join-Path $OutputDirectory "layernorm_anchored_fp32_oracle_test.exe"
 Invoke-PhoneLmHostCppCompile -Label "LayerNorm anchored FP32 design oracle (not DSP)" `
     -Output $LayerNormOracleExecutable `

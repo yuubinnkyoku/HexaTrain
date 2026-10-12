@@ -2,7 +2,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
   [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
-  [ValidateSet('layernorm-stability','layernorm-redesign')][string]$Suite='layernorm-stability',
+  [string]$HexagonSdkRoot,
+  [ValidateSet('layernorm-stability','layernorm-redesign','htp-hvx-boundary')][string]$Suite='layernorm-stability',
   [switch]$SkipBuild,
   [switch]$SkipInstall
 )
@@ -11,6 +12,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
+if($Suite -eq 'htp-hvx-boundary' -and $HexagonSdkRoot -ne 'C:\Qualcomm\Hexagon_SDK\6.6.0.0'){throw 'EXPLICIT_PINNED_HEXAGON_ROOT_REQUIRED'}
 if (& git -C $root status --porcelain) { throw 'VALIDATION_SOURCE_MUST_BE_COMMITTED' }
 $source=(& git -C $root rev-parse HEAD).Trim()
 $plan=Get-Content (Join-Path $root 'build/reports/g1-long-linear-200k-primary/run-plan.json') -Raw | ConvertFrom-Json
@@ -32,9 +34,9 @@ $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%
 if ($line.Count -ne 1) { throw 'DEVICE_STORAGE_STATUS_UNKNOWN' }
 $deviceFree=[long](($line[0] -split '\s+')[3])*1024L
 if ($deviceFree -lt 12GB) { throw 'DEVICE_STORAGE_HEADROOM_LOW' }
-$prefix=if($Suite -eq 'layernorm-redesign'){'lnredesign'}else{'lnvalidation'}
+$prefix=if($Suite -eq 'htp-hvx-boundary'){'lnboundary'}elseif($Suite -eq 'layernorm-redesign'){'lnredesign'}else{'lnvalidation'}
 $id=$prefix+'-'+[guid]::NewGuid().ToString('N')
-$base=if($Suite -eq 'layernorm-redesign'){'htp-layernorm-redesign'}else{'g1-layernorm-validation'}
+$base=if($Suite -eq 'htp-hvx-boundary'){'htp-hvx-boundary'}elseif($Suite -eq 'layernorm-redesign'){'htp-layernorm-redesign'}else{'g1-layernorm-validation'}
 $directory=Join-Path $root "build/reports/$base/$id"
 [IO.Directory]::CreateDirectory($directory)|Out-Null
 $ledger=[ordered]@{schema='LAYER_NORM_VALIDATION_V1';suite=$Suite;source_sha=$source;run_id_private=$id;
@@ -44,7 +46,7 @@ function Save-Ledger { [IO.File]::WriteAllText((Join-Path $directory 'validation
 Save-Ledger
 try {
  & (Join-Path $PSScriptRoot 'run_qnn_headless_tests.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId `
-   -Suite $Suite -RunId $id -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
+   -Suite $Suite -RunId $id -HexagonSdkRoot $HexagonSdkRoot -SkipBuild:$SkipBuild -SkipInstall:$SkipInstall `
    -TestMode BACKGROUND_CORRECTNESS *> (Join-Path $directory 'runner.txt')
  $ledger.status='PASS'
 } catch { $ledger.status='FAIL';$ledger.failure=$_.Exception.Message

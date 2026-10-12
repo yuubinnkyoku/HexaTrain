@@ -4,7 +4,7 @@ param(
     [string]$HexagonSdkRoot,
     [ValidateSet(
         "device-probe", "qnn-forward", "linear", "mlp-split", "mlp-fused", "mlp-full-step",
-        "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward", "layernorm-stability", "layernorm-redesign",
+        "transformer-forward", "softmax-backward", "attention-backward", "layernorm-backward", "layernorm-stability", "layernorm-redesign", "htp-hvx-boundary",
         "transformer-mse", "tiny-lm-ce", "sgd-one-step", "momentum-one-step", "adam-one-step",
         "tiny-lm-stability", "phase01-adam", "generation-diagnostics", "api-trace", "callback-bound",
         "qnn-reproducibility", "qnn-graph-bisection",
@@ -115,7 +115,7 @@ if ($Suite -eq "nicopedia-parity") {
 if (-not (Test-Path -LiteralPath $QairtSdkRoot -PathType Container)) {
     throw "QAIRT SDK root does not exist."
 }
-if ($Suite -eq "hvx-muon-optimizer-benchmark" -and
+if ($Suite -in @("hvx-muon-optimizer-benchmark", "htp-hvx-boundary") -and
     ([string]::IsNullOrWhiteSpace($HexagonSdkRoot) -or
      -not (Test-Path -LiteralPath $HexagonSdkRoot -PathType Container))) {
     throw "HVX Muon benchmark requires an explicit existing HexagonSdkRoot."
@@ -251,7 +251,7 @@ try {
             "-Pphonelm.enableQnn=true", "-Pqairt.sdkRoot=$QairtSdkRoot",
             "-Pqairt.expectedBuildId=$ExpectedBuildId", "--no-daemon"
         )
-        if ($Suite -eq "hvx-muon-optimizer-benchmark") {
+        if ($Suite -in @("hvx-muon-optimizer-benchmark", "htp-hvx-boundary")) {
             $gradleArguments += @(
                 "-Pphonelm.enableHvxMuon=true",
                 "-Phexagon.sdkRoot=$HexagonSdkRoot"
@@ -379,6 +379,9 @@ try {
             "runtime_backend_build_id=v$ExpectedBuildId", "backend_build_id_match=true",
             "backend_requested=HTP", "cpu_fallback=false"
         )
+    }
+    if ($Suite -eq "htp-hvx-boundary") {
+        $requiredEvidence += @("rpc_status_success=true", "transport_mismatch=0", "training_updates=0", "fallback=false")
     }
     foreach ($required in $requiredEvidence) {
         if ($deviceReport -notmatch "(?m)^$([regex]::Escape($required))$") {

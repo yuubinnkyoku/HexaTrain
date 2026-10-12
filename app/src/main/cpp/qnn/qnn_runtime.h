@@ -422,6 +422,8 @@ public:
     bool prepareLayerNormStability(uint32_t rows, uint32_t dimension,
                                    float epsilon, bool adaptive, std::string& error, bool observe = true,
                                    uint32_t diagnosticVariant = 0);
+    bool prepareFp32Boundary(uint32_t operation, std::string& error);
+    bool executeFp32Boundary(const std::vector<float>& input, const std::vector<float>& rhs, std::vector<float>& output, std::string& error);
     bool prepareLayerNormArithmetic(uint32_t rows, uint32_t dimension, std::string& error);
     bool executeLayerNormArithmetic(const std::vector<float>& a, const std::vector<float>& b,
                                    std::vector<std::vector<float>>& outputs, std::string& error);

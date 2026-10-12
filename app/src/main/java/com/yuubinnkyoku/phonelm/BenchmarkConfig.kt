@@ -111,6 +111,7 @@ enum class ExecutionMode(val nativeCode: Int) {
     QNN_HTP_TINY_LANGUAGE_MODEL_NICOPEDIA_GENERATE(101),
     QNN_HTP_LAYER_NORM_STABILITY_VALIDATION(103),
     QNN_HTP_LAYER_NORM_REDESIGN(104),
+    QNN_HTP_HVX_BOUNDARY(105),
     ;
 
     companion object {
