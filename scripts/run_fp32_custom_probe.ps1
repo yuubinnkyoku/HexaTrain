@@ -67,7 +67,7 @@ $ledger=[ordered]@{source_sha=(& git -C $root rev-parse HEAD).Trim();branch=(& g
 [IO.File]::WriteAllText("$report/identity-private.json",($ledger|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 if($takeovers){throw 'FOCUS_TAKEOVER'}
 $stdout=Get-Content "$report/stdout.txt" -Raw
-if($stdout -notmatch 'summary,' -or $stdout -match 'RECEIPT_FAIL|NONFINITE|INPUT_MUTATION'){throw 'CUSTOM_PROBE_INCOMPLETE_OR_UNSAFE'}
+if($stdout -notmatch '(?m)^summary,' -or $stdout -match '(?m)^(?:\w*RECEIPT_FAIL|\w*NONFINITE\w*|INPUT_MUTATION)'){throw 'CUSTOM_PROBE_INCOMPLETE_OR_UNSAFE'}
 Write-Host "variant=$Variant exit=$($process.ExitCode) private_report=$report"
 Select-String -Path "$report/stdout.txt" -Pattern '^summary,|^raw_copy,|^result,' | ForEach-Object {$_.Line}
 if($Variant -notin @('standardAdd','standardMultiply','htpAdd','htpMultiply') -and $process.ExitCode -ne 0){throw 'CUSTOM_ACCURACY_NOT_ESTABLISHED'}
