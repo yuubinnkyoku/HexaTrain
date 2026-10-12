@@ -10,6 +10,13 @@ $ErrorActionPreference='Stop'
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 if(& git -C $root status --porcelain){throw 'SOURCE_MUST_BE_COMMITTED'}
+$build=Get-Content (Join-Path $root 'build/fp32-custom/build-identity.json') -Raw | ConvertFrom-Json
+foreach($p in $build.source_hashes.psobject.Properties){
+ if((Get-FileHash -LiteralPath (Join-Path $root $p.Name)).Hash.ToLowerInvariant() -ne $p.Value){throw 'BUILD_SOURCE_MISMATCH'}
+}
+foreach($p in $build.binary_hashes.psobject.Properties){
+ if((Get-FileHash -LiteralPath (Join-Path $root "build/fp32-custom/$($p.Name)")).Hash.ToLowerInvariant() -ne $p.Value){throw 'BUILD_BINARY_MISMATCH'}
+}
 $plan=Get-Content (Join-Path $root 'build/reports/g1-long-linear-200k-primary/run-plan.json') -Raw | ConvertFrom-Json
 if($plan.status -ne 'UNSTABLE'){throw 'PROTECTED_STATUS_MISMATCH'}
 $protected=Get-Content (Join-Path $root 'build/reports/g1-long-linear-forensics/final-protected-identities.json') -Raw | ConvertFrom-Json
@@ -23,6 +30,7 @@ if($d.Serial -ne $plan.device_serial_private){throw 'PHYSICAL_IDENTITY_MISMATCH'
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $d.Endpoint
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+if((Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','pidof','fp32_probe')).Text.Trim()){throw 'EXISTING_CUSTOM_PROBE'}
 function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
  $r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments
  if($r.ExitCode -ne 0){throw 'ADB_OPERATION_FAILED'}
@@ -35,7 +43,7 @@ $id='customfp32-'+[guid]::NewGuid().ToString('N')
 $report=Join-Path $root "build/reports/htp-fp32-custom-consumer/$id"
 [IO.Directory]::CreateDirectory($report)|Out-Null
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$report/apk-audit.txt" *> "$report/apk-audit-console.txt"
-$remote="/data/local/tmp/$id"
+$remote='/data/local/tmp/hexafp32-'+$build.binary_hashes.fp32_probe.Substring(0,16)
 Adb @('shell','mkdir','-p',$remote)|Out-Null
 $files=@('libHexaFp32Host.so','libHexaFp32Dsp.so','fp32_probe') | ForEach-Object {Join-Path $root "build/fp32-custom/$_"}
 foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){$files+=Join-Path $QairtSdkRoot "lib/aarch64-android/$name"}
@@ -44,7 +52,8 @@ $files+=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/
 $hashes=@{}
 foreach($file in $files){
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
- Adb @('push',$file,$remote)|Out-Null
+ $old=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','sha256sum',"$remote/$name")
+ if($old.ExitCode -ne 0 -or ($old.Text -split '\s+')[0] -ne $hash){Adb @('push',$file,$remote)|Out-Null}
  $remoteHash=((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0]
  if($remoteHash -ne $hash){throw 'STAGED_ARTIFACT_MISMATCH'};$hashes[$name]=$hash
 }
@@ -63,7 +72,7 @@ do {
  $process.WaitForExit(2000)|Out-Null;$process.Refresh()
 } while(!$process.HasExited)
 $conditionAfter=Adb @('shell','dumpsys','battery');$thermalAfter=Adb @('shell','dumpsys','thermalservice')
-$ledger=[ordered]@{source_sha=(& git -C $root rev-parse HEAD).Trim();branch=(& git -C $root branch --show-current).Trim();variant=$Variant;mode='BACKGROUND_CORRECTNESS';device_private=$d;hashes=$hashes;exit_code=$process.ExitCode;focus_takeover_count=$takeovers;battery_before=$conditionBefore;battery_after=$conditionAfter;thermal_before=$thermalBefore;thermal_after=$thermalAfter;protected_identity='PASS';status='COMPLETE';started_utc=$started.ToString('o')}
+$ledger=[ordered]@{source_sha=(& git -C $root rev-parse HEAD).Trim();build=$build;branch=(& git -C $root branch --show-current).Trim();variant=$Variant;mode='BACKGROUND_CORRECTNESS';device_private=$d;hashes=$hashes;exit_code=$process.ExitCode;focus_takeover_count=$takeovers;battery_before=$conditionBefore;battery_after=$conditionAfter;thermal_before=$thermalBefore;thermal_after=$thermalAfter;protected_identity='PASS';status='COMPLETE';started_utc=$started.ToString('o')}
 [IO.File]::WriteAllText("$report/identity-private.json",($ledger|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 if($takeovers){throw 'FOCUS_TAKEOVER'}
 $stdout=Get-Content "$report/stdout.txt" -Raw

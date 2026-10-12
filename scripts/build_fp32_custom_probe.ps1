@@ -27,3 +27,16 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/probe.cpp')) {
  if($LASTEXITCODE){throw 'CUSTOM_PROBE_BUILD_FAILED'}
 }
 Write-Host 'custom_package_build=PASS'
+$sourceHashes=@{}
+foreach($relative in @('host_tests/fp32_custom/package.cpp','host_tests/fp32_custom/probe.cpp',
+ 'app/src/main/cpp/qnn/layernorm_stability_reference.h','app/src/main/cpp/qnn/layernorm_redesign_reference.h','host_tests/hvx_rpc/fp32_boundary_fixture.h')){
+ $sourceHashes[$relative]=(Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash.ToLowerInvariant()
+}
+$binaryHashes=@{}
+foreach($name in @('libHexaFp32Dsp.so','libHexaFp32Host.so','fp32_probe')){
+ $binaryHashes[$name]=(Get-FileHash -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
+}
+$identity=@{source_sha=(& git -C $root rev-parse HEAD).Trim();source_hashes=$sourceHashes;binary_hashes=$binaryHashes;
+ qairt_build_id=$ExpectedBuildId;hexagon_compiler_sha256=(Get-FileHash $hex).Hash.ToLowerInvariant();
+ ndk_compiler_sha256=(Get-FileHash $arm).Hash.ToLowerInvariant();fp_contract='off';vectorization='disabled';architecture='v81'}
+[IO.File]::WriteAllText("$out/build-identity.json",($identity|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))

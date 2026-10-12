@@ -10,14 +10,16 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <sys/resource.h>
 #include "../../app/src/main/cpp/qnn/layernorm_redesign_reference.h"
 #include "../hvx_rpc/fp32_boundary_fixture.h"
 using API=QNN_INTERFACE_VER_TYPE;
 API api{}; Qnn_BackendHandle_t backend{};Qnn_DeviceHandle_t device{};Qnn_ContextHandle_t context{};
-void check(const char* stage,Qnn_ErrorHandle_t rc) {
+void checkImpl(const char* stage,Qnn_ErrorHandle_t rc) {
  std::printf("api,%s,%llu\n",stage,(unsigned long long)QNN_GET_ERROR_CODE(rc));std::fflush(stdout);
  if(rc!=QNN_SUCCESS)std::exit(2);
 }
+#define check(stage, expression) do {auto apiStarted=std::chrono::steady_clock::now();auto apiRc=(expression);double apiUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-apiStarted).count();std::printf("api_us,%s,%.3f\n",stage,apiUs);checkImpl(stage,apiRc);}while(0)
 void log(const char* f,QnnLog_Level_t,uint64_t,va_list a){std::vfprintf(stderr,f,a);std::fputc('\n',stderr);}
 uint32_t word(float f){uint32_t u;std::memcpy(&u,&f,4);return u;}
 float from(uint32_t u){float f;std::memcpy(&f,&u,4);return f;}
@@ -63,13 +65,15 @@ struct Graph {
    else node("consumer",variant=="htpAdd"?QNN_OP_ELEMENT_WISE_ADD:QNN_OP_ELEMENT_WISE_MULTIPLY,"qti.aisw",{m,c},{y});
   }
   check("graphFinalize",api.graphFinalize(graph,nullptr,nullptr));
+  std::printf("graph,%s,tensors=%zu,nodes=%d,custom_scratch=0,custom_vtcm=0\n",variant.c_str(),tensors.size(),variant=="Copy"||variant=="Add"||variant=="Multiply"||variant=="Affine"||!custom?1:2);
  }
  std::vector<float> run(const std::vector<float>& x,const std::vector<float>& b,const std::vector<float>& c) {
-  receipts.clear();std::vector<Qnn_Tensor_t> in,out;std::vector<std::vector<uint32_t>> buffers;
+  auto allocationStarted=std::chrono::steady_clock::now();receipts.clear();std::vector<Qnn_Tensor_t> in,out;std::vector<std::vector<uint32_t>> buffers;
   buffers.reserve(outputs.size());const std::vector<float>* values[]={&x,&b,&c};
   for(size_t j=0;j<inputs.size();++j){auto t=tensors[inputs[j]];t.v1.clientBuf={(void*)values[j]->data(),uint32_t(values[j]->size()*4)};in.push_back(t);}
   for(auto j:outputs){auto t=tensors[j];buffers.emplace_back(shapes[j][3],0x7fc0dead);t.v1.clientBuf={buffers.back().data(),uint32_t(buffers.back().size()*4)};out.push_back(t);}
   auto before=x;auto bb=b;auto cc=c;auto start=std::chrono::steady_clock::now();
+  std::printf("host_allocate_poison_copy_us,%.3f\n",std::chrono::duration<double,std::micro>(start-allocationStarted).count());
   check("graphExecute",api.graphExecute(graph,in.data(),in.size(),out.data(),out.size(),nullptr,nullptr));
   double us=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count();executeUs=us;
   if(std::memcmp(x.data(),before.data(),x.size()*4)||std::memcmp(b.data(),bb.data(),b.size()*4)||std::memcmp(c.data(),cc.data(),c.size()*4)){std::puts("INPUT_MUTATION");std::exit(3);}
@@ -94,6 +98,7 @@ struct Graph {
    for(size_t j=0;j<buffers[k].size();++j)if(!std::isfinite(from(buffers[k][j]))){std::puts("TAP_NONFINITE_OR_POISON");std::exit(3);}
   }
   for(float f:y)if(!std::isfinite(f)){std::puts("NONFINITE_OR_POISON");std::exit(3);}
+  std::printf("host_receipt_finite_validation_us,%.3f\n",std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count()-us);
   return y;
  }
 };
@@ -137,6 +142,11 @@ int main(int argc,char** argv){
   for(size_t j=0;j<128;++j)x[j]=from(hexatrain_boundary_bits(j));
   auto raw=g.run(x,b,c);unsigned bad=0;for(size_t j=0;j<128;++j)bad+=word(x[j])!=word(raw[j]);
   std::printf("raw_copy,bit_mismatch=%u\n",bad);failures+=bad!=0;
+ }else if(variant=="Add"||variant=="Multiply"){
+  for(size_t j=0;j<128;++j){x[j]=from(hexatrain_boundary_bits(j));b[j]=variant=="Add"?from(1):.5f;}
+  auto raw=g.run(x,b,c);unsigned bad=0;
+  for(size_t j=0;j<128;++j){float f=variant=="Add"?x[j]+b[j]:x[j]*b[j];bad+=word(f)!=word(raw[j]);}
+  std::printf("raw_arithmetic,%s,bit_mismatch=%u\n",variant.c_str(),bad);failures+=bad!=0;
  }
  namespace ln=phonelm::qnn::lnvalidation;
  for(const auto& fixture:ln::redesignCases(64)) {
@@ -157,6 +167,12 @@ int main(int argc,char** argv){
   }
  }
  std::printf("summary,%s,required_failures=%u,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0\n",variant.c_str(),failures);
+ if(!failures && g.custom){
+  auto fixture=ln::redesignCases(64)[1];auto host=ln::anchoredFp32Oracle(fixture,64);
+  x=host.dx;for(unsigned j=0;j<128;++j){b[j]=1.000123f;c[j]=fixture.dy[j];}
+  for(unsigned j=0;j<33;++j){auto output=g.run(x,b,c);std::printf("perf,%s,%u,execute_us=%.3f\n",variant.c_str(),j,g.executeUs);}
+ }
+ struct rusage usage{};getrusage(RUSAGE_SELF,&usage);std::printf("peak_host_rss_kib,%ld\n",usage.ru_maxrss);
  check("contextFree",api.contextFree(context,nullptr));check("deviceFree",api.deviceFree(device));check("backendFree",api.backendFree(backend));
  return failures || (g.custom&&mismatches)?4:0;
 }
