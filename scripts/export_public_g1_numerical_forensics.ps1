@@ -5,6 +5,8 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 function Select-Health($row) {
   if ($row.tensor -notmatch '^layer_\d{3}_(ln[12]_(centered_s|square|safe_scale)|output)$') { throw 'TENSOR_NOT_ALLOW_LISTED' }
+  if ($row.hash -notmatch '^[a-f0-9]{64}$' -or [int]$row.count -le 0 -or
+      ([int]$row.finite+[int]$row.nan+[int]$row.pos_inf+[int]$row.neg_inf) -ne [int]$row.count) {throw 'INVALID_HEALTH_AGGREGATE'}
   [ordered]@{tensor=$row.tensor; count=[int]$row.count; finite=[int]$row.finite
     nan=[int]$row.nan; pos_inf=[int]$row.pos_inf; neg_inf=[int]$row.neg_inf
     min=[double]$row.min; max=[double]$row.max; rms=[double]$row.rms
@@ -33,9 +35,13 @@ foreach ($item in $index.runs) {
       $p.from_step -lt 40000 -or $p.to_step -gt 45000 -or $p.to_step -le $p.from_step -or
       $p.to_step-$p.from_step -gt 2000 -or
       $p.classification -notin @('REPRODUCED_NONFINITE','NO_FAILURE_AT_FIXED_STATE','NO_FAILURE_IN_BOUND')) {throw 'INVALID_PUBLIC_PROVENANCE'}
+  $scaleMode=if($null -eq $p.layernorm_centered_scale){'1'}else{[string]$p.layernorm_centered_scale}
+  if($scaleMode -notin @('1','0.5','adaptive') -or
+     $p.tap_scope -notin @('NONE','COARSE_LAYER_BOUNDARIES','NICOPEDIA_FINE','LN1_SQUARE','LN2_SQUARE','ALL_LAYER_NORM_SQUARES') -or
+     ($p.from_step -eq 40000 -and $p.source_checkpoint_sha256 -ne '89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d')){throw 'PUBLIC_CONDITION_IDENTITY_MISMATCH'}
   $row=[ordered]@{label=$item.label; source_sha=$p.source_sha
     from_step=$p.from_step; to_step=$p.to_step; probe_microbatch=$p.probe_microbatch
-    centered_scale_mode= $(if($null -eq $p.layernorm_centered_scale){'1'}else{[string]$p.layernorm_centered_scale})
+    centered_scale_mode=$scaleMode
     tap_scope=$p.tap_scope; classification=$p.classification
     checkpoint_sha256=$p.source_checkpoint_sha256; qairt_build_id=$p.qairt_build_id
     order_hash=$p.order_hash}
@@ -73,11 +79,22 @@ foreach ($item in $index.runs) {
       if($match.Success){$row[$key]=[long]$match.Groups[1].Value}
     }
     if($p.first_scaled_checkpoint_sha256){$row['first_scaled_checkpoint_sha256']=$p.first_scaled_checkpoint_sha256}
-    foreach($key in @('api_trace_graph_execute_attempt_count','api_trace_graph_execute_success_count','api_trace_graph_execute_failure_count','generalized_tiny_training_output_nonfinite_count','generalized_tiny_training_output_poison_count')){
+    foreach($key in @('api_trace_graph_execute_attempt_count','api_trace_graph_execute_success_count','api_trace_graph_execute_failure_count','generalized_tiny_training_output_nonfinite_count','generalized_tiny_training_output_poison_count','hvx_rpc_failure_count','hvx_fallback_count','hvx_nonfinite_count','completed_steps','run_completed_steps')){
       $match=[regex]::Match($r,"(?m)^$key=(\d+)\s*$")
       if($match.Success){$row[$key]=[long]$match.Groups[1].Value}
     }
     $row['cpu_fallback_false']=($r -match '(?m)^cpu_fallback=false\s*$')
+    if(-not $row.cpu_fallback_false -or $row.api_trace_graph_execute_failure_count -ne 0 -or
+       $row.api_trace_graph_execute_attempt_count -ne $row.api_trace_graph_execute_success_count){throw 'PUBLIC_QNN_HEALTH_MISMATCH'}
+    foreach($key in @('output_tensors_finite','final_finite','all_steps_finite','nan_detected','inf_detected')) {
+      $match=[regex]::Match($r,"(?m)^$key=(true|false)\s*$")
+      if($match.Success){$row[$key]=($match.Groups[1].Value -eq 'true')}
+    }
+    if($p.classification -ne 'REPRODUCED_NONFINITE' -and -not $row.output_tensors_finite){throw 'FINITE_CLAIM_NOT_SUPPORTED'}
+    if($p.classification -eq 'NO_FAILURE_IN_BOUND' -and
+       ($row.api_trace_graph_execute_attempt_count -ne 8*($p.to_step-$p.from_step) -or
+        $row.run_completed_steps -ne $p.to_step-$p.from_step -or -not $row.all_steps_finite -or
+        $row.hvx_rpc_failure_count -ne 0 -or $row.hvx_fallback_count -ne 0 -or $row.hvx_nonfinite_count -ne 0)){throw 'BOUND_COMPLETION_NOT_SUPPORTED'}
   }
   $public+=$row
 }
