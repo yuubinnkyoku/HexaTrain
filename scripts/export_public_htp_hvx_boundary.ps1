@@ -9,7 +9,7 @@ function Read-TypedLine([string]$Line) {
     boundary {@('name','field','op','mismatch','transfer_abs','reference_abs','nonfinite','gate')}
     stage {@('name','field','htp_fp32_abs','oracle_double_abs')}
     raw_boundary {@('op','mismatch','abs','nonfinite')}
-    subtract {@('name','abs','output_nonzero')}
+    subtract {@('name','abs','output_nonzero','row0_nonzero')}
     observer {@('name','bit_mismatch')}
     default {throw 'UNKNOWN_PUBLIC_RECORD'}
   }
@@ -52,7 +52,7 @@ foreach($dir in $PrivateDirectories){
   $failure=@($lines|Where-Object {$_ -match '^api_trace_graph_execute_failure_count=\d+$'}|ForEach-Object {[long]($_.Split('=')[1])})
   if($success.Count -ne 6 -or ($success|Measure-Object -Sum).Sum -ne 603 -or $failure.Count -ne 6 -or ($failure|Measure-Object -Sum).Sum -ne 0){throw 'QNN_API_NOT_VERIFIED'}
   $transfers=@($lines|Where-Object {$_ -match '^transport '});if($transfers.Count -ne 366){throw 'RPC_COUNT_MISMATCH'}
-  foreach($line in $transfers){if($line -notmatch ' status=0 dsp_mismatch=0 host_mismatch=0 input_mutation=0 complete=1 ' -or $line -notmatch ' finite=1 '){throw 'TRANSPORT_NOT_BIT_EXACT'}}
+  foreach($line in $transfers){if($line -notmatch ' status=0 dsp_mismatch=0 host_mismatch=0 input_mutation=0 complete=1 ' -or $line -notmatch ' finite=1 ' -or $line -notmatch ' receipt_mismatch=0 output_finite=1 '){throw 'TRANSPORT_NOT_BIT_EXACT'}}
   $fixed=@($transfers|Where-Object {$_ -match '^transport name=fixed[0-5] count=256 '});if($fixed.Count -ne 6){throw 'FIXED_REPETITIONS_MISSING'}
   $records=@($lines|Where-Object {$_ -match '^(?:boundary|stage|raw_boundary|subtract|observer) '}|ForEach-Object {Read-TypedLine $_})
   if($records.Count -ne 763){throw 'NUMERICAL_RECORD_COUNT_MISMATCH'}

@@ -17,7 +17,7 @@ std::string hvxBoundaryCheck() {
   rpc.a=static_cast<float*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,RPCMEM_DEFAULT_FLAGS,4096*4));
   rpc.b=static_cast<float*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,RPCMEM_DEFAULT_FLAGS,4096*4));
   rpc.out=static_cast<float*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,RPCMEM_DEFAULT_FLAGS,4096*4));
-  rpc.metadata=static_cast<int*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,RPCMEM_DEFAULT_FLAGS,64*4));
+  rpc.metadata=static_cast<int*>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,RPCMEM_DEFAULT_FLAGS,(4096+8)*4));
   if(!rpc.a||!rpc.b||!rpc.out||!rpc.metadata)return "status=FAILED\nfailure=BOUNDARY_RPCMEM\n";
   if((reinterpret_cast<uintptr_t>(rpc.a)|reinterpret_cast<uintptr_t>(rpc.b)|reinterpret_cast<uintptr_t>(rpc.out))&127)return "status=FAILED\nfailure=BOUNDARY_ALIGNMENT\n";
   size_t rpcCalls=0,transportMismatch=0;
@@ -27,15 +27,18 @@ std::string hvxBoundaryCheck() {
     std::memcpy(rpc.a,input.data(),n*4);std::memcpy(rpc.b,input.data(),n*4);
     // Complement every expected word: an unwritten element cannot match input.
     for(size_t i=0;i<n;++i){uint32_t word;std::memcpy(&word,&input[i],4);word=~word;std::memcpy(rpc.out+i,&word,4);}
-    std::memset(rpc.metadata,0xa5,64*4);const auto t1=std::chrono::steady_clock::now();
-    int status=hexatrain_hvx_probe_run(rpc.handle,8,fixed?1:0,int(n),0,rpc.a,int(n),rpc.b,int(n),rpc.out,int(n),rpc.metadata,64);
+    std::memset(rpc.metadata,0xa5,(n+8)*4);
+    for(size_t i=0;i<n;++i){uint32_t poison;std::memcpy(&poison,&input[i],4);poison=~poison;std::memcpy(rpc.metadata+8+i,&poison,4);}
+    const auto t1=std::chrono::steady_clock::now();
+    int status=hexatrain_hvx_probe_run(rpc.handle,8,fixed?1:0,int(n),0,rpc.a,int(n),rpc.b,int(n),rpc.out,int(n),rpc.metadata,int(n+8));
     ++rpcCalls;const auto t2=std::chrono::steady_clock::now();output.assign(rpc.out,rpc.out+n);
     std::vector<float> before(rpc.a,rpc.a+n),expected(rpc.b,rpc.b+n);
-    size_t mismatch=bits(input,output),immutable=bits(input,before)+bits(input,expected);
-    const auto t3=std::chrono::steady_clock::now();transportMismatch+=mismatch+immutable;
+    size_t mismatch=bits(input,output),immutable=bits(input,before)+bits(input,expected),receipt=0;
+    for(size_t i=0;i<n;++i){uint32_t sent,received;std::memcpy(&sent,&input[i],4);std::memcpy(&received,rpc.metadata+8+i,4);receipt+=sent!=received;}
+    const auto t3=std::chrono::steady_clock::now();transportMismatch+=mismatch+immutable+receipt;
     auto us=[](auto a,auto b){return std::chrono::duration<double,std::micro>(b-a).count();};
-    r<<"transport name="<<name<<" count="<<n<<" input_fnv="<<std::hex<<fingerprint(input)<<std::dec<<" finite="<<finite(input)<<" status="<<status<<" dsp_mismatch="<<rpc.metadata[1]<<" host_mismatch="<<mismatch<<" input_mutation="<<immutable<<" complete="<<(mismatch==0)<<" output_finite="<<finite(output)<<" host_pack_us="<<us(t0,t1)<<" rpc_us="<<us(t1,t2)<<" dsp_copy_check_us="<<rpc.metadata[3]<<" host_validation_us="<<us(t2,t3)<<'\n';
-    return !status&&rpc.metadata[0]==0x46503332&&rpc.metadata[1]==0&&rpc.metadata[2]==int(n)&&rpc.metadata[4]==0&&rpc.metadata[5]==0&&!mismatch&&!immutable;
+    r<<"transport name="<<name<<" count="<<n<<" input_fnv="<<std::hex<<fingerprint(input)<<std::dec<<" finite="<<finite(input)<<" status="<<status<<" dsp_mismatch="<<rpc.metadata[1]<<" host_mismatch="<<mismatch<<" input_mutation="<<immutable<<" complete="<<(mismatch==0)<<" receipt_mismatch="<<receipt<<" output_finite="<<finite(output)<<" host_pack_us="<<us(t0,t1)<<" rpc_us="<<us(t1,t2)<<" dsp_copy_check_us="<<rpc.metadata[3]<<" host_validation_us="<<us(t2,t3)<<'\n';
+    return !status&&rpc.metadata[0]==0x46503332&&rpc.metadata[1]==0&&rpc.metadata[2]==int(n)&&rpc.metadata[4]==0&&rpc.metadata[5]==0&&!mismatch&&!immutable&&!receipt;
   };
   std::vector<float> fixture(HEXATRAIN_BOUNDARY_COUNT),echo;hexatrain_boundary_fill(fixture.data(),fixture.size());
   if(!finite(fixture))return "status=FAILED\nfailure=FIXTURE_NONFINITE\n";
@@ -91,7 +94,7 @@ std::string hvxBoundaryCheck() {
     std::vector<float> rhs(128,c.name=="large_mean_low_variance"?1024.f:0.f),out;
     if(!boundary[3].executeFp32Boundary(c.x,rhs,out,e))return failure("boundary_subtract",e,boundary[3]);++qnnCalls;
     std::vector<double> difference(128);for(size_t i=0;i<128;++i)difference[i]=double(c.x[i])-rhs[i];auto de=errors(difference,out);
-    r<<"subtract name="<<c.name<<" abs="<<de.absolute<<" output_nonzero="<<std::count_if(out.begin(),out.end(),[](float x){return x!=0;})<<'\n';
+    r<<"subtract name="<<c.name<<" abs="<<de.absolute<<" output_nonzero="<<std::count_if(out.begin(),out.end(),[](float x){return x!=0;})<<" row0_nonzero="<<std::count_if(out.begin(),out.begin()+64,[](float x){return x!=0;})<<'\n';
   }
   for(auto& b:boundary)r<<b.apiTraceSummary()<<b.diagnostics();r<<ln.apiTraceSummary()<<untapped.apiTraceSummary();
   const int closeStatus=hexatrain_hvx_probe_close(rpc.handle);rpc.handle=0;

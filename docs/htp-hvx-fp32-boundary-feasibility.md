@@ -9,6 +9,7 @@ branch: `investigation/htp-hvx-fp32-boundary-feasibility`。
 - Host/DSP: 256 finite FP32 raw patterns、3独立process、各6往復。
   全要素bit mismatch0、DSP独立fixture照合0、input mutation0、complete write、return0を別々に検査。
   poisonは各期待wordのbit complement。DSPはinteger memcpyのみで全要素を返す。
+  DSP受信全wordを独立した整数metadata channelでも返し、Host送信bitと全要素照合する。
 - QNN: FLOAT32 APP_WRITE→単一Reshape→APP_READと、Add(x,0)、Multiply(x,1)、Subtract(x,offset)を分ける。
   Reshapeもbackend loweringを経由するため、単純なメモリ共有または純粋なtransportとは仮定しない。
 - D64既存20 recipes、full upstream1、double referenceとanchored FP32 Host oracleを再利用。

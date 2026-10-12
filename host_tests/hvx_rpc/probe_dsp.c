@@ -361,7 +361,7 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
   // Default-off diagnostic using the existing float-sequence ABI. No arithmetic.
   if (mode == 8) {
     if ((m != 0 && m != 1) || k != leftLen || n != 0 ||
-        leftLen < 1 || leftLen > 4096 || rightLen != leftLen || resultLen != leftLen)
+        leftLen < 1 || leftLen > 4096 || rightLen != leftLen || resultLen != leftLen || metadataLen < leftLen + 8)
       return 1010;
     const uint64_t started = HAP_perf_get_time_us();
     int mismatches = 0;
@@ -372,6 +372,8 @@ int hexatrain_hvx_probe_run(remote_handle64 handle, int mode, int m, int k, int 
       else memcpy(&expected, right + i, 4);
       mismatches += actual != expected;
       memcpy(result + i, &actual, 4);
+      // Separate integer channel records every word actually received by DSP.
+      memcpy(metadata + 8 + i, &actual, 4);
     }
     metadata[0] = 0x46503332;
     metadata[1] = mismatches;
