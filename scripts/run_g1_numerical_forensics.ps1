@@ -111,6 +111,8 @@ try {
   if ($ProbeBatch -lt 0) { $artifacts+=@('learning-rate-telemetry.csv','optimizer-health-telemetry.csv') }
   if (-not (Test-Path $resultPath)) {
     $ledger.status='BLOCKED'; $ledger.classification='FAILURE_BEFORE_NATIVE_REPORT'
+  } elseif ((Get-Content $resultPath -Raw) -notmatch '(?m)^forensic_pre_update_checkpoint_saved=') {
+    $ledger.status='BLOCKED'; $ledger.classification='FAILURE_BEFORE_FORENSIC_CAPTURE'
   } else { try {
     foreach ($name in $artifacts) {
       Receive-PhoneLmBinary -Adb $adb -Device $device.Endpoint -Package com.yuubinnkyoku.phonelm `

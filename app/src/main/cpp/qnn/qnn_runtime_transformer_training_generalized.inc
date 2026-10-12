@@ -140,6 +140,11 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
     return fail("generalized tiny training centered scale makes epsilon unrepresentable");
   }
   g.epsilonScaled = float(epsilonScaled);
+  const std::uint64_t adaptiveAppReadBytes = adaptiveScale
+      ? std::uint64_t(numLayers) * tokens * 2u * sizeof(float) : 0u;
+  if (adaptiveAppReadBytes > phonelm::transformer::kApplicationPolicyBytes -
+          resourceEstimate.estimatedPeakApplicationTensorBytes)
+    return fail("APP_RESOURCE_ESTIMATOR: adaptive scale buffers exceed application policy");
   g.adaptiveHalfEpsilon = g.epsilonScaled * 0.25f;
   if (adaptiveScale && (!std::isfinite(g.adaptiveHalfEpsilon) || g.adaptiveHalfEpsilon <= 0))
     return fail("APP_CONFIGURATION_VALIDATION: adaptive epsilon is unrepresentable");
@@ -1790,7 +1795,7 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
            ? numLayers * resourceEstimate.perLayerForwardNodes + 3u +
                  (g.minimalOutputs ? 1u : 0u)
            : resourceEstimate.nodeCount - kAdamNodeCount) +
-      gateScaleExtraNodes;
+      gateScaleExtraNodes + (adaptiveScale ? std::uint64_t(numLayers) * 10u : 0u);
   if (g.graphAddNodeSuccessCount != expectedNodes ||
       nodeNames.size() != g.graphAddNodeSuccessCount) {
     return fail("APP_RESOURCE_ESTIMATOR: emitted node count mismatch");
@@ -1811,6 +1816,12 @@ bool Runtime::prepareTinyTransformerTrainingGeneralized(
       std::to_string(numHeads) +
       (g.forwardOnly ? "_FORWARD_ONLY" : "_EXPLICIT_FORWARD_BACKWARD");
   diagnostics_ += "tiny_transformer_training_graph=" + graphLabel + '\n' +
+                  "tiny_transformer_training_adaptive_extra_nodes=" +
+                  std::to_string(adaptiveScale ? std::uint64_t(numLayers) * 10u : 0u) + '\n' +
+                  "tiny_transformer_training_adaptive_extra_tensors=" +
+                  std::to_string(adaptiveScale ? std::uint64_t(numLayers) * 10u + 3u : 0u) + '\n' +
+                  "tiny_transformer_training_adaptive_extra_app_read_bytes=" +
+                  std::to_string(adaptiveAppReadBytes) + '\n' +
                   "tiny_transformer_training_forward_only=" +
                   std::string(g.forwardOnly ? "true\n" : "false\n") +
                   "tiny_transformer_training_graph_count=1\n"
