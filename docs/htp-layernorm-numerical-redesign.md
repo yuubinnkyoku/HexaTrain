@@ -13,7 +13,7 @@ direct LayerNormは大振幅のforwardを改善するが、大offset＋低分散
 これは全ての可能なQNN graph/custom opが不可能という証明ではない。
 
 D64の0.27230037は、forward由来のinverse/xhat誤差とbackwardでの追加丸めの複合である。
-独立processで全3,574数値recordが完全一致。計2,652 QNN executesは全return0、fallback0。
+3独立processで全3,574数値recordが完全一致。計3,978 QNN executesは全return0、fallback0。
 CPU reference/Host/buildのPASSを、device accuracyのPASSへ読み替えない。
 
 ## 事前登録した条件とgate
@@ -116,6 +116,8 @@ independent Subtract graphにもa=`1024±0.001`, b=`1024`を直接渡し、全0�
 情報はsubtractまでの入力変換または演算中で失われており、後段squareやbackward起因ではない。
 APP_WRITE import時とkernel operand変換時のどちらかまでは未分離である。
 direct LayerNormもxhat error0.295066653643となる。center後のscalingは失われた差を復元できない。
+最終reviewではdirect probeのoutputをNaN poisonして再build/replayした。
+100 direct casesと他の診断を含む全recordが元と一致し、ゼロ初期化による未書き込みの見逃しではないことを確認。
 このrecipeのforward-only double backward errorは6.81282260844、実HTP dX error6.87336948344。
 
 ## B. Primitive演算の実測とrange制約
@@ -195,7 +197,8 @@ dynamic同等性誤差はroundoff範囲で1e−10より小さい。
 CPU FP32のnaive absolute-mean版も大offset randomでは精度が不十分な例があるため、「FP32なら演算順序不問」とはしない。
 
 tap有無は600 candidate/dimension/recipe組全てで、y/xhat/dX/dGamma/dBetaのfloat bits一致。
-独立process再実行も同じAPK・同じsourceで3,574数値record完全一致。
+最初の独立process再実行は同じAPK・同じsourceで3,574数値record完全一致。
+3つ目のPOISON_CONTROLは再buildした別APK/sourceで、同じ全recordsに一致した。
 同一process内のtap/nativeの2 executesを2独立training runsとは数えない。
 
 PREVIOUSに対する最終outputs bitsが変わった組数は、dynamic33、mean-backward3、scale8 45、
@@ -264,13 +267,15 @@ accuracy成立後に行うべきpaired finalization/time、RSS/peak、full-step 
 | pre-device Fast | PASS、53.5s（最初のFast77.8sもPASS） |
 | report/export後のFast | PASS、61.0s。privacy/diff/parser、通常host/JVM gate |
 | 最終review Fast | PASS、54.1s。格子helper edge補強後。100-case oracle metricsはbyte一致 |
+| poison-control前Fast | PASS、69.5s。出力初期化の計測補強後 |
+| 3-run evidence後Fast | PASS、56.0s。最終aggregateとreportのgate |
 | Qnn gate | PASS、633.9s。pinned check、全Host258.8s、build366.1s、audit3.5s。optional inventoryはadvisory、core complete |
 | 最終Host | PASS、277.6s。100-case independent/dynamic gradientsとFP32 oracle、shape、optimizer/registry/checkpoint/resume、既存diagnostic/parity battery |
-| 新suite PRIMARY / INDEPENDENT_REPEAT | **accuracy FAIL**、各1,326/1,326 QNN成功、failure0、fallback0 |
+| 新suite PRIMARY / INDEPENDENT_REPEAT / POISON_CONTROL | **accuracy FAIL**、各1,326/1,326 QNN成功、failure0、fallback0 |
 | 最終Device legacy backward | PASS、63.9s、BACKGROUND_CORRECTNESS。旧0.005低分散upstream fixtureの合格であり、新accuracy FAILを置き換えない |
-| headless build / installed APK / foreground | pinned build/audit、同一APK identity確認、両process focus takeover0 |
-| thermal / storage | 両process thermal0、battery temperature34°C、Host20GiB/Device12GiB launch gateを維持 |
-| exporter | typed allow-list SelfTest、2 private reports検証、独立再exportのbyte hash一致 |
+| headless build / installed APK / foreground | pinned build/audit、PRIMARY/REPEAT同一APK identity確認、3 process focus takeover0 |
+| thermal / storage | 3 process thermal0、PRIMARY/REPEAT 34°C、POISON_CONTROL 32°C、Host20GiB/Device12GiB launch gateを維持 |
+| exporter | typed allow-list SelfTest、3 private reports検証、独立再exportのbyte hash一致 |
 | 新candidate full-model / stress60k | **BLOCKED_ACCURACY / 未実施** |
 
 ```powershell
@@ -290,7 +295,10 @@ optimizer/data cursor/storage/thermal/QNN/HVXをfail-closedで確認する。
 
 ## H. Provenanceと保全
 
-両新device runsのexact sourceは`29da9599f84ae171cc7b897714c08e21a50b3e46`。
+PRIMARY/INDEPENDENT_REPEATのexact sourceは`29da9599f84ae171cc7b897714c08e21a50b3e46`。
+POISON_CONTROLは`16772c9e69af32f83d58d85e7cdc0c0c24ee61cf`。
+後者はdirect output poisonと、範囲外の格子距離helper/Host edge checksを追加したもの。
+graph数式・test input recipes・thresholdに変更なし。再build/audit/identity確認の後に実行した。
 そのcommitに事前criteriaと候補実装を保存。final docs/exportのcommitはGit履歴とprivate最終identityで解決。
 public report/export確定commitは`4f20bc313c626a43dfbeb923a831aa237b421e14`。
 原experiment `6bca2a7a24f04f8b8b2d4084feb337a12c21e00a`、旧investigation
@@ -313,7 +321,7 @@ private base=`build/reports/htp-layernorm-redesign/`。
 `initial-identities.json`、`public-index.json`、各`validation-plan.json`/`device-report.txt`、Host/reference/oracle/verify logs、
 headless同一private IDのAPK audit/device identity/foreground/thermalを保存。
 公開[aggregates](results/htp-layernorm-redesign/aggregates.json)は全dimensionのcase metricsとD64 stage/primitive aggregates、
-repeatの完全一致hashのみ。raw tensors、corpus、checkpoint、device/APK identifiers、run IDs、ローカル絶対pathは公開しない。
+repeat/controlの完全一致hashのみ。raw tensors、corpus、checkpoint、device/APK identifiers、run IDs、ローカル絶対pathは公開しない。
 
 最終identity記録でprotected hashes・branches・original statusとclean working treeを確認する。
-push/PR/main merge、reset/rebase/amend、削除、SDK/firmware変更、UI foreground、optimizer reset、failureの成功化を行わない。
+push/PR/main merge、reset/rebase/amend、保護artifactの削除、SDK/firmware変更、UI foreground、optimizer reset、failureの成功化を行わない。
