@@ -84,6 +84,7 @@ std::string hvxBoundaryCheck() {
         if(!boundary[op].executeFp32Boundary(padded,rhs,out,e))return failure("boundary_consumer",e,boundary[op]);++qnnCalls;
         if(bits(before,padded)||bits(rb,rhs))return "status=FAILED\nfailure=QNN_INPUT_MUTATION\n";
         out.resize(fromDsp.size());size_t mismatch=bits(fromDsp,out);auto er=errors(fromDsp,out);
+        if(!finite(out))return r.str()+"status=FAILED\nfailure=BOUNDARY_CONSUMER_NONFINITE\n";
         double referenceError=dr[f]?errors(*dr[f],out).absolute:er.absolute;
         double limit=(f==6||f==7||f==8)?.02:.002;
         if(f==3&&(c.name=="low_variance"||c.name=="epsilon_dominated"||c.name=="constant"||c.name=="large_mean_low_variance"||c.name=="random_seed7"||c.name=="random_seed97"))limit=.06;
