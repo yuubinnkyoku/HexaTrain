@@ -69,6 +69,15 @@ if ($Suite -eq "Fast") {
 }
 
 # Headwise G1 gate capacity / identity contract.
+$LayerNormReferenceExecutable = Join-Path $OutputDirectory "layernorm_stability_reference_test.exe"
+Invoke-PhoneLmHostCppCompile -Label "Independent LayerNorm double/FP32 gradients" `
+    -Output $LayerNormReferenceExecutable `
+    -Sources @(Join-Path $Root "host_tests\layernorm_stability_reference_test.cpp") `
+    -IncludeDirs @($CppInclude)
+Invoke-PhoneLmHostCppRun -Label "Independent LayerNorm double/FP32 gradients" `
+    -Executable $LayerNormReferenceExecutable
+
+# Headwise G1 gate capacity / identity contract.
 $HeadwiseGateExecutable = Join-Path $OutputDirectory "headwise_g1_gate_test.exe"
 Invoke-PhoneLmHostCppCompile -Label "Headwise G1 gate host test" `
     -Output $HeadwiseGateExecutable `

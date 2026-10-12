@@ -271,6 +271,17 @@ struct Runtime::Impl {
         uint32_t dims[1]{};
         uint32_t elements = 0;
     } elementwiseSquare;
+    struct LayerNormStabilityGraph {
+        Qnn_GraphHandle_t graph = nullptr;
+        std::vector<Qnn_Tensor_t> tensors;
+        std::vector<std::string> names;
+        std::vector<std::vector<uint32_t>> dims;
+        std::vector<uint32_t> outputs;
+        uint32_t rows = 0, dimension = 0, nodes = 0;
+        uint32_t lastAxis = 1, rowAxis = 0;
+        float scale = 1, epsilon = 1e-5f, halfEpsilon = 2.5e-6f;
+        float threshold = 255.875f, half = .5f, d = 1, invD = 1;
+    } layerNormStability;
     struct LayerNormBackwardGraph {
         Qnn_GraphHandle_t graph = nullptr;
         Qnn_Tensor_t input = QNN_TENSOR_INIT, upstream = QNN_TENSOR_INIT;
@@ -1135,6 +1146,7 @@ bool Runtime::recreateContext(std::string& error) {
         impl_->layerNorm = {};
         impl_->softmax = {};
         impl_->layerNormBackward = {};
+        impl_->layerNormStability = {};
         impl_->softmaxBackward = {};
         impl_->attention = {};
         impl_->attentionBackward = {};
@@ -1433,6 +1445,7 @@ bool Runtime::executeMatMul(const std::vector<float>& a, const std::vector<float
 #include "qnn_runtime_muon.inc"
 #include "qnn_runtime_muon_stage_probe.inc"
 #include "qnn_runtime_transformer_training.inc"
+#include "qnn_runtime_layernorm_stability.inc"
 #include "qnn_runtime_transformer_training_generalized.inc"
 #include "qnn_runtime_transformer_training_generalized_execute.inc"
 }

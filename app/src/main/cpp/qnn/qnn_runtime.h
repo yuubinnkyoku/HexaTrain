@@ -231,6 +231,12 @@ struct LayerNormBackwardOutputs {
     std::vector<float> dBeta;
 };
 
+// Diagnostic-only observation of the exact shared training LayerNorm builder.
+struct LayerNormStabilityOutputs {
+    LayerNormBackwardOutputs values;
+    std::vector<std::vector<float>> taps;
+};
+
 struct AttentionBackwardOutputs {
     std::vector<float> probabilities;
     std::vector<float> dScores;
@@ -413,6 +419,13 @@ public:
                                   std::string& error);
     bool prepareLayerNormBackward(uint32_t rows, uint32_t dimension,
                                   float epsilon, std::string& error);
+    bool prepareLayerNormStability(uint32_t rows, uint32_t dimension,
+                                   float epsilon, bool adaptive, std::string& error);
+    bool executeLayerNormStability(const std::vector<float>& input,
+                                   const std::vector<float>& upstream,
+                                   const std::vector<float>& gamma,
+                                   const std::vector<float>& beta,
+                                   LayerNormStabilityOutputs& outputs, std::string& error);
     bool executeLayerNormBackward(const std::vector<float>& input,
                                   const std::vector<float>& upstream,
                                   const std::vector<float>& gamma,
