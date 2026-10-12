@@ -30,7 +30,7 @@ if($d.Serial -ne $plan.device_serial_private){throw 'PHYSICAL_IDENTITY_MISMATCH'
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $d.Endpoint
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
-if((Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','pidof','fp32_probe')).Text.Trim()){throw 'EXISTING_CUSTOM_PROBE'}
+if((Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','ps','-A')).Text -match '(?m)\bfp32_probe\s*$'){throw 'EXISTING_CUSTOM_PROBE'}
 function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
  $r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments
  if($r.ExitCode -ne 0){throw 'ADB_OPERATION_FAILED'}
@@ -52,7 +52,8 @@ $files+=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/
 $hashes=@{}
 foreach($file in $files){
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
- $old=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','sha256sum',"$remote/$name")
+ $old=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','sha256sum',"$remote/$name") -AllowFailure
+ if($old.ExitCode -ne 0 -and $old.Text -notmatch 'No such file or directory'){throw 'STAGING_STATE_UNKNOWN'}
  if($old.ExitCode -ne 0 -or ($old.Text -split '\s+')[0] -ne $hash){Adb @('push',$file,$remote)|Out-Null}
  $remoteHash=((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0]
  if($remoteHash -ne $hash){throw 'STAGED_ARTIFACT_MISMATCH'};$hashes[$name]=$hash
