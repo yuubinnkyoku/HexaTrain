@@ -1,0 +1,7638 @@
+{
+  "schema": "HTP_HVX_BOUNDARY_V1",
+  "source_sha": "575d94661beafe5b53e9e050f0e04b5f500dfc18",
+  "qairt_build_id": "2.48.40.260702151143",
+  "hexagon_sdk": "6.6.0.0",
+  "architecture": "V81",
+  "fixture_fnv1a64": "0b2b772440d58a12",
+  "training_updates": 0,
+  "decision": "BLOCKED_REINJECTION",
+  "consumer_failed_checks_per_process": 32,
+  "processes": [
+    {
+      "process_index": 1,
+      "rpc_calls": 366,
+      "qnn_calls": 603,
+      "fixed_repetitions": 6,
+      "fixed_elements": 256,
+      "transport_mismatch": 0,
+      "observer_mismatch": 0,
+      "rpc_median_us": 496.562,
+      "numerical_digest": "df6eb5b3687adb43846971e6bad3741b8b3e79e0246546eed357e7d06e74e849"
+    },
+    {
+      "process_index": 2,
+      "rpc_calls": 366,
+      "qnn_calls": 603,
+      "fixed_repetitions": 6,
+      "fixed_elements": 256,
+      "transport_mismatch": 0,
+      "observer_mismatch": 0,
+      "rpc_median_us": 498.386,
+      "numerical_digest": "df6eb5b3687adb43846971e6bad3741b8b3e79e0246546eed357e7d06e74e849"
+    },
+    {
+      "process_index": 3,
+      "rpc_calls": 366,
+      "qnn_calls": 603,
+      "fixed_repetitions": 6,
+      "fixed_elements": 256,
+      "transport_mismatch": 0,
+      "observer_mismatch": 0,
+      "rpc_median_us": 284.584,
+      "numerical_digest": "df6eb5b3687adb43846971e6bad3741b8b3e79e0246546eed357e7d06e74e849"
+    }
+  ],
+  "transport_performance": [
+    {
+      "process_index": 1,
+      "elements": 2,
+      "samples": 40,
+      "payload_bytes_including_receipt": 64,
+      "rpc_us_median": 495.9895,
+      "dsp_copy_check_us_median": 6.0,
+      "host_pack_us_median": 1.198,
+      "host_validation_us_median": 7.8125
+    },
+    {
+      "process_index": 1,
+      "elements": 64,
+      "samples": 80,
+      "payload_bytes_including_receipt": 1056,
+      "rpc_us_median": 500.2865,
+      "dsp_copy_check_us_median": 7.0,
+      "host_pack_us_median": 10.99,
+      "host_validation_us_median": 35.156
+    },
+    {
+      "process_index": 1,
+      "elements": 128,
+      "samples": 240,
+      "payload_bytes_including_receipt": 2080,
+      "rpc_us_median": 496.172,
+      "dsp_copy_check_us_median": 8.0,
+      "host_pack_us_median": 20.833,
+      "host_validation_us_median": 62.969
+    },
+    {
+      "process_index": 1,
+      "elements": 256,
+      "samples": 5,
+      "payload_bytes_including_receipt": 4128,
+      "rpc_us_median": 298.386,
+      "dsp_copy_check_us_median": 87.0,
+      "host_pack_us_median": 17.448,
+      "host_validation_us_median": 50.625
+    },
+    {
+      "process_index": 2,
+      "elements": 2,
+      "samples": 40,
+      "payload_bytes_including_receipt": 64,
+      "rpc_us_median": 505.23400000000004,
+      "dsp_copy_check_us_median": 5.0,
+      "host_pack_us_median": 1.0675,
+      "host_validation_us_median": 7.943
+    },
+    {
+      "process_index": 2,
+      "elements": 64,
+      "samples": 80,
+      "payload_bytes_including_receipt": 1056,
+      "rpc_us_median": 504.297,
+      "dsp_copy_check_us_median": 7.0,
+      "host_pack_us_median": 11.094,
+      "host_validation_us_median": 35.261
+    },
+    {
+      "process_index": 2,
+      "elements": 128,
+      "samples": 240,
+      "payload_bytes_including_receipt": 2080,
+      "rpc_us_median": 495.365,
+      "dsp_copy_check_us_median": 8.0,
+      "host_pack_us_median": 20.7295,
+      "host_validation_us_median": 62.864
+    },
+    {
+      "process_index": 2,
+      "elements": 256,
+      "samples": 5,
+      "payload_bytes_including_receipt": 4128,
+      "rpc_us_median": 443.75,
+      "dsp_copy_check_us_median": 85.0,
+      "host_pack_us_median": 17.396,
+      "host_validation_us_median": 51.823
+    },
+    {
+      "process_index": 3,
+      "elements": 2,
+      "samples": 40,
+      "payload_bytes_including_receipt": 64,
+      "rpc_us_median": 328.802,
+      "dsp_copy_check_us_median": 5.0,
+      "host_pack_us_median": 0.469,
+      "host_validation_us_median": 4.062
+    },
+    {
+      "process_index": 3,
+      "elements": 64,
+      "samples": 80,
+      "payload_bytes_including_receipt": 1056,
+      "rpc_us_median": 301.5625,
+      "dsp_copy_check_us_median": 6.0,
+      "host_pack_us_median": 5.364,
+      "host_validation_us_median": 18.0465
+    },
+    {
+      "process_index": 3,
+      "elements": 128,
+      "samples": 240,
+      "payload_bytes_including_receipt": 2080,
+      "rpc_us_median": 279.505,
+      "dsp_copy_check_us_median": 7.0,
+      "host_pack_us_median": 10.104,
+      "host_validation_us_median": 31.563
+    },
+    {
+      "process_index": 3,
+      "elements": 256,
+      "samples": 5,
+      "payload_bytes_including_receipt": 4128,
+      "rpc_us_median": 296.145,
+      "dsp_copy_check_us_median": 87.0,
+      "host_pack_us_median": 17.448,
+      "host_validation_us_median": 50.312
+    }
+  ],
+  "muon_abi": {
+    "full_parity_matrices": 114.0,
+    "full_parity_total_matrices": 114.0,
+    "full_parity_max_abs": 1.490116119E-08,
+    "full_parity_worst_relative_l2": 4.40269854E-08,
+    "full_parity_minimum_cosine": 1.0
+  },
+  "records": [
+    {
+      "kind": "raw_boundary",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "abs": 0.0,
+      "nonfinite": 0.0
+    },
+    {
+      "kind": "raw_boundary",
+      "op": "add_zero",
+      "mismatch": 105.0,
+      "abs": 0.0009765625,
+      "nonfinite": 0.0
+    },
+    {
+      "kind": "raw_boundary",
+      "op": "multiply_one",
+      "mismatch": 97.0,
+      "abs": 0.0009765625,
+      "nonfinite": 0.0
+    },
+    {
+      "kind": "observer",
+      "name": "ordinary",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 2.02433256824E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.02433256824E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "dg",
+      "htp_fp32_abs": 3.09944152832E-06,
+      "oracle_double_abs": 2.55350343092E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.55350343092E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 3.09944152832E-06,
+      "reference_abs": 3.12497656263E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 3.09944152832E-06,
+      "reference_abs": 3.12497656263E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "ordinary",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "ordinary",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "ordinary",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "small_centered",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.13645398617E-06,
+      "reference_abs": 2.13645398617E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.13645398617E-06,
+      "reference_abs": 2.13645398617E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "centered",
+      "htp_fp32_abs": 2.13645398617E-06,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.13645398617E-06,
+      "reference_abs": 2.13645398617E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.13645398617E-06,
+      "reference_abs": 2.13645398617E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "inverse",
+      "htp_fp32_abs": 0.0337600708008,
+      "oracle_double_abs": 7.91172084291E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 7.91172084291E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0287399291992,
+      "reference_abs": 0.0287391380271,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0287399291992,
+      "reference_abs": 0.0287391380271,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "xhat",
+      "htp_fp32_abs": 0.000337600708008,
+      "oracle_double_abs": 1.33998292462E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.33998292462E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000150680541992,
+      "reference_abs": 0.000150693941821,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000150680541992,
+      "reference_abs": 0.000150693941821,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "dx",
+      "htp_fp32_abs": 0.0272216796875,
+      "oracle_double_abs": 2.82670804808E-06
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.82670804808E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0155410766602,
+      "reference_abs": 0.0155420806886,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0155410766602,
+      "reference_abs": 0.0155420806886,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "dg",
+      "htp_fp32_abs": 0.000128477811813,
+      "oracle_double_abs": 2.90127378788E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.90127378788E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000125348567963,
+      "reference_abs": 0.000125345249942,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000125348567963,
+      "reference_abs": 0.000125345249942,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "small_centered",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "small_centered",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "small_centered",
+      "abs": 2.13645398617E-06,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "low_variance",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.34395265579E-05,
+      "reference_abs": 2.34395265579E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.34395265579E-05,
+      "reference_abs": 2.34395265579E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "centered",
+      "htp_fp32_abs": 2.34320759773E-05,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 4.09781932831E-07,
+      "reference_abs": 4.09781932831E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 4.09781932831E-07,
+      "reference_abs": 4.09781932831E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "inverse",
+      "htp_fp32_abs": 0.488494873047,
+      "oracle_double_abs": 1.18763582577E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.18763582577E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0115051269531,
+      "reference_abs": 0.0114932505949,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0115051269531,
+      "reference_abs": 0.0114932505949,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00658798217773,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "dx",
+      "htp_fp32_abs": 0.27229309082,
+      "oracle_double_abs": 1.09583253902E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.09583253902E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0606689453125,
+      "reference_abs": 0.0606747036501,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0606689453125,
+      "reference_abs": 0.0606747036501,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "dg",
+      "htp_fp32_abs": 0.00247237086296,
+      "oracle_double_abs": 2.72729394624E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.72729394624E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 8.98241996765E-05,
+      "reference_abs": 8.98259900523E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 8.98241996765E-05,
+      "reference_abs": 8.98259900523E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "low_variance",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "low_variance",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "low_variance",
+      "abs": 2.34395265579E-05,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "epsilon_dominated",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 1.00135803223E-05,
+      "reference_abs": 1.00135803223E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 1.00135803223E-05,
+      "reference_abs": 1.00135803223E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "centered",
+      "htp_fp32_abs": 1.00061297417E-05,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 7.45058059692E-09,
+      "reference_abs": 7.45058059692E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 7.45058059692E-09,
+      "reference_abs": 7.45058059692E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "inverse",
+      "htp_fp32_abs": 0.226196289062,
+      "oracle_double_abs": 1.33381557248E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.33381557248E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0238037109375,
+      "reference_abs": 0.0238170490932,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0238037109375,
+      "reference_abs": 0.0238170490932,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00316420034505,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "dx",
+      "htp_fp32_abs": 0.164947509766,
+      "oracle_double_abs": 1.02730125633E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.02730125633E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0471038818359,
+      "reference_abs": 0.0471067154769,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0471038818359,
+      "reference_abs": 0.0471067154769,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "dg",
+      "htp_fp32_abs": 0.00118845701218,
+      "oracle_double_abs": 9.6890243606E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 9.6890243606E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 9.39965248108E-05,
+      "reference_abs": 9.40062138352E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 9.39965248108E-05,
+      "reference_abs": 9.40062138352E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "epsilon_dominated",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "epsilon_dominated",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "epsilon_dominated",
+      "abs": 1.00135803223E-05,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "constant",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "inverse",
+      "htp_fp32_abs": 0.227783203125,
+      "oracle_double_abs": 1.71862870957E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.71862870957E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.022216796875,
+      "reference_abs": 0.0222339831621,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.022216796875,
+      "reference_abs": 0.0222339831621,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "dx",
+      "htp_fp32_abs": 0.165649414062,
+      "oracle_double_abs": 1.0685343284E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.0685343284E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0478973388672,
+      "reference_abs": 0.0478866535239,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0478973388672,
+      "reference_abs": 0.0478866535239,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "dg",
+      "htp_fp32_abs": 1.87754631042E-06,
+      "oracle_double_abs": 2.56037280266E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.56037280266E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.87754631042E-06,
+      "reference_abs": 1.87498593762E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.87754631042E-06,
+      "reference_abs": 1.87498593762E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "constant",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "constant",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "constant",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "large_mean_low_variance",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 0.0009765625,
+      "reference_abs": 0.0009765625,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 0.0009765625,
+      "reference_abs": 0.0009765625,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "centered",
+      "htp_fp32_abs": 0.0009765625,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "inverse",
+      "htp_fp32_abs": 13.8517456055,
+      "oracle_double_abs": 1.06385562049E-06
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.06385562049E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.101745605469,
+      "reference_abs": 0.101746669324,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.101745605469,
+      "reference_abs": 0.101746669324,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "xhat",
+      "htp_fp32_abs": 0.295066654682,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 9.93609428406E-05,
+      "reference_abs": 9.93619817621E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 9.93609428406E-05,
+      "reference_abs": 9.93619817621E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "dx",
+      "htp_fp32_abs": 6.87336730957,
+      "oracle_double_abs": 8.15331415538E-06
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 8.15331415538E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0493774414062,
+      "reference_abs": 0.0493692880921,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0493774414062,
+      "reference_abs": 0.0493692880921,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "dg",
+      "htp_fp32_abs": 0.110651880503,
+      "oracle_double_abs": 1.26005187395E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.26005187395E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.61773777008E-05,
+      "reference_abs": 5.61669771518E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.61773777008E-05,
+      "reference_abs": 5.61669771518E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean_low_variance",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean_low_variance",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "large_mean_low_variance",
+      "abs": 0.0009765625,
+      "output_nonzero": 64.0,
+      "row0_nonzero": 0.0
+    },
+    {
+      "kind": "observer",
+      "name": "boundary_below",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "dg",
+      "htp_fp32_abs": 1.90734863281E-06,
+      "oracle_double_abs": 3.23435844773E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23435844773E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500504834E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500504834E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_below",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_below",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "boundary_below",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "boundary_equal",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00048828125,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "dg",
+      "htp_fp32_abs": 0.00024601817131,
+      "oracle_double_abs": 3.23436031291E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23436031291E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500502968E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500502968E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_equal",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_equal",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "boundary_equal",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "boundary_above",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "dg",
+      "htp_fp32_abs": 1.90734863281E-06,
+      "oracle_double_abs": 3.23436217808E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23436217808E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500501103E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87500501103E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "boundary_above",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "boundary_above",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "boundary_above",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "known_failure",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00048828125,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "dg",
+      "htp_fp32_abs": 0.00024601817131,
+      "oracle_double_abs": 3.23455167095E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23455167095E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.8750031161E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.8750031161E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "known_failure",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "known_failure",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "known_failure",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "large_signed",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00048828125,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 126.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 126.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "dg",
+      "htp_fp32_abs": 0.00024601817131,
+      "oracle_double_abs": 3.2354882773E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.2354882773E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87499375004E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87499375004E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_signed",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_signed",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "large_signed",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "half_scale_limit",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "dg",
+      "htp_fp32_abs": 1.90734863281E-06,
+      "oracle_double_abs": 3.23579268935E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23579268935E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87499070592E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87499070592E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "half_scale_limit",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "half_scale_limit",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "half_scale_limit",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "very_large_signed",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 1.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "xhat",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "dx",
+      "htp_fp32_abs": 2.50339508057E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "dg",
+      "htp_fp32_abs": 1.90734863281E-06,
+      "oracle_double_abs": 3.23626206944E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.23626206944E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87498601212E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87498601212E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "very_large_signed",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "very_large_signed",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "very_large_signed",
+      "abs": 0.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "large_mean",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 32.0,
+      "transfer_abs": 4.0,
+      "reference_abs": 4.0,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 32.0,
+      "transfer_abs": 4.0,
+      "reference_abs": 4.0,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "centered",
+      "htp_fp32_abs": 4.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "inverse",
+      "htp_fp32_abs": 0.000200500711799,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "xhat",
+      "htp_fp32_abs": 0.0205078125,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "dx",
+      "htp_fp32_abs": 9.44519415498E-05,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 126.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 126.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "dg",
+      "htp_fp32_abs": 0.00781437754631,
+      "oracle_double_abs": 3.223769518E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.223769518E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87511093763E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 1.90734863281E-06,
+      "reference_abs": 1.87511093763E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "large_mean",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "large_mean",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "large_mean",
+      "abs": 4.0,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "sparse_known_failure",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "inverse",
+      "htp_fp32_abs": 1.01048499346E-05,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.15393912792E-06,
+      "reference_abs": 5.15315918622E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.15393912792E-06,
+      "reference_abs": 5.15315918622E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "xhat",
+      "htp_fp32_abs": 0.0033016204834,
+      "oracle_double_abs": 3.9246283734E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.9246283734E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 66.0,
+      "transfer_abs": 0.000604629516602,
+      "reference_abs": 0.000604237053764,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 66.0,
+      "transfer_abs": 0.000604629516602,
+      "reference_abs": 0.000604237053764,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "dx",
+      "htp_fp32_abs": 5.26569783688E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 3.55206429958E-06,
+      "reference_abs": 3.55185647997E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 3.55206429958E-06,
+      "reference_abs": 3.55185647997E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "dg",
+      "htp_fp32_abs": 0.00172758102417,
+      "oracle_double_abs": 2.05071293724E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.05071293724E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 0.00022554397583,
+      "reference_abs": 0.000225338904536,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 0.00022554397583,
+      "reference_abs": 0.000225338904536,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_known_failure",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_known_failure",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "sparse_known_failure",
+      "abs": 0.0,
+      "output_nonzero": 66.0,
+      "row0_nonzero": 2.0
+    },
+    {
+      "kind": "observer",
+      "name": "sparse_large",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "centered",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "inverse",
+      "htp_fp32_abs": 5.00679016113E-06,
+      "oracle_double_abs": 6.82766088111E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 6.82766088111E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.00679016113E-06,
+      "reference_abs": 4.99996250025E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "xhat",
+      "htp_fp32_abs": 0.000604629516602,
+      "oracle_double_abs": 3.85681075521E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.85681075521E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 66.0,
+      "transfer_abs": 0.000604629516602,
+      "reference_abs": 0.000604243835526,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 66.0,
+      "transfer_abs": 0.000604629516602,
+      "reference_abs": 0.000604243835526,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "dx",
+      "htp_fp32_abs": 2.68127769232E-06,
+      "oracle_double_abs": 1.93885497657E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.93885497657E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 2.50339508057E-06,
+      "reference_abs": 2.49509777844E-06,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "dg",
+      "htp_fp32_abs": 0.00022554397583,
+      "oracle_double_abs": 2.02528132931E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 2.02528132931E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 55.0,
+      "transfer_abs": 0.00022554397583,
+      "reference_abs": 0.000225341447697,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 55.0,
+      "transfer_abs": 0.00022554397583,
+      "reference_abs": 0.000225341447697,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "sparse_large",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "sparse_large",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "sparse_large",
+      "abs": 0.0,
+      "output_nonzero": 66.0,
+      "row0_nonzero": 2.0
+    },
+    {
+      "kind": "observer",
+      "name": "random_seed1",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.00024139881134,
+      "reference_abs": 0.00024139881134,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.00024139881134,
+      "reference_abs": 0.00024139881134,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "centered",
+      "htp_fp32_abs": 0.000664114952087,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000428080558777,
+      "reference_abs": 0.000428080558777,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000428080558777,
+      "reference_abs": 0.000428080558777,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "inverse",
+      "htp_fp32_abs": 0.000450134277344,
+      "oracle_double_abs": 1.35525626277E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.35525626277E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.000450134277344,
+      "reference_abs": 0.000450161247573,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.000450134277344,
+      "reference_abs": 0.000450161247573,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "xhat",
+      "htp_fp32_abs": 0.00127637386322,
+      "oracle_double_abs": 3.45782458E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.45782458E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000483751296997,
+      "reference_abs": 0.000483665038107,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000483751296997,
+      "reference_abs": 0.000483665038107,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "dx",
+      "htp_fp32_abs": 0.000453948974609,
+      "oracle_double_abs": 9.00682044502E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 9.00682044502E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000239312648773,
+      "reference_abs": 0.000239330988992,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000239312648773,
+      "reference_abs": 0.000239330988992,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "dg",
+      "htp_fp32_abs": 0.000550627708435,
+      "oracle_double_abs": 1.57693599678E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.57693599678E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000191926956177,
+      "reference_abs": 0.000191912360718,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000191926956177,
+      "reference_abs": 0.000191912360718,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed1",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed1",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "random_seed1",
+      "abs": 0.00024139881134,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "random_seed7",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000119686126709,
+      "reference_abs": 0.000119686126709,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000119686126709,
+      "reference_abs": 0.000119686126709,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "centered",
+      "htp_fp32_abs": 0.00017135636881,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 4.6519562602E-07,
+      "reference_abs": 4.6519562602E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 4.6519562602E-07,
+      "reference_abs": 4.6519562602E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "inverse",
+      "htp_fp32_abs": 0.188079833984,
+      "oracle_double_abs": 1.29823145016E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.29823145016E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0718078613281,
+      "reference_abs": 0.0717948790136,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0718078613281,
+      "reference_abs": 0.0717948790136,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "xhat",
+      "htp_fp32_abs": 0.0535580813885,
+      "oracle_double_abs": 1.65883455305E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.65883455305E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000114619731903,
+      "reference_abs": 0.000114636320249,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000114619731903,
+      "reference_abs": 0.000114636320249,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "dx",
+      "htp_fp32_abs": 0.185035705566,
+      "oracle_double_abs": 1.25273591038E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.25273591038E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0584411621094,
+      "reference_abs": 0.0584399033658,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0584411621094,
+      "reference_abs": 0.0584399033658,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "dg",
+      "htp_fp32_abs": 0.019829981029,
+      "oracle_double_abs": 1.14003740996E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.14003740996E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 2.79992818832E-05,
+      "reference_abs": 2.80056909166E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 2.79992818832E-05,
+      "reference_abs": 2.80056909166E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed7",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed7",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "random_seed7",
+      "abs": 0.000119686126709,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "random_seed31",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.991943359375,
+      "reference_abs": 0.991943359375,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.991943359375,
+      "reference_abs": 0.991943359375,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "centered",
+      "htp_fp32_abs": 1.58715820312,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.99853515625,
+      "reference_abs": 0.99853515625,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.99853515625,
+      "reference_abs": 0.99853515625,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "inverse",
+      "htp_fp32_abs": 5.25906216353E-08,
+      "oracle_double_abs": 1.42608286833E-11
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.42608286833E-11,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 5.25906216353E-08,
+      "reference_abs": 5.25763608066E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 5.25906216353E-08,
+      "reference_abs": 5.25763608066E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "xhat",
+      "htp_fp32_abs": 0.000991344451904,
+      "oracle_double_abs": 1.74410643705E-07
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.74410643705E-07,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000486731529236,
+      "reference_abs": 0.00048680370196,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000486731529236,
+      "reference_abs": 0.00048680370196,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "dx",
+      "htp_fp32_abs": 6.55854819342E-07,
+      "oracle_double_abs": 1.47259928318E-11
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.47259928318E-11,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 5.94882294536E-08,
+      "reference_abs": 5.9487686567E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 5.94882294536E-08,
+      "reference_abs": 5.9487686567E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "dg",
+      "htp_fp32_abs": 0.000609338283539,
+      "oracle_double_abs": 7.96038847062E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 7.96038847062E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000168323516846,
+      "reference_abs": 0.00016828463908,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 0.000168323516846,
+      "reference_abs": 0.00016828463908,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed31",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed31",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "random_seed31",
+      "abs": 0.991943359375,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    },
+    {
+      "kind": "observer",
+      "name": "random_seed97",
+      "bit_mismatch": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "input",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "input",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "input",
+      "op": "add_zero",
+      "mismatch": 122.0,
+      "transfer_abs": 0.0009765625,
+      "reference_abs": 0.0009765625,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "input",
+      "op": "multiply_one",
+      "mismatch": 122.0,
+      "transfer_abs": 0.0009765625,
+      "reference_abs": 0.0009765625,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "centered",
+      "htp_fp32_abs": 0.00105285644531,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "centered",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "centered",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "centered",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "inverse",
+      "htp_fp32_abs": 4.76663208008,
+      "oracle_double_abs": 1.94379752543E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "inverse",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.94379752543E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "inverse",
+      "op": "add_zero",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0166320800781,
+      "reference_abs": 0.0166434002455,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "inverse",
+      "op": "multiply_one",
+      "mismatch": 2.0,
+      "transfer_abs": 0.0166320800781,
+      "reference_abs": 0.0166434002455,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "xhat",
+      "htp_fp32_abs": 0.327684044838,
+      "oracle_double_abs": 3.0881226909E-08
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "xhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 3.0881226909E-08,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "xhat",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000112026929855,
+      "reference_abs": 0.000111996048628,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "xhat",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.000112026929855,
+      "reference_abs": 0.000111996048628,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "dy",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dy",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dy",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dy",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "dxhat",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dxhat",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dxhat",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dxhat",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "dx",
+      "htp_fp32_abs": 2.82164001465,
+      "oracle_double_abs": 1.21300937224E-05
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dx",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 1.21300937224E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dx",
+      "op": "add_zero",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0623321533203,
+      "reference_abs": 0.0623274891022,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dx",
+      "op": "multiply_one",
+      "mismatch": 128.0,
+      "transfer_abs": 0.0623321533203,
+      "reference_abs": 0.0623274891022,
+      "nonfinite": 0.0,
+      "gate": 0.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "dg",
+      "htp_fp32_abs": 0.191675454378,
+      "oracle_double_abs": 9.75143940596E-09
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dg",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 9.75143940596E-09,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dg",
+      "op": "add_zero",
+      "mismatch": 64.0,
+      "transfer_abs": 6.01261854172E-05,
+      "reference_abs": 6.01240519227E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "dg",
+      "op": "multiply_one",
+      "mismatch": 64.0,
+      "transfer_abs": 6.01261854172E-05,
+      "reference_abs": 6.01240519227E-05,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "stage",
+      "name": "random_seed97",
+      "field": "db",
+      "htp_fp32_abs": 0.0,
+      "oracle_double_abs": 0.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "db",
+      "op": "reshape",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "db",
+      "op": "add_zero",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "boundary",
+      "name": "random_seed97",
+      "field": "db",
+      "op": "multiply_one",
+      "mismatch": 0.0,
+      "transfer_abs": 0.0,
+      "reference_abs": 0.0,
+      "nonfinite": 0.0,
+      "gate": 1.0
+    },
+    {
+      "kind": "subtract",
+      "name": "random_seed97",
+      "abs": 0.0009765625,
+      "output_nonzero": 128.0,
+      "row0_nonzero": 64.0
+    }
+  ]
+}
