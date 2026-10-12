@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnResidual','lnResidualTap','lnResidualFused','matmul')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -39,13 +39,16 @@ function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arg
 $df=Adb @('shell','df','-k','/data/user/0')
 $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%'})
 if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){throw 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'}
+$research=$Variant -match '^ln|^matmul'
+$executable=if($research){'layernorm_probe'}else{'fp32_probe'}
 $id='customfp32-'+[guid]::NewGuid().ToString('N')
-$report=Join-Path $root "build/reports/htp-fp32-custom-consumer/$id"
+$reportBase=if($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
+$report=Join-Path $root "build/reports/$reportBase/$id"
 [IO.Directory]::CreateDirectory($report)|Out-Null
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$report/apk-audit.txt" *> "$report/apk-audit-console.txt"
-$remote='/data/local/tmp/hexafp32-'+$build.binary_hashes.fp32_probe.Substring(0,16)
+$remote='/data/local/tmp/hexafp32-'+$build.binary_hashes.$executable.Substring(0,16)
 Adb @('shell','mkdir','-p',$remote)|Out-Null
-$files=@('libHexaFp32Host.so','libHexaFp32Dsp.so','fp32_probe') | ForEach-Object {Join-Path $root "build/fp32-custom/$_"}
+$files=@('libHexaFp32Host.so','libHexaFp32Dsp.so',$executable) | ForEach-Object {Join-Path $root "build/fp32-custom/$_"}
 foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){$files+=Join-Path $QairtSdkRoot "lib/aarch64-android/$name"}
 $files+=Join-Path $QairtSdkRoot 'lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so'
 $files+=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
@@ -58,13 +61,13 @@ foreach($file in $files){
  $remoteHash=((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0]
  if($remoteHash -ne $hash){throw 'STAGED_ARTIFACT_MISMATCH'};$hashes[$name]=$hash
 }
-Adb @('shell','chmod','700',"$remote/fp32_probe")|Out-Null
+Adb @('shell','chmod','700',"$remote/$executable")|Out-Null
 function Top { $s=Adb @('shell','dumpsys','activity','activities');$m=[regex]::Match($s,'(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/');if(!$m.Success){throw 'TOP_RESUMED_UNKNOWN'};return $m.Groups[1].Value }
 $before=Top
 if($before -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_ALREADY_FOREGROUND'}
 $conditionBefore=Adb @('shell','dumpsys','battery')
 $thermalBefore=Adb @('shell','dumpsys','thermalservice')
-$cmd="cd $remote && export LD_LIBRARY_PATH=$remote && export ADSP_LIBRARY_PATH='$remote;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp' && ./fp32_probe $Variant"
+$cmd="cd $remote && export LD_LIBRARY_PATH=$remote && export ADSP_LIBRARY_PATH='$remote;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp' && ./$executable $Variant"
 $process=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'shell',('"'+$cmd+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$report/stdout.txt" -RedirectStandardError "$report/stderr.txt"
 $takeovers=0;$started=[DateTime]::UtcNow
 do {
@@ -80,4 +83,4 @@ $stdout=Get-Content "$report/stdout.txt" -Raw
 if($stdout -notmatch '(?m)^summary,' -or $stdout -match '(?m)^(?:\w*RECEIPT_FAIL|\w*NONFINITE\w*|INPUT_MUTATION)'){throw 'CUSTOM_PROBE_INCOMPLETE_OR_UNSAFE'}
 Write-Host "variant=$Variant exit=$($process.ExitCode) private_report=$report"
 Select-String -Path "$report/stdout.txt" -Pattern '^summary,|^raw_copy,|^result,' | ForEach-Object {$_.Line}
-if($Variant -notin @('standardAdd','standardMultiply','htpAdd','htpMultiply') -and $process.ExitCode -ne 0){throw 'CUSTOM_ACCURACY_NOT_ESTABLISHED'}
+if($Variant -notin @('standardAdd','standardMultiply','htpAdd','htpMultiply','matmul') -and $process.ExitCode -ne 0){throw 'CUSTOM_ACCURACY_NOT_ESTABLISHED'}

@@ -1,31 +1,5 @@
 // Standalone diagnostic; only libQnnHtp is selected. No training state loaded.
-#include <QnnInterface.h>
-#include <QnnOpPackage.h>
-#include <QnnOpDef.h>
-#include <dlfcn.h>
-#include <cstdio>
-#include <cstring>
-#include <cstdlib>
-#include <cmath>
-#include <vector>
-#include <string>
-#include <chrono>
-#include <sys/resource.h>
-#include "../../app/src/main/cpp/qnn/layernorm_redesign_reference.h"
-#include "../hvx_rpc/fp32_boundary_fixture.h"
-using API=QNN_INTERFACE_VER_TYPE;
-API api{}; Qnn_BackendHandle_t backend{};Qnn_DeviceHandle_t device{};Qnn_ContextHandle_t context{};
-void checkImpl(const char* stage,Qnn_ErrorHandle_t rc) {
- std::printf("api,%s,%llu\n",stage,(unsigned long long)QNN_GET_ERROR_CODE(rc));std::fflush(stdout);
- if(rc!=QNN_SUCCESS)std::exit(2);
-}
-#define check(stage, expression) do {auto apiStarted=std::chrono::steady_clock::now();auto apiRc=(expression);double apiUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-apiStarted).count();std::printf("api_us,%s,%.3f\n",stage,apiUs);checkImpl(stage,apiRc);}while(0)
-void log(const char* f,QnnLog_Level_t,uint64_t,va_list a){std::vfprintf(stderr,f,a);std::fputc('\n',stderr);}
-uint32_t word(float f){uint32_t u;std::memcpy(&u,&f,4);return u;}
-float from(uint32_t u){float f;std::memcpy(&f,&u,4);return f;}
-uint64_t hashWords(const std::vector<float>& values,uint64_t hash=14695981039346656037ull){
- for(float f:values){uint32_t u=word(f);for(unsigned j=0;j<4;++j){hash^=(u>>(8*j))&255;hash*=1099511628211ull;}}return hash;
-}
+#include "probe_support.h"
 struct Graph {
  Qnn_GraphHandle_t graph{}; std::vector<Qnn_Tensor_t> tensors;
  std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;

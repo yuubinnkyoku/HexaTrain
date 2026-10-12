@@ -27,6 +27,10 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/probe.cpp')) {
  if($LASTEXITCODE){throw 'CUSTOM_PROBE_BUILD_FAILED'}
 }
 Write-Host 'custom_package_build=PASS'
+if(Test-Path (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp')){
+ & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -ffp-contract=off -static-libstdc++ "-I$inc" (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp') -ldl -o "$out/layernorm_probe"
+ if($LASTEXITCODE){throw 'LAYERNORM_PROBE_BUILD_FAILED'}
+}
 $sourceHashes=@{}
 foreach($relative in @('host_tests/fp32_custom/package.cpp','host_tests/fp32_custom/probe.cpp',
  'app/src/main/cpp/qnn/layernorm_stability_reference.h','app/src/main/cpp/qnn/layernorm_redesign_reference.h','host_tests/hvx_rpc/fp32_boundary_fixture.h')){
@@ -36,6 +40,10 @@ $binaryHashes=@{}
 foreach($name in @('libHexaFp32Dsp.so','libHexaFp32Host.so','fp32_probe')){
  $binaryHashes[$name]=(Get-FileHash -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
 }
+foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32_custom/probe_support.h','host_tests/fp32_custom/layernorm_probe.cpp')){
+ if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
+}
+if(Test-Path "$out/layernorm_probe"){$binaryHashes['layernorm_probe']=(Get-FileHash "$out/layernorm_probe").Hash.ToLowerInvariant()}
 $identity=@{source_sha=(& git -C $root rev-parse HEAD).Trim();source_hashes=$sourceHashes;binary_hashes=$binaryHashes;
  qairt_build_id=$ExpectedBuildId;hexagon_compiler_sha256=(Get-FileHash $hex).Hash.ToLowerInvariant();
  ndk_compiler_sha256=(Get-FileHash $arm).Hash.ToLowerInvariant();fp_contract='off';vectorization='disabled';architecture='v81'}

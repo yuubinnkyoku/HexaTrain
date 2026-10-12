@@ -7,12 +7,13 @@
 #ifdef __hexagon__
 #include <HAP_perf.h>
 #endif
+#include "layernorm_ops.h"
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 4, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 5, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -23,8 +24,10 @@ Qnn_ErrorHandle_t getInfo(const QnnOpPackage_Info_t** p) {
 }
 Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(c.version!=QNN_OPCONFIG_VERSION_1 || !c.v1.packageName || !c.v1.typeName ||
-       std::strcmp(c.v1.packageName,package) || c.v1.numOfParams || c.v1.numOfOutputs!=2)
+       std::strcmp(c.v1.packageName,package) || c.v1.numOfParams)
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"LnForward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(c.v1.numOfOutputs!=2)return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     for(unsigned k=0;k<4;++k) if(!std::strcmp(c.v1.typeName,names[k]))
         return c.v1.numOfInputs==(k==0?1u:k==3?3u:2u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
@@ -107,5 +110,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps()?package:nullptr;
 }
