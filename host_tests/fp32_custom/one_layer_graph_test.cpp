@@ -18,5 +18,6 @@ Qnn_ErrorHandle_t node(Qnn_GraphHandle_t,Qnn_OpConfig_t config){auto& c=config.v
 int main(int argc,char** argv){api.graphCreate=create;api.tensorCreateGraphTensor=tensorCreate;api.graphAddNode=node;api.graphFinalize=finish;
  for(auto mode:{"standalone","integratedNative","integratedTap","integratedFused","producedTap","producedSegmentTap"}){std::string m=mode;OneGraph g(m,m.find("Tap")!=std::string::npos||m=="integratedFused",m=="integratedFused",m!="standalone"&&m!="producedSegmentTap",m=="producedTap"||m=="producedSegmentTap");}
  if(argc==2){auto fs=one::read(argv[1]);std::vector<one::FV> weights;for(auto& z:fs)weights.push_back(one::f(one::reference(z,true).at("dw")));accumulation(fs,weights);}
+ for(bool tap:{false,true}){OneGraph g(tap?"integratedSplitTap":"integratedSplitNative",tap,false,false,false);}
  std::cout<<"one_layer_graph_host_audit=PASS checked="<<checked<<" generalized_shape_validator=PASS\n";
 }
