@@ -12,7 +12,7 @@ void mm(DiagnosticGraph& g,const std::string& name,unsigned a,unsigned b,unsigne
 struct OneGraph {
  DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0;
  unsigned tensor(const std::string& name,unsigned r,unsigned c,bool terminal=false){auto id=g.tensor(name.c_str(),tap||terminal?QNN_TENSOR_TYPE_APP_READ:QNN_TENSOR_TYPE_NATIVE,{1,1,r,c});out[name]=id;return id;}
- unsigned input(const std::string& name,unsigned r,unsigned c){auto id=g.tensor(name.c_str(),QNN_TENSOR_TYPE_APP_WRITE,{1,1,r,c});in[name]=id;return id;}
+ unsigned input(const std::string& name,unsigned r,unsigned c){auto id=g.tensor(("input_"+name).c_str(),QNN_TENSOR_TYPE_APP_WRITE,{1,1,r,c});in[name]=id;return id;}
  unsigned binary(const std::string& name,const char* type,unsigned a,unsigned b,unsigned r,unsigned c,bool terminal=false){auto id=tensor(name,r,c,terminal);g.node(name.c_str(),type,"qti.aisw",{a,b},{id});return id;}
  unsigned mat(const std::string& name,unsigned a,unsigned b,unsigned r,unsigned c,bool ta=false,bool tb=false,bool terminal=false){auto id=tensor(name,r,c,terminal);op::mm(g,name,a,b,id,ta,tb);return id;}
  unsigned sum(const std::string& name,unsigned a){auto id=tensor(name,32,1);Qnn_Param_t p=QNN_PARAM_INIT;p.name=QNN_OP_REDUCE_SUM_PARAM_AXES;p.paramType=QNN_PARAMTYPE_TENSOR;p.tensorParam=g.tensors[axis];g.node(name.c_str(),QNN_OP_REDUCE_SUM,"qti.aisw",{a},{id},{p,op::boolean(QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS,true)});return id;}
