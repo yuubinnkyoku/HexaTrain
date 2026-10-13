@@ -2,7 +2,9 @@
 #include <QnnInterface.h>
 #include <QnnOpPackage.h>
 #include <QnnOpDef.h>
+#ifndef ONE_GRAPH_HOST_AUDIT
 #include <dlfcn.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -10,7 +12,9 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#ifndef ONE_GRAPH_HOST_AUDIT
 #include <sys/resource.h>
+#endif
 #include <map>
 #include "../../app/src/main/cpp/qnn/layernorm_redesign_reference.h"
 #include "../hvx_rpc/fp32_boundary_fixture.h"
@@ -22,6 +26,7 @@ inline void log(const char* f,QnnLog_Level_t,uint64_t,va_list a){std::vfprintf(s
 inline uint32_t word(float f){uint32_t u;std::memcpy(&u,&f,4);return u;}
 inline float from(uint32_t u){float f;std::memcpy(&f,&u,4);return f;}
 inline uint64_t hashWords(const std::vector<float>& values,uint64_t hash=14695981039346656037ull){for(float f:values){uint32_t u=word(f);for(unsigned j=0;j<4;++j){hash^=(u>>(8*j))&255;hash*=1099511628211ull;}}return hash;}
+#ifndef ONE_GRAPH_HOST_AUDIT
 inline void initializeProbe(){
  void* lib=dlopen("libQnnHtp.so",RTLD_NOW|RTLD_GLOBAL);if(!lib){std::puts(dlerror());std::exit(2);}
  const QnnInterface_t** ps=nullptr;uint32_t count=0;
@@ -34,6 +39,7 @@ inline void initializeProbe(){
  check("deviceCreate",api.deviceCreate(logger,nullptr,&device));check("contextCreate",api.contextCreate(backend,device,nullptr,&context));
 }
 inline void closeProbe(){check("contextFree",api.contextFree(context,nullptr));check("deviceFree",api.deviceFree(device));check("backendFree",api.backendFree(backend));}
+#endif
 // Shared QNN helper for variable shapes and multiple saved/output tensors.
 struct DiagnosticGraph {
  Qnn_GraphHandle_t graph{};std::vector<Qnn_Tensor_t> tensors;std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;

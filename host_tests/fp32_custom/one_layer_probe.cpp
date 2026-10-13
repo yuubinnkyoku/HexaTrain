@@ -78,6 +78,7 @@ void accumulation(const std::vector<one::Fixture>& fs,const std::vector<one::FV>
  }
  auto unchanged=tiny_lm::parameterRegistry(before);for(unsigned i=0;i<original.size();++i)if(*original[i].values!=*unchanged[i].values)std::exit(3);
 }
+#ifndef ONE_GRAPH_HOST_AUDIT
 int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one::read("one-layer-inputs.bin");unsigned segmentFailures=0,attentionFailures=0,producerFailures=0;std::vector<one::FV> weights(24);std::vector<std::map<std::string,one::FV>> anchors(24),native(24);
  for(auto name:{"standalone","integratedNative","integratedTap","integratedFused","producedTap"}){std::string mode=name;bool integrated=mode!="standalone",tap=mode.find("Tap")!=std::string::npos||mode=="integratedFused",fused=mode=="integratedFused",produced=mode=="producedTap";OneGraph graph(mode,tap,fused,integrated,produced);unsigned beforeSegment=segmentFailures,beforeAttention=attentionFailures;
   for(auto& z:fs){auto ref=one::reference(z),fp=one::reference(z,true);auto o=graph.g.run(graph.inputs(z));auto actual=graph.audit(z,o);for(auto& p:ref)if(actual.count(p.first)){unsigned bad=metric(mode,z.index,p.first,p.second,fp.at(p.first),actual.at(p.first),limit(p.first));if(p.first=="dc"||p.first=="dw"||p.first=="dx"||p.first=="dg"||p.first=="db"||p.first=="residual"||p.first=="y"||p.first=="xhat"||p.first=="inverse"){if(!produced)segmentFailures+=bad;}else attentionFailures+=bad;}
@@ -89,3 +90,4 @@ int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one
   std::printf("onepathsummary,%s,cases=24,segment_failures=%u,attention_failures=%u\n",mode.c_str(),segmentFailures-beforeSegment,attentionFailures-beforeAttention);if(mode=="standalone"&&segmentFailures){std::puts("ONE_STANDALONE_ACCURACY_STOP");return 4;}
  }accumulation(fs,weights);struct rusage usage{};getrusage(RUSAGE_SELF,&usage);std::printf("peak_rss_kib,%ld\n",usage.ru_maxrss);closeProbe();std::printf("summary,oneStandard,segment_failures=%u,attention_failures=%u,producer_failures=%u,cpu_fallback=0,input_mutation=0,finite=1,poison_remaining=0,canary_failures=0,training_updates=0\n",segmentFailures,attentionFailures,producerFailures);return segmentFailures?4:0;
 }
+#endif
