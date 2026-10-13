@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -45,9 +45,9 @@ $df=Adb @('shell','df','-k','/data/user/0')
 $line=@($df -split "`n" | Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%'})
 if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){throw 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'}
 $research=$Variant -match '^ln|^matmul|^copyNative|^mm'
-$executable=if($research){'layernorm_probe'}else{'fp32_probe'}
+$executable=if($Variant -match '^one'){'one_layer_probe'}elseif($research){'layernorm_probe'}else{'fp32_probe'}
 $id='customfp32-'+[guid]::NewGuid().ToString('N')
-$reportBase=if($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
+$reportBase=if($Variant -match '^one'){'g1-one-layer-fp32-backward'}elseif($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
 $report=Join-Path $root "build/reports/$reportBase/$id"
 [IO.Directory]::CreateDirectory($report)|Out-Null
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$report/apk-audit.txt" *> "$report/apk-audit-console.txt"
@@ -57,6 +57,12 @@ $files=@('libHexaFp32Host.so','libHexaFp32Dsp.so',$executable) | ForEach-Object 
 if($Variant -match '^mm'){
  $fixture=Join-Path $root 'build/reports/htp-fp32-custom-matmul-ln2/frozen-inputs.bin'
  if((Get-FileHash -LiteralPath $fixture).Hash.ToLowerInvariant() -ne 'daf61450486f6f8df40b7b10e631c268e9f5e2e5f2458e3a1eda4b0cb8c9978e'){throw 'FROZEN_FIXTURE_IDENTITY_MISMATCH'}
+ $files+=$fixture
+}
+if($Variant -match '^one'){
+ $fixture=Join-Path $root 'build/reports/g1-one-layer-fp32-backward/one-layer-inputs.bin'
+ $fixtureIdentity=Get-Content (Join-Path $root 'build/reports/g1-one-layer-fp32-backward/fixture-identity-private.json') -Raw|ConvertFrom-Json
+ if((Get-FileHash -LiteralPath $fixture).Hash.ToLowerInvariant() -ne $fixtureIdentity.sha256){throw 'ONE_LAYER_FIXTURE_MISMATCH'}
  $files+=$fixture
 }
 foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){$files+=Join-Path $QairtSdkRoot "lib/aarch64-android/$name"}

@@ -44,6 +44,12 @@ foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32
  if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
 }
 if(Test-Path "$out/layernorm_probe"){$binaryHashes['layernorm_probe']=(Get-FileHash "$out/layernorm_probe").Hash.ToLowerInvariant()}
+if(Test-Path (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp')){
+ & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -ffp-contract=off -static-libstdc++ "-I$inc" (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp') (Join-Path $root 'app/src/main/cpp/tiny_language_model_cpu.cpp') -ldl -o "$out/one_layer_probe"
+ if($LASTEXITCODE){throw 'ONE_LAYER_PROBE_BUILD_FAILED'}
+ $binaryHashes['one_layer_probe']=(Get-FileHash "$out/one_layer_probe").Hash.ToLowerInvariant()
+ foreach($relative in @('host_tests/fp32_custom/one_layer_probe.cpp','host_tests/fp32_custom/one_layer_reference.h','host_tests/fp32_custom/one_layer_fixture_audit.cpp','app/src/main/cpp/tiny_language_model_cpu.cpp','app/src/main/cpp/tiny_language_model_cpu.h','app/src/main/cpp/transformer_parameter_metadata.h','app/src/main/cpp/nicopedia_muon_checkpoint.cpp','app/src/main/cpp/nicopedia_muon_checkpoint.h')){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
+}
 $identity=@{source_sha=(& git -C $root rev-parse HEAD).Trim();source_hashes=$sourceHashes;binary_hashes=$binaryHashes;
  qairt_build_id=$ExpectedBuildId;hexagon_compiler_sha256=(Get-FileHash $hex).Hash.ToLowerInvariant();
  ndk_compiler_sha256=(Get-FileHash $arm).Hash.ToLowerInvariant();fp_contract='off';vectorization='disabled';architecture='v81'}

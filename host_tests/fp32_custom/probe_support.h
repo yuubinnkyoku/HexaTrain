@@ -38,12 +38,18 @@ inline void closeProbe(){check("contextFree",api.contextFree(context,nullptr));c
 struct DiagnosticGraph {
  Qnn_GraphHandle_t graph{};std::vector<Qnn_Tensor_t> tensors;std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;
  std::vector<unsigned> inputs,outputs;unsigned nodes=0;double executeUs=0;
- DiagnosticGraph(const std::string& name){tensors.reserve(40);names.reserve(40);shapes.reserve(40);check("graphCreate",api.graphCreate(context,name.c_str(),nullptr,&graph));}
+ std::vector<std::vector<float>> constants;
+ DiagnosticGraph(const std::string& name){tensors.reserve(512);names.reserve(512);shapes.reserve(512);constants.reserve(512);check("graphCreate",api.graphCreate(context,name.c_str(),nullptr,&graph));}
  unsigned tensor(const char* name,Qnn_TensorType_t type,std::vector<uint32_t> shape,Qnn_DataType_t dtype=QNN_DATATYPE_FLOAT_32){
   unsigned id=tensors.size();names.emplace_back(name);shapes.push_back(shape);Qnn_Tensor_t t=QNN_TENSOR_INIT;
   t.v1.name=names.back().c_str();t.v1.type=type;t.v1.dataFormat=QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER;t.v1.dataType=dtype;t.v1.rank=shape.size();t.v1.dimensions=shapes.back().data();t.v1.memType=QNN_TENSORMEMTYPE_RAW;
   tensors.push_back(t);check("tensorCreate",api.tensorCreateGraphTensor(graph,&tensors.back()));
   if(type==QNN_TENSOR_TYPE_APP_WRITE)inputs.push_back(id);if(type==QNN_TENSOR_TYPE_APP_READ)outputs.push_back(id);return id;
+ }
+ unsigned constant(const char* name,std::vector<uint32_t> shape,std::vector<float> data,Qnn_DataType_t dtype=QNN_DATATYPE_FLOAT_32){
+  unsigned id=tensors.size();names.emplace_back(name);shapes.push_back(shape);constants.push_back(std::move(data));Qnn_Tensor_t t=QNN_TENSOR_INIT;
+  t.v1.name=names.back().c_str();t.v1.type=QNN_TENSOR_TYPE_STATIC;t.v1.dataFormat=QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER;t.v1.dataType=dtype;t.v1.rank=shape.size();t.v1.dimensions=shapes.back().data();t.v1.memType=QNN_TENSORMEMTYPE_RAW;t.v1.clientBuf={constants.back().data(),uint32_t(constants.back().size()*4)};
+  tensors.push_back(t);check("tensorCreate",api.tensorCreateGraphTensor(graph,&tensors.back()));return id;
  }
  unsigned size(unsigned id)const{unsigned n=1;for(auto d:shapes[id])n*=d;return n;}
  void node(const char* name,const char* type,const char* package,std::vector<unsigned> ins,std::vector<unsigned> outs,std::vector<Qnn_Param_t> params={}){
