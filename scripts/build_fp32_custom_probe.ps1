@@ -44,6 +44,9 @@ foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32
  if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
 }
 if(Test-Path "$out/layernorm_probe"){$binaryHashes['layernorm_probe']=(Get-FileHash "$out/layernorm_probe").Hash.ToLowerInvariant()}
+foreach($relative in @('host_tests/fp32_custom/head_split_op.h','host_tests/fp32_custom/one_layer_frontier_probe.h')){
+ if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
+}
 if(Test-Path (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp')){
  & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -ffp-contract=off -static-libstdc++ "-I$inc" (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp') (Join-Path $root 'app/src/main/cpp/tiny_language_model_cpu.cpp') -ldl -o "$out/one_layer_probe"
  if($LASTEXITCODE){throw 'ONE_LAYER_PROBE_BUILD_FAILED'}

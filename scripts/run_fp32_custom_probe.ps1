@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary','oneFinal')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -69,14 +69,28 @@ foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){
 $files+=Join-Path $QairtSdkRoot 'lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so'
 $files+=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
 $hashes=@{}
-foreach($file in $files){
+if($Variant -match '^one'){
+ function RemoteHashes {
+  $arguments=@('shell','sha256sum')+@($files|ForEach-Object {"$remote/$(Split-Path $_ -Leaf)"})
+  $result=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $arguments -AllowFailure
+  if($result.ExitCode -ne 0 -and $result.Text -notmatch 'No such file or directory'){throw 'STAGING_STATE_UNKNOWN'}
+  $values=@{};foreach($line in $result.Text -split "`n"){
+   $match=[regex]::Match($line.Trim(),'^([0-9a-f]{64})\s+(.+)$')
+   if($match.Success){$values[$match.Groups[2].Value]=$match.Groups[1].Value}
+  };return $values
+ }
+ $old=RemoteHashes
+ foreach($file in $files){$name=Split-Path $file -Leaf;$hash=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant();if($old["$remote/$name"] -ne $hash){Adb @('push',$file,$remote)|Out-Null};$hashes[$name]=$hash}
+ $verified=RemoteHashes
+ foreach($name in $hashes.Keys){if($verified["$remote/$name"] -ne $hashes[$name]){throw 'STAGED_ARTIFACT_MISMATCH'}}
+}else{foreach($file in $files){
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
  $old=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','sha256sum',"$remote/$name") -AllowFailure
  if($old.ExitCode -ne 0 -and $old.Text -notmatch 'No such file or directory'){throw 'STAGING_STATE_UNKNOWN'}
  if($old.ExitCode -ne 0 -or ($old.Text -split '\s+')[0] -ne $hash){Adb @('push',$file,$remote)|Out-Null}
  $remoteHash=((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0]
  if($remoteHash -ne $hash){throw 'STAGED_ARTIFACT_MISMATCH'};$hashes[$name]=$hash
-}
+}}
 Adb @('shell','chmod','700',"$remote/$executable")|Out-Null
 function Top { $s=Adb @('shell','dumpsys','activity','activities');$m=[regex]::Match($s,'(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/');if(!$m.Success){throw 'TOP_RESUMED_UNKNOWN'};return $m.Groups[1].Value }
 $before=Top

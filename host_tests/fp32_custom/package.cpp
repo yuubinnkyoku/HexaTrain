@@ -9,12 +9,13 @@
 #endif
 #include "layernorm_ops.h"
 #include "custom_matmul_ops.h"
+#include "head_split_op.h"
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 9, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 10, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -30,6 +31,7 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(!std::strcmp(c.v1.typeName,"LnForward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"LnBackward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"LnResidual"))return c.v1.numOfInputs==5 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"HeadSplit"))return c.v1.numOfInputs==1 && c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(c.v1.numOfOutputs!=2)return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDContext")||!std::strcmp(c.v1.typeName,"MatMulDWo"))
         return c.v1.numOfInputs==2?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
@@ -117,5 +119,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps()?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps()?package:nullptr;
 }

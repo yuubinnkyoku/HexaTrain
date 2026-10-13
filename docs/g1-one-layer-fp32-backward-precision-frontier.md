@@ -74,3 +74,31 @@ traffic/RSS and device conditions; runtime VTCM/DDR/power may remain unresolved.
 Do not extrapolate micrograph wall to full-model throughput.
 40k→60k /200k NO-GO. No all19-layer integration, production optimizer/backend,
 checkpoint/data-order/SDK change, push, PR, merge or history rewrite.
+
+## Bounded change after exploratory Device results
+
+Source4e78f62 exploratory graph: all24 standalone and integrated-native LN2
+segment gates passed, but integrated Attention had19 final-gradient gate failures.
+At tap case0, dWq words differed from native (observer effect); further full
+Attention execution stopped. No full Attention success is claimed.
+The selector changed values: case0 dContext differs from its independent FP32
+reference by <=2.53319740295e-7, while h0-selected differs by6.56604766846e-4.
+By the triangle inequality this cannot be a bit-exact selection of actual dContext.
+The predeclared selector copy contract is therefore blocked before gate multiply.
+
+One new type, HeadSplit, copies the two T32/head32 columns with FP32 memcpy,
+FLOAT32/flat4/direct/DDR_ONLY, receipt of2048 input plus both1024 output words.
+No reductions, transpose arithmetic, broadcast expansion or HVX implementation.
+The final independent control uses actual DSP dContext, standard selector
+direct/Copy-native/tap/native-output-Copy variants. Only a reproduced selector
+blocker permits HeadSplit → standard broadcast gate Multiply. Any next failure
+stops Custom expansion. The old full Attention observer mismatch remains unresolved.
+
+An independent HTP-produced LN2 segment includes CPU-fed LN1 output → Q/K/V
+projection → head selectors → QKᵀ scale/mask/Softmax → contexts → sigmoid gates,
+scatter/sum → Wo projection + input residual → Custom LN2. Its dY is produced
+from external upstream, W2ᵀ, FF1 ReLU mask, W1ᵀ. LN1/embedding and language-loss
+producers are omitted. Upstream projection q/k/v have ordinary forward0.002 gates
+fixed before that lane's first device result. Compare X/dY/context to CPU generalized
+saved state separately, then compare Custom LN2/MatMul to double using the actual
+received X/dY/context. A failing upstream is not a LayerNorm kernel failure.
