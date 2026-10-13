@@ -2,6 +2,7 @@
 namespace ln=phonelm::qnn::lnvalidation;
 ln::Case expand(ln::Case c,unsigned d,unsigned rows){auto x=c.x,dy=c.dy;c.x.resize(rows*d);c.dy.resize(rows*d);for(unsigned r=0;r<rows;++r)for(unsigned j=0;j<d;++j){c.x[r*d+j]=x[(r%2)*d+j];c.dy[r*d+j]=dy[(r%2)*d+j]*(r%3==2?-1.f:1.f);}return c;}
 #include "matmul_probe.h"
+#include "custom_matmul_probe.h"
 unsigned failures=0;
 void metric(const char* lane,const std::string& recipe,unsigned d,unsigned rows,const char* field,
  const std::vector<double>& ref,const std::vector<float>& host,const std::vector<float>& actual,double limit){
@@ -15,6 +16,7 @@ void checkReceipt(const std::vector<uint32_t>& r,unsigned kind,const std::vector
 }
 int main(int argc,char** argv){
  if(argc!=2)return 1;std::string mode=argv[1];initializeProbe();
+ if(mode=="mmDirect"||mode=="mmBoundary"){auto failed=mmprobe::run(mode=="mmBoundary");closeProbe();return failed?4:0;}
  if(mode=="copyNative"){
   DiagnosticGraph g("gradient_native_copy_control");auto x=g.tensor("gradient",QNN_TENSOR_TYPE_APP_WRITE,{32,64});
   auto n=g.tensor("native",QNN_TENSOR_TYPE_NATIVE,{32,64}),y=g.tensor("readback",QNN_TENSOR_TYPE_APP_READ,{32,64});
