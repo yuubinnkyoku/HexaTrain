@@ -139,6 +139,9 @@ execution marker/counter, finite results, and complete stores. Inputs are owned 
 the Host until synchronous execute completes. Native tensors belong to the QNN
 context; saved state is not retained across context free. APP_READ outputs use
 NaN poison and canaries; every APP_WRITE vector is checked for mutation.
+Final counter state is per MatMul specialization, so the independent dContext/dWo
+branches do not mutate a shared counter. Same-kind graph executions are synchronous
+in this diagnostic; concurrent same-kind instances are not supported or promoted.
 
 Observed Add and fused LN backward can optionally append their output words to
 their existing receipt. Original receipt sizes remain accepted; LN formulas and
@@ -233,24 +236,26 @@ separately from the nine-process numerical cohort.
 
 Accuracy-passing candidates only; BACKGROUND_CORRECTNESS, 9 additional timed calls,
 8 steady samples per graph/process. Values below are ranges of process medians.
-All final main processes recorded thermal status0 and battery temperature39°C,
+All final main processes recorded thermal status0 and battery temperature37–38°C,
 with wired power present. DSP frequency/worker scheduling and device power in watts
 were not controlled or measured. These are diagnostic latency observations.
 
 | Candidate | DSP MatMul arithmetic window | Graph execute wall |
 | --- | ---: | ---: |
-| Single dContext (mmDirect) | 3.905–3.936 ms | 6.831–7.132 ms |
-| Single dWo (mmDirect) | 4.087–4.121 ms | 7.133–7.255 ms |
-| Native-connected dContext | 3.8975–3.899 ms | 7.195–7.514 ms |
-| Native-connected dWo | 4.090 ms | 7.325–7.557 ms |
-| LN2 native segment | dContext4.765–4.7695 / dWo4.7255–4.728 ms | 9.674–9.757 ms |
-| LN2 tap segment | dContext4.162–4.766 / dWo4.408–4.725 ms | 9.474–9.731 ms |
-| LN2 fused segment | dContext4.7675–4.768 / dWo4.724–4.7265 ms | 9.134–9.181 ms |
+| Single dContext (mmDirect) | 3.9005–3.9325 ms | 6.901–7.021 ms |
+| Single dWo (mmDirect) | 4.088–4.1075 ms | 6.946–7.125 ms |
+| Native-connected dContext | 3.898–3.9045 ms | 7.107–7.318 ms |
+| Native-connected dWo | 4.089–4.090 ms | 7.376–7.703 ms |
+| LN2 native segment | dContext4.762–4.7685 / dWo4.720–4.728 ms | 9.683–9.777 ms |
+| LN2 tap segment | dContext4.1565–4.181 / dWo4.4055–4.4105 ms | 9.435–9.650 ms |
+| LN2 fused segment | dContext4.7695–4.7755 / dWo4.7255–4.7285 ms | 8.874–9.371 ms |
 
-A boundary-process direct dContext median was 0.745ms arithmetic/1.355ms wall,
+In the earlier source22d09e4 cohort, a boundary-process direct dContext median was
+0.745ms arithmetic/1.355ms wall,
 unlike the other repetitions. Its first execute was 1.394s; other direct first
-executes were about8–9ms. This outlier is retained, not selected as representative.
-LN2 first executes were11.37–12.94ms. Background scheduling/frequency/transient
+executes were about8–9ms. This old-cohort outlier is retained separately, not selected
+as representative. Final standalone first executes were7.13–9.01ms; final LN2
+first executes were9.14–13.67ms. Background scheduling/frequency/transient
 causes are unresolved; no throughput promotion follows these measurements.
 
 The timer reads `c31:30` and converts the 19.2MHz qtimer to integer microseconds.
@@ -259,16 +264,17 @@ preemption can affect windows; kernel-window sums are not graph wall decompositi
 In the full segment, summed dContext+dWo windows can exceed graph wall. Concurrency
 versus instrumentation/scheduling effects have not been resolved by a QNN timeline.
 
-Standalone full-word receipt/finite scanning costs about172–177.5µs per MatMul,
+Standalone full-word receipt/finite scanning costs about171–177.5µs per MatMul,
 recorded outside the arithmetic window. LN/Add old timers include diagnostic work;
-their native segment windows are approximately0.866–0.869ms combined LN and
-0.752–0.753ms Add, not receipt-free arithmetic measurements.
-Host allocation/poison/copy median was85–138µs for standalone and492–495µs for chain.
-MatMul reference/validation medians were1.53–2.25ms standalone and about1.53–1.55ms
+their native segment windows are approximately0.8675–0.8685ms combined LN and
+0.7215–0.7225ms Add, not receipt-free arithmetic measurements.
+Host allocation/poison/copy median was79–121µs for standalone and485–497µs for chain.
+MatMul reference/validation medians were1.55–2.19ms standalone and about1.48–1.59ms
 in chain; LN references and receipt validation add further Host work.
 Graph creation/finalization and first execute are exported separately.
-Standalone finalization17.11–42.54ms; native LN2 finalization27.65–29.87ms,
-tap68.51–74.76ms, fused69.07–75.40ms.
+Standalone finalization12.15–39.34ms; native LN2 finalization23.90–28.87ms,
+tap58.65–77.16ms, fused45.08–68.38ms. First graph creation was47.72–82.33ms
+standalone and55.67–70.74ms in LN2; subsequent LN2 graph creation0.52–1.33ms.
 
 | Logical tensor payload | Bytes |
 | --- | ---: |
@@ -355,9 +361,10 @@ Muon W8 and auxiliary Adam remain the existing consumers and are unchanged.
 | --- | --- |
 | First scalar source/pilots | `6ad33db804bb1a62928ee407537d1b9700420743` |
 | Frozen transport/prechain source | `3c35772a29be3a5d628cfa26acff902c00c74c89` |
-| Final numerical source | `22d09e447be6902e802e37bc6418f0f132e060dc` |
-| Final DSP package SHA256 | `a8bfcdd8d4feb20ecea9995f0bdf4937a0ca6deed414314f44bd8929be7e33e4` |
-| Final Host package SHA256 | `5af836f0d2f95b0c7d7712ddd2fe8c3e6a447b6739ef01b506e7e24834c1e93d` |
+| First full-chain source, retained separately | `22d09e447be6902e802e37bc6418f0f132e060dc` |
+| Final numerical source/counter isolation | `45b4cee980d32710b255873ad6731266a066f00c` |
+| Final DSP package SHA256 | `c3eff6e8b9951fb65610667cfb2c6c75841a919f646bda95cc9068e99d7c7ec8` |
+| Final Host package SHA256 | `10e2d7367986adcc71c070038e2485566c52746317178d0526d047e0983c576d` |
 | Final probe SHA256 | `81e5c8332d7d3daff0a60a2e705892e4783f23368b914103c151d59b93d2322b` |
 | Hexagon compiler SHA256 | `039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047` |
 | NDK compiler SHA256 | `ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3` |
@@ -370,6 +377,13 @@ health/focus and raw per-case records remain in ignored private ledgers. Nine fi
 main processes use the exact same package/probe/source/runtime/fixture identities;
 three additional Copy control processes use the same binaries. Earlier cohorts
 and pilot evidence remain separate and are not overwritten or reused for promotion.
+Final review identified a potentially shared receipt-counter race between the two
+independent MatMul branches. The counter-only fix leaves arithmetic unchanged;
+Host tests require independent initial counters, and final DSP symbols have distinct
+4-byte storage. All nine numerical and three Copy processes were rerun on the new
+exact package. Typed numerical digests and maxima match the earlier full-chain
+cohort, while timing belongs to its own new cohort. Old results were not transferred
+to the changed binary.
 
 The bounded old-binary audit found identical inspected code/data/relocation sections
 and different `.comment` linker command metadata with random temporary object names.
@@ -404,3 +418,9 @@ Closeout regression: Muon W8 headless114/114 PASS, maxAbs1.490116119e-8,
 relativeL2 4.40269854e-8, minimum cosine1, RPC/finite success and fallbackfalse.
 Device probe smoke PASS with pinned APK audit and foreground takeover0.
 These synthetic diagnostics do not update the protected production training state.
+Final counter source Fast PASS99.5s; final documentation/export Fast PASS86.4s.
+Protected data/forensic hashes, original branch refs and old frozen package/probe
+hashes match at closeout. Host free space40.73GiB; final read-only device checks
+confirm the same physical identity, Awake/top-resumed and no active run. Final
+working tree is clean after the documentation/export commit. Exact final HEAD and
+the clean status are also stored in the final private identity.
