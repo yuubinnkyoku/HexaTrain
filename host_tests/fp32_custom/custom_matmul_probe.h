@@ -3,6 +3,17 @@
 #include <limits>
 namespace mmprobe {
 inline std::map<std::string,std::vector<uint32_t>> anchors;
+// The PC-frozen operands are transported verbatim: ARM math-library differences
+// in the LN design oracle must not silently change the standalone input identity.
+inline std::vector<mmfixture::Fixture> frozenFixtures(const mmfixture::Shape& requested){
+ FILE* file=std::fopen("frozen-inputs.bin","rb");if(!file){std::puts("FROZEN_FIXTURE_MISSING");std::exit(3);}std::vector<mmfixture::Fixture> result;
+ auto read=[&](std::vector<float>& v){if(std::fread(v.data(),4,v.size(),file)!=v.size()){std::puts("FROZEN_FIXTURE_TRUNCATED");std::exit(3);}for(auto f:v)if(!std::isfinite(f)){std::puts("FROZEN_FIXTURE_NONFINITE");std::exit(3);}};
+ for(auto s:mmfixture::shapes)for(auto f:mmfixture::fixtures(s)){
+  read(f.c.x);read(f.c.gamma);read(f.c.beta);read(f.c.dy);read(f.residual);std::vector<float> a(s.ar*s.ac),b(s.br*s.bc);read(a);read(b);
+  f.other=s.left?b:a;f.frozenGradient=s.left?a:b;
+  if(std::strcmp(s.name,requested.name)==0)result.push_back(std::move(f));
+ }if(std::fgetc(file)!=EOF){std::puts("FROZEN_FIXTURE_TRAILING_BYTES");std::exit(3);}std::fclose(file);return result;
+}
 inline uint32_t ordered(float f){auto u=word(f);return u&0x80000000u?~u:u|0x80000000u;}
 inline unsigned metric(const mmfixture::Shape& s,const mmfixture::Fixture& f,const std::string& variant,
  const std::vector<float>& a,const std::vector<float>& b,const std::vector<float>& actual){
@@ -34,8 +45,8 @@ inline unsigned run(bool boundary){unsigned failures=0,standardFailures=0;for(au
   if(standard){Qnn_Param_t p=QNN_PARAM_INIT;p.paramType=QNN_PARAMTYPE_SCALAR;p.scalarParam.dataType=QNN_DATATYPE_BOOL_8;p.name=QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0;p.scalarParam.bool8Value=s.ta;auto q=p;q.name=QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1;q.scalarParam.bool8Value=s.tb;
    g.node("matmul",QNN_OP_MAT_MUL,"qti.aisw",ins,{y},{p,q});
   }else{mr=g.tensor("matmul_receipt",R,{1,1,1,16+s.ar*s.ac+s.br*s.bc+s.m*s.n},QNN_DATATYPE_INT_32);g.node("matmul",s.ta?"MatMulDWo":"MatMulDContext","HexaFp32",ins,{y,mr});}
-  g.finalize();unsigned bad=0,index=0;auto fixtures=mmfixture::fixtures(s);
-  for(auto f:fixtures){auto gradient=mmfixture::gradient(f),aa=s.left?gradient:f.other,bb=s.left?f.other:gradient;auto out=g.run({{a,aa},{b,bb}});
+  g.finalize();unsigned bad=0,index=0;auto fixtures=frozenFixtures(s);
+  for(auto f:fixtures){auto gradient=f.frozenGradient,aa=s.left?gradient:f.other,bb=s.left?f.other:gradient;auto out=g.run({{a,aa},{b,bb}});
    if(copied){auto& r=out[cr];if(r[0]!=0x48383100u||r[1]<=copyLast||r[2]!=2048||r[3]!=1||r[5]!=81||r[6]!=32||r[7]){std::puts("COPY_RECEIPT_FAIL");std::exit(3);}copyLast=r[1];
     for(unsigned j=0;j<2048;++j)if(r[8+j]!=word(gradient[j])||r[2056+j]||r[4104+j]||(tap&&out[mid][j]!=word(gradient[j]))){std::puts("COPY_PRECISION_FAIL");std::exit(3);}
    }if(!standard)receipt(out[mr],s,aa,bb,out[y],last);
@@ -45,7 +56,7 @@ inline unsigned run(bool boundary){unsigned failures=0,standardFailures=0;for(au
   }
   if(standard)standardFailures+=bad;else failures+=bad;
   // Timing starts only after this candidate's complete accuracy matrix passes.
-  if(!standard&&!bad){auto f=fixtures[60];auto grad=mmfixture::gradient(f);for(unsigned rep=0;rep<9;++rep){auto aa=s.left?grad:f.other,bb=s.left?f.other:grad;auto out=g.run({{a,aa},{b,bb}});receipt(out[mr],s,aa,bb,out[y],last);
+  if(!standard&&!bad){auto f=fixtures[60];auto grad=f.frozenGradient;for(unsigned rep=0;rep<9;++rep){auto aa=s.left?grad:f.other,bb=s.left?f.other:grad;auto out=g.run({{a,aa},{b,bb}});receipt(out[mr],s,aa,bb,out[y],last);
     std::printf("mmperf,%s,%s,%u,wall_us=%.3f,kernel_us=%u,receipt_us=%u\n",s.name,variant.c_str(),rep,g.executeUs,out[mr][4],out[mr][13]);}
   }
   std::printf("pathsummary,%s,%s,cases=68,required_failures=%u,first_execute_in_api_trace=1\n",s.name,variant.c_str(),bad);

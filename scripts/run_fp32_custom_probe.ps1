@@ -49,6 +49,11 @@ $report=Join-Path $root "build/reports/$reportBase/$id"
 $remote='/data/local/tmp/hexafp32-'+$build.binary_hashes.$executable.Substring(0,16)
 Adb @('shell','mkdir','-p',$remote)|Out-Null
 $files=@('libHexaFp32Host.so','libHexaFp32Dsp.so',$executable) | ForEach-Object {Join-Path $root "build/fp32-custom/$_"}
+if($Variant -match '^mm'){
+ $fixture=Join-Path $root 'build/reports/htp-fp32-custom-matmul-ln2/frozen-inputs.bin'
+ if((Get-FileHash -LiteralPath $fixture).Hash.ToLowerInvariant() -ne 'daf61450486f6f8df40b7b10e631c268e9f5e2e5f2458e3a1eda4b0cb8c9978e'){throw 'FROZEN_FIXTURE_IDENTITY_MISMATCH'}
+ $files+=$fixture
+}
 foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){$files+=Join-Path $QairtSdkRoot "lib/aarch64-android/$name"}
 $files+=Join-Path $QairtSdkRoot 'lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so'
 $files+=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'

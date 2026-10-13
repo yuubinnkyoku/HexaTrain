@@ -88,3 +88,13 @@ No production graph replacement, all-layer attention conversion, training update
 ## Results
 
 Pending independent device validation. Host arithmetic is not Device verification.
+
+Initial source `6ad33db` had three numerically passing direct-device pilots.
+Sixteen of 136 generated operand sets differed in bits from the PC-frozen file:
+the ARM LN oracle's math-library results were not assumed bitwise identical to PC.
+These pilots are preserved separately and do not satisfy frozen-input identity.
+The standalone probe now reads the exact preregistered binary, with SHA256 checked
+locally and after device staging. This changes input transport, not the kernel,
+gates, reduction order, or LayerNorm algorithm. The final cohort must rerun B/C.
+The chain will use only external X/gamma/beta/dY/residual/context/Wo from that file;
+it must never use the file's injected intermediate gradient.

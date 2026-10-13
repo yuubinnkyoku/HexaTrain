@@ -10,7 +10,7 @@ namespace ln=phonelm::qnn::lnvalidation;
 struct Shape {const char* name;unsigned ar,ac,br,bc,m,n,k;bool ta,tb,left;};
 inline const Shape shapes[]={{"dcontext",32,64,64,64,32,64,64,false,true,true},
                              {"dwo",32,64,32,64,64,64,32,true,false,false}};
-struct Fixture {ln::Case c;std::vector<float> residual,other;unsigned control;bool additional;};
+struct Fixture {ln::Case c;std::vector<float> residual,other;unsigned control;bool additional;std::vector<float> frozenGradient;};
 inline ln::Case repeated(ln::Case c){auto x=c.x,dy=c.dy;c.x.resize(2048);c.dy.resize(2048);
  for(unsigned r=0;r<32;++r)for(unsigned j=0;j<64;++j){c.x[r*64+j]=x[(r%2)*64+j];c.dy[r*64+j]=dy[(r%2)*64+j]*(r%3==2?-1.f:1.f);}return c;}
 inline std::vector<float> coefficients(const Shape& s,unsigned control){
