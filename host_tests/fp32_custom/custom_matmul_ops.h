@@ -1,11 +1,14 @@
 #pragma once
 // Two diagnostic geometries only. Physical row-major inputs are never transposed.
 namespace mmcustom {
-unsigned serial=0;
 bool matrix(const QHPI_Tensor* t,unsigned rows,unsigned cols){auto s=qhpi_tensor_shape(t);
  return qhpi_tensor_type(t)==QHPI_FLOAT32&&s.rank==4&&s.dims[0]==1&&s.dims[1]==1&&s.dims[2]==rows&&s.dims[3]==cols;
 }
 template<bool Dwo> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
+ // One counter per specialization: the two independent LN2 branches can run
+ // concurrently. Graph executes containing a given specialization are synchronous
+ // in this diagnostic, so no same-kind concurrent invocation is supported.
+ static unsigned serial=0;
  constexpr unsigned M=Dwo?64:32,N=64,K=Dwo?32:64,AN=2048,BN=Dwo?2048:4096,YN=M*N;
  if(ni!=2||no!=2||!matrix(in[0],32,64)||!matrix(in[1],Dwo?32:64,64)||!matrix(out[0],M,N)||
     qhpi_tensor_type(out[1])!=QHPI_INT32||lncustom::count(out[1])!=16+AN+BN+YN)return QHPI_ERROR_FATAL;

@@ -28,16 +28,19 @@ int chainTest(){auto fs=mmfixture::fixtures(mmfixture::shapes[0]),ws=mmfixture::
  }std::printf("chain_host_test,cases=68,observed_add_fused_legacy_receipts=PASS,double_final_gate=PASS\n");return 0;
 }
 int main(){unsigned checked=0;
+ unsigned firstCounter[2]={};
  for(auto s:mmfixture::shapes){for(auto f:mmfixture::fixtures(s)){auto grad=mmfixture::gradient(f),a=s.left?grad:f.other,b=s.left?f.other:grad;
   std::vector<float> y(s.m*s.n,NAN);std::vector<unsigned> receipt(16+a.size()+b.size()+y.size(),0x7fc0dead);
   auto at=tensor(s.ar,s.ac,a.data()),bt=tensor(s.br,s.bc,b.data()),yt=tensor(s.m,s.n,y.data()),rt=tensor(1,receipt.size(),receipt.data(),QHPI_INT32);
   const QHPI_Tensor* in[]={&at,&bt};QHPI_Tensor* out[]={&yt,&rt};auto kernel=s.ta?mmcustom::kernel<true>:mmcustom::kernel<false>;
   if(kernel(nullptr,2,out,2,in)!=QHPI_SUCCESS)return 1;auto fp=mmfixture::reference(a,b,s,true);for(unsigned i=0;i<y.size();++i){float expected=float(fp[i]);if(std::memcmp(&expected,&y[i],4))return 2;}
+  if(checked%68==0)firstCounter[s.ta]=receipt[1];
   if(std::memcmp(receipt.data()+16,a.data(),4*a.size())||std::memcmp(receipt.data()+16+a.size(),b.data(),4*b.size())||std::memcmp(receipt.data()+16+a.size()+b.size(),y.data(),4*y.size()))return 3;
   at.shape.dims[2]=16;if(kernel(nullptr,2,out,2,in)!=QHPI_ERROR_FATAL)return 4;at.shape.dims[2]=s.ar;
   bt.dtype=QHPI_FLOAT16;if(kernel(nullptr,2,out,2,in)!=QHPI_ERROR_FATAL)return 5;bt.dtype=QHPI_FLOAT32;
   auto old=a[0];a[0]=INFINITY;if(kernel(nullptr,2,out,2,in)!=QHPI_ERROR_FATAL)return 6;a[0]=old;
   std::fill(a.begin(),a.end(),std::numeric_limits<float>::max());std::fill(b.begin(),b.end(),2.f);if(kernel(nullptr,2,out,2,in)!=QHPI_ERROR_FATAL)return 7;
   ++checked;
- }}std::printf("kernel_host_test,cases=%u,fp32_bitwise=1,shape_dtype_nonfinite_overflow_rejected=1\n",checked);return checked==136?chainTest():8;
+ }}if(firstCounter[0]!=1||firstCounter[1]!=1)return 9;
+ std::printf("kernel_host_test,cases=%u,fp32_bitwise=1,shape_dtype_nonfinite_overflow_rejected=1,branch_counters_independent=1\n",checked);return checked==136?chainTest():8;
 }
