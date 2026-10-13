@@ -14,9 +14,11 @@ void checkReceipt(const std::vector<uint32_t>& r,unsigned kind,const std::vector
  unsigned at=8;for(auto& in:inputs)for(float f:in)if(r.at(at++)!=word(f)){std::puts("OPERAND_RECEIPT_FAIL");std::exit(3);}
  if(at+extra!=r.size()){std::puts("RECEIPT_SIZE_FAIL");std::exit(3);}std::printf("kernel_receipt,%u,%u,kernel_us=%u\n",kind,r[1],r[4]);
 }
+#include "ln2_matmul_probe.h"
 int main(int argc,char** argv){
  if(argc!=2)return 1;std::string mode=argv[1];initializeProbe();
  if(mode=="mmDirect"||mode=="mmBoundary"){auto failed=mmprobe::run(mode=="mmBoundary");closeProbe();return failed?4:0;}
+ if(mode=="mmLn2"){auto failed=ln2probe::run();closeProbe();return failed?4:0;}
  if(mode=="copyNative"){
   DiagnosticGraph g("gradient_native_copy_control");auto x=g.tensor("gradient",QNN_TENSOR_TYPE_APP_WRITE,{32,64});
   auto n=g.tensor("native",QNN_TENSOR_TYPE_NATIVE,{32,64}),y=g.tensor("readback",QNN_TENSOR_TYPE_APP_READ,{32,64});

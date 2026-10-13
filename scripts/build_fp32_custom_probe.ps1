@@ -40,7 +40,7 @@ $binaryHashes=@{}
 foreach($name in @('libHexaFp32Dsp.so','libHexaFp32Host.so','fp32_probe')){
  $binaryHashes[$name]=(Get-FileHash -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
 }
-foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32_custom/probe_support.h','host_tests/fp32_custom/layernorm_probe.cpp','host_tests/fp32_custom/matmul_probe.h','host_tests/fp32_custom/custom_matmul_ops.h','host_tests/fp32_custom/custom_matmul_probe.h','host_tests/fp32_custom/custom_matmul_fixture.h')){
+foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32_custom/probe_support.h','host_tests/fp32_custom/layernorm_probe.cpp','host_tests/fp32_custom/matmul_probe.h','host_tests/fp32_custom/custom_matmul_ops.h','host_tests/fp32_custom/custom_matmul_probe.h','host_tests/fp32_custom/custom_matmul_fixture.h','host_tests/fp32_custom/ln2_matmul_probe.h')){
  if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
 }
 if(Test-Path "$out/layernorm_probe"){$binaryHashes['layernorm_probe']=(Get-FileHash "$out/layernorm_probe").Hash.ToLowerInvariant()}

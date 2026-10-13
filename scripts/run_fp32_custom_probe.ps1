@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -16,6 +16,11 @@ foreach($p in $build.source_hashes.psobject.Properties){
 }
 foreach($p in $build.binary_hashes.psobject.Properties){
  if((Get-FileHash -LiteralPath (Join-Path $root "build/fp32-custom/$($p.Name)")).Hash.ToLowerInvariant() -ne $p.Value){throw 'BUILD_BINARY_MISMATCH'}
+}
+if($Variant -eq 'mmLn2'){
+ $gate=Get-Content (Join-Path $root 'build/reports/htp-fp32-custom-matmul-ln2/independent-gate.json') -Raw|ConvertFrom-Json
+ if($gate.phase -ne 'Independent' -or $gate.processes -ne 6 -or $gate.source_sha -ne $build.source_sha -or $gate.package_sha256 -ne $build.binary_hashes.'libHexaFp32Dsp.so' -or $gate.probe_sha256 -ne $build.binary_hashes.layernorm_probe){throw 'LN2_REQUIRES_SAME_BINARY_INDEPENDENT_MATMUL_GATE'}
+ if(@($gate.results|Where-Object {$_.variant -notin @('standard','standardNative') -and $_.failures -ne 0}).Count){throw 'LN2_INDEPENDENT_ACCURACY_NOT_ESTABLISHED'}
 }
 $plan=Get-Content (Join-Path $root 'build/reports/g1-long-linear-200k-primary/run-plan.json') -Raw | ConvertFrom-Json
 if($plan.status -ne 'UNSTABLE'){throw 'PROTECTED_STATUS_MISMATCH'}

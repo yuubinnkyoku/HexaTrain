@@ -57,7 +57,8 @@ template<bool Fused> uint32_t backward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tens
  unsigned d=count(in[1]),n=count(in[0]);if(d<8||d>128||!n||n%d)return QHPI_ERROR_FATAL;unsigned rows=n/d;
  if(rows>32||count(in[2])!=n||count(in[3])!=rows||count(out[0])!=n||count(out[1])!=d||count(out[2])!=d)return QHPI_ERROR_FATAL;
  if constexpr(Fused)if(count(in[4])!=n)return QHPI_ERROR_FATAL;
- if(!receipt(out[3],Fused?6:5,ni,in,serial,n))return QHPI_ERROR_FATAL;
+ const bool observedFused=Fused&&count(out[3])==8+2*n+d+rows+3*n;
+ if(!receipt(out[3],Fused?6:5,ni,in,serial,n+(observedFused?n:0)))return QHPI_ERROR_FATAL;
  auto started=now();const auto dy=data(in[0]),gamma=data(in[1]),h=data(in[2]),inv=data(in[3]);
  auto dx=data(out[0]),dg=data(out[1]),db=data(out[2]);Sum sumsG[128],sumsB[128];
  auto metadata=static_cast<unsigned*>(qhpi_tensor_raw_data(out[3]));unsigned offset=8;for(unsigned j=0;j<ni;++j)offset+=count(in[j]);
@@ -68,6 +69,7 @@ template<bool Fused> uint32_t backward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tens
    if(!std::isfinite(dx[i]))return QHPI_ERROR_FATAL;}
  }
  for(unsigned j=0;j<d;++j){dg[j]=sumsG[j].value;db[j]=sumsB[j].value;if(!std::isfinite(dg[j])||!std::isfinite(db[j]))return QHPI_ERROR_FATAL;}
+ if(observedFused)std::memcpy(metadata+offset+n,dx,4*n);
  metadata[4]=unsigned(now()-started);return QHPI_SUCCESS;
 }
 QHPI_Tensor_Signature_v1 inSigs[5]={};

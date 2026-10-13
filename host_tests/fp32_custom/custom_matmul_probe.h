@@ -16,15 +16,15 @@ inline std::vector<mmfixture::Fixture> frozenFixtures(const mmfixture::Shape& re
 }
 inline uint32_t ordered(float f){auto u=word(f);return u&0x80000000u?~u:u|0x80000000u;}
 inline unsigned metric(const mmfixture::Shape& s,const mmfixture::Fixture& f,const std::string& variant,
- const std::vector<float>& a,const std::vector<float>& b,const std::vector<float>& actual){
- auto start=std::chrono::steady_clock::now();auto ref=mmfixture::reference(a,b,s,false),fp=mmfixture::reference(a,b,s,true);auto e=phonelm::qnn::lnvalidation::errors(ref,actual);
+ const std::vector<float>& a,const std::vector<float>& b,const std::vector<float>& actual,const std::vector<double>* chain=nullptr){
+ auto start=std::chrono::steady_clock::now();auto ref=chain?*chain:mmfixture::reference(a,b,s,false),fp=mmfixture::reference(a,b,s,true);auto e=phonelm::qnn::lnvalidation::errors(ref,actual);
  double err2=0,ref2=0,rel=0,fpAbs=0;uint32_t ulp=0;unsigned mismatches=0;
  for(unsigned i=0;i<ref.size();++i){double d=double(actual[i])-ref[i];err2+=d*d;ref2+=ref[i]*ref[i];rel=std::max(rel,std::fabs(d)/std::max(.001,std::fabs(ref[i])));
   fpAbs=std::max(fpAbs,std::fabs(double(actual[i])-fp[i]));auto x=ordered(actual[i]),y=ordered(float(fp[i]));ulp=std::max(ulp,x>y?x-y:y-x);mismatches+=word(actual[i])!=word(float(fp[i]));
  }
  bool pass=e.nonfinite==0&&e.absolute<=.03;
- std::printf("custommm,%s,%s,%s,%u,%u,abs=%.12g,rms=%.12g,relative_l2=%.12g,max_relative=%.12g,nonfinite=%zu,fp_abs=%.12g,ulp=%u,fp_word_mismatch=%u,input_hash=%016llx,hash=%016llx,gate=%u,host_validation_us=%.3f\n",
-  s.name,variant.c_str(),f.c.name.c_str(),f.control,f.additional,e.absolute,e.rms,std::sqrt(err2/std::max(1e-300,ref2)),rel,e.nonfinite,fpAbs,ulp,mismatches,
+ std::printf("%s,%s,%s,%s,%u,%u,abs=%.12g,rms=%.12g,relative_l2=%.12g,max_relative=%.12g,nonfinite=%zu,fp_abs=%.12g,ulp=%u,fp_word_mismatch=%u,input_hash=%016llx,hash=%016llx,gate=%u,host_validation_us=%.3f\n",
+  chain?"chainmm":"custommm",s.name,variant.c_str(),f.c.name.c_str(),f.control,f.additional,e.absolute,e.rms,std::sqrt(err2/std::max(1e-300,ref2)),rel,e.nonfinite,fpAbs,ulp,mismatches,
   (unsigned long long)hashWords(b,hashWords(a)),(unsigned long long)hashWords(actual),pass,std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());return !pass;
 }
 inline void receipt(const std::vector<uint32_t>& r,const mmfixture::Shape& s,const std::vector<float>& a,const std::vector<float>& b,const std::vector<uint32_t>& y,unsigned& last){
