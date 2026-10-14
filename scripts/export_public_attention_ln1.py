@@ -5,12 +5,12 @@ if not __debug__:
     raise RuntimeError("Optimized Python disables cohort assertions; export rejected")
 
 def export(cohort, output):
-    expected_source="02eda90071825a6bbe43c578d77e4a4a5d73d1cb"
+    expected_source="ba128e3d338ed57b1a2b86b0df3b43d100de874f"
     entries=json.loads(Path(cohort).read_text(encoding="utf-8-sig"))
     assert set(entries)=={"oneAttention","oneLn1","oneObserver"}
     summary={"schema":1,"lanes":{}}
     identities=[]
-    expected={"oneAttention":(341,3235),"oneLn1":(312,2552),"oneObserver":(300,925)}
+    expected={"oneAttention":(341,3135),"oneLn1":(312,2552),"oneObserver":(300,925)}
     metric=re.compile(r"^onemetric,([^,]+),(\d+),([^,]+),(.+)$")
     for lane, paths in entries.items():
         assert len(paths)==3 and len(set(paths))==3
