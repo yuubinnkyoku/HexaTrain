@@ -44,7 +44,7 @@ foreach($relative in @('host_tests/fp32_custom/layernorm_ops.h','host_tests/fp32
  if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
 }
 if(Test-Path "$out/layernorm_probe"){$binaryHashes['layernorm_probe']=(Get-FileHash "$out/layernorm_probe").Hash.ToLowerInvariant()}
-foreach($relative in @('host_tests/fp32_custom/head_split_op.h','host_tests/fp32_custom/one_layer_frontier_probe.h','host_tests/fp32_custom/broadcast_multiply_op.h','host_tests/fp32_custom/broadcast_fixture.h','host_tests/fp32_custom/broadcast_frontier_probe.h','host_tests/fp32_custom/upstream_reference.h','host_tests/fp32_custom/ln1_frontier_probe.h','host_tests/fp32_custom/ln1_graph.h','host_tests/fp32_custom/ln1_fixture_audit.cpp')){
+foreach($relative in @('host_tests/fp32_custom/attention_matmul_op.h','host_tests/fp32_custom/attention_fixture.h','host_tests/fp32_custom/attention_ln1_probe.h','host_tests/fp32_custom/ln1_producer_fixture.cpp','host_tests/fp32_custom/head_split_op.h','host_tests/fp32_custom/one_layer_frontier_probe.h','host_tests/fp32_custom/broadcast_multiply_op.h','host_tests/fp32_custom/broadcast_fixture.h','host_tests/fp32_custom/broadcast_frontier_probe.h','host_tests/fp32_custom/upstream_reference.h','host_tests/fp32_custom/ln1_frontier_probe.h','host_tests/fp32_custom/ln1_graph.h','host_tests/fp32_custom/ln1_fixture_audit.cpp')){
  if(Test-Path (Join-Path $root $relative)){$sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()}
 }
 if(Test-Path (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp')){

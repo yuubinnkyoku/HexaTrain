@@ -26,13 +26,13 @@ bool receipt(QHPI_Tensor* output,unsigned kind,unsigned ni,const QHPI_Tensor* co
  return true;
 }
 unsigned serial=0;
-uint32_t forward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
- if(ni!=4||no!=4)return QHPI_ERROR_FATAL;
+template<bool Observe> uint32_t forwardKernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
+ if(ni!=4||no!=(Observe?4u:3u))return QHPI_ERROR_FATAL;
  const unsigned d=count(in[1]),n=count(in[0]);if(d<8||d>128||!n||n%d)return QHPI_ERROR_FATAL;const unsigned rows=n/d;
  if(rows>32||count(in[2])!=d||count(in[3])!=1 ||
     count(out[0])!=n||count(out[1])!=n||count(out[2])!=rows)return QHPI_ERROR_FATAL;
  for(unsigned j=0;j<ni;++j)if(qhpi_tensor_type(in[j])!=QHPI_FLOAT32)return QHPI_ERROR_FATAL;
- if(!receipt(out[3],4,ni,in,serial,n+rows))return QHPI_ERROR_FATAL;
+ if constexpr(Observe)if(!receipt(out[3],4,ni,in,serial,n+rows))return QHPI_ERROR_FATAL;
  auto started=now();float eps=data(in[3])[0];if(!std::isfinite(eps)||eps<=0)return QHPI_ERROR_FATAL;
  const auto x=data(in[0]),gamma=data(in[1]),beta=data(in[2]);auto y=data(out[0]),h=data(out[1]),inv=data(out[2]);
  float centered[128];
@@ -48,29 +48,30 @@ uint32_t forward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,c
    if(!std::isfinite(h[i])||!std::isfinite(y[i]))return QHPI_ERROR_FATAL;}
   if(!std::isfinite(inv[r]))return QHPI_ERROR_FATAL;
  }
- auto metadata=static_cast<unsigned*>(qhpi_tensor_raw_data(out[3]));unsigned offset=8+n+2*d+1;
- std::memcpy(metadata+offset,h,n*4);std::memcpy(metadata+offset+n,inv,rows*4);metadata[4]=unsigned(now()-started);
+ if constexpr(Observe){auto metadata=static_cast<unsigned*>(qhpi_tensor_raw_data(out[3]));unsigned offset=8+n+2*d+1;
+ std::memcpy(metadata+offset,h,n*4);std::memcpy(metadata+offset+n,inv,rows*4);metadata[4]=unsigned(now()-started);}
  return QHPI_SUCCESS;
 }
-template<bool Fused> uint32_t backward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
- if(ni!=(Fused?5u:4u)||no!=4)return QHPI_ERROR_FATAL;
+uint32_t forward(QHPI_RuntimeHandle* rt,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){return forwardKernel<true>(rt,no,out,ni,in);}
+template<bool Fused,bool Observe=true> uint32_t backward(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
+ if(ni!=(Fused?5u:4u)||no!=(Observe?4u:3u))return QHPI_ERROR_FATAL;
  unsigned d=count(in[1]),n=count(in[0]);if(d<8||d>128||!n||n%d)return QHPI_ERROR_FATAL;unsigned rows=n/d;
  if(rows>32||count(in[2])!=n||count(in[3])!=rows||count(out[0])!=n||count(out[1])!=d||count(out[2])!=d)return QHPI_ERROR_FATAL;
  if constexpr(Fused)if(count(in[4])!=n)return QHPI_ERROR_FATAL;
- const bool observedFused=Fused&&count(out[3])==8+2*n+d+rows+3*n;
- if(!receipt(out[3],Fused?6:5,ni,in,serial,n+(observedFused?n:0)))return QHPI_ERROR_FATAL;
+ const bool observedFused=Observe&&Fused&&count(out[3])==8+2*n+d+rows+3*n;
+ if constexpr(Observe)if(!receipt(out[3],Fused?6:5,ni,in,serial,n+(observedFused?n:0)))return QHPI_ERROR_FATAL;
  auto started=now();const auto dy=data(in[0]),gamma=data(in[1]),h=data(in[2]),inv=data(in[3]);
  auto dx=data(out[0]),dg=data(out[1]),db=data(out[2]);Sum sumsG[128],sumsB[128];
- auto metadata=static_cast<unsigned*>(qhpi_tensor_raw_data(out[3]));unsigned offset=8;for(unsigned j=0;j<ni;++j)offset+=count(in[j]);
+ unsigned* metadata=nullptr;if constexpr(Observe)metadata=static_cast<unsigned*>(qhpi_tensor_raw_data(out[3]));unsigned offset=8;for(unsigned j=0;j<ni;++j)offset+=count(in[j]);
  for(unsigned r=0;r<rows;++r){Sum sum,prod;
   for(unsigned j=0;j<d;++j){unsigned i=r*d+j;float dh=dy[i]*gamma[j];sum.add(dh);prod.add(dh*h[i]);sumsG[j].add(dy[i]*h[i]);sumsB[j].add(dy[i]);}
   for(unsigned j=0;j<d;++j){unsigned i=r*d+j;float value=inv[r]*(dy[i]*gamma[j]-sum.value/float(d)-h[i]*prod.value/float(d));
-   std::memcpy(metadata+offset+i,&value,4);if constexpr(Fused)dx[i]=value+data(in[4])[i];else dx[i]=value;
+   if constexpr(Observe)std::memcpy(metadata+offset+i,&value,4);if constexpr(Fused)dx[i]=value+data(in[4])[i];else dx[i]=value;
    if(!std::isfinite(dx[i]))return QHPI_ERROR_FATAL;}
  }
  for(unsigned j=0;j<d;++j){dg[j]=sumsG[j].value;db[j]=sumsB[j].value;if(!std::isfinite(dg[j])||!std::isfinite(db[j]))return QHPI_ERROR_FATAL;}
  if(observedFused)std::memcpy(metadata+offset+n,dx,4*n);
- metadata[4]=unsigned(now()-started);return QHPI_SUCCESS;
+ if constexpr(Observe)metadata[4]=unsigned(now()-started);return QHPI_SUCCESS;
 }
 QHPI_Tensor_Signature_v1 inSigs[5]={};
 QHPI_Tensor_Signature_v1 outSigs[4]={};

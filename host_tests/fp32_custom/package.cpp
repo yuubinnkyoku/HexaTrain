@@ -14,9 +14,9 @@
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 11, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 21, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -34,6 +34,11 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(!std::strcmp(c.v1.typeName,"LnResidual"))return c.v1.numOfInputs==5 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"HeadSplit"))return c.v1.numOfInputs==1 && c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"BroadcastMultiply"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"MatMulDProbabilities"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"MatMulDProbabilitiesNoReceipt"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==2?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    const char* freeNames[]={"LnForwardNoReceipt","LnBackwardNoReceipt","AddNoReceipt","MatMulDContextNoReceipt","MatMulDWoNoReceipt","HeadSplitNoReceipt","BroadcastMultiplyNoReceipt","CopyNoReceipt"};
+    const unsigned freeInputs[]={4,4,2,2,2,1,4,1},freeOutputs[]={3,3,1,1,1,2,2,1};
+    for(unsigned j=0;j<8;++j)if(!std::strcmp(c.v1.typeName,freeNames[j]))return c.v1.numOfInputs==freeInputs[j]&&c.v1.numOfOutputs==freeOutputs[j]?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(c.v1.numOfOutputs!=2)return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDContext")||!std::strcmp(c.v1.typeName,"MatMulDWo"))
         return c.v1.numOfInputs==2?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
@@ -54,25 +59,28 @@ QHPI_Tensor_Signature_v1 outputs[2] = {
 // Integer receipt is produced only by the target kernel. It includes input
 // words and a per-call counter; the host must validate it independently.
 unsigned calls=0;
-template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** o,
+template<unsigned Kind,bool Observe=true> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** o,
     uint32_t ni,const QHPI_Tensor* const* in) {
-    if(no!=2 || ni!=(Kind==0?1u:Kind==3?3u:2u)) return QHPI_ERROR_FATAL;
+    if(no!=(Observe?2u:1u) || ni!=(Kind==0?1u:Kind==3?3u:2u)) return QHPI_ERROR_FATAL;
     auto shape=qhpi_tensor_shape(in[0]); unsigned n=1;
     for(unsigned d=0;d<shape.rank;++d)n*=shape.dims[d];
     if(!n || n>4096)return QHPI_ERROR_FATAL;
     auto count=[](const QHPI_Tensor* t){auto s=qhpi_tensor_shape(t);unsigned total=1;
         for(unsigned d=0;d<s.rank;++d)total*=s.dims[d];return total;};
-    const bool observedAdd=Kind==1&&count(o[1])==4*n+8;
-    if(count(o[0])!=n || (count(o[1])!=3*n+8&&!observedAdd))return QHPI_ERROR_FATAL;
+    const bool observedAdd=Observe&&Kind==1&&count(o[1])==4*n+8;
+    if(count(o[0])!=n)return QHPI_ERROR_FATAL;
+    if constexpr(Observe)if(count(o[1])!=3*n+8&&!observedAdd)return QHPI_ERROR_FATAL;
     for(unsigned i=0;i<ni;++i)if(count(in[i])!=n || qhpi_tensor_type(in[i])!=QHPI_FLOAT32)return QHPI_ERROR_FATAL;
-    if(qhpi_tensor_type(o[0])!=QHPI_FLOAT32 || qhpi_tensor_type(o[1])!=QHPI_INT32)return QHPI_ERROR_FATAL;
+    if(qhpi_tensor_type(o[0])!=QHPI_FLOAT32)return QHPI_ERROR_FATAL;
+    if constexpr(Observe)if(qhpi_tensor_type(o[1])!=QHPI_INT32)return QHPI_ERROR_FATAL;
     const float* x=static_cast<const float*>(qhpi_tensor_raw_data(in[0]));
     float* y=static_cast<float*>(qhpi_tensor_raw_data(o[0]));
-    auto* receipt=static_cast<unsigned*>(qhpi_tensor_raw_data(o[1]));
-    if(!x || !y || !receipt)return QHPI_ERROR_FATAL;
+    unsigned* receipt=nullptr;if constexpr(Observe)receipt=static_cast<unsigned*>(qhpi_tensor_raw_data(o[1]));
+    if(!x || !y || (Observe&&!receipt))return QHPI_ERROR_FATAL;
+    const auto started=lncustom::now();
+    if constexpr(Observe){
     #ifdef __hexagon__
     receipt[0]=0x48383100u+Kind;
-    const auto started=HAP_perf_get_time_us();
     #else
     receipt[0]=0x43505500u+Kind;
     #endif
@@ -80,6 +88,7 @@ template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Ten
     for(unsigned i=0;i<3;++i)for(unsigned j=0;j<n;++j) {
         receipt[8+i*n+j]=0;
         if(i<ni)std::memcpy(receipt+8+i*n+j,static_cast<const float*>(qhpi_tensor_raw_data(in[i]))+j,4);
+    }
     }
     for(unsigned j=0;j<n;++j) {
         if constexpr(Kind==0) std::memcpy(y+j,x+j,4);
@@ -94,17 +103,19 @@ template<unsigned Kind> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Ten
         }
     }
     if(observedAdd)std::memcpy(receipt+8+3*n,y,4*n);
+    if constexpr(Observe){
     #ifdef __hexagon__
     receipt[4]=unsigned(HAP_perf_get_time_us()-started);
     #else
     receipt[4]=0;
     #endif
-    receipt[5]=81;receipt[6]=32;receipt[7]=0;
+    receipt[5]=81;receipt[6]=32;receipt[7]=0;}
     return QHPI_SUCCESS;
 }
 QHPI_Kernel_v1 kernels[4] = {};
 QHPI_OpInfo_v1 ops[4] = {};
 }
+#include "attention_matmul_op.h"
 extern "C" Qnn_ErrorHandle_t HexaFp32InterfaceProvider(QnnOpPackage_Interface_t* p) {
     if(!p)return QNN_OP_PACKAGE_ERROR_INVALID_ARGUMENT;
     *p={};p->interfaceVersion={1,4,0};p->v1_4.init=init;p->v1_4.terminate=terminate;
@@ -121,5 +132,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps()?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps()?package:nullptr;
 }

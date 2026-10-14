@@ -43,10 +43,11 @@ inline void closeProbe(){check("contextFree",api.contextFree(context,nullptr));c
 // Shared QNN helper for variable shapes and multiple saved/output tensors.
 struct DiagnosticGraph {
  Qnn_GraphHandle_t graph{};std::vector<Qnn_Tensor_t> tensors;std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;
- std::vector<unsigned> inputs,outputs;unsigned nodes=0;double executeUs=0;
+ std::vector<unsigned> inputs,outputs;unsigned nodes=0;double executeUs=0;bool receiptEnabled=true;
  std::vector<std::vector<float>> constants;
  DiagnosticGraph(const std::string& name){tensors.reserve(512);names.reserve(512);shapes.reserve(512);constants.reserve(512);check("graphCreate",api.graphCreate(context,name.c_str(),nullptr,&graph));}
  unsigned tensor(const char* name,Qnn_TensorType_t type,std::vector<uint32_t> shape,Qnn_DataType_t dtype=QNN_DATATYPE_FLOAT_32){
+  if(!receiptEnabled&&dtype==QNN_DATATYPE_INT_32)return ~0u;
   if(names.size()>=512||std::find(names.begin(),names.end(),name)!=names.end()){std::puts("DIAGNOSTIC_NAME_OR_CAPACITY_FAIL");std::exit(3);}
   unsigned id=tensors.size();names.emplace_back(name);shapes.push_back(shape);Qnn_Tensor_t t=QNN_TENSOR_INIT;
   t.v1.name=names.back().c_str();t.v1.type=type;t.v1.dataFormat=QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER;t.v1.dataType=dtype;t.v1.rank=shape.size();t.v1.dimensions=shapes.back().data();t.v1.memType=QNN_TENSORMEMTYPE_RAW;
@@ -61,6 +62,7 @@ struct DiagnosticGraph {
  }
  unsigned size(unsigned id)const{unsigned n=1;for(auto d:shapes[id])n*=d;return n;}
  void node(const char* name,const char* type,const char* package,std::vector<unsigned> ins,std::vector<unsigned> outs,std::vector<Qnn_Param_t> params={}){
+  std::string freeType;if(!receiptEnabled&&!std::strcmp(package,"HexaFp32")){freeType=std::string(type)+"NoReceipt";type=freeType.c_str();outs.erase(std::remove(outs.begin(),outs.end(),~0u),outs.end());}
   std::vector<Qnn_Tensor_t> i,o;for(auto t:ins)i.push_back(tensors[t]);for(auto t:outs)o.push_back(tensors[t]);Qnn_OpConfig_t op=QNN_OPCONFIG_INIT;
   op.v1.name=name;op.v1.typeName=type;op.v1.packageName=package;op.v1.numOfInputs=i.size();op.v1.inputTensors=i.data();op.v1.numOfOutputs=o.size();op.v1.outputTensors=o.data();op.v1.numOfParams=params.size();op.v1.params=params.data();
   check("graphAddNode",api.graphAddNode(graph,op));++nodes;
