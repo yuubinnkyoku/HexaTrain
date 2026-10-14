@@ -43,7 +43,7 @@ inline void closeProbe(){check("contextFree",api.contextFree(context,nullptr));c
 // Shared QNN helper for variable shapes and multiple saved/output tensors.
 struct DiagnosticGraph {
  Qnn_GraphHandle_t graph{};std::vector<Qnn_Tensor_t> tensors;std::vector<std::string> names;std::vector<std::vector<uint32_t>> shapes;
- std::vector<unsigned> inputs,outputs;unsigned nodes=0;double executeUs=0;bool receiptEnabled=true;
+ std::vector<unsigned> inputs,outputs;unsigned nodes=0;double executeUs=0;bool receiptEnabled=true,allowNonfiniteControl=false;
  std::vector<std::vector<float>> constants;
  DiagnosticGraph(const std::string& name){tensors.reserve(512);names.reserve(512);shapes.reserve(512);constants.reserve(512);check("graphCreate",api.graphCreate(context,name.c_str(),nullptr,&graph));}
  unsigned tensor(const char* name,Qnn_TensorType_t type,std::vector<uint32_t> shape,Qnn_DataType_t dtype=QNN_DATATYPE_FLOAT_32){
@@ -77,7 +77,8 @@ struct DiagnosticGraph {
   for(auto id:inputs)if(std::memcmp(values.at(id).data(),before.at(id).data(),size(id)*4)){std::puts("INPUT_MUTATION");std::exit(3);}
   for(auto id:outputs){auto& b=buffers[id];for(unsigned j=0;j<4;++j)if(b[j]!=0xa55aa55a||b[size(id)+4+j]!=0xa55aa55a){std::puts("CANARY_FAIL");std::exit(3);}
    std::vector<uint32_t> actual(b.begin()+4,b.end()-4);b=actual;
-   for(auto w:b){if(w==0x7fc0dead){std::puts("POISON_FAIL");std::exit(3);}if(tensors[id].v1.dataType==QNN_DATATYPE_FLOAT_32&&!std::isfinite(from(w))){std::puts("NONFINITE");std::exit(3);}}
+   unsigned nonfinite=0;for(auto w:b){if(w==0x7fc0dead){std::puts("POISON_FAIL");std::exit(3);}if(tensors[id].v1.dataType==QNN_DATATYPE_FLOAT_32&&!std::isfinite(from(w)))++nonfinite;}
+   if(nonfinite){if(!allowNonfiniteControl){std::puts("NONFINITE");std::exit(3);}std::printf("control_nonfinite,tensor=%s,count=%u,accuracy=FAIL\n",names[id].c_str(),nonfinite);}
   }return buffers;
  }
 };
