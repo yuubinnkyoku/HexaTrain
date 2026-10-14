@@ -2,7 +2,8 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,
- [Parameter(Mandatory=$true)][string]$NdkRoot
+ [Parameter(Mandatory=$true)][string]$NdkRoot,
+ [switch]$ProbeOnly
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -18,6 +19,15 @@ $hex=Join-Path $HexagonSdkRoot 'tools/HEXAGON_Tools/19.0.07/Tools/bin/hexagon-cl
 $arm=Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe'
 $src=Join-Path $root 'host_tests/fp32_custom/package.cpp'
 $inc=Join-Path $QairtSdkRoot 'include/QNN'
+if($ProbeOnly){
+ $reuse=Get-Content (Join-Path $out 'build-identity.json') -Raw|ConvertFrom-Json
+ if($reuse.qairt_build_id -ne $ExpectedBuildId -or $reuse.hexagon_compiler_sha256 -ne (Get-FileHash $hex).Hash.ToLowerInvariant() -or $reuse.ndk_compiler_sha256 -ne (Get-FileHash $arm).Hash.ToLowerInvariant()){throw 'PROBE_ONLY_COMPILER_OR_SDK_CHANGED'}
+ foreach($name in @('libHexaFp32Dsp.so','libHexaFp32Host.so','fp32_probe','layernorm_probe')){if((Get-FileHash (Join-Path $out $name)).Hash.ToLowerInvariant() -ne $reuse.binary_hashes.$name){throw 'PROBE_ONLY_BINARY_CHANGED'}}
+ foreach($file in @('package.cpp','layernorm_ops.h','custom_matmul_ops.h','head_split_op.h','broadcast_multiply_op.h','attention_matmul_op.h','probe.cpp','layernorm_probe.cpp','probe_support.h')){
+  $relative='host_tests/fp32_custom/'+$file
+  if((Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant() -ne $reuse.source_hashes.$relative){throw 'PROBE_ONLY_PACKAGE_OR_OTHER_PROBE_SOURCE_CHANGED'}
+ }
+}else{
 & $hex -std=c++17 -mv81 -O2 -G0 -fPIC -shared -ffp-contract=off -fno-vectorize -fno-slp-vectorize -DPREPARE_DISABLED "-I$inc" "-I$HexagonSdkRoot/incs" "-I$HexagonSdkRoot/incs/stddef" "-I$HexagonSdkRoot/rtos/qurt/computev81/include/qurt" $src -o "$out/libHexaFp32Dsp.so"
 if($LASTEXITCODE){throw 'CUSTOM_DSP_BUILD_FAILED'}
 & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -ffp-contract=off "-I$inc" $src "-L$QairtSdkRoot/lib/aarch64-android" -lQnnHtpPrepare -o "$out/libHexaFp32Host.so"
@@ -30,6 +40,7 @@ Write-Host 'custom_package_build=PASS'
 if(Test-Path (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp')){
  & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -ffp-contract=off -static-libstdc++ "-I$inc" (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp') -ldl -o "$out/layernorm_probe"
  if($LASTEXITCODE){throw 'LAYERNORM_PROBE_BUILD_FAILED'}
+}
 }
 $sourceHashes=@{}
 foreach($relative in @('host_tests/fp32_custom/package.cpp','host_tests/fp32_custom/probe.cpp',

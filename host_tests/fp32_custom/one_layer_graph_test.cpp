@@ -27,7 +27,7 @@ int main(int argc,char** argv){api.graphCreate=create;api.tensorCreateGraphTenso
  for(bool tap:{false,true}){OneGraph g(tap?"integratedSplitTap":"integratedSplitNative",tap,false,false,false);}
  for(bool next:{false,true})for(bool tap:{false,true}){OneGraph g("broadcastGraphAudit",tap,false,false,false,true,next);}
  for(bool tap:{false,true}){OneGraph g(tap?"upstreamLn1Tap":"upstreamLn1Native",tap,false,false,true);}
- for(bool receipt:{false,true})for(bool tap:{false,true})for(bool consumer:{false,true}){OneGraph g("dpGraphAudit",tap,false,false,false,true,true,true,receipt,consumer);}
+ for(bool receipt:{false,true})for(bool tap:{false,true})for(bool consumer:{false,true}){OneGraph g("dpGraphAudit",tap,false,false,false,true,true,true,receipt,consumer,true);if(!tap&&g.g.tensors[g.out.at("y")].v1.type!=QNN_TENSOR_TYPE_NATIVE)return 2;}
  for(unsigned v=0;v<3;++v)for(bool receipt:{false,true})for(bool tap:{false,true}){LnStudy ln(v,tap,receipt,false,0);}
  for(unsigned k:{1024u,128u}){LnStudy ln(2,false,true,true,k);}
  std::cout<<"one_layer_graph_host_audit=PASS checked="<<checked<<" generalized_shape_validator=PASS\n";
