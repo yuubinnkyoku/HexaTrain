@@ -275,6 +275,7 @@ SDK19.0.07のHVX headerにはsf multiply/add intrinsicsが存在する。しか�
 ## H. Provenance・validation
 
 - Branch: `investigation/g1-fp32-attention-ln1-frontier`。
+- Working tree: clean。数値cohort前とcloseout後の`git status --porcelain`が空であることを確認。生成binary/private evidenceはignoredなbuild領域に保持した。
 - Device-tested source/probe commit: `ba128e3d338ed57b1a2b86b0df3b43d100de874f`。DSP/Host packageは`02eda90071825a6bbe43c578d77e4a4a5d73d1cb`のbytesを再利用した。全package source hashes・compiler hashes・SDK identityをProbeOnly guardで照合し、package arithmeticの差は0。
 - Final HEAD: 本レポートを含むcommit。`git log -1 --format=%H -- docs/g1-fp32-attention-matmul-ln1-feasibility.md`で取得でき、exact hashはcloseout private ledgerと完了回答にも残す。以後の変更はexporter/evidence/docのみで、numerical source/binaryへ転用しない。
 - QAIRT `2.48.40.260702151143`、QNN API `2.37.0`、HTP V81、Hexagon SDK `6.6.0.0`、tools `19.0.07`、NDK `26.2.11394342`。
