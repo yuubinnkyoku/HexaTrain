@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary','oneFinal')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary','oneFinal','oneBroadcast','oneUpstream')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -35,6 +35,14 @@ if($d.Serial -ne $plan.device_serial_private){throw 'PHYSICAL_IDENTITY_MISMATCH'
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $d.Endpoint
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+if($Variant -in @('oneBroadcast','oneUpstream')){
+ $awake=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','dumpsys','power')
+ if($awake.Text -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN'}
+ $activity=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','dumpsys','activity','activities')
+ if($activity.Text -notmatch '(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/'){throw 'TOP_RESUMED_UNKNOWN'}
+ if($Matches[1] -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_ALREADY_FOREGROUND'}
+ Get-PhoneLmThermalBatteryState -Adb $adb -Device $d.Endpoint -Phase 'frontier-preflight'|Out-Null
+}
 if((Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','ps','-A')).Text -match '(?m)\b(?:fp32_probe|layernorm_probe)\s*$'){throw 'EXISTING_CUSTOM_PROBE'}
 function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
  $r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments
@@ -47,7 +55,7 @@ if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){thro
 $research=$Variant -match '^ln|^matmul|^copyNative|^mm'
 $executable=if($Variant -match '^one'){'one_layer_probe'}elseif($research){'layernorm_probe'}else{'fp32_probe'}
 $id='customfp32-'+[guid]::NewGuid().ToString('N')
-$reportBase=if($Variant -match '^one'){'g1-one-layer-fp32-backward'}elseif($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
+$reportBase=if($Variant -in @('oneBroadcast','oneUpstream')){'g1-fp32-broadcast-upstream-frontier'}elseif($Variant -match '^one'){'g1-one-layer-fp32-backward'}elseif($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
 $report=Join-Path $root "build/reports/$reportBase/$id"
 [IO.Directory]::CreateDirectory($report)|Out-Null
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$report/apk-audit.txt" *> "$report/apk-audit-console.txt"
@@ -64,6 +72,12 @@ if($Variant -match '^one'){
  $fixtureIdentity=Get-Content (Join-Path $root 'build/reports/g1-one-layer-fp32-backward/fixture-identity-private.json') -Raw|ConvertFrom-Json
  if((Get-FileHash -LiteralPath $fixture).Hash.ToLowerInvariant() -ne $fixtureIdentity.sha256){throw 'ONE_LAYER_FIXTURE_MISMATCH'}
  $files+=$fixture
+}
+if($Variant -eq 'oneUpstream'){
+ $ln1Fixture=Join-Path $root 'build/reports/g1-fp32-broadcast-upstream-frontier/ln1-parameters.bin'
+ $ln1Identity=Get-Content (Join-Path $root 'build/reports/g1-fp32-broadcast-upstream-frontier/ln1-fixture-identity.json') -Raw|ConvertFrom-Json
+ if((Get-FileHash -LiteralPath $ln1Fixture).Hash.ToLowerInvariant() -ne $ln1Identity.sha256){throw 'LN1_FIXTURE_IDENTITY_MISMATCH'}
+ $files+=$ln1Fixture
 }
 foreach($name in @('libQnnHtp.so','libQnnHtpPrepare.so','libQnnHtpV81Stub.so')){$files+=Join-Path $QairtSdkRoot "lib/aarch64-android/$name"}
 $files+=Join-Path $QairtSdkRoot 'lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so'
