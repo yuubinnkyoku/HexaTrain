@@ -8,7 +8,7 @@ $ErrorActionPreference='Stop'
 if($SourceSha -notmatch '^[0-9a-f]{40}$'){throw 'EXACT_SOURCE_REQUIRED'}
 if($LaneAReports.Count -ne 3 -or $LaneBReports.Count -ne 3){throw 'THREE_PROCESSES_PER_LANE_REQUIRED'}
 if(@(@($LaneAReports)+@($LaneBReports)|Select-Object -Unique).Count -ne 6){throw 'INDEPENDENT_PROCESS_PATHS_REQUIRED'}
-$metricPattern='^onemetric,([A-Za-z0-9_]+),(\d+),([A-Za-z0-9_]+),abs=([^,]+),rms=([^,]+),relative_l2=([^,]+),max_relative=([^,]+),fp_abs=([^,]+),nonfinite=(\d+),hash=([0-9a-f]{16}),limit=([^,]+),gate=([01])$'
+$metricPattern='^onemetric,([A-Za-z0-9_]+),(\d+),([A-Za-z0-9_]+),abs=([^,]+),rms=([^,]+),relative_l2=([^,]+),max_relative=([^,]+),fp_abs=([^,]+),nonfinite=(\d+),hash=([0-9a-f]{16}),limit=([^,]+),gate=([01]),cosine=([^,]+),fp_word_mismatch=(\d+)$'
 function Number([string]$Text){$n=[double]::Parse($Text,[Globalization.CultureInfo]::InvariantCulture);if([double]::IsNaN($n)-or[double]::IsInfinity($n)-or$n -lt 0){throw 'NONFINITE_OR_NEGATIVE_METRIC'};return $n}
 function Digest([string[]]$Lines){$bytes=[Text.Encoding]::UTF8.GetBytes(($Lines -join "`n")+"`n");return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()}
 $identity=$null;$ln1Identity=$null;$lanes=@()
@@ -34,7 +34,8 @@ foreach($lane in @(@{name='oneBroadcast';reports=$LaneAReports;metrics=1840;exec
   if($lane.name -eq 'oneUpstream' -and $summary[0] -notmatch 'local_custom_failures=0,transfer_words_equal=1,'){throw 'UPSTREAM_LOCAL_CUSTOM_FAIL'}
   $parsed=@();$keys=@{};foreach($line in $lines){if($line -notmatch '^onemetric,'){continue};if($line -notmatch $metricPattern){throw 'METRIC_SCHEMA_FAIL'};$m=$Matches.Clone();$abs=Number $m[4];$limit=Number $m[11];$pass=[int]$m[12];if([int]$m[9] -ne 0 -or $pass -ne [int]($abs -le $limit)){throw 'METRIC_GATE_OR_FINITE_INCONSISTENT'}
    $key="$($m[1]),$($m[2]),$($m[3])";if($keys.ContainsKey($key)){throw 'DUPLICATE_METRIC'};$keys[$key]=$true
-   $parsed+=[pscustomobject]@{mode=$m[1];case=[int]$m[2];stage=$m[3];max_abs=$abs;rms=(Number $m[5]);relative_l2=(Number $m[6]);fp_abs=(Number $m[8]);limit=$limit;pass=$pass}
+   $cosine=[double]::Parse($m[13],[Globalization.CultureInfo]::InvariantCulture);if([double]::IsNaN($cosine)-or[double]::IsInfinity($cosine)-or[math]::Abs($cosine) -gt 1.000000000001){throw 'COSINE_NONFINITE_OR_OUT_OF_RANGE'}
+   $parsed+=[pscustomobject]@{mode=$m[1];case=[int]$m[2];stage=$m[3];max_abs=$abs;rms=(Number $m[5]);relative_l2=(Number $m[6]);fp_abs=(Number $m[8]);limit=$limit;pass=$pass;cosine=$cosine;fp_word_mismatch=[int]$m[14]}
   }
   if($parsed.Count -ne $lane.metrics){throw "METRIC_COUNT_FAIL expected=$($lane.metrics) actual=$($parsed.Count)"}
   $executes=@($lines|Where-Object {$_ -eq 'api,graphExecute,0'}).Count;if($executes -ne $lane.executes){throw 'EXECUTE_COUNT_FAIL'}
@@ -47,7 +48,7 @@ foreach($lane in @(@{name='oneBroadcast';reports=$LaneAReports;metrics=1840;exec
   if($null -eq $firstMetrics){$firstMetrics=$parsed}
  }
  if(@($digests|Select-Object -Unique).Count -ne 1){throw 'THREE_PROCESS_NUMERICAL_MISMATCH'}
- $groups=@();foreach($group in ($firstMetrics|Group-Object mode,stage)){$v=$group.Group;$expectedCases=if($v[0].mode -in @('broadcastCustom','broadcastStandard')){35}else{25};if($v.Count -ne $expectedCases -or (($v.case|Sort-Object) -join ',') -ne ((0..($expectedCases-1)) -join ',')){throw 'GROUP_CASE_MATRIX_INCOMPLETE'};$groups+=[ordered]@{mode=$v[0].mode;stage=$v[0].stage;cases=$v.Count;max_abs=($v.max_abs|Measure-Object -Maximum).Maximum;max_fp_abs=($v.fp_abs|Measure-Object -Maximum).Maximum;limit=$v[0].limit;failures=@($v|Where-Object pass -eq 0).Count}}
+ $groups=@();foreach($group in ($firstMetrics|Group-Object mode,stage)){$v=$group.Group;$expectedCases=if($v[0].mode -in @('broadcastCustom','broadcastStandard')){35}else{25};if($v.Count -ne $expectedCases -or (($v.case|Sort-Object) -join ',') -ne ((0..($expectedCases-1)) -join ',')){throw 'GROUP_CASE_MATRIX_INCOMPLETE'};$groups+=[ordered]@{mode=$v[0].mode;stage=$v[0].stage;cases=$v.Count;max_abs=($v.max_abs|Measure-Object -Maximum).Maximum;max_fp_abs=($v.fp_abs|Measure-Object -Maximum).Maximum;max_rms=($v.rms|Measure-Object -Maximum).Maximum;max_relative_l2=($v.relative_l2|Measure-Object -Maximum).Maximum;minimum_cosine=($v.cosine|Measure-Object -Minimum).Minimum;fp_word_mismatch_total=($v.fp_word_mismatch|Measure-Object -Sum).Sum;limit=$v[0].limit;failures=@($v|Where-Object pass -eq 0).Count}}
  $lanes+=[ordered]@{lane=$lane.name;processes=$processes;aggregate=$groups}
 }
 $public=[ordered]@{schema_version=1;provenance=($identity|ConvertFrom-Json);ln1_fixture_sha256=$ln1Identity;lanes=$lanes;training_updates=0;threshold_relaxation=$false;production_builder_changed=$false}
