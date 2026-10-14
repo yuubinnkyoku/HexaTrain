@@ -3,6 +3,7 @@ import argparse, hashlib, json, math, re
 from pathlib import Path
 
 def export(cohort, output):
+    expected_source="02eda90071825a6bbe43c578d77e4a4a5d73d1cb"
     entries=json.loads(Path(cohort).read_text(encoding="utf-8-sig"))
     assert set(entries)=={"oneAttention","oneLn1","oneObserver"}
     summary={"schema":1,"lanes":{}}
@@ -18,7 +19,7 @@ def export(cohort, output):
             assert ledger["exit_code"]==0 and ledger["focus_takeover_count"]==0 and ledger["protected_identity"]=="PASS"
             assert ledger["branch"]=="investigation/g1-fp32-attention-ln1-frontier"
             build=ledger["build"]
-            assert ledger["source_sha"]==build["source_sha"] and re.fullmatch(r"[0-9a-f]{40}",build["source_sha"])
+            assert ledger["source_sha"]==build["source_sha"]==expected_source
             assert build["qairt_build_id"]=="2.48.40.260702151143" and build["architecture"]=="v81"
             selected={key:ledger["hashes"][key] for key in ("libHexaFp32Host.so","libHexaFp32Dsp.so","one_layer_probe","libQnnHtp.so","libQnnHtpPrepare.so","libQnnHtpV81Stub.so","libQnnHtpV81Skel.so","one-layer-inputs.bin")}
             for key in ("libHexaFp32Host.so","libHexaFp32Dsp.so","one_layer_probe"):assert selected[key]==build["binary_hashes"][key]
