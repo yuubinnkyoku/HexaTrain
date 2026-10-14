@@ -1,6 +1,8 @@
 """Allowlisted aggregate export. Private ledgers/tensors/paths never leave build/."""
 import argparse, hashlib, json, math, re
 from pathlib import Path
+if not __debug__:
+    raise RuntimeError("Optimized Python disables cohort assertions; export rejected")
 
 def export(cohort, output):
     expected_source="02eda90071825a6bbe43c578d77e4a4a5d73d1cb"
