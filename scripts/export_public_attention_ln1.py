@@ -7,6 +7,7 @@ def export(cohort, output):
     assert set(entries)=={"oneAttention","oneLn1","oneObserver"}
     summary={"schema":1,"lanes":{}}
     identities=[]
+    expected={"oneAttention":(341,3235),"oneLn1":(312,2552),"oneObserver":(300,925)}
     metric=re.compile(r"^onemetric,([^,]+),(\d+),([^,]+),(.+)$")
     for lane, paths in entries.items():
         assert len(paths)==3 and len(set(paths))==3
@@ -21,8 +22,10 @@ def export(cohort, output):
             assert build["qairt_build_id"]=="2.48.40.260702151143" and build["architecture"]=="v81"
             selected={key:ledger["hashes"][key] for key in ("libHexaFp32Host.so","libHexaFp32Dsp.so","one_layer_probe","libQnnHtp.so","libQnnHtpPrepare.so","libQnnHtpV81Stub.so","libQnnHtpV81Skel.so","one-layer-inputs.bin")}
             for key in ("libHexaFp32Host.so","libHexaFp32Dsp.so","one_layer_probe"):assert selected[key]==build["binary_hashes"][key]
+            assert selected["one-layer-inputs.bin"]=="388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f"
             if lane=="oneLn1":
                 fixtures={key:ledger["hashes"][key] for key in ("ln1-parameters.bin","ln1-producers.bin")}
+                assert fixtures=={"ln1-parameters.bin":"7102ec13544df457922942e3282b15a8612da91c51156692000fc0dd0a21f97f","ln1-producers.bin":"ee9e3185b9a5857d874b5791a1e4b34c153401367dc208a1b74fa3bafa1a9580"}
             else: fixtures={}
             identity={"source_commit":build["source_sha"],"binary_hashes":selected,"sdk_build":build["qairt_build_id"],"hexagon_compiler_sha256":build["hexagon_compiler_sha256"],"ndk_compiler_sha256":build["ndk_compiler_sha256"]}
             identities.append(identity)
@@ -54,8 +57,10 @@ def export(cohort, output):
                     if not nonfinite:
                         group["max_abs"]=max(group["max_abs"],float(values["abs"]));group["max_fp_abs"]=max(group["max_fp_abs"],float(values["fp_abs"]))
                     group["fp_word_mismatches"]+=int(values["fp_word_mismatch"])
+                    if mode in ("dpCustom","dpFree") or mode.startswith("dpChain") and int(mode[7:])<6 and stage in ("y","xhat","inverse","dx","dg","db","residual","dc","dw","h0_selected","h1_selected","h0_dc","h1_dc","h0_dp","h1_dp") or mode.startswith("ln1V2") and stage in ("y","xhat","inverse","xhatSaved","inverseSaved","dx","dg","db") or mode.endswith("Local"):
+                        assert values["gate"]=="1","required Custom accuracy failed"
             executes=sum(line=="api,graphExecute,0" for line in lines)
-            assert executes>0 and len(canonical)>0
+            assert (executes,sum(line.startswith("onemetric,") for line in canonical))==expected[lane]
             processes.append({"ordinal":len(processes)+1,"numerical_digest":digest,"execute_count":executes,"metric_count":sum(line.startswith("onemetric,") for line in canonical),"api_success":True,"finite":True,"protected_checks":True})
         summary["lanes"][lane]={"processes":processes,"aggregate":list(groups.values())}
     assert all(identity==identities[0] for identity in identities)
