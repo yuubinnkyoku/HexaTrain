@@ -11,13 +11,13 @@ void mm(DiagnosticGraph& g,const std::string& name,unsigned a,unsigned b,unsigne
 }
 #include "ln1_graph.h"
 struct OneGraph {
- DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
+ DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0,productReceipt=0,lastProduct=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
  unsigned tensor(const std::string& name,unsigned r,unsigned c,bool terminal=false){auto id=g.tensor(name.c_str(),tap||terminal?QNN_TENSOR_TYPE_APP_READ:QNN_TENSOR_TYPE_NATIVE,{1,1,r,c});out[name]=id;return id;}
  unsigned input(const std::string& name,unsigned r,unsigned c){auto id=g.tensor(("input_"+name).c_str(),QNN_TENSOR_TYPE_APP_WRITE,{1,1,r,c});in[name]=id;return id;}
  unsigned binary(const std::string& name,const char* type,unsigned a,unsigned b,unsigned r,unsigned c,bool terminal=false){auto id=tensor(name,r,c,terminal);g.node(name.c_str(),type,"qti.aisw",{a,b},{id});return id;}
  unsigned mat(const std::string& name,unsigned a,unsigned b,unsigned r,unsigned c,bool ta=false,bool tb=false,bool terminal=false){auto id=tensor(name,r,c,terminal);op::mm(g,name,a,b,id,ta,tb);return id;}
  unsigned sum(const std::string& name,unsigned a){auto id=tensor(name,32,1);Qnn_Param_t p=QNN_PARAM_INIT;p.name=QNN_OP_REDUCE_SUM_PARAM_AXES;p.paramType=QNN_PARAMTYPE_TENSOR;p.tensorParam=g.tensors[axis];g.node(name.c_str(),QNN_OP_REDUCE_SUM,"qti.aisw",{a},{id},{p,op::boolean(QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS,true)});return id;}
- OneGraph(const std::string& name,bool taps,bool fuse,bool attention,bool upstream,bool broadcast=false,bool next=false,bool customDp=false,bool receipt=true,bool consumer=false,bool strictObservers=false):g(name),tap(taps),fused(fuse),integrated(attention),produced(upstream){
+ OneGraph(const std::string& name,bool taps,bool fuse,bool attention,bool upstream,bool broadcast=false,bool next=false,bool customDp=false,bool receipt=true,bool consumer=false,bool strictObservers=false,bool customProduct=false):g(name),tap(taps),fused(fuse),integrated(attention),produced(upstream){
   receipts=receipt;g.receiptEnabled=receipt;
   axis=g.constant("axis",{1},{from(3)},QNN_DATATYPE_UINT_32);scale=g.constant("scale",{1,1,1,1},{1.f/std::sqrt(32.f)});
   auto gamma=input("gamma",1,64),beta=input("beta",1,64),residual=input("residual",32,64),wo=input("wo",64,64);auto eps=g.constant("epsilon",{1,1,1,1},{1e-5f});
@@ -47,7 +47,9 @@ struct OneGraph {
     if(customDp)dp[head]=tensor(pr+"dp",32,32,!consumer);else dp[head]=mat(pr+"dp",dh,vv[head],32,32,false,true,true);
     if(!customDp)mat(pr+"dv",pp[head],dh,32,32,true,false,true);}
     if(customDp){dpr=g.tensor("dprob_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,6152},QNN_DATATYPE_INT_32);g.node("dprob","MatMulDProbabilities","HexaFp32",{ya,yb,vv[0],vv[1]},{dp[0],dp[1],dpr});}
-    if(consumer)for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";auto product=binary(pr+"product",QNN_OP_ELEMENT_WISE_MULTIPLY,dp[head],pp[head],32,32);auto dot=sum(pr+"dot",product);auto centered=binary(pr+"centered",QNN_OP_ELEMENT_WISE_SUBTRACT,dp[head],dot,32,32);binary(pr+"ds",QNN_OP_ELEMENT_WISE_MULTIPLY,pp[head],centered,32,32,true);}
+    std::array<unsigned,2> products{};
+    if(customProduct){for(unsigned head=0;head<2;++head)products[head]=tensor("h"+std::to_string(head)+"_product",32,32);productReceipt=g.tensor("product_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,6152},QNN_DATATYPE_INT_32);g.node("softmax_product","SoftmaxProduct","HexaFp32",{dp[0],dp[1],pp[0],pp[1]},{products[0],products[1],productReceipt});}
+    if(consumer)for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";auto product=customProduct?products[head]:binary(pr+"product",QNN_OP_ELEMENT_WISE_MULTIPLY,dp[head],pp[head],32,32);auto dot=sum(pr+"dot",product);auto centered=binary(pr+"centered",QNN_OP_ELEMENT_WISE_SUBTRACT,dp[head],dot,32,32);binary(pr+"ds",QNN_OP_ELEMENT_WISE_MULTIPLY,pp[head],centered,32,32,true);}
    }
   }
   if(integrated){std::vector<unsigned> qs,ks,vs,gscats;
@@ -86,6 +88,7 @@ struct OneGraph {
     auto bits=slice(r,4104+head*1024,1024);if(o.count(out.at(pr+"dp"))&&o.at(out.at(pr+"dp"))!=bits)std::exit(3);result[pr+"dp"]=decode(bits);}
    std::printf("dprob_receipt,%u,marker=%08x,all_input_words_equal=1,local_fp_words_equal=1,math_us=%u,kernel_window_us=%u,wall_us=%.3f\n",z.index,r[0],r[4],r[7],g.executeUs);
   }
+  if(productReceipt){auto& r=o.at(productReceipt);if(r.size()!=6152||r[0]!=0x4838310cu||r[1]<=lastProduct||r[2]!=4096||r[3]!=2048||r[5]!=81||r[6]!=32)std::exit(3);lastProduct=r[1];for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";auto& dp=result.at(pr+"dp");auto& p=z.v.at(pr+"p");for(unsigned j=0;j<1024;++j)if(r[8+head*1024+j]!=word(dp[j])||r[2056+head*1024+j]!=word(p[j])||r[4104+head*1024+j]!=word(dp[j]*p[j]))std::exit(3);auto bits=slice(r,4104+head*1024,1024);if(o.count(out.at(pr+"product"))&&o.at(out.at(pr+"product"))!=bits)std::exit(3);result[pr+"product"]=decode(bits);}std::printf("product_receipt,%u,marker=%08x,raw_words=1,fp_exact=1,math_us=%u,window_us=%u\n",z.index,r[0],r[4],r[7]);}
   for(auto& entry:result)for(auto value:entry.second)if(!std::isfinite(value)){std::puts("ONE_NONFINITE_RECEIPT");std::exit(3);}
   std::printf("oneownership,%u,custom_executions=%u,full_operand_words=1,saved_words_equal=1,complete_write=1,finite=1,mutation=0,canary=1\n",z.index,(fused?4:5)+(materialReceipt?1:0)+(splitReceipt?1:0)+(broadcastReceipt?1:0));return result;
  }
@@ -111,7 +114,9 @@ void accumulation(const std::vector<one::Fixture>& fs,const std::vector<one::FV>
 #include "one_layer_boundary_probe.h"
 #include "broadcast_frontier_probe.h"
 #include "attention_ln1_probe.h"
+#include "softmax_projection_probe.h"
 int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one::read("one-layer-inputs.bin");unsigned segmentFailures=0,attentionFailures=0,producerFailures=0;std::vector<one::FV> weights(24);std::vector<std::map<std::string,one::FV>> anchors(24),native(24);
+ if(std::string(argv[1])=="oneSoftmax"||std::string(argv[1])=="oneProjection"||std::string(argv[1])=="oneProducer"){auto rc=softmaxProjection(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneAttention"||std::string(argv[1])=="oneLn1"||std::string(argv[1])=="oneObserver"){auto rc=attentionLn1(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneBroadcast"||std::string(argv[1])=="oneUpstream"){auto rc=std::string(argv[1])=="oneBroadcast"?broadcastFrontier(fs):upstreamFrontier(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneSegment"||std::string(argv[1])=="oneBoundary"||std::string(argv[1])=="oneFinal"){auto rc=bounded(argv[1],fs);closeProbe();return rc;}

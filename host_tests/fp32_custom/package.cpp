@@ -14,9 +14,9 @@
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt", "SoftmaxProduct", "SoftmaxProductNoReceipt", "ProjectionQKV", "ProjectionQKVNoReceipt"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 21, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 25, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -36,6 +36,7 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(!std::strcmp(c.v1.typeName,"BroadcastMultiply"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDProbabilities"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDProbabilitiesNoReceipt"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==2?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    for(unsigned j=21;j<25;++j)if(!std::strcmp(c.v1.typeName,names[j]))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==(j<23?2u:3u)+(j%2?1u:0u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     const char* freeNames[]={"LnForwardNoReceipt","LnBackwardNoReceipt","AddNoReceipt","MatMulDContextNoReceipt","MatMulDWoNoReceipt","HeadSplitNoReceipt","BroadcastMultiplyNoReceipt","CopyNoReceipt"};
     const unsigned freeInputs[]={4,4,2,2,2,1,4,1},freeOutputs[]={3,3,1,1,1,2,2,1};
     for(unsigned j=0;j<8;++j)if(!std::strcmp(c.v1.typeName,freeNames[j]))return c.v1.numOfInputs==freeInputs[j]&&c.v1.numOfOutputs==freeOutputs[j]?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
@@ -59,6 +60,7 @@ QHPI_Tensor_Signature_v1 outputs[2] = {
 // Integer receipt is produced only by the target kernel. It includes input
 // words and a per-call counter; the host must validate it independently.
 unsigned calls=0;
+inline float elementProduct(float a,float b){return a*b;}
 template<unsigned Kind,bool Observe=true> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** o,
     uint32_t ni,const QHPI_Tensor* const* in) {
     if(no!=(Observe?2u:1u) || ni!=(Kind==0?1u:Kind==3?3u:2u)) return QHPI_ERROR_FATAL;
@@ -95,7 +97,7 @@ template<unsigned Kind,bool Observe=true> uint32_t kernel(QHPI_RuntimeHandle*,ui
         else {
             const float* b=static_cast<const float*>(qhpi_tensor_raw_data(in[1]));
             if constexpr(Kind==1)y[j]=x[j]+b[j];
-            if constexpr(Kind==2)y[j]=x[j]*b[j];
+            if constexpr(Kind==2)y[j]=elementProduct(x[j],b[j]);
             if constexpr(Kind==3) {
                 const float* c=static_cast<const float*>(qhpi_tensor_raw_data(in[2]));
                 volatile float product=x[j]*b[j]; y[j]=product+c[j];
@@ -116,6 +118,7 @@ QHPI_Kernel_v1 kernels[4] = {};
 QHPI_OpInfo_v1 ops[4] = {};
 }
 #include "attention_matmul_op.h"
+#include "segment_ops.h"
 extern "C" Qnn_ErrorHandle_t HexaFp32InterfaceProvider(QnnOpPackage_Interface_t* p) {
     if(!p)return QNN_OP_PACKAGE_ERROR_INVALID_ARGUMENT;
     *p={};p->interfaceVersion={1,4,0};p->v1_4.init=init;p->v1_4.terminate=terminate;
@@ -132,5 +135,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps()?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps() && segmentcustom::registerOps()?package:nullptr;
 }
