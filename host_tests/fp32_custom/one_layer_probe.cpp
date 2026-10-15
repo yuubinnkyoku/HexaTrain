@@ -12,13 +12,13 @@ void mm(DiagnosticGraph& g,const std::string& name,unsigned a,unsigned b,unsigne
 #include "ln1_graph.h"
 inline bool sameFpWords(const one::FV& a,const one::FV& b){return a.size()==b.size()&&(a.empty()||!std::memcmp(a.data(),b.data(),a.size()*4));}
 struct OneGraph {
- DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0,productReceipt=0,lastProduct=0,dotReceipt=0,centerReceipt=0,finalReceipt=0,fusedReceipt=0,lastDot=0,lastCenter=0,lastFinal=0,lastFused=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
+ DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0,productReceipt=0,lastProduct=0,dotReceipt=0,centerReceipt=0,finalReceipt=0,fusedReceipt=0,lastDot=0,lastCenter=0,lastFinal=0,lastFused=0;unsigned rawReceipt=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
  unsigned tensor(const std::string& name,unsigned r,unsigned c,bool terminal=false){auto id=g.tensor(name.c_str(),tap||terminal?QNN_TENSOR_TYPE_APP_READ:QNN_TENSOR_TYPE_NATIVE,{1,1,r,c});out[name]=id;return id;}
  unsigned input(const std::string& name,unsigned r,unsigned c){auto id=g.tensor(("input_"+name).c_str(),QNN_TENSOR_TYPE_APP_WRITE,{1,1,r,c});in[name]=id;return id;}
  unsigned binary(const std::string& name,const char* type,unsigned a,unsigned b,unsigned r,unsigned c,bool terminal=false){auto id=tensor(name,r,c,terminal);g.node(name.c_str(),type,"qti.aisw",{a,b},{id});return id;}
  unsigned mat(const std::string& name,unsigned a,unsigned b,unsigned r,unsigned c,bool ta=false,bool tb=false,bool terminal=false){auto id=tensor(name,r,c,terminal);op::mm(g,name,a,b,id,ta,tb);return id;}
  unsigned sum(const std::string& name,unsigned a){auto id=tensor(name,32,1);Qnn_Param_t p=QNN_PARAM_INIT;p.name=QNN_OP_REDUCE_SUM_PARAM_AXES;p.paramType=QNN_PARAMTYPE_TENSOR;p.tensorParam=g.tensors[axis];g.node(name.c_str(),QNN_OP_REDUCE_SUM,"qti.aisw",{a},{id},{p,op::boolean(QNN_OP_REDUCE_SUM_PARAM_KEEP_DIMS,true)});return id;}
- OneGraph(const std::string& name,bool taps,bool fuse,bool attention,bool upstream,bool broadcast=false,bool next=false,bool customDp=false,bool receipt=true,bool consumer=false,bool strictObservers=false,bool customProduct=false,unsigned softmaxDomain=0,bool nextAttention=false,unsigned observerCut=0):g(name),tap(taps),fused(fuse),integrated(attention),produced(upstream){
+ OneGraph(const std::string& name,bool taps,bool fuse,bool attention,bool upstream,bool broadcast=false,bool next=false,bool customDp=false,bool receipt=true,bool consumer=false,bool strictObservers=false,bool customProduct=false,unsigned softmaxDomain=0,bool nextAttention=false,unsigned observerCut=0,unsigned closureMode=0):g(name),tap(taps),fused(fuse),integrated(attention),produced(upstream){
   receipts=receipt;g.receiptEnabled=receipt;
   axis=g.constant("axis",{1},{from(3)},QNN_DATATYPE_UINT_32);scale=g.constant("scale",{1,1,1,1},{1.f/std::sqrt(32.f)});
   auto gamma=input("gamma",1,64),beta=input("beta",1,64),residual=input("residual",32,64),wo=input("wo",64,64);auto eps=g.constant("epsilon",{1,1,1,1},{1e-5f});
@@ -56,7 +56,12 @@ struct OneGraph {
      if(softmaxDomain==2){fusedReceipt=g.tensor("softmax_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,10312},QNN_DATATYPE_INT_32);g.node("softmax_backward","SoftmaxBackward","HexaFp32",{dp[0],dp[1],pp[0],pp[1]},{ds[0],ds[1],fusedReceipt});}
      else{for(unsigned head=0;head<2;++head){dots[head]=tensor("h"+std::to_string(head)+"_dot",32,1);centers[head]=tensor("h"+std::to_string(head)+"_centered",32,32);}dotReceipt=g.tensor("dot_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,2120},QNN_DATATYPE_INT_32);centerReceipt=g.tensor("center_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,4168},QNN_DATATYPE_INT_32);finalReceipt=g.tensor("final_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,6152},QNN_DATATYPE_INT_32);g.node("softmax_reduce","SoftmaxReduce","HexaFp32",{products[0],products[1]},{dots[0],dots[1],dotReceipt});g.node("softmax_center","SoftmaxCenter","HexaFp32",{dp[0],dp[1],dots[0],dots[1]},{centers[0],centers[1],centerReceipt});g.node("softmax_final","SoftmaxProduct","HexaFp32",{pp[0],pp[1],centers[0],centers[1]},{ds[0],ds[1],finalReceipt});}
     }else if(consumer)for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";auto product=customProduct?products[head]:binary(pr+"product",QNN_OP_ELEMENT_WISE_MULTIPLY,dp[head],pp[head],32,32);auto dot=sum(pr+"dot",product);auto centered=binary(pr+"centered",QNN_OP_ELEMENT_WISE_SUBTRACT,dp[head],dot,32,32);ds[head]=binary(pr+"ds",QNN_OP_ELEMENT_WISE_MULTIPLY,pp[head],centered,32,32,true);}
-    if(nextAttention)for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";auto k=input(pr+"k",32,32),q=input(pr+"q",32,32);mat(pr+"dqraw",ds[head],k,32,32,false,false,true);mat(pr+"dkraw",ds[head],q,32,32,true,false,true);}
+    if(nextAttention){std::array<unsigned,2> kk,qq;std::vector<unsigned> yy;
+     for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";kk[head]=input(pr+"k",32,32);qq[head]=input(pr+"q",32,32);if(closureMode){yy.push_back(tensor(pr+"dqraw",32,32,closureMode==1));yy.push_back(tensor(pr+"dkraw",32,32,closureMode==1));}else{mat(pr+"dqraw",ds[head],kk[head],32,32,false,false,true);mat(pr+"dkraw",ds[head],qq[head],32,32,true,false,true);}}
+     if(closureMode){rawReceipt=g.tensor("raw_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,10248},QNN_DATATYPE_INT_32);auto outputs=yy;outputs.push_back(rawReceipt);g.node("dqdk","RawDQDK","HexaFp32",{ds[0],ds[1],kk[0],kk[1],qq[0],qq[1]},outputs);
+      if(closureMode==2)for(unsigned head=0;head<2;++head)for(unsigned j=0;j<2;++j){auto key="h"+std::to_string(head)+(j?"_dk":"_dq");binary(key,QNN_OP_ELEMENT_WISE_MULTIPLY,yy[head*2+j],scale,32,32,true);}
+     }
+    }
 
    }
   }
@@ -133,7 +138,9 @@ void accumulation(const std::vector<one::Fixture>& fs,const std::vector<one::FV>
 #include "broadcast_frontier_probe.h"
 #include "attention_ln1_probe.h"
 #include "softmax_projection_probe.h"
+#include "closure_probe.h"
 int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one::read("one-layer-inputs.bin");unsigned segmentFailures=0,attentionFailures=0,producerFailures=0;std::vector<one::FV> weights(24);std::vector<std::map<std::string,one::FV>> anchors(24),native(24);
+ if(std::string(argv[1]).rfind("oneClosure",0)==0){auto rc=closurestudy::run(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneSoftmax"||std::string(argv[1])=="oneProjection"||std::string(argv[1])=="oneProducer"){auto rc=softmaxProjection(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneAttention"||std::string(argv[1])=="oneLn1"||std::string(argv[1])=="oneObserver"){auto rc=attentionLn1(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneBroadcast"||std::string(argv[1])=="oneUpstream"){auto rc=std::string(argv[1])=="oneBroadcast"?broadcastFrontier(fs):upstreamFrontier(fs);closeProbe();return rc;}

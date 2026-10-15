@@ -11,12 +11,13 @@
 #include "custom_matmul_ops.h"
 #include "head_split_op.h"
 #include "broadcast_multiply_op.h"
+#include "closure_contract.h"
 
 namespace {
 constexpr const char* package = "HexaFp32";
-const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt", "SoftmaxProduct", "SoftmaxProductNoReceipt", "ProjectionQKV", "ProjectionQKVNoReceipt", "SoftmaxReduce", "SoftmaxReduceNoReceipt", "SoftmaxCenter", "SoftmaxCenterNoReceipt", "SoftmaxBackward", "SoftmaxBackwardNoReceipt"};
+const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt", "SoftmaxProduct", "SoftmaxProductNoReceipt", "ProjectionQKV", "ProjectionQKVNoReceipt", "SoftmaxReduce", "SoftmaxReduceNoReceipt", "SoftmaxCenter", "SoftmaxCenterNoReceipt", "SoftmaxBackward", "SoftmaxBackwardNoReceipt", "RawDQDK", "RawDQDKNoReceipt", "FFN2", "FFN2NoReceipt", "QKVHeads", "QKVHeadsNoReceipt"};
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, names, nullptr, 31, nullptr, 0,
+QnnOpPackage_Info_t info = {package, names, nullptr, 37, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -36,6 +37,7 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(!std::strcmp(c.v1.typeName,"BroadcastMultiply"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDProbabilities"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==3?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"MatMulDProbabilitiesNoReceipt"))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==2?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    for(unsigned j=31;j<37;++j)if(!std::strcmp(c.v1.typeName,names[j])){auto ct=closurecontract::contracts[(j-31)/2];return c.v1.numOfInputs==ct.inputs&&c.v1.numOfOutputs==ct.outputs+(j%2?1u:0u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;}
     for(unsigned j=25;j<31;++j)if(!std::strcmp(c.v1.typeName,names[j]))return c.v1.numOfInputs==(j<27?2u:4u)&&c.v1.numOfOutputs==(j%2?3u:2u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     for(unsigned j=21;j<25;++j)if(!std::strcmp(c.v1.typeName,names[j]))return c.v1.numOfInputs==4&&c.v1.numOfOutputs==(j<23?2u:3u)+(j%2?1u:0u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     const char* freeNames[]={"LnForwardNoReceipt","LnBackwardNoReceipt","AddNoReceipt","MatMulDContextNoReceipt","MatMulDWoNoReceipt","HeadSplitNoReceipt","BroadcastMultiplyNoReceipt","CopyNoReceipt"};
@@ -121,6 +123,7 @@ QHPI_OpInfo_v1 ops[4] = {};
 #include "attention_matmul_op.h"
 #include "segment_ops.h"
 #include "softmax_ops.h"
+#include "closure_ops.h"
 extern "C" Qnn_ErrorHandle_t HexaFp32InterfaceProvider(QnnOpPackage_Interface_t* p) {
     if(!p)return QNN_OP_PACKAGE_ERROR_INVALID_ARGUMENT;
     *p={};p->interfaceVersion={1,4,0};p->v1_4.init=init;p->v1_4.terminate=terminate;
@@ -137,5 +140,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps() && segmentcustom::registerOps() && softmaxcustom::registerOps()?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps() && segmentcustom::registerOps() && softmaxcustom::registerOps() && closurecustom::registerOps()?package:nullptr;
 }

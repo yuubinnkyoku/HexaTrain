@@ -1,12 +1,15 @@
 #pragma once
 // The single additional operation type: lossless T32/D64/H2 selector replacement.
 namespace headcustom {
+inline void copyHeads(const float* x,float* a,float* b){
+ for(unsigned row=0;row<32;++row){std::memcpy(a+row*32,x+row*64,128);std::memcpy(b+row*32,x+row*64+32,128);}
+}
 template<bool Observe> uint32_t kernelImpl(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** o,uint32_t ni,const QHPI_Tensor* const* in){static unsigned calls=0;
  if(ni!=1||no!=(Observe?3u:2u)||!mmcustom::matrix(in[0],32,64)||!mmcustom::matrix(o[0],32,32)||!mmcustom::matrix(o[1],32,32))return QHPI_ERROR_FATAL;
  if constexpr(Observe)if(qhpi_tensor_type(o[2])!=QHPI_INT32||lncustom::count(o[2])!=4104)return QHPI_ERROR_FATAL;
  auto x=lncustom::data(in[0]),a=lncustom::data(o[0]),b=lncustom::data(o[1]);unsigned* r=nullptr;if constexpr(Observe)r=static_cast<unsigned*>(qhpi_tensor_raw_data(o[2]));if(!x||!a||!b||(Observe&&!r))return QHPI_ERROR_FATAL;auto started=lncustom::now();
  for(unsigned j=0;j<2048;++j)if(!std::isfinite(x[j]))return QHPI_ERROR_FATAL;if constexpr(Observe)std::memcpy(r+8,x,8192);
- for(unsigned row=0;row<32;++row){std::memcpy(a+row*32,x+row*64,128);std::memcpy(b+row*32,x+row*64+32,128);}if constexpr(Observe){std::memcpy(r+2056,a,4096);std::memcpy(r+3080,b,4096);
+ copyHeads(x,a,b);if constexpr(Observe){std::memcpy(r+2056,a,4096);std::memcpy(r+3080,b,4096);
  #ifdef __hexagon__
  r[0]=0x48383109u;
  #else
