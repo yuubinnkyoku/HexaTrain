@@ -22,7 +22,7 @@ Qnn_ErrorHandle_t node(Qnn_GraphHandle_t,Qnn_OpConfig_t config){auto& c=config.v
  for(unsigned i=0;i<c.numOfParams;++i){auto& p=c.params[i];if(!std::strcmp(p.name,QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN0))n.transposeInput0=p.scalarParam.bool8Value;if(!std::strcmp(p.name,QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1))n.transposeInput1=p.scalarParam.bool8Value;}
  auto result=shape::validate(n);if(!result.ok){std::cerr<<n.name<<":"<<result.error;return 1;}++checked;return QNN_SUCCESS;
 }
-int main(int argc,char** argv){api.graphCreate=create;api.tensorCreateGraphTensor=tensorCreate;api.graphAddNode=node;api.graphFinalize=finish;
+int main(int argc,char** argv){if(sameFpWords({0.f},{-0.f})||!sameFpWords({-0.f},{-0.f}))return 3;api.graphCreate=create;api.tensorCreateGraphTensor=tensorCreate;api.graphAddNode=node;api.graphFinalize=finish;
  for(auto mode:{"standalone","integratedNative","integratedTap","integratedFused","producedTap","producedSegmentTap"}){std::string m=mode;OneGraph g(m,m.find("Tap")!=std::string::npos||m=="integratedFused",m=="integratedFused",m!="standalone"&&m!="producedSegmentTap",m=="producedTap"||m=="producedSegmentTap");}
  if(argc==2){auto fs=one::read(argv[1]);std::vector<one::FV> weights;for(auto& z:fs)weights.push_back(one::f(one::reference(z,true).at("dw")));accumulation(fs,weights);}
  for(bool tap:{false,true}){OneGraph g(tap?"integratedSplitTap":"integratedSplitNative",tap,false,false,false);}
