@@ -50,7 +50,7 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp')){
 }
 }
 $sourceHashes=@{}
-foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','ordered_ffn2_controls.h','ordered_hvx_probe.h')){
+foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','ordered_ffn2_controls.h','ordered_hvx_probe.h','ordered_hvx_graph.h')){
  $relative='host_tests/fp32_custom/'+$file
  $sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()
 }
