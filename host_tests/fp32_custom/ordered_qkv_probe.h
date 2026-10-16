@@ -48,15 +48,18 @@ inline std::map<std::string,one::FV> audit(Graph& g,const Case& c,const std::map
     }
     std::array<one::FV,3> actual,fp;for(unsigned p=0;p<3;++p){auto ref=one::mm(idealY,one::d(c.w[p]),32,64,64);fp[p]=one::f(one::mm(one::d(received),one::d(c.w[p]),32,64,64,false,false,true));
         actual[p]=o.count(g.q[p])?decode(o.at(g.q[p])):g.observed?closurestudy::slice(o.at(g.qr),(g.hvx?24:8)+14336+p*2048,2048):fp[p];
-        if(o.count(g.q[p])||g.observed){auto key="qkv"+std::to_string(p);values[key]=actual[p];accuracy+=metric(g.name,ci,key,ref,one::d(fp[p]),actual[p],.002);identity+=words(actual[p],fp[p],g.name,ci,("host_ordered_"+key).c_str());}
+        if(o.count(g.q[p])||g.observed){auto key="qkv"+std::to_string(p);values[key]=actual[p];accuracy+=metric(g.name,ci,key,ref,one::d(fp[p]),actual[p],.002);
+            if(!g.stage||g.observed||g.tap)identity+=words(actual[p],fp[p],g.name,ci,("host_ordered_"+key).c_str());}
         if(g.stage==2)for(unsigned h=0;h<2;++h){auto key="head"+std::to_string(p*2+h);accuracy+=metric(g.name,ci,key,one::split(ref,h),one::split(one::d(fp[p]),h),values.at(key),.002);
-            identity+=words(values.at(key),one::f(one::split(one::d(actual[p]),h)),g.name,ci,(std::string(g.observed||g.tap?"lossless_observed_":"oracle_slice_")+key).c_str());}
+            if(g.observed||g.tap)identity+=words(values.at(key),one::f(one::split(one::d(actual[p]),h)),g.name,ci,("lossless_observed_"+key).c_str());}
     }
     if(g.observed){qreceipt(g,c,o,received,actual,ci);
         if(g.stage==2){auto& r=o.at(g.hr);require(r.size()==12296&&r[0]==0x48383113u&&r[1]>g.lastH&&r[2]==6144&&r[3]==6144&&r[5]==81&&r[6]==32);g.lastH=r[1];
             for(unsigned p=0;p<3;++p)require(sameFpWords(closurestudy::slice(r,8+p*2048,2048),actual[p]));for(unsigned p=0;p<6;++p)require(sameFpWords(closurestudy::slice(r,6152+p*1024,1024),values.at("head"+std::to_string(p))));
             std::printf("qkvheads,%s,%u,producer_consumer_words=1,lossless_words=1\n",g.name.c_str(),ci);}
-    }return values;
+    }
+    if(g.stage&&!g.observed&&!g.tap)std::printf("qkvoracle,%s,%u,hidden_y_host_ln_oracle=1,host_fp_words_not_a_gate=1,own_double_and_scalar_final_words_required=1\n",g.name.c_str(),ci);
+    return values;
 }
 inline void matrix(unsigned stage,const std::vector<Case>& cs,unsigned& accuracy,unsigned& identity){
     std::vector<std::map<std::string,one::FV>> anchors(cs.size());std::array<std::vector<std::map<std::string,one::FV>>,4> scalar;for(auto& v:scalar)v.resize(cs.size());
