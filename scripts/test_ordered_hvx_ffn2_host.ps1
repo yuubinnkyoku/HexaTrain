@@ -1,12 +1,14 @@
 param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
- [Parameter(Mandatory=$true)][string]$ExpectedBuildId
+ [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
+ [string]$ReportRoot=''
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 $out=Join-Path $root 'build/reports/ordered-fp32-hvx-ffn2'
+if($ReportRoot){$out=[IO.Path]::GetFullPath($ReportRoot)}
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $fixture=Join-Path $root 'build/reports/g1-one-layer-fp32-backward/one-layer-inputs.bin'
 $ln=Join-Path $root 'build/reports/g1-fp32-broadcast-upstream-frontier/ln1-parameters.bin'

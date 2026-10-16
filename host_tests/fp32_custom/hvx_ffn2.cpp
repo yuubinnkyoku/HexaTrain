@@ -1,4 +1,4 @@
-// Diagnostic-only NN [32,128] x [128,64]. No alternate geometry or fallback.
+// Diagnostic-only audited NN FFN2 K128 and QKV K64; N64/M32, no fallback.
 #include <cstring>
 #include <hexagon_types.h>
 #include <hvx_hexagon_protos.h>
@@ -7,22 +7,12 @@
 #endif
 static_assert(sizeof(HVX_Vector) == 128, "HVX vector width");
 static_assert(sizeof(float) == 4, "FP32 words");
+#include "hvx_ordered_nn.h"
 extern "C" __attribute__((noinline)) void hexatrain_ordered_hvx_ffn2(
     const float* a, const float* b, float* y) {
-    for (unsigned m = 0; m < 32; ++m) {
-        for (unsigned tile = 0; tile < 2; ++tile) {
-            HVX_Vector acc = Q6_V_vzero();
-            for (unsigned q = 0; q < 128; ++q) {
-                int bits;
-                std::memcpy(&bits, a + m * 128 + q, 4);
-                const HVX_Vector av = Q6_V_vsplat_R(bits);
-                HVX_Vector bv;
-                // Exact 128-byte copy: no assumed QNN pointer alignment.
-                std::memcpy(&bv, b + q * 64 + tile * 32, 128);
-                const HVX_Vector product = Q6_Vsf_vmpy_VsfVsf(av, bv);
-                acc = Q6_Vsf_vadd_VsfVsf(acc, product);
-            }
-            std::memcpy(y + m * 64 + tile * 32, &acc, 128);
-        }
-    }
+    ordered_hvx_nn<128>(a,b,y);
+}
+extern "C" __attribute__((noinline)) void hexatrain_ordered_hvx_qkv_nn64(
+    const float* a, const float* b, float* y) {
+    ordered_hvx_nn<64>(a,b,y);
 }

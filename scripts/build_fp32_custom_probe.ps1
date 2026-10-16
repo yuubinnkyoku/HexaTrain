@@ -28,7 +28,7 @@ if($ProbeOnly){
   $relative='host_tests/fp32_custom/'+$file
   if((Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant() -ne $reuse.source_hashes.$relative){throw 'PROBE_ONLY_PACKAGE_OR_OTHER_PROBE_SOURCE_CHANGED'}
  }
- foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h')){
+ foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','hvx_ordered_nn.h','hvx_qkv_op.h')){
   $relative='host_tests/fp32_custom/'+$file
   if((Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant() -ne $reuse.source_hashes.$relative){throw 'PROBE_ONLY_HVX_PACKAGE_SOURCE_CHANGED'}
  }
@@ -50,7 +50,7 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp')){
 }
 }
 $sourceHashes=@{}
-foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','ordered_ffn2_controls.h','ordered_hvx_probe.h','ordered_hvx_graph.h')){
+foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','hvx_ordered_nn.h','hvx_qkv_op.h','ordered_ffn2_controls.h','ordered_hvx_probe.h','ordered_hvx_graph.h','ordered_qkv_controls.h','ordered_qkv_probe.h','ordered_qkv_graph.h')){
  $relative='host_tests/fp32_custom/'+$file
  $sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()
 }
