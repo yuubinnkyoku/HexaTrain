@@ -143,7 +143,9 @@ void accumulation(const std::vector<one::Fixture>& fs,const std::vector<one::FV>
 #include "ordered_hvx_probe.h"
 #include "ordered_qkv_probe.h"
 #include "qk_scale_probe.h"
+#include "probability_probe.h"
 int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one::read("one-layer-inputs.bin");unsigned segmentFailures=0,attentionFailures=0,producerFailures=0;std::vector<one::FV> weights(24);std::vector<std::map<std::string,one::FV>> anchors(24),native(24);
+ if(std::string(argv[1])=="oneProbabilityScale"){auto rc=probabilitystudy::runScale(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneQkScaleA"||std::string(argv[1])=="oneQkScaleB"){auto rc=qkscalestudy::run(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneHvx"){auto rc=orderedhvxstudy::run(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneQkvHvx"){auto rc=orderedqkvstudy::run(fs);closeProbe();return rc;}

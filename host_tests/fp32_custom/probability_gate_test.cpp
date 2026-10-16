@@ -1,0 +1,10 @@
+#define main inherited_graph_main
+#include "one_layer_graph_test.cpp"
+#undef main
+#include "probability_contract.h"
+int main(int argc,char** argv){if(argc!=2)return 1;auto fs=one::read(argv[1]);auto s=probabilitycontract::sensitivity(fs);auto m=probabilitycontract::mask();std::printf("sensitivity,D=%.15g,L=%.15g,V=%.15g,ds_bound=%.15g,dv_bound=%.15g\n",s.d,s.l,s.v,probabilitycontract::pGate*(2*s.d+s.l)+s.l*probabilitycontract::pGate*probabilitycontract::pGate,probabilitycontract::pGate*s.v);if(word(probabilitycontract::scale())!=0x3e3504f3u||word(-10000.f)!=0xc61c4000u||limit("h0_dv")!=.01)return 2;
+ for(unsigned r=0;r<32;++r)for(unsigned c=0;c<32;++c)if(word(m[r*32+c])!=(c>r?0xc61c4000u:0u))return 3;
+ double worstDs=0,worstDv=0;for(auto& z:upstreamreference::fullUpstream(fs)){auto ref=one::reference(z,true);for(unsigned h=0;h<2;++h){auto p="h"+std::to_string(h)+"_";auto prob=one::d(z.v.at(p+"p"));for(unsigned sign=0;sign<2;++sign){auto pert=prob;for(unsigned i=0;i<1024;++i)pert[i]+=(int((i*17+sign)%3)-1)*1e-9;auto bound=probabilitycontract::impact(ref.at(p+"dp"),ref.at(p+"dc"),prob,pert);if(bound.first>probabilitycontract::dsGate/8||bound.second>probabilitycontract::dvGate/10)return 5;auto a=probabilitycontract::backward(ref.at(p+"dp"),prob),b=probabilitycontract::backward(ref.at(p+"dp"),pert);auto v=one::mm(prob,ref.at(p+"dc"),32,32,32,true),w=one::mm(pert,ref.at(p+"dc"),32,32,32,true);for(unsigned i=0;i<1024;++i){worstDs=std::max(worstDs,std::fabs(a[i]-b[i]));worstDv=std::max(worstDv,std::fabs(v[i]-w[i]));}}}}
+ if(worstDs>probabilitycontract::dsGate/8||worstDv>probabilitycontract::dvGate/10)return 4;
+ std::printf("probability_gate_host=PASS cases=25 D=%.15g L=%.15g V=%.15g p_gate=1e-6 row_gate=2e-6 mask_gate=.001 component_ds_budget=.00025 component_dv_budget=.001 perturbation=1e-9 uniform_box_is_not_sufficient=1 ds_bound=%.15g dv_bound=%.15g empirical_ds=%.15g empirical_dv=%.15g scale_bits=%08x mask_bits=%08x\n",s.d,s.l,s.v,1e-6*(2*s.d+s.l)+s.l*1e-12,1e-6*s.v,worstDs,worstDv,word(probabilitycontract::scale()),word(-10000.f));
+}
