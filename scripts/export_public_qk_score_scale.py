@@ -89,7 +89,7 @@ def required(lane, graph, ci, key):
     return not key.startswith('scatter')
 
 
-def process(ledger, text, lane):
+def process(ledger, text, lane, legacy_pilot=False):
     variant = 'oneQkScale' + lane
     need(ledger['variant'] == variant and ledger['branch'] == BRANCH, 'WRONG_VARIANT_BRANCH')
     need(ledger['exit_code'] == 0 and ledger['status'] == 'COMPLETE' and ledger['mode'] == 'BACKGROUND_CORRECTNESS', 'PROCESS_FAILED')
@@ -104,7 +104,7 @@ def process(ledger, text, lane):
         need(sum(a == k for a, _ in api) == 1, 'TEARDOWN_MISSING')
     expected_m, expected_w = coverage(lane)
     observed_m, observed_w = Counter(), Counter()
-    aggregate = defaultdict(lambda: dict(checks=0, max_abs=0., failures=0, nonfinite=0))
+    aggregate = defaultdict(lambda: dict(checks=0, max_abs=0., failures=0, nonfinite=0, max_fp_word_mismatch=0))
     canonical = []
     for line in lines:
         if line.startswith('onemetric,'):
@@ -126,6 +126,7 @@ def process(ledger, text, lane):
             # Stage controls and large arithmetic controls remain separate groups.
             group = graph + ('Stress' if 'Standalone' in graph and int(ci) >= (44 if lane == 'A' else 25) else '') + '/' + key
             dst = aggregate[group]; dst['checks'] += 1; dst['max_abs'] = max(dst['max_abs'], float(f['abs'])); dst['failures'] += f['gate'] != '1'
+            dst['max_fp_word_mismatch'] = max(dst['max_fp_word_mismatch'], int(f['fp_word_mismatch']))
             canonical.append(line)
         elif line.startswith('hvxwords,'):
             a = line.split(','); observed_w[tuple(a[1:4])] += 1
@@ -138,17 +139,21 @@ def process(ledger, text, lane):
     marker = '48383116' if lane == 'A' else '48383117'
     receipts = [fields(l, 1) for l in lines if l.startswith('segmentreceipt,marker=' + marker + ',')]
     need(len(receipts) == (231 if lane == 'A' else 235) and all(r['raw_inputs'] == r['complete_output'] == '1' for r in receipts), 'DSP_RECEIPT_COVERAGE')
-    if lane == 'B':
+    if lane == 'B' and not legacy_pilot:
         need(sum(l == 'frontierscale,received_bits=3e3504f3,head_gradient_order=H0Q_H0K_H1Q_H1K' for l in lines) == 235, 'RECEIVED_SCALE_BITS')
+    if legacy_pilot:
+        need(lane == 'B' and ledger['source_sha'] == 'd640e86064cff113aa963640c2a7468fe43d1463' and ledger['build']['binary_hashes']['one_layer_probe'] == '67ceaedbabd1fcdf66211ae426edfbeb8175204247cf59dda327fbd9770d6959', 'WRONG_PILOT_SOURCE')
+        need(not any(l.startswith('frontierscale,') for l in lines), 'PILOT_LOG_FORMAT_CHANGED')
     perf = defaultdict(list); first = {}; finalize = {}; graph_info = {}; memory = {}
+    allowed_graphs = {k[0] for k in expected_m} - {k[0] for k in expected_m if k[0].endswith('Local')}
     for line in lines:
         if line.startswith('frontierperf,'):
-            name = line.split(',')[1]; perf[name].append(fields(line))
+            name = line.split(',')[1]; need(name in allowed_graphs, 'UNKNOWN_GRAPH'); perf[name].append(fields(line))
         elif line.startswith(('frontierfirst,', 'frontierfinalize,')):
-            name = line.split(',')[1]; f = fields(line)
+            name = line.split(',')[1]; need(name in allowed_graphs, 'UNKNOWN_GRAPH'); f = fields(line)
             (first if line.startswith('frontierfirst,') else finalize)[name] = float(next(iter(f.values())))
         elif line.startswith(('segmentgraph,', 'closurememory,')):
-            name = line.split(',')[1]; f = {k: int(v) for k, v in fields(line).items()}
+            name = line.split(',')[1]; need(name in allowed_graphs, 'UNKNOWN_GRAPH'); f = {k: int(v) for k, v in fields(line).items()}
             (graph_info if line.startswith('segmentgraph,') else memory)[name] = f
     perf_names = ['qkStandalone0', 'qkStandalone1'] + ['qkNative0' + str(m) for m in range(4)] if lane == 'A' else ['scaleStandalone0', 'scaleStandalone1'] + ['scaleNative0' + str(d) + str(m) for d in (2, 1) for m in range(4)]
     need(set(perf) == set(perf_names), 'PERFORMANCE_COVERAGE')
