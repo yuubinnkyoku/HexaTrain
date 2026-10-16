@@ -1,16 +1,16 @@
 # Ordered FP32 HVX FFN2 feasibility
 
-**Initial snapshot: BLOCKED / UNRESOLVED at the device safety gate.** The linked V81
+**Overall: BLOCKED / UNRESOLVED at the Host storage safety gate.** The linked V81
 package contains real HVX multiply/add code for NN `[32,128] × [128,64]`.
-The device was Dozing, so no new DSP execution, numerical parity, native segment,
+No candidate was staged or executed, so no new DSP numerical parity, native segment,
 observer-free accuracy, or performance result is claimed. Code generation is a
 separate positive result; it does not establish architectural feasibility.
 40k→60k and 200k remain **NO-GO**.
 
-After the user's continuation, a read-only refresh found Awake,79% battery,
-36°C. Full preflight and a standalone pilot are being prepared; this initial
-snapshot does not contain their results. The final report must supersede this
-snapshot before any new device conclusion is made.
+The first preflight stopped at Dozing. After the user's continuation, the device
+was Awake with about80% battery and36°C, but the standalone runner stopped at
+`HOST_STORAGE_HEADROOM_LOW`: the Host volume had only422780928B free, below
+the required20GiB. This is an infrastructure stop, not an HVX numerical failure.
 
 ## A. Design and scope
 
@@ -105,6 +105,8 @@ No fused multiply-add, scalar multiply/add, call/library substitution, stack
 frame, or stack spill appears inside that symbol. Scalar address arithmetic,
 FP32 word loads for broadcast, loop predicates, and branch control remain.
 QHPI wrapper finite checks/receipt copies are outside the arithmetic symbol.
+The symbol references29 distinct vector registers, v0–v28. This is static
+register-name usage, not a measured peak live-register count or runtime occupancy.
 
 The compiler software-pipelines q: a prologue supplies the first products, a
 125-iteration hardware loop carries the accumulator, and an epilogue drains
@@ -193,7 +195,7 @@ or thermal guard failure. Keep pilot and final cohorts separate; exclude all
 timing values from numerical digests. Device smoke and Muon W8 114/114 must be
 rerun before final success. None has been rerun in this study.
 
-At the read-only preflight, stable physical identity was resolved from two ADB
+At the initial read-only preflight, stable physical identity was resolved from two ADB
 aliases of the same physical device, active training/headless runs were absent,
 Host free space exceeded20GiB and device free space exceeded12GiB. Thermal
 status0 and battery33°C were observed. Battery was15%, unpowered, and power state
@@ -201,6 +203,16 @@ was **Dozing**. Awake was a mandatory condition; device work stopped before
 staging or executing the candidate. The cached top-resumed activity cannot
 replace an Awake check. No wake, takeover, force-stop, permission/notification,
 clock/charging/cooling, root/SELinux, firmware, SDK or training change occurred.
+
+After continuation, physical identity and absence of active runs were rechecked;
+Awake, thermal status0,36°C and about80% battery were observed. A read-only copy
+of the installed APK passed the pinned QAIRT/V81 audit. The candidate runner then
+failed the Host storage check **before candidate staging or execution**. Free
+space was422780928B (about0.39GiB), not20GiB. This study's report/build artifacts
+totaled about0.19GB; removing them would not satisfy the20GiB requirement.
+No user files, protected research evidence or SDK files were deleted to proceed.
+The later device storage/hash/focus gates were not completed for a candidate
+process; no candidate safety ledger or numerical process record is fabricated.
 
 ## F. Architecture implications
 
@@ -280,13 +292,14 @@ training throughput, or full-model correctness.
 | HVX_SEGMENT_SPEEDUP_VERIFIED | UNRESOLVED |
 | BLOCKED_HVX_CODEGEN / NUMERICS / INTEGRATION | No such failure established |
 | PERFORMANCE_NOT_PROMOTED | No performance candidate eligible; no measured below-gate result |
-| Overall | BLOCKED by device safety; feasibility UNRESOLVED |
+| Overall | BLOCKED by Host storage safety; feasibility UNRESOLVED |
 
 ## H. Provenance and reproduction
 
 Build/source hashes, exact HEAD, validation closeout and protected identities
 are recorded in ignored `build/reports/ordered-fp32-hvx-ffn2/`. The source commit
-is anchored after the implementation commit using ProbeOnly source/hash checks;
+is **`fb5b3750eac5c49033ce5890d11f888c75fc369e`**, anchored after the implementation
+commit using ProbeOnly source/hash checks;
 no device-tested source commit exists. Exact final report HEAD is obtained with
 `git log -1 --format=%H -- docs/ordered-fp32-hvx-ffn2-feasibility.md`; its hash
 and final clean status are saved in private closeout and the completion reply.
@@ -344,4 +357,33 @@ Device smoke/Muon regression, and3 final independent processes with identical
 final binaries/fixtures and timing-free per-variant numerical digests. None may
 be replaced by the build, static audit, previous study, or Host mock results.
 
-Validation closeout is recorded below after all Host gates finish.
+Validation:
+
+- Fast PASS,233.9s for implementation preparation and93.4s at final closeout.
+  No Fast result substitutes for device gates.
+- Qnn PASS,1125.8s: pinned SDK inventory/core/API, full Host contract and diagnostic
+  suite948.3s, QNN-enabled APK build91.8s, APK audit8.0s. Optional inventory
+  advisory only; no fallback. The installed APK also passed an independent audit.
+- Additional Host suite **12/12 PASS**: new controls, closure142 calls, existing
+  product/QKV, MatMul136 plus chain68, HeadSplit24, observer-free kernels,
+  Softmax210, dProbabilities70, broadcast, double/ordered references and
+  shape/ownership3920 checks. The standalone Host controls perform24 calls.
+  Initial runner argument-cardinality and shape-test link omissions were fixed;
+  the complete final suite then passed. Earlier failed runner logs remain private.
+- Linked-symbol codegen audit PASS. The ProbeOnly reanchor preserved all five
+  binary hashes, including the same scalar/HVX package and one-layer probe.
+- Device smoke and Muon W8 114/114: **BLOCKED**, not borrowed from the previous study.
+  Candidate QNN executes0, independent candidate processes0, numerical digests
+  unavailable, paired timing samples0. Mandatory device regression is incomplete.
+- Five protected hashes and all three frozen fixture hashes match at closeout;
+  200k remains UNSTABLE. Original local branch refs remain unchanged.
+
+The allow-list exporter `scripts/export_public_ordered_hvx_ffn2.ps1` verifies
+current source/binary/fixture/protected identities, Host gates and the zero-run
+storage stop. It emits only Host/codegen aggregate fields and null device
+measurements. [Public aggregate](results/ordered-fp32-hvx-ffn2-summary.json)
+includes SDK manifest/header/manual hashes. It cannot promote device success.
+
+Reopening requires at least20GiB genuinely free on the Host workspace volume,
+then all current device safety and APK/library/hash checks again. Native segment
+and performance work must still wait for the standalone device numerical gate.

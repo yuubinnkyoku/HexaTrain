@@ -1,0 +1,90 @@
+{
+  "schema": "ORDERED_HVX_FFN2_BLOCKED_V1",
+  "branch": "investigation/ordered-fp32-hvx-ffn2",
+  "source_commit": "fb5b3750eac5c49033ce5890d11f888c75fc369e",
+  "device_tested_source_commit": null,
+  "geometry": {
+    "m": 32,
+    "transpose_a": false,
+    "transpose_b": false,
+    "k": 128,
+    "n": 64
+  },
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api": "2.37.0",
+  "architecture": "V81",
+  "hexagon_sdk": "6.6.0.0",
+  "hexagon_tools": "19.0.07",
+  "ndk": "26.2.11394342",
+  "fp_contract": "off",
+  "hvx_fp_mode": "strict-ieee",
+  "vector_bytes": 128,
+  "fp32_lanes": 32,
+  "binary_sha256": {
+    "libHexaFp32Dsp.so": "166b4974fabc64bc2cac03360173cce672c77d07149e84b5aa5e3add20fe854b",
+    "libHexaFp32Host.so": "f27673572e38441b3a54ea1bd8c2838631485fe95bb764198e72249b691ece85",
+    "one_layer_probe": "aefb7a364d3c704fd173f3f942d0c5fe597ddf4911cb9345c9966b6fd6eb553d"
+  },
+  "hexagon_compiler_sha256": "039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047",
+  "ndk_compiler_sha256": "ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3",
+  "sdk_sha256": {
+    "sdk_manifest": "8bb7a783a59b7b929355f643e78580addf80bbc1e5f4762c244ce2e06be9478f",
+    "hvx_protos": "156fc1b73ee1a30d8f287e9a8a52faf2b81b562c26ef3716166275391912122e",
+    "hexagon_types": "45906d308e3bacb0d25cf8bda0c490f04e8983f034e412c99b1759ebbf7155dc",
+    "v81_hvx_prm": "e82b15bf7aa4190578299f7603eea451872072a10373cea6d7e56f1e93143cea",
+    "compiler_guide": "d3fd9e21a26c66c7658a3db7a5d400407b95d72614c98d4f0aeaecc91ab8c632"
+  },
+  "fixture_sha256": {
+    "one-layer-inputs.bin": "388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f",
+    "ln1-parameters.bin": "7102ec13544df457922942e3282b15a8612da91c51156692000fc0dd0a21f97f",
+    "ln1-producers.bin": "ee9e3185b9a5857d874b5791a1e4b34c153401367dc208a1b74fa3bafa1a9580"
+  },
+  "target_disassembly_sha256": "7c88e9ea2d49667ac4c52d5eb6602f84e22863466d98fde6390e79427290a168",
+  "static_instruction_sites": {
+    "multiply_sites": 4,
+    "add_sites": 4,
+    "fp32_conversion_sites": 8,
+    "normalization_sites": 8,
+    "broadcast_sites": 4,
+    "unaligned_memory_sites": 5,
+    "fma_sites": 0,
+    "calls_in_target": 0,
+    "stack_spill_sites": 0
+  },
+  "dsp_execution": "UNRESOLVED",
+  "host": {
+    "hvx_host_emulation": false,
+    "scalar_ordered_words": "PASS",
+    "tests_passed": 12,
+    "scalar_control_max_abs": 1.32154673338E-06,
+    "qnn": "PASS",
+    "control_calls": 24,
+    "controls": 12,
+    "shape_checks": 3920,
+    "fast": "PASS"
+  },
+  "device": {
+    "native_segment": "UNRESOLVED",
+    "smoke": "BLOCKED",
+    "muon_w8": "BLOCKED",
+    "double_max_abs": null,
+    "numerical_digest": null,
+    "kernel_speedup": null,
+    "segment_speedup": null,
+    "word_mismatches": null,
+    "independent_processes": 0,
+    "observer_free": "UNRESOLVED",
+    "candidate_executes": 0
+  },
+  "explicit_kernel_scratch_bytes": 0,
+  "prepack_bytes": 0,
+  "observed_receipt_bytes": 57408,
+  "protected_hashes_verified": 5,
+  "classification": [
+    "HVX_FFN2_CODEGEN_VERIFIED",
+    "UNRESOLVED"
+  ],
+  "blocking_gate": "HOST_STORAGE_HEADROOM_LOW",
+  "training_updates": 0,
+  "training": "NO-GO"
+}
