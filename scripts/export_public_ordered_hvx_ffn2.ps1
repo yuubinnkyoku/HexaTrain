@@ -1,9 +1,17 @@
-# Allow-list export for the safety-blocked, Host/codegen-only study snapshot.
-# This exporter cannot promote device numerical or performance claims.
-param([string]$OutputPath='')
+# Allow-list export for the initial blocked snapshot or explicit final cohort.
+# Only -FinalCohort can export device numerical/performance evidence.
+param([string]$OutputPath='', [switch]$FinalCohort, [switch]$SelfTest)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $private=Join-Path $root 'build/reports/ordered-fp32-hvx-ffn2'
+if($FinalCohort){
+ if(!$OutputPath){$OutputPath=Join-Path $private 'final-public-summary.json'}
+ $arguments=@((Join-Path $root 'scripts/export_public_ordered_hvx_ffn2.py'),'--root',$root,'--output',$OutputPath)
+ if($SelfTest){$arguments+='--self-test'}
+ & python @arguments
+ if($LASTEXITCODE){throw 'FINAL_COHORT_EXPORT_FAILED'}
+ return
+}
 $build=Get-Content (Join-Path $root 'build/fp32-custom/build-identity.json') -Raw|ConvertFrom-Json
 $audit=Get-Content (Join-Path $private 'codegen-audit.json') -Raw|ConvertFrom-Json
 $stop=Get-Content (Join-Path $private 'safety-stop-private.json') -Raw|ConvertFrom-Json
