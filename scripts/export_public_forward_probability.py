@@ -97,6 +97,12 @@ def export(repo, root):
     legacy = (root / 'host-suite.txt').read_text(encoding='utf-8-sig')
     for marker in ('ordered_hvx_qkv_host_suite=PASS tests=15', 'qk_scale_host_test=PASS', 'qk_scale_graph_test=PASS', 'forward_probability_host_test=PASS', 'probability_graph_test=PASS', 'probability_gate_test=PASS'):
         need(marker in legacy, 'HOST_SUITE_INCOMPLETE')
+    host_identity = load(root / 'host-identity-private.json')
+    for name, item in host_identity['tests'].items():
+        need(sha(repo / ('host_tests/fp32_custom/' + name + '.cpp')) == item['source_sha256'], 'HOST_SOURCE_CHANGED')
+        need(sha(root / 'host' / (name + '.exe')) == item['executable_sha256'], 'HOST_EXECUTABLE_CHANGED')
+        need(sha(root / 'host' / (name + '.txt')) == item['log_sha256'], 'HOST_LOG_CHANGED')
+        need(item['exit_code'] == (4 if name == 'probability_reference_test' else 0), 'HOST_EXIT_CHANGED')
     ref = host_record((root / 'host/probability_reference_test.txt').read_text())
     latest_host = (root / 'host-new-final.txt').read_text(encoding='utf-8-sig')
     need('PROBABILITY_HOST_TEST_FAILED: probability_reference_test exit=4' in latest_host and ref['joint_gate'] == 'FAIL', 'HOST_FAILURE_NOT_RECORDED')
@@ -125,6 +131,7 @@ def export(repo, root):
                 device_executes=0, final_processes=0, numerical_digests=[], final_verified_classifications=[],
                 forward_scale='HOST_ONLY_UNRESOLVED', standard_mask='UNMEASURED', standard_softmax='UNMEASURED',
                 custom_softmax='NOT_IMPLEMENTED_CONDITION_NOT_MET', native_P_backward='GRAPH_SHAPE_ONLY_UNRESOLVED',
+                host_reference_source_commit=host_identity['source_commit'], host_compiler_sha256=host_identity['compiler_sha256'],
                 validation=validation, old_registry_prefix=45, registered_operations=47, existing_arithmetic_unchanged=True,
                 saved_P_logical_bytes=dict(per_layer_microbatch=8192, layers19=155648, layers19_microbatches8=1245184),
                 scheduling_and_physical_peak_allocation='UNMEASURED', device_performance='UNMEASURED',
@@ -153,6 +160,15 @@ def self_test():
             n += 1
         else:
             raise ValueError('PROFILE_CORRUPTION_ACCEPTED')
+    good = 'probability_reference_host,cases=44,heads=88,gradient_cases=25,cartesian_boundary=1,p_maxAbs=0,row_error=0,ds_bound=0,dv_bound=0,ds_actual=0,dv_actual=0,joint_failures=0,dsp_claim=0'
+    host_record(good)
+    for altered in (good.replace('cases=44', 'cases=43'), good.replace('p_maxAbs=0', 'p_maxAbs=nan'), good.replace('p_maxAbs=0', 'p_maxAbs=.01')):
+        try:
+            host_record(altered)
+        except ValueError:
+            n += 1
+        else:
+            raise ValueError('HOST_NUMERICAL_CORRUPTION_ACCEPTED')
     return n
 
 

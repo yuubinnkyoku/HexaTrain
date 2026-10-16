@@ -153,6 +153,10 @@ P/dP/dContext combinations occur in a real training trajectory.
 | Actual Host FP32 dScores error | 2.8771553135698e-4 | .002 — PASS |
 | Actual Host FP32 dValue error | 4.50467220550199e-5 | .01 — PASS |
 
+The existing Host Softmax oracle evaluates the shifted exponential in double,
+rounds each exponential to FP32, and uses increasing-column FP32 sum and
+FP32 division. It is a Host libm control, not a promised DSP exp word oracle.
+
 The joint assessment returned exit 4 with 9 failed predicates across its
 case/head/gradient combinations. This is a numerical failure, not an SDK,
 transport, or QNN API failure. The broad Host profile and the three new
@@ -301,7 +305,11 @@ Initial compiled pilot source:
 `198f3504deb9e779fd6bb030fd72e0635dc57d68`.
 The pilot stopped at the awake gate before staging or probe execution.
 A final Host-only candidate rebuild includes the producer/final word-audit
-correction; its source and binary hashes are recorded by the public aggregate.
+correction. Its source is `ac5be47c155725a0a442da540ab0359b34602a88`.
+DSP SHA256: `45aebb0312f7d7f39cf01c61e9456cc3e87c70b73854db68c755ea2df6428d4c`.
+Host package: `480014e5f0259a04b8065c2e911930a0f19b41568a5fc5b0182adb9499c2b210`.
+Probe: `06fce37163459854f2c6c5f7e6a31b91a64b098a304a5dbf57afbb7019d0abea`.
+These identify an untested device candidate; they do not imply DSP execution.
 There is **no new device-tested source commit**, no numerical digest and zero
 independent final device processes. Old device source b6794c4 and old binary
 hashes are comparison identities only.
@@ -317,6 +325,10 @@ Frozen identities:
 - one-layer inputs: `388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f`.
 - LN1 parameters: `7102ec13544df457922942e3282b15a8612da91c51156692000fc0dd0a21f97f`.
 - source-derived LN1 producers: `ee9e3185b9a5857d874b5791a1e4b34c153401367dc208a1b74fa3bafa1a9580`.
+
+Completed broad profiles: Fast 80.4s PASS; Host 424.1s PASS; Qnn 482.4s
+PASS, including QNN APK build and SDK/APK audit. The optional SDK inventory
+advisory was retained; core and pinned Build ID passed.
 
 Validation classification is fail-closed: Fast/Host profile/Qnn and SDK/APK
 audit results are checked from completed logs by the allow-list exporter.
@@ -337,7 +349,11 @@ failure.
 
 Private records remain under
 `build/reports/g1-fp32-forward-attention-probability-closure/`.
-The allow-list aggregate commits only public identities and classifications.
+The [allow-list aggregate](results/g1-fp32-forward-attention-probability-closure-summary.json)
+commits only public identities and classifications. Its exporter rejected ten
+self-test corruptions. The Host result source/executable/log identities,
+compiler, frozen inputs, five protected hashes, old Op prefix and unchanged
+legacy numerical-source identities are validated before export.
 Final repository HEAD and clean-tree/protected-ref checks are recorded in the
 private final closeout and final response, after the closing report commit;
 an immutable commit cannot embed its own final hash. No push/PR/merge or
