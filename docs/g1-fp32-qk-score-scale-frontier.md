@@ -1,17 +1,15 @@
 # G1 FP32 QK raw score / backward score scale frontier
 
-**BLOCKED / UNRESOLVED — 必須の最終認定は未完了。**
-診断専用/default-offの2演算とHost検証を実装した。Forwardは最終candidateの
-2独立process、Backwardはそれ以前のprobeによる1 pilotで、Standalone・native接続・
-observer-freeの数値条件を満たした。しかしForward最終3回目の実行前に
-`DEVICE_NOT_AWAKE_OR_UNKNOWN`で安全停止した。wake操作は行っていない。
-その後のユーザー明示の続行指示に対する再開確認でも、host-side ADB inventoryが
-`ADB_NO_ONLINE_DEVICE`で停止した。endpoint推測・別端末接続・device操作は行っていない。
+**Forward QKᵀ rawとBackward score scaleのprecision frontierを閉じた。**
+同一最終package/probe、各Lane3独立processでStandalone・native接続・
+各graph自身のobserver-free accuracyを独立に確認した。既存Scalar ordered FP32を再利用し、
+新packageのHVX FFN2/QKV、Muon W8 114/114回帰もPASSした。
 
-**3-process × 2 Laneと新packageのHVX device回帰が未完了のため、
-今回のVERIFIED分類は一つも確定しない。** 全Attention/full1-layer/full19-layerはUNVERIFIED。
+次の標準consumerはForward Score Scale、Backward Head Scatterで精度FAILを再現した。
+**次の主投資はForward Scale→Causal Mask→Softmax Pの精度修復。**
+全Attention/full1-layer/full19-layerはUNVERIFIED。
 Production backendとtraining updatesは変更せず、40k→60k / 200kは引き続きNO-GO。
-[公開aggregate](results/g1-fp32-qk-score-scale-frontier-summary.json)もBLOCKEDを保持する。
+[公開aggregate](results/g1-fp32-qk-score-scale-frontier-summary.json)に全6 processの集計を保存した。
 
 ## A. Source & reuse audit
 
@@ -89,8 +87,8 @@ scaled-gradient budgetを引き継いで **.01**。観測後のgate変更は0。
 
 ## B. Forward QKᵀ
 
-最終source **e30b66c3980f3c4537282f227dd809b3a7a6299f** / 同一package/probeで
-**2独立processのみ完了**。以下はその両processで一致した数値であり、3-process認定ではない。
+最終source **b6794c4572d10c163acb5201e811546ac564243e** / 同一package/probeの
+**3独立processで認定した**。以下の数値は全processで一致した。
 
 Standaloneは44 LN1/QKV casesを中心に、既存10 arithmetic controlsとsigned-zeroを加えた55 cases。
 ordinary、low variance、mixed signs、cancellation、large/small、
@@ -140,19 +138,16 @@ Standaloneは内部edgeを持たないため、Float Tapで変更する中間ten
 Observed/Tapではこのconsumer graph内のraw自体にも.01とordered-word監査を行った。
 標準ScaleのFAILを受け、Mask/Forward Softmax/Pへは進めていない。
 **次Forward frontierはstandard Score Scaleという観測結果**を保存する。
-局所・native・observer-freeの成功事実はあるが、必須cohortが欠けるため
-DSP_FORWARD_QK_RAW_VERIFIED / FP32_FORWARD_QK_NATIVE_SEGMENT_VERIFIEDは確定しない。
+Standalone、native接続、各graph自身のobserver-free accuracyを独立に確認し、
+**DSP_FORWARD_QK_RAW_VERIFIED / FP32_FORWARD_QK_NATIVE_SEGMENT_VERIFIED**を認定する。
 
 Reference boundaryは正しい固定LN1 X、gamma/beta、QKV weights、local dY。
 全G1 producer起点や全19層Forwardの正しさを認定しない。
 
 ## C. Backward score scale
 
-以下はsource **d640e86064cff113aa963640c2a7468fe43d1463**、
-旧probeによる**1 pilot**の結果である。
-DSP/Host package bytesは最終candidateと同一だが、probe bytesは異なる。
-最終probeは受信scale bits logとnext-raw監査/finalize計時を追加しており、
-**最終candidateのLane B processは0件**。pilotをその代用にしない。
+最終source **b6794c4572d10c163acb5201e811546ac564243e** / 同一最終binaryの
+**3独立processで認定した**。最終cohort/途中停止cohortは含めていない。
 
 Standaloneは既存25 frozen/native cases＋10 controls。
 4出力のpositive/negative、head非対称、zero/signed zero、small/large finite、
@@ -167,8 +162,7 @@ cancellation由来、固定seed randomを維持した。
 
 coreは全PASS、受信rawに対するFP32 multiply全word一致。
 scale **0x3e3504f3**はHost/sourceのconstructionと一致し、
-pilotでもreceipt内のscalar wordをprobeが検査した。
-pilotには独立のreceived-bits log行がなく、最終probe用の直接log証拠と区別する。
+全processでreceipt内のscalar wordを検査し、各235件の実受信bits logでも確認した。
 
 追加large controlではFP32 outputのULPが大きく、double maxAbsは最大511.810546875。
 これは既存25-case .01認定へ含めないarithmetic-identity stress。
@@ -200,7 +194,7 @@ receipt wordsを照合。NoReceipt/noTapは自身のactual final gradientsをdou
 
 次consumerは正しいCustom scaled gradients→標準one-hot Head Scatter。
 
-| Standard Scatter pilot /25 | H0 dQ | H0 dK | H1 dQ | H1 dK |
+| Standard Scatter 最終cohort /25 | H0 dQ | H0 dK | H1 dQ | H1 dK |
 | --- | ---: | ---: | ---: | ---: |
 | LN2起点double maxAbs | **.0118618792579** | **.0143292945277** | .00979156600529 | .00988647173366 |
 | 実scaled inputに対するlocal maxAbs | **.0118598937988** | **.0143356323242** | .00979614257812 | .00988388061523 |
@@ -211,25 +205,24 @@ head selector transposeで正しいhalfへ配置する数学と、
 標準HTPが受信FP32 wordsをlosslessに保存するかは別の問題だった。
 sourceではその後head0/head1のdisjoint scattersをAddしてDQ/DKを構成する。
 今回の診断はscatterまでで、後続Add/Projection gradientsを実行・認定しない。
-**次Backward frontierはstandard Head Scatterというpilot観測**を保存する。
-DSP_BACKWARD_SCORE_SCALE_VERIFIED / FP32_BACKWARD_SCORE_SCALE_SEGMENT_VERIFIEDも未確定。
+**次Backward frontierはstandard Head Scatterという最終cohort観測**を保存する。
+**DSP_BACKWARD_SCORE_SCALE_VERIFIED / FP32_BACKWARD_SCORE_SCALE_SEGMENT_VERIFIED**を認定する。
 
 Reference-fedなのはLN2 X/dY、upstream residual、Wo/context、
 Forward saved P/Q/K/V/Gate。実G1 Forwardがこれらを正確に生成した証明ではない。
 
 ## D. Coverage / saved state
 
-| Correctness level | 今回確認できた範囲 | 未完了 |
+| Correctness level | 今回の認定範囲 | Remaining boundary |
 | --- | --- | --- |
-| Local mathematical | QK最終2 process、Scale pilotで同一operand ordered wordsとdouble core gate | 最終3-process両Lane |
-| Native connected | LN1→HVX QKV→Heads→QKの実native接続、LN2→Scaleはpilot | Lane B最終probe |
-| Observer-free | 各実行graph自身のNoReceipt/noTap final accuracyとcross-variant words | 必須最終cohort/新HVX device回帰 |
-| Producer-fed | fragment内のCustom producer→consumerのみ | frozen external boundaryより前の実G1 producer |
+| Local mathematical | QK / Scaleの同一operand ordered words、独立double core gateを各3 processで確認 | 未試験geometry/全入力一般化 |
+| Native connected | 実LN1→HVX QKV→Heads→QK、実LN2→Softmax→Raw→Scale | frozen external boundaryより前 |
+| Observer-free | 各graph自身のNoReceipt/noTap final accuracy、cross-variant words | production全graphへは未昇格 |
+| Producer-fed | fragment内部のCustom producer→consumerを認定 | LN1 X / LN2 inputs / Forward saved statesはreference-fed |
 | Full training | 今回は認定範囲外 | 全Forward/Backward/gradient/materialization/optimizer整合 |
 
-以前のLN1、LN2、HVX QKV/FFN2、Softmax、RawDQDK等の研究成果は保持した。
-今回の新packageに対するdevice回帰は安全停止で未実行であり、
-過去binaryのPASSを新binaryのPASSへ転用しない。
+新packageで既存HVX FFN2/QKVのdevice回帰も実行し、数学/word/observer-free gatesを確認した。
+LN1/LN2、Scalar MatMul/Multiply、Softmax、HeadSplit、RawDQDKの既存契約も維持した。
 
 | Forward state | Actual producer / backward consumer | Lifetime and remaining closure |
 | --- | --- | --- |
@@ -267,25 +260,23 @@ embedding/logits/loss、全19層のlifetime/scheduling、optimizer接続も未�
 
 ## E. Performance
 
-以下はaccuracy/word gate成立後だけ採取した**未確定の費用観測**。
-正式な速度改善認定はしない。
-Aは最終2 processのmedian範囲、Bは異なるprobeによる1 pilotであり、
-両者や過去研究binaryとのspeedup計算は行わない。
-各graphは別途first executeを記録し、anchor＋2 warmups後9 steady samples。
-exclusive benchmark、clock/power変更は0。
+正当性のgate成立後に採取した限定的な費用測定。すべて同じ最終package/probe、
+BACKGROUND_CORRECTNESS、各Lane3独立process。以下の範囲はprocess別medianのmin/maxである。
+各graphのfirst executeを別記し、anchor＋2 warmups後9 steady samples/processを採取した。
+exclusive benchmark、clock/power設定変更は0。過去binaryとのspeedup計算は行わない。
 
-| Graph / evidence | DSP arithmetic ms | receipt-inclusive window ms | execute wall ms |
+| Graph | DSP arithmetic ms | receipt-inclusive window ms | execute wall ms |
 | --- | ---: | ---: | ---: |
-| QK Standalone Observed / A2 | 1.975–1.979 | 2.132–2.136 | 5.135–5.151 |
-| QK Standalone NoReceipt / A2 | 未観測 | 未観測 | 4.950–5.068 |
-| LN1→HVX QKV→Heads→QK Observed / A2 | 1.980 | 2.134–2.135 | 7.061–7.099 |
-| 同 NoReceipt/noTap / A2 | 未観測 | 未観測 | 6.641–6.752 |
-| Scale Standalone Observed / pilot | .053 | .240 | 3.055 |
-| Scale Standalone NoReceipt / pilot | 未観測 | 未観測 | 2.943 |
-| LN2→Softmax→Raw→Scale Observed / pilot | .054 | .230 | 17.284 |
-| 同 NoReceipt/noTap / pilot | 未観測 | 未観測 | 16.180 |
+| QK Standalone Observed | 1.981–1.984 | 2.139–2.142 | 4.787–5.128 |
+| QK Standalone NoReceipt | 未観測 | 未観測 | 4.736–4.852 |
+| LN1→HVX QKV→Heads→QK Observed | 1.980–1.981 | 2.131–2.133 | 6.580–7.070 |
+| 同 NoReceipt/noTap | 未観測 | 未観測 | 6.295–6.682 |
+| Scale Standalone Observed | .054–.055 | .236–.239 | 2.874–3.079 |
+| Scale Standalone NoReceipt | 未観測 | 未観測 | 2.839–3.131 |
+| LN2→Softmax→Raw→Scale Observed | .053–.055 | .228–.232 | 16.746–17.477 |
+| 同 NoReceipt/noTap | 未観測 | 未観測 | 15.828–16.575 |
 
-QKは2 heads合計の算術window。Scaleは4 outputs合計。
+QKは2 heads合計の算術window、Scaleは4 outputs合計。
 native Aのwallは**LN1 saved-state local backwardも含む**ためForward-only latencyではない。
 native BはdWo branchも含む。
 windowはfinite scans/copies等を含むがQHPI全invocationやRPC全体の時間とは一致しない。
@@ -304,29 +295,29 @@ stack scalars/pointer arrays、既存LN stackやbackend workspaceをphysical pea
 logical tensor payloadと2×input＋APP_READ outputs/guardsのHost下限であり、
 VTCM/DDR traffic/allocator peak/RSS増分は分離未測定。
 
-A free Standalone first wall 5.594–5.668ms、finalize47.379–48.224ms。
-A free native first8.710–10.279ms、finalize56.616–76.547ms。
-B free Standalone first3.525ms、finalize42.136ms。
-B free native first20.097ms、**pilotではnative finalize未計時**。
-最終probeには計時を追加したがBを実行できていない。cold boot測定ではない。
+| Free graph | first execute ms | graph finalize ms |
+| --- | ---: | ---: |
+| QK Standalone | 4.891–5.344 | 27.316–45.828 |
+| LN1→QK＋local B | 7.174–9.602 | 35.040–62.950 |
+| Scale Standalone | 3.129–3.382 | 27.520–33.439 |
+| LN2 fused→Scale＋dWo | 17.056–17.420 | 36.594–62.316 |
 
-A2はthermal0→0、battery33°C→33°C、
-B pilotはthermal0→0、battery34°C→34°C。
-いずれもAC/USB/Wireless powered=false。自然なdevice条件を記録したもので、
-他app/scheduler/clockを制御したproduction throughputではない。
+先行graphsでcontextがwarmになった後の各graph初回であり、cold boot測定ではない。
+全6 processでthermal0→0、battery36°C→36°C、AC=true / USB=false / Wireless=false。
+他app/scheduler/clockを固定したproduction throughputではない。
 
 QK workは2×32×32×32=**65,536 MAC/layer/MB**。
 19層1,245,184 MAC、19層×8MB **9,961,472 MAC**。
 Scale workは2 heads×2 gradients×32×32=**4,096 multiplies/layer/MB**、
 19層77,824、19層×8MB **622,592 multiplies**。
 これらは算術量であり、wallの単純倍算をproduction速度へ転用しない。
-今回HVX QKは実装していない。
+今回HVX QKは実装していない。Scalar/HVX QK speedupは認定しない。
 
 ## F. Observer effect
 
 新segmentではObserved/NoReceiptとFloat Tap有無を分け、
 実際のfinal outputsのdouble accuracyとcross-variant全word一致を確認した
-（A最終2 process、Bはpilot限定）。
+（各Laneの最終3 process）。
 Observedのreceipt equality、NoReceiptのactual final accuracy、
 process間digest一致は別々の検査である。
 
@@ -338,8 +329,7 @@ NATIVE FLOAT32宣言だけでは、今回の標準Scale/Scatterの精度は保�
 ## G. Architecture decision
 
 **次の主投資は1: Forward Score Scale→Causal Mask→Softmax P precision closure。**
-ただし最初に今回の安全停止を解消できる実行条件で、両Laneの最終cohortと
-新package回帰を完了する必要がある。
+今回の両Laneの最終cohortと新package回帰は完了した。
 
 Forward Scaleは正しいCustom rawを受けても.01を超え、P生成を直接阻む。
 PはdVとSoftmax backwardの双方が必要とするsaved stateで、
@@ -351,7 +341,7 @@ wider integrationだけでは標準演算の誤差は修復されない。
 
 | QK option | Assessment |
 | --- | --- |
-| A Scalar維持 | 約1.98ms/paired QKという限定費用を観測。現在は正確性を優先し維持 |
+| A Scalar維持 | 1.981–1.984ms/paired QKという限定費用を観測。現在は正確性を優先し維持 |
 | B Ordered HVX NT | 右Kは動的row-major。output-column lanesにはstrided/gather loadsかpretransposeが必要。packingなら2×4096=8192B/layer/MBの追加payload候補、保存Kとpacked Kのlifetimeを別監査。q順/独立rounding/N32 tilingの新検証が必要 |
 | C Forward precision先行 | 実測Scale frontierを解消してP依存を閉じる。今回の主推薦 |
 
@@ -364,35 +354,37 @@ FP32_ARCHITECTURE_REASSESSMENT_REQUIREDを維持する。
 
 | # | Answer |
 | --- | --- |
-| 1 Forward Scalar QK PASS? | 完了した最終2 processでは44-case gate PASS。3-process最終認定はBLOCKED |
-| 2 正しいQ/Kに対するordered words? | YES、Standalone/ObservedおよびTapで全word一致。不可視値は直接観測としない |
-| 3 LN1→HVX QKV→Heads→QK native? | 完了2 processでPASS、最終分類UNRESOLVED |
-| 4 Observer-free raw accuracy? | 各NoReceipt/noTap graph自身でPASS、最終cohort未完 |
+| 1 Forward Scalar QK PASS? | YES、44-case core .01と3独立process |
+| 2 正しいQ/Kに対するordered words? | YES、Standalone/Observed/Tapで全word一致。不可視値の直接観測とはしない |
+| 3 LN1→HVX QKV→Heads→QK native? | PASS、実DSP/HVX producerのnative tensor接続 |
+| 4 Observer-free raw accuracy? | PASS、各NoReceipt/noTap graph自身のfinal outputで独立判定 |
 | 5 次Forward consumer? | 標準Scale Head1が1/44 FAIL、maxAbs.0102389901429 |
-| 6 正しいBackward scale bits? | 0x3e3504f3、production float constructionとHost assertion。pilot receipt wordsも一致 |
-| 7 Custom Scale Standalone? | 25-case coreと全wordはpilot PASS。最終probe未実行 |
-| 8 LN2→Softmax→Raw→Scale? | fused/separate両方pilot PASS。最終probe未実行 |
-| 9 Observer-free scaled gradients? | pilotの自身final outputでPASS、最終3 processは未完 |
-| 10 次Backward Scatter? | pilotでH0 dQ/dKが各1/25 FAIL。H1は.01以内でもword lossあり |
+| 6 正しいBackward scale bits? | 0x3e3504f3、production construction、Host assertion、実receipt/受信bits logが一致 |
+| 7 Custom Scale Standalone? | PASS、25-case core .01、全controlsのordered FP32 words一致 |
+| 8 LN2→Softmax→Raw→Scale? | PASS、fused/separate両方、native chain全stageで既存gate維持 |
+| 9 Observer-free scaled gradients? | PASS、そのvariant自身のdouble accuracyとcross-variant words |
+| 10 次Backward Scatter? | H0 dQ/dKが各1/25 FAIL。H1は.01以内でもword lossあり |
 | 11 Forward Pに残るもの? | Scale修復、Mask/Softmax producer accuracy、P保存/lifetimeとnative consumer連結。Gate/PVも別途 |
 | 12 Full LN1 dYに残るもの? | scatter/集約、Q/K/V weight/input gradients、dV、Gate branch、source順Add、LN1 backward、residual合流 |
-| 13 HVX FFN2/QKV回帰維持? | Hostとlinked codegen PASS。新packageのdevice回帰はBLOCKED、過去PASSで代用しない |
-| 14 Scalar QK費用? | A2でpaired math1.975–1.979ms、free native wall6.641–6.752ms、local B込み。正式性能認定ではない |
-| 15 精度修復かHVX高速化か? | 精度修復を優先 |
-| 16 Full1-layer不足? | 両Lane認定完了、P/Gate/PV/Wo/FFN/residual producers、Scatter/Projection/Gate/FFN gradients、全dY、materialization/8MB accumulation、lifetime/registry統合 |
+| 13 HVX FFN2/QKV回帰維持? | YES、新package/probeで実行し、Scalar/HVX数学・words・native/observer-freeとABIを確認 |
+| 14 Scalar QK費用? | paired math1.981–1.984ms、free native wall6.295–6.682ms、local B込み |
+| 15 精度修復かHVX高速化か? | 精度修復を優先。Forward Scale→Mask→Pを主推薦 |
+| 16 Full1-layer不足? | P/Gate/PV/Wo/FFN/residual producers、Scatter/Projection/Gate/FFN gradients、全dY、materialization/8MB accumulation、lifetime/registry統合 |
 | 17 40k→60k / 200k? | NO-GO、training updates0 |
 
-| Required classification | Current disposition |
+| Required classification | Final disposition |
 | --- | --- |
-| DSP_FORWARD_QK_RAW_VERIFIED | UNRESOLVED、最終2/3 process |
-| FP32_FORWARD_QK_NATIVE_SEGMENT_VERIFIED | UNRESOLVED、同上 |
-| DSP_BACKWARD_SCORE_SCALE_VERIFIED | UNRESOLVED、pilotのみ |
-| FP32_BACKWARD_SCORE_SCALE_SEGMENT_VERIFIED | UNRESOLVED、pilotのみ |
-| OBSERVER_FREE_PRECISION_VERIFIED | UNRESOLVED、必要な最終cohort未完 |
-| BLOCKED_FORWARD_CONSUMER | Standard Score Scaleの実測FAIL、最終2 processで再現 |
-| BLOCKED_BACKWARD_CONSUMER | Standard Head Scatterのpilot FAIL、最終確認未完 |
-| FP32_ARCHITECTURE_REASSESSMENT_REQUIRED | 追加FP32 ownership、保存状態、registry/性能費用の検討が必要 |
-| UNRESOLVED | safety停止、最終cohort、新package HVX回帰、旧observer内部機構 |
+| DSP_FORWARD_QK_RAW_VERIFIED | VERIFIED、Standalone、44-case core .01 |
+| FP32_FORWARD_QK_NATIVE_SEGMENT_VERIFIED | VERIFIED、reference-fed LN1 Xからのnative接続 |
+| DSP_BACKWARD_SCORE_SCALE_VERIFIED | VERIFIED、正しいraw inputsとscale bits |
+| FP32_BACKWARD_SCORE_SCALE_SEGMENT_VERIFIED | VERIFIED、正しいfrozen外部LN2/Forward state条件 |
+| OBSERVER_FREE_PRECISION_VERIFIED | VERIFIED、両対象graph自身のNoReceipt/noTap final outputs |
+| BLOCKED_FORWARD_CONSUMER | Standard Score Scale、Head1 .01 FAIL |
+| BLOCKED_BACKWARD_CONSUMER | Standard Head Scatter、H0 dQ/dK .01 FAIL |
+| FP32_ARCHITECTURE_REASSESSMENT_REQUIRED | 保存状態/FP32 ownership、registry/ABI/性能費用の拡大を検討 |
+| UNRESOLVED | 旧observer機構、Full1-layer/19-layer correctness、未測定production scheduling |
+
+全Attention Forward / Full1-layer / Full19-layer VERIFIEDは使用しない。
 
 ## I. Provenance
 
@@ -400,12 +392,10 @@ FP32_ARCHITECTURE_REASSESSMENT_REQUIREDを維持する。
 | --- | --- |
 | Branch | investigation/g1-fp32-qk-score-scale-frontier |
 | Research base | 8e13b1ed1e2464b4aef790233682a11c43c838c5 |
-| Candidate device-tested numerical source | e30b66c3980f3c4537282f227dd809b3a7a6299f（Lane A 2 process） |
-| Pilot source | d640e86064cff113aa963640c2a7468fe43d1463 |
+| Final device-tested source | b6794c4572d10c163acb5201e811546ac564243e |
 | DSP package SHA256 | 0b7251a67a69140c8688548b79d8e2f7d280ac74df6050b181841c63726c7c32 |
 | Host package SHA256 | a252605cd7fea45190f65602b07563946f062683cd6fad763f5bdfffcdb3df7c |
-| Candidate probe SHA256 | 002c90c918a621a9935496d01780473d39d75f376341923a172b34e9713fd600 |
-| Pilot probe SHA256 | 67ceaedbabd1fcdf66211ae426edfbeb8175204247cf59dda327fbd9770d6959 |
+| Final probe SHA256 | 002c90c918a621a9935496d01780473d39d75f376341923a172b34e9713fd600 |
 | Hexagon compiler SHA256 | 039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047 |
 | NDK compiler SHA256 | ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3 |
 | Frozen inputs SHA256 | 388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f |
@@ -416,72 +406,77 @@ Hexagon SDK6.6.0.0/tools19.0.07、NDK26.2.11394342を固定した。
 compiler、SDK manifest、HVX headers/types、V81 PRM、compiler guideのhashを再照合した。
 QNN graph configsは既存DiagnosticGraphのdefault config、explicit FLOAT32、
 flat rank4、DDR-only QHPI signatures、HTP登録。CPU backend fallbackは0。
-Host reference計算は検証用であり、CPU完全不使用/NPU-only/QNN自動微分とは主張しない。
+Host referenceは検証用であり、CPU完全不使用/NPU-only/QNN自動微分とは主張しない。
 
-最終A2は各754 executes、8756 metrics、4686 word comparisons。
-共通timing-free numerical digest:
+最終Aは各754 executes、8756 metrics、4686 word comparisons。
+3 process共通timing-free numerical digest:
 `1fab9e1327056516d9b1e4239656950029740787cd24693b6ec794770287a4d3`。
-B pilotは715 executes、12180 metrics、3120 word comparisons。
-pilot digest:
-`ea9559a5df8db1960f605739aa0264a70d450e336e9601048628635c90eb78be`。
+最終Bは各715 executes、12180 metrics、3120 word comparisons。
+3 process共通digest:
+`baa67163cd2a5ebf541d063132ffd185e4063339aed682155ca98835320f408b`。
+合計4407 executes、62808 metrics、23418 word comparisons。
 digestはordered metric/word/contract行のhashで、raw tensor SHAではない。
 timing/counterを除外し、全word検査はprobe内で別実施する。
 検査数はvariants/repetitionsを含み、その数の独立fixtureを意味しない。
 
-完了processはAPI errors0、finite、input mutation0、APP-visible poison/canary/complete writes、
-Observed DSP marker、fallback0、context/device/backend teardown成功、focus takeover0。
-A最終3回目は二段目のawake checkで拒否され、graph execute/teardownの成功記録は存在しない。
-staging先の掃除やwakeも含め、停止後のdevice操作は0。
-明示再開後もhost-side inventoryのADB_NO_ONLINE_DEVICEで止まり、端末への操作は0。
-pilot、完了最終2 process、実行前停止を別保存した。freeze後candidate再buildは0。
+全最終processでAPI errors0、finite、input mutation0、APP-visible poison/canary/complete writes、
+Observed DSP markers、fallback0、context/device/backend teardown成功、focus takeover0。
+3-process数値一致と、graph variant間のbitwise同値性を別々に検査した。
+source/SDK/compiler/fixtures/QNN config/package/probeは全6 processで一致。
+cohort開始後のcandidate再buildは0。
+
+途中でawake check、続行指示後のADB_NO_ONLINE_DEVICEによる安全停止があった。
+wake、endpoint推測、別端末接続、foreground takeoverは0。
+ユーザーの再接続後、元の物理identity・awake・active run不在・容量・thermal等を確認して再開した。
+停止前のpilot/部分2-processと停止時stagingはprivateに保存し、
+**最終cohortは両Lane3 processを新規採取**した。旧recordsを最終3 processへ混在させていない。
+再開sourceでのProbeOnly再buildは停止前candidateと全binary bytesが一致した。
 
 | Validation | Result |
 | --- | --- |
-| Fast | PASS、89.7s / candidate59.2s / closeout61.2s |
+| Fast | PASS、candidate/closeoutおよび最終report確定後gateのlogsを保存 |
 | Host profile | PASS、273.3s、contract/diagnostic＋parity battery |
 | Qnn profile | PASS、399.6s、Host349.9s＋pinned core/API＋QNN build＋APK audit |
 | Targeted Host | 既存15 suite＋新kernel140 calls＋新28 graphs/24 nodes PASS、最終graph再compile/retest PASS |
-| Linked HVX FFN2/QKV codegen | 新packageで両audit PASS、device executionとは別 |
-| Device smoke | 今回sourceでPASS、93.5s、BACKGROUND_CORRECTNESS |
-| Muon W8 | 今回sourceで実際に114/114 PASS、maxAbs1.490116119e-8、relativeL2 4.40269854e-8、cosine1、RPC success/finite/fallback=false |
-| Final independent cohort | **BLOCKED**、A2/3、B0/3 |
-| New package HVX FFN2/QKV device regression | **BLOCKED**、安全停止後のため未実行 |
+| Linked HVX FFN2/QKV codegen | 同じpackageで両audit PASS |
+| Device smoke | 再開sourceでPASS、77.0s、BACKGROUND_CORRECTNESS |
+| Muon W8 | 再開sourceで実際に114/114 PASS、maxAbs1.490116119e-8、relativeL2 4.40269854e-8、cosine1、RPC success/finite/fallback=false |
+| Final independent cohort | PASS、A3/3、B3/3、各Laneのdigest一致 |
+| New package HVX FFN2 regression | PASS、596 executes /1266 metrics /2158 word comparisons |
+| New package HVX QKV regression | PASS、1388 executes /10086 metrics /17457 word comparisons |
+
+Host/Qnn対象の数値source、SDK/APKの契約は最終candidateでも不変。
+package/probe再build後のbytesを照合し、新packageのdevice回帰を新規実行した。
+Qnn/APK auditはpinned core/API、arm64 ABI、V81 Stub/Skel hashes、host path不在、
+2.47混入不在を検査。optional inventory advisoryだけを許容し、SDK fallbackは0。
 
 旧device-tested source `a50da5c3a569d34fb6896c8fcffb3754dc7f2312`、
 旧DSP `9736778fc192fd71c7ab974341294ec4f4cd05618473c699848318e9839c9b11`、
 旧probe `9e28d2b960f6dbc9c2dc4f4c17b58de4f4024c9c603967682c504836c1af143d`
-を照合し、旧bytesをprivateに保管した。新candidate PASSの代用にしない。
+を照合し、旧bytesをprivateに保管した。新binaryの回帰は今回の実行結果で認定した。
 40k checkpoint `89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d`
-とtokenizer/cache/manifest/run-planを含む既存保護identity計5件、前研究branch refsを再確認した。
-100k baseline、200k UNSTABLE、Step41647/42k evidence、private numerical reportsを保持した。
-checkpoint decode、corpus/data order/optimizer/codec変更、training updates、Final testは0。
-6031は **UNRESOLVED / DORMANT / WATCH**。
+を含む既存保護identity計5件、前研究branch refsを最終実行後にも再確認した。
+100k baseline、200k UNSTABLE、Step41647/42k evidence、dataset/tokenizer/cache/data order、
+private numerical reportsを保持した。checkpoint decode、optimizer/codec変更、
+training updates、Final test、LR探索は0。6031は **UNRESOLVED / DORMANT / WATCH**。
 
 Private evidenceはignored `build/reports/g1-fp32-qk-score-scale-frontier/`。
-allow-list blocked exporterは正確なmetric/word coverage、source/binary/fixture、
-safety停止、未完cohort、今回のW8/検証logsを検査する。
-8 numerical/coverage/teardown破損条件を通常Pythonとoptimized modeで拒否する。
-通常のfinal exporterも未完cohortを拒否し、VERIFIEDへ昇格しない。
+allow-list exporterは正確なmetric/word coverage、source/binary/fixture、6独立process、
+SDK/compiler、physical identity、同じpackageの旧HVX回帰、W8 raw結果と検証logsを検査する。
+最終exportの48破損条件を通常Python/optimized modeの双方で拒否した。
+停止時には別のBLOCKED aggregateを保存し、通常final exporterが未完cohortを拒否することも確認した。
 raw tensors/checkpoints/corpus、device identifiers、APK hash、SDK binaries、
 private logs、local absolute pathsは公開aggregate/commitへ含めない。
 
-再開には、元の物理端末へのonline接続、awake、他の安全条件が成立する必要がある。
-新しいclean source commitと同一candidate bytesのidentityを固定して
-**両Laneの3独立processを新規cohortとして採取し、新packageでoneHvx/oneQkvHvx回帰を実行する**。
-現A2/pilotを新しい成功cohortへ混在させない。
-gate緩和、wake/foreground takeover、training再開は再開手順に含まない。
-
 ```powershell
-# Host-only reproduction:
 .\scripts\test_qk_score_scale_host.ps1 -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143
-
-# Device reproduction: only after safety conditions and explicit resumption.
 .\scripts\run_fp32_custom_probe.ps1 -Variant oneQkScaleA -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143 -NdkRoot $NdkRoot
 .\scripts\run_fp32_custom_probe.ps1 -Variant oneQkScaleB -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143 -NdkRoot $NdkRoot
-
-# Current incomplete evidence must remain BLOCKED:
-python scripts/export_public_qk_score_scale_blocked.py --private-root build/reports/g1-fp32-qk-score-scale-frontier --output docs/results/g1-fp32-qk-score-scale-frontier-summary.json --self-test
+python scripts/export_public_qk_score_scale.py --private-root build/reports/g1-fp32-qk-score-scale-frontier --output docs/results/g1-fp32-qk-score-scale-frontier-summary.json --self-test
 ```
 
+再現時はclean sourceと固定SDK/fixturesを用意し、物理同一性・active run保護・awake・容量・
+thermal/battery・APK auditを満たしてからheadless実行する。安全条件は緩和しない。
 Final report HEADは `git log -1 --format=%H -- docs/g1-fp32-qk-score-scale-frontier.md`
-で解決する。exact HEADと最終clean statusはprivate closeoutと完了回答へ保存する。
+で解決し、exact HEADと最終clean statusをprivate closeoutと完了回答へ保存する。
+push/PR/merge/main変更/history rewriteは0。

@@ -200,14 +200,29 @@ def main():
         need(staged[filename] == expected, 'FIXTURE_IDENTITY')
     validation = json.loads((root / 'regression-private.json').read_text(encoding='utf-8-sig'))
     need(validation['source_sha'] == cohort['source_sha'] and all(validation[k] == 'PASS' for k in ('fast', 'host', 'qnn', 'device_smoke', 'muon_w8', 'protected_artifacts')), 'REQUIRED_VALIDATION_MISSING')
+    from export_public_qk_score_scale_blocked import profile, muon
+    for key, name in [('fast', 'Fast'), ('host', 'Host'), ('qnn', 'Qnn'), ('device', 'Device')]:
+        profile(root, validation[key + '_log'], name)
+    muon_record = muon(root, validation)
+    mi = json.loads((Path(validation['muon_report_private']).parent / 'device-identity-private.json').read_text(encoding='utf-8-sig'))
+    need(mi['stable_device_id'] == initial['device_private']['Serial'], 'MUON_PHYSICAL_IDENTITY')
+    need(validation['previous_branch_refs'] == 'PASS' and validation['protected_hash_count'] == 5, 'PROTECTION_INCOMPLETE')
+    sdk = json.loads((root / 'sdk-hashes.json').read_text(encoding='utf-8-sig'))
     # Existing allow-list parsers independently validate same-package numerical regressions.
     from export_public_ordered_hvx_ffn2 import process as ffn_process
     from export_public_ordered_hvx_qkv import process as qkv_process
+    legacy = {}
     for key, check in [('ffn2', ffn_process), ('qkv', qkv_process)]:
         path = Path(validation[key + '_private']); ledger = json.loads((path / 'identity-private.json').read_text(encoding='utf-8-sig'))
         need(ledger['build']['binary_hashes'] == build['binary_hashes'] and ledger['source_sha'] == cohort['source_sha'], 'REGRESSION_BINARY_SOURCE')
-        check(ledger, (path / 'stdout.txt').read_text())
+        record = check(ledger, (path / 'stdout.txt').read_text())
+        legacy[key] = {k: record[k] for k in ('qnn_executes', 'metric_checks', 'word_comparisons', 'numerical_digest')}
     public = dict(schema='G1_FP32_QK_SCORE_SCALE_FRONTIER_V1', branch=BRANCH, base_commit='8e13b1ed1e2464b4aef790233682a11c43c838c5', device_tested_source_commit=cohort['source_sha'], binary_sha256={k: build['binary_hashes'][k] for k in ('libHexaFp32Dsp.so', 'libHexaFp32Host.so', 'one_layer_probe')}, compiler_sha256={k: build[k] for k in ('hexagon_compiler_sha256', 'ndk_compiler_sha256')}, fixture_sha256={k: staged[k] for k in ('one-layer-inputs.bin', 'ln1-parameters.bin')}, qairt_build_id=build['qairt_build_id'], qnn_api='2.37.0', architecture='V81', scale_bits='3e3504f3', gates=dict(raw=.01, scaled_gradient=.01, forward_scale=.01, scatter=.01), independent_processes_per_lane=3, process_records=result, numerical_digest_excludes_timing=True, regression={k: validation[k] for k in ('fast', 'host', 'qnn', 'device_smoke', 'muon_w8', 'protected_artifacts')}, new_package_hvx_ffn2_qkv_regression='PASS', observer_incident='REPRODUCED / CAUSE UNRESOLVED', full_one_layer='UNVERIFIED', full_19_layer='UNVERIFIED', training='NO-GO', training_updates=0, self_test_corruptions_rejected=tested)
+    public.update(status='VERIFIED_SEGMENTS', verification_complete=True, sdk_sha256=sdk, muon_w8=muon_record, legacy_regression=legacy, protected_hash_count=5, previous_branch_refs='PASS', classification=['DSP_FORWARD_QK_RAW_VERIFIED', 'FP32_FORWARD_QK_NATIVE_SEGMENT_VERIFIED', 'DSP_BACKWARD_SCORE_SCALE_VERIFIED', 'FP32_BACKWARD_SCORE_SCALE_SEGMENT_VERIFIED', 'OBSERVER_FREE_PRECISION_VERIFIED', 'FP32_ARCHITECTURE_REASSESSMENT_REQUIRED'])
+    forward_blocked = all(r['stage_metrics']['qkNative20/out1']['failures'] > 0 for r in result['A'])
+    backward_blocked = all(r['stage_metrics']['scaleNative120/scatter1']['failures'] > 0 for r in result['B'])
+    need(forward_blocked and backward_blocked, 'NEXT_FRONTIER_REPRODUCTION_MISSING')
+    public['classification'] += ['BLOCKED_FORWARD_CONSUMER', 'BLOCKED_BACKWARD_CONSUMER']
     Path(args.output).parent.mkdir(parents=True, exist_ok=True); Path(args.output).write_text(json.dumps(public, indent=2, sort_keys=True, allow_nan=False) + '\n', encoding='utf-8')
     print('qk_score_scale_public_export=PASS corruption_rejections=' + str(tested))
 
