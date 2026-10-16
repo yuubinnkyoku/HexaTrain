@@ -1,0 +1,2838 @@
+{
+  "schema": "ORDERED_HVX_QKV_FINAL_V1",
+  "branch": "investigation/ordered-fp32-hvx-qkv",
+  "base_commit": "2a59e9b7c208597cbdb597b5ac7c290ff2624eac",
+  "device_tested_source_commit": "a50da5c3a569d34fb6896c8fcffb3754dc7f2312",
+  "qairt_build_id": "2.48.40.260702151143",
+  "qnn_api": "2.37.0",
+  "architecture": "V81",
+  "hexagon_sdk": "6.6.0.0",
+  "hexagon_tools": "19.0.07",
+  "ndk": "26.2.11394342",
+  "geometry": {
+    "m": 32,
+    "k": 64,
+    "n": 64,
+    "projections": 3,
+    "mac_per_layer_microbatch": 393216
+  },
+  "vector_bytes": 128,
+  "fp32_lanes": 32,
+  "fp_contract": "off",
+  "hvx_fp_mode": "strict-ieee",
+  "binary_sha256": {
+    "libHexaFp32Dsp.so": "9736778fc192fd71c7ab974341294ec4f4cd05618473c699848318e9839c9b11",
+    "libHexaFp32Host.so": "08ee5a005b012136a9c0050f1d39e30251ec32421873af5a7a8efc57df3e6423",
+    "one_layer_probe": "9e28d2b960f6dbc9c2dc4f4c17b58de4f4024c9c603967682c504836c1af143d"
+  },
+  "hexagon_compiler_sha256": "039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047",
+  "ndk_compiler_sha256": "ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3",
+  "sdk_sha256": {
+    "sdk_manifest": "8bb7a783a59b7b929355f643e78580addf80bbc1e5f4762c244ce2e06be9478f",
+    "hvx_protos": "156fc1b73ee1a30d8f287e9a8a52faf2b81b562c26ef3716166275391912122e",
+    "hexagon_types": "45906d308e3bacb0d25cf8bda0c490f04e8983f034e412c99b1759ebbf7155dc",
+    "v81_hvx_prm": "e82b15bf7aa4190578299f7603eea451872072a10373cea6d7e56f1e93143cea",
+    "compiler_guide": "d3fd9e21a26c66c7658a3db7a5d400407b95d72614c98d4f0aeaecc91ab8c632"
+  },
+  "fixture_sha256": {
+    "one-layer-inputs.bin": "388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f",
+    "ln1-parameters.bin": "7102ec13544df457922942e3282b15a8612da91c51156692000fc0dd0a21f97f"
+  },
+  "target_disassembly_sha256": "d4eaa44b2e0bab5121d55b74c88708f28ab150f5767663e86c76e6f034b2b8c2",
+  "independent_processes": 3,
+  "qnn_executes": 4164,
+  "metric_checks": 30258,
+  "word_comparisons": 52371,
+  "numerical_digest": "b307c1d1c193ba6edd0bcb8557ca81b460ff5c7410220cd075cc30e96f5221b2",
+  "numerical_digest_excludes_timing": true,
+  "required_word_mismatches": 0,
+  "accuracy_failures": 0,
+  "process_records": [
+    {
+      "numerical_digest": "b307c1d1c193ba6edd0bcb8557ca81b460ff5c7410220cd075cc30e96f5221b2",
+      "metric_checks": 10086,
+      "word_comparisons": 17457,
+      "qnn_executes": 1388,
+      "api_failures": 0,
+      "required_word_mismatches": 0,
+      "accuracy_failures": 0,
+      "finite": true,
+      "input_mutation": 0,
+      "poison_remaining": 0,
+      "canary_failures": 0,
+      "cpu_fallback": 0,
+      "focus_takeovers": 0,
+      "teardown": "PASS",
+      "errors": {
+        "qkv0": {
+          "max_abs": 2.47147319188e-06,
+          "worst_case_rms": 3.36618342726e-07,
+          "worst_relative_l2": 1.95284792319e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "qkv1": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 3.92429089394e-07,
+          "worst_relative_l2": 1.94454865349e-07,
+          "worst_max_relative_floor_0_001": 0.000245050174315
+        },
+        "qkv2": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 7.89937860959e-07,
+          "worst_relative_l2": 2.03847628456e-07,
+          "worst_max_relative_floor_0_001": 0.000737156995445
+        },
+        "dx": {
+          "max_abs": 1.53640447422e-05,
+          "worst_case_rms": 5.68311620338e-06,
+          "worst_relative_l2": 1.128460158e-07,
+          "worst_max_relative_floor_0_001": 0.00013560133844
+        },
+        "dg": {
+          "max_abs": 1.96494390394e-05,
+          "worst_case_rms": 6.32213144842e-06,
+          "worst_relative_l2": 1.797056948e-07,
+          "worst_max_relative_floor_0_001": 0.000809893818628
+        },
+        "db": {
+          "max_abs": 7.89668411016e-06,
+          "worst_case_rms": 2.45734735171e-06,
+          "worst_relative_l2": 4.46424236146e-08,
+          "worst_max_relative_floor_0_001": 1.76951289177e-05
+        },
+        "y": {
+          "max_abs": 5.81823561774e-07,
+          "worst_case_rms": 9.10670022991e-08,
+          "worst_relative_l2": 9.09795236097e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "hat": {
+          "max_abs": 6.66749372158e-07,
+          "worst_case_rms": 9.25150927578e-08,
+          "worst_relative_l2": 9.25165064794e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "inverse": {
+          "max_abs": 1.94379752543e-05,
+          "worst_case_rms": 1.93180674838e-05,
+          "worst_relative_l2": 6.70827025222e-08,
+          "worst_max_relative_floor_0_001": 1.73006447517e-07
+        },
+        "head0": {
+          "max_abs": 1.67515014926e-06,
+          "worst_case_rms": 2.92918713003e-07,
+          "worst_relative_l2": 2.02356380719e-07,
+          "worst_max_relative_floor_0_001": 0.000439971034352
+        },
+        "head1": {
+          "max_abs": 2.4316564895e-06,
+          "worst_case_rms": 3.75628932702e-07,
+          "worst_relative_l2": 1.95699534739e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "head2": {
+          "max_abs": 2.34935266796e-06,
+          "worst_case_rms": 3.56815361218e-07,
+          "worst_relative_l2": 2.20177269581e-07,
+          "worst_max_relative_floor_0_001": 0.000217244482181
+        },
+        "head3": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 4.25069380695e-07,
+          "worst_relative_l2": 2.13464237596e-07,
+          "worst_max_relative_floor_0_001": 0.000151114661543
+        },
+        "head4": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 8.20712872468e-07,
+          "worst_relative_l2": 2.00678500955e-07,
+          "worst_max_relative_floor_0_001": 0.000525074483691
+        },
+        "head5": {
+          "max_abs": 4.65698120244e-06,
+          "worst_case_rms": 7.9824996472e-07,
+          "worst_relative_l2": 2.07615899014e-07,
+          "worst_max_relative_floor_0_001": 0.000682703323346
+        }
+      },
+      "stage_max_abs": {
+        "0": {
+          "qkv0": 2.47147319188e-06,
+          "qkv1": 2.3994641607e-06,
+          "qkv2": 5.09577405872e-06
+        },
+        "1": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06
+        },
+        "2": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "head0": 1.67515014926e-06,
+          "head1": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "head2": 2.34935266796e-06,
+          "head3": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06,
+          "head4": 5.7436790506e-06,
+          "head5": 4.65698120244e-06
+        }
+      },
+      "performance": [
+        {
+          "stage": 0,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15903.5155,
+              "p10": 14858.6195,
+              "p90": 16409.7395,
+              "minimum": 14571.406,
+              "maximum": 17323.854
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15896.615,
+              "p10": 14844.948499999999,
+              "p90": 16396.9795,
+              "minimum": 14565.052,
+              "maximum": 17284.115
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 82.344,
+              "p10": 56.7705,
+              "p90": 96.30199999999999,
+              "minimum": 32.5,
+              "maximum": 107.5
+            },
+            "first_execute_wall_us": 14972.291,
+            "finalize_wrapper_us": 45603.282,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 3919.0105,
+              "p10": 3720.3125,
+              "p90": 4093.9839999999995,
+              "minimum": 3577.396,
+              "maximum": 4201.771
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 3906.562,
+              "p10": 3708.5415000000003,
+              "p90": 4085.6255,
+              "minimum": 3573.802,
+              "maximum": 4189.219
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 83.568,
+              "p10": 32.318,
+              "p90": 85.96350000000001,
+              "minimum": 31.25,
+              "maximum": 323.906
+            },
+            "first_execute_wall_us": 4052.709,
+            "finalize_wrapper_us": 49802.187,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 4.058043605649947,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.9503213353480775,
+            "p10": 3.8440834814629605,
+            "p90": 4.212744012803782,
+            "minimum": 3.7597026383473353,
+            "maximum": 4.224585332584561
+          },
+          "wall_us_abba_speedup": 4.193940785721201,
+          "wall_us_baab_speedup": 3.888121644463822,
+          "wall_us_absolute_median_difference_us": 11984.505
+        },
+        {
+          "stage": 0,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15227.3695,
+              "p10": 14738.49,
+              "p90": 16234.843499999999,
+              "minimum": 14670.469,
+              "maximum": 16597.032
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15203.073499999999,
+              "p10": 14730.885,
+              "p90": 16223.7235,
+              "minimum": 14664.948,
+              "maximum": 16581.927
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 306.2505,
+              "p10": 116.0935,
+              "p90": 324.7395,
+              "minimum": 114.323,
+              "maximum": 478.385
+            },
+            "first_execute_wall_us": 16898.958,
+            "finalize_wrapper_us": 43608.541,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106528,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221344,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163872,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11238.0,
+              "p10": 11234.0,
+              "p90": 12309.5,
+              "minimum": 11196,
+              "maximum": 12310
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11800.5,
+              "p10": 11744.5,
+              "p90": 12857.5,
+              "minimum": 11730,
+              "maximum": 12886
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4178.3330000000005,
+              "p10": 3980.3125,
+              "p90": 4384.87,
+              "minimum": 3738.021,
+              "maximum": 4443.125
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4166.745,
+              "p10": 3962.4480000000003,
+              "p90": 4374.0625,
+              "minimum": 3733.177,
+              "maximum": 4431.667
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 306.406,
+              "p10": 151.19799999999998,
+              "p90": 319.3495,
+              "minimum": 123.698,
+              "maximum": 349.636
+            },
+            "first_execute_wall_us": 4966.302,
+            "finalize_wrapper_us": 46171.667,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106592,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221408,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163936,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 316.5,
+              "p10": 315.0,
+              "p90": 318.5,
+              "minimum": 315,
+              "maximum": 321
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 848.5,
+              "p10": 815.0,
+              "p90": 872.0,
+              "minimum": 810,
+              "maximum": 883
+            }
+          },
+          "wall_us_speedup": 3.644364750248484,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.673185389237627,
+            "p10": 3.6085285343667697,
+            "p90": 3.8901497759571004,
+            "minimum": 3.5372720544906113,
+            "maximum": 3.976036345138595
+          },
+          "wall_us_abba_speedup": 3.765493484415205,
+          "wall_us_baab_speedup": 3.665202296496581,
+          "wall_us_absolute_median_difference_us": 11049.0365,
+          "math_us_speedup": 35.507109004739334,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 36.9326744873817,
+            "p10": 35.50300157977883,
+            "p90": 37.799389406006135,
+            "minimum": 35.50078988941548,
+            "maximum": 38.950949367088604
+          },
+          "math_us_abba_speedup": 37.221543841581386,
+          "math_us_baab_speedup": 35.53362029315896,
+          "math_us_absolute_median_difference_us": 10921.5
+        },
+        {
+          "stage": 1,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15751.9275,
+              "p10": 15548.125,
+              "p90": 16709.193,
+              "minimum": 15492.292,
+              "maximum": 16977.239
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15741.302,
+              "p10": 15521.198,
+              "p90": 16698.932,
+              "minimum": 15480.782,
+              "maximum": 16925.73
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 112.943,
+              "p10": 103.854,
+              "p90": 114.4005,
+              "minimum": 89.375,
+              "maximum": 122.396
+            },
+            "first_execute_wall_us": 16685.625,
+            "finalize_wrapper_us": 57990.364,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4703.228999999999,
+              "p10": 4481.3285,
+              "p90": 5214.4005,
+              "minimum": 4433.021,
+              "maximum": 5856.615
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4694.0885,
+              "p10": 4473.724,
+              "p90": 5157.4220000000005,
+              "minimum": 4425.104,
+              "maximum": 5846.875
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 113.75,
+              "p10": 106.953,
+              "p90": 145.937,
+              "minimum": 89.74,
+              "maximum": 157.969
+            },
+            "first_execute_wall_us": 5840.937,
+            "finalize_wrapper_us": 42872.812,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.3491729830718433,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.3698159866364232,
+            "p10": 3.021964189887128,
+            "p90": 3.463562644835316,
+            "minimum": 2.9412434207335068,
+            "maximum": 3.4882096200445654
+          },
+          "wall_us_abba_speedup": 3.3698159866364232,
+          "wall_us_baab_speedup": 3.335204467044747,
+          "wall_us_absolute_median_difference_us": 11048.6985
+        },
+        {
+          "stage": 1,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 16139.3755,
+              "p10": 15973.280999999999,
+              "p90": 16408.3595,
+              "minimum": 15613.645,
+              "maximum": 16522.5
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 16128.333,
+              "p10": 15959.974,
+              "p90": 16391.406499999997,
+              "minimum": 15605.468,
+              "maximum": 16509.479
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 453.724,
+              "p10": 203.88049999999998,
+              "p90": 492.2135,
+              "minimum": 181.823,
+              "maximum": 801.51
+            },
+            "first_execute_wall_us": 16702.708,
+            "finalize_wrapper_us": 57342.604,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157284,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289668,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239848,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11241.0,
+              "p10": 11237.0,
+              "p90": 11276.0,
+              "minimum": 11237,
+              "maximum": 11287
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11840.0,
+              "p10": 11756.0,
+              "p90": 11890.0,
+              "minimum": 11748,
+              "maximum": 11912
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5146.276,
+              "p10": 4727.5785,
+              "p90": 5588.6985,
+              "minimum": 4296.615,
+              "maximum": 6477.865
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5118.88,
+              "p10": 4716.5625,
+              "p90": 5560.3645,
+              "minimum": 4292.292,
+              "maximum": 6451.927
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 455.182,
+              "p10": 184.32350000000002,
+              "p90": 485.07849999999996,
+              "minimum": 167.187,
+              "maximum": 510.364
+            },
+            "first_execute_wall_us": 5578.542,
+            "finalize_wrapper_us": 51490.052,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157348,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289732,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239912,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 321.5,
+              "p10": 317.5,
+              "p90": 323.5,
+              "minimum": 315,
+              "maximum": 335
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 960.0,
+              "p10": 845.0,
+              "p90": 1006.0,
+              "minimum": 812,
+              "maximum": 1049
+            }
+          },
+          "wall_us_speedup": 3.1361270751899046,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.1774582776907536,
+            "p10": 2.903963539895571,
+            "p90": 3.4401721064936015,
+            "minimum": 2.792964293326983,
+            "maximum": 3.5875109307226576
+          },
+          "wall_us_abba_speedup": 3.299705732717954,
+          "wall_us_baab_speedup": 3.06733758922928,
+          "wall_us_absolute_median_difference_us": 10993.0995,
+          "math_us_speedup": 34.9642301710731,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 35.05607476635514,
+            "p10": 34.73606118673186,
+            "p90": 35.26223901342639,
+            "minimum": 34.23252279635258,
+            "maximum": 35.34748427672956
+          },
+          "math_us_abba_speedup": 35.204116315122825,
+          "math_us_baab_speedup": 34.95571394762516,
+          "math_us_absolute_median_difference_us": 10919.5
+        },
+        {
+          "stage": 2,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17263.307500000003,
+              "p10": 17171.6405,
+              "p90": 17547.2395,
+              "minimum": 16821.042,
+              "maximum": 17695.782
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17223.6465,
+              "p10": 17135.5205,
+              "p90": 17522.916,
+              "minimum": 16814.271,
+              "maximum": 17678.021
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 115.052,
+              "p10": 98.828,
+              "p90": 142.083,
+              "minimum": 46.302,
+              "maximum": 214.375
+            },
+            "first_execute_wall_us": 20436.667,
+            "finalize_wrapper_us": 73711.355,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5221.5885,
+              "p10": 4926.8485,
+              "p90": 5880.443499999999,
+              "minimum": 4868.75,
+              "maximum": 6557.083
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5190.2345000000005,
+              "p10": 4913.0470000000005,
+              "p90": 5739.687,
+              "minimum": 4860.052,
+              "maximum": 6547.083
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 117.2135,
+              "p10": 114.505,
+              "p90": 140.833,
+              "minimum": 83.333,
+              "maximum": 158.75
+            },
+            "first_execute_wall_us": 5621.979,
+            "finalize_wrapper_us": 77789.583,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.3061409377625224,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.2530853514205758,
+            "p10": 3.043111118101291,
+            "p90": 3.4167799023056267,
+            "minimum": 2.9754258617292937,
+            "maximum": 3.4528430142873714
+          },
+          "wall_us_abba_speedup": 3.152389806471019,
+          "wall_us_baab_speedup": 3.3271822880310644,
+          "wall_us_absolute_median_difference_us": 12041.719000000003
+        },
+        {
+          "stage": 2,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17608.281499999997,
+              "p10": 17003.5675,
+              "p90": 18015.7025,
+              "minimum": 16943.907,
+              "maximum": 18288.229
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17596.536500000002,
+              "p10": 16984.323,
+              "p90": 17988.072999999997,
+              "minimum": 16926.979,
+              "maximum": 18244.74
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 590.703,
+              "p10": 222.682,
+              "p90": 714.505,
+              "minimum": 220.677,
+              "maximum": 1001.563
+            },
+            "first_execute_wall_us": 18235.886,
+            "finalize_wrapper_us": 53788.802,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206468,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 338980,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313608,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 12365.0,
+              "p10": 12312.5,
+              "p90": 12382.0,
+              "minimum": 11331,
+              "maximum": 12392
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 13042.5,
+              "p10": 12872.5,
+              "p90": 13147.5,
+              "minimum": 12086,
+              "maximum": 13156
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5548.5154999999995,
+              "p10": 5008.2555,
+              "p90": 5652.4215,
+              "minimum": 4924.114,
+              "maximum": 5703.177
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5521.5105,
+              "p10": 4995.3645,
+              "p90": 5638.8805,
+              "minimum": 4914.271,
+              "maximum": 5693.021
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 593.281,
+              "p10": 222.39600000000002,
+              "p90": 645.417,
+              "minimum": 222.083,
+              "maximum": 706.719
+            },
+            "first_execute_wall_us": 6370.99,
+            "finalize_wrapper_us": 43901.563,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206532,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 339044,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313672,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 321.0,
+              "p10": 317.0,
+              "p90": 325.0,
+              "minimum": 316,
+              "maximum": 326
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 960.0,
+              "p10": 841.0,
+              "p90": 1019.0,
+              "minimum": 824,
+              "maximum": 1033
+            }
+          },
+          "wall_us_speedup": 3.173512176365011,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.206087405890986,
+            "p10": 3.1414223353661965,
+            "p90": 3.297386597400985,
+            "minimum": 3.1364617096006255,
+            "maximum": 3.4384036605672037
+          },
+          "wall_us_abba_speedup": 3.1862257848608535,
+          "wall_us_baab_speedup": 3.206087405890986,
+          "wall_us_absolute_median_difference_us": 12059.765999999998,
+          "math_us_speedup": 38.5202492211838,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 38.29612403100775,
+            "p10": 37.79178078227971,
+            "p90": 38.784508083596215,
+            "minimum": 37.02190923317684,
+            "maximum": 39.04731861198738
+          },
+          "math_us_abba_speedup": 38.15761209195381,
+          "math_us_baab_speedup": 38.482406734496124,
+          "math_us_absolute_median_difference_us": 12044.0
+        }
+      ],
+      "thermal_status": [
+        0,
+        0
+      ],
+      "battery_temperature_c": [
+        36.0,
+        36.0
+      ],
+      "power": [
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        },
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        }
+      ],
+      "peak_rss_kib": 119512,
+      "observed_alignment_patterns": [
+        "y=0,wq=0,wk=0,wv=0,q=0,k=0,v=0,vector_bytes=128,scratch_bytes=0"
+      ],
+      "process": 1,
+      "app_visible_complete_write": true
+    },
+    {
+      "numerical_digest": "b307c1d1c193ba6edd0bcb8557ca81b460ff5c7410220cd075cc30e96f5221b2",
+      "metric_checks": 10086,
+      "word_comparisons": 17457,
+      "qnn_executes": 1388,
+      "api_failures": 0,
+      "required_word_mismatches": 0,
+      "accuracy_failures": 0,
+      "finite": true,
+      "input_mutation": 0,
+      "poison_remaining": 0,
+      "canary_failures": 0,
+      "cpu_fallback": 0,
+      "focus_takeovers": 0,
+      "teardown": "PASS",
+      "errors": {
+        "qkv0": {
+          "max_abs": 2.47147319188e-06,
+          "worst_case_rms": 3.36618342726e-07,
+          "worst_relative_l2": 1.95284792319e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "qkv1": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 3.92429089394e-07,
+          "worst_relative_l2": 1.94454865349e-07,
+          "worst_max_relative_floor_0_001": 0.000245050174315
+        },
+        "qkv2": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 7.89937860959e-07,
+          "worst_relative_l2": 2.03847628456e-07,
+          "worst_max_relative_floor_0_001": 0.000737156995445
+        },
+        "dx": {
+          "max_abs": 1.53640447422e-05,
+          "worst_case_rms": 5.68311620338e-06,
+          "worst_relative_l2": 1.128460158e-07,
+          "worst_max_relative_floor_0_001": 0.00013560133844
+        },
+        "dg": {
+          "max_abs": 1.96494390394e-05,
+          "worst_case_rms": 6.32213144842e-06,
+          "worst_relative_l2": 1.797056948e-07,
+          "worst_max_relative_floor_0_001": 0.000809893818628
+        },
+        "db": {
+          "max_abs": 7.89668411016e-06,
+          "worst_case_rms": 2.45734735171e-06,
+          "worst_relative_l2": 4.46424236146e-08,
+          "worst_max_relative_floor_0_001": 1.76951289177e-05
+        },
+        "y": {
+          "max_abs": 5.81823561774e-07,
+          "worst_case_rms": 9.10670022991e-08,
+          "worst_relative_l2": 9.09795236097e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "hat": {
+          "max_abs": 6.66749372158e-07,
+          "worst_case_rms": 9.25150927578e-08,
+          "worst_relative_l2": 9.25165064794e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "inverse": {
+          "max_abs": 1.94379752543e-05,
+          "worst_case_rms": 1.93180674838e-05,
+          "worst_relative_l2": 6.70827025222e-08,
+          "worst_max_relative_floor_0_001": 1.73006447517e-07
+        },
+        "head0": {
+          "max_abs": 1.67515014926e-06,
+          "worst_case_rms": 2.92918713003e-07,
+          "worst_relative_l2": 2.02356380719e-07,
+          "worst_max_relative_floor_0_001": 0.000439971034352
+        },
+        "head1": {
+          "max_abs": 2.4316564895e-06,
+          "worst_case_rms": 3.75628932702e-07,
+          "worst_relative_l2": 1.95699534739e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "head2": {
+          "max_abs": 2.34935266796e-06,
+          "worst_case_rms": 3.56815361218e-07,
+          "worst_relative_l2": 2.20177269581e-07,
+          "worst_max_relative_floor_0_001": 0.000217244482181
+        },
+        "head3": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 4.25069380695e-07,
+          "worst_relative_l2": 2.13464237596e-07,
+          "worst_max_relative_floor_0_001": 0.000151114661543
+        },
+        "head4": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 8.20712872468e-07,
+          "worst_relative_l2": 2.00678500955e-07,
+          "worst_max_relative_floor_0_001": 0.000525074483691
+        },
+        "head5": {
+          "max_abs": 4.65698120244e-06,
+          "worst_case_rms": 7.9824996472e-07,
+          "worst_relative_l2": 2.07615899014e-07,
+          "worst_max_relative_floor_0_001": 0.000682703323346
+        }
+      },
+      "stage_max_abs": {
+        "0": {
+          "qkv0": 2.47147319188e-06,
+          "qkv1": 2.3994641607e-06,
+          "qkv2": 5.09577405872e-06
+        },
+        "1": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06
+        },
+        "2": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "head0": 1.67515014926e-06,
+          "head1": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "head2": 2.34935266796e-06,
+          "head3": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06,
+          "head4": 5.7436790506e-06,
+          "head5": 4.65698120244e-06
+        }
+      },
+      "performance": [
+        {
+          "stage": 0,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15578.515500000001,
+              "p10": 14790.9375,
+              "p90": 16243.932499999999,
+              "minimum": 14736.51,
+              "maximum": 16500.781
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15554.454,
+              "p10": 14780.625,
+              "p90": 16226.5365,
+              "minimum": 14726.094,
+              "maximum": 16440.885
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 83.073,
+              "p10": 77.47399999999999,
+              "p90": 83.8545,
+              "minimum": 72.552,
+              "maximum": 107.5
+            },
+            "first_execute_wall_us": 18476.979,
+            "finalize_wrapper_us": 48452.605,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4181.3279999999995,
+              "p10": 3969.5575,
+              "p90": 4373.541499999999,
+              "minimum": 3828.437,
+              "maximum": 4647.969
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4137.396000000001,
+              "p10": 3938.099,
+              "p90": 4337.1355,
+              "minimum": 3819.844,
+              "maximum": 4584.739
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 83.75,
+              "p10": 82.031,
+              "p90": 84.792,
+              "minimum": 63.854,
+              "maximum": 304.011
+            },
+            "first_execute_wall_us": 4672.813,
+            "finalize_wrapper_us": 77570.677,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.725733905591717,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.705054917307206,
+            "p10": 3.560617184349443,
+            "p90": 3.8677105041881514,
+            "minimum": 3.5029469446349313,
+            "maximum": 3.871743083728163
+          },
+          "wall_us_abba_speedup": 3.8006828894321174,
+          "wall_us_baab_speedup": 3.630029656466993,
+          "wall_us_absolute_median_difference_us": 11397.187500000002
+        },
+        {
+          "stage": 0,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15256.7965,
+              "p10": 15082.2395,
+              "p90": 16476.953,
+              "minimum": 14967.083,
+              "maximum": 16563.021
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15246.1195,
+              "p10": 15057.4215,
+              "p90": 16450.078500000003,
+              "minimum": 14912.969,
+              "maximum": 16522.187
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 307.1875,
+              "p10": 273.099,
+              "p90": 317.78650000000005,
+              "minimum": 242.552,
+              "maximum": 338.854
+            },
+            "first_execute_wall_us": 15996.198,
+            "finalize_wrapper_us": 49401.407,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106528,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221344,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163872,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11236.0,
+              "p10": 11198.5,
+              "p90": 12309.5,
+              "minimum": 11196,
+              "maximum": 12310
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11810.0,
+              "p10": 11739.5,
+              "p90": 12854.5,
+              "minimum": 11696,
+              "maximum": 12873
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4270.9375,
+              "p10": 4017.578,
+              "p90": 4504.2965,
+              "minimum": 3896.25,
+              "maximum": 4848.438
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4247.4735,
+              "p10": 4007.6825,
+              "p90": 4487.6825,
+              "minimum": 3891.041,
+              "maximum": 4836.823
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 306.901,
+              "p10": 273.49,
+              "p90": 348.203,
+              "minimum": 115.313,
+              "maximum": 398.646
+            },
+            "first_execute_wall_us": 5137.24,
+            "finalize_wrapper_us": 36912.344,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106592,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221408,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163936,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 320.0,
+              "p10": 316.0,
+              "p90": 322.0,
+              "minimum": 316,
+              "maximum": 323
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 867.5,
+              "p10": 821.0,
+              "p90": 892.5,
+              "minimum": 812,
+              "maximum": 895
+            }
+          },
+          "wall_us_speedup": 3.5722359552206044,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.639113190305916,
+            "p10": 3.434992643666022,
+            "p90": 3.887420331917973,
+            "minimum": 3.2774320463276303,
+            "maximum": 3.9283877002512457
+          },
+          "wall_us_abba_speedup": 3.800395362733676,
+          "wall_us_baab_speedup": 3.5228969708647524,
+          "wall_us_absolute_median_difference_us": 10985.859,
+          "math_us_speedup": 35.1125,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 36.61634036326991,
+            "p10": 35.16470656050549,
+            "p90": 36.9695434916107,
+            "minimum": 35.158307210031346,
+            "maximum": 37.25632911392405
+          },
+          "math_us_abba_speedup": 36.732804464596455,
+          "math_us_baab_speedup": 35.19265873891906,
+          "math_us_absolute_median_difference_us": 10916.0
+        },
+        {
+          "stage": 1,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15600.390500000001,
+              "p10": 15303.5155,
+              "p90": 15850.3645,
+              "minimum": 15083.438,
+              "maximum": 15965.417
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15588.697499999998,
+              "p10": 15295.8335,
+              "p90": 15821.927,
+              "minimum": 15077.448,
+              "maximum": 15903.021
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 112.55250000000001,
+              "p10": 42.474000000000004,
+              "p90": 126.511,
+              "minimum": 41.77,
+              "maximum": 208.542
+            },
+            "first_execute_wall_us": 17319.583,
+            "finalize_wrapper_us": 65962.604,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4685.521000000001,
+              "p10": 4312.291499999999,
+              "p90": 4901.7970000000005,
+              "minimum": 4270.521,
+              "maximum": 5060.937
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4676.7970000000005,
+              "p10": 4296.093000000001,
+              "p90": 4879.2445,
+              "minimum": 4253.906,
+              "maximum": 5050.938
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 113.30699999999999,
+              "p10": 43.906,
+              "p90": 139.583,
+              "minimum": 42.395,
+              "maximum": 265.468
+            },
+            "first_execute_wall_us": 4650.156,
+            "finalize_wrapper_us": 65555.469,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.329488972517677,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.43263935271714,
+            "p10": 3.16061907293002,
+            "p90": 3.4883769270957377,
+            "minimum": 3.1244845288143512,
+            "maximum": 3.5136603126203325
+          },
+          "wall_us_abba_speedup": 3.3547614579536646,
+          "wall_us_baab_speedup": 3.4478289241613727,
+          "wall_us_absolute_median_difference_us": 10914.8695
+        },
+        {
+          "stage": 1,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15987.5255,
+              "p10": 15732.057499999999,
+              "p90": 17117.2915,
+              "minimum": 15683.802,
+              "maximum": 17584.427
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15963.151,
+              "p10": 15720.130000000001,
+              "p90": 17107.005,
+              "minimum": 15671.719,
+              "maximum": 17518.23
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 416.563,
+              "p10": 230.6245,
+              "p90": 546.588,
+              "minimum": 171.615,
+              "maximum": 1180.365
+            },
+            "first_execute_wall_us": 15690.313,
+            "finalize_wrapper_us": 51180.729,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157284,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289668,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239848,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11267.5,
+              "p10": 11239.0,
+              "p90": 11801.0,
+              "minimum": 11239,
+              "maximum": 12315
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11843.0,
+              "p10": 11812.0,
+              "p90": 12391.0,
+              "minimum": 11744,
+              "maximum": 12911
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4994.5575,
+              "p10": 4804.1925,
+              "p90": 5337.916499999999,
+              "minimum": 4658.803,
+              "maximum": 5464.375
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4981.692999999999,
+              "p10": 4775.9895,
+              "p90": 5325.1305,
+              "minimum": 4641.615,
+              "maximum": 5437.188
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 454.5055,
+              "p10": 299.5575,
+              "p90": 519.0885000000001,
+              "minimum": 173.333,
+              "maximum": 545.885
+            },
+            "first_execute_wall_us": 4638.594,
+            "finalize_wrapper_us": 28745.364,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157348,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289732,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239912,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 323.0,
+              "p10": 319.0,
+              "p90": 325.0,
+              "minimum": 319,
+              "maximum": 328
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 961.5,
+              "p10": 863.5,
+              "p90": 1038.5,
+              "minimum": 851,
+              "maximum": 1065
+            }
+          },
+          "wall_us_speedup": 3.200989376936796,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.21587009207928,
+            "p10": 3.057348965765631,
+            "p90": 3.3919416681525107,
+            "minimum": 3.03676423801878,
+            "maximum": 3.532299961485988
+          },
+          "wall_us_abba_speedup": 3.2763629020827403,
+          "wall_us_baab_speedup": 3.0814488762666032,
+          "wall_us_absolute_median_difference_us": 10992.968,
+          "math_us_speedup": 34.88390092879257,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 35.0452040425769,
+            "p10": 34.761882716049385,
+            "p90": 36.40769219760719,
+            "minimum": 34.760802469135804,
+            "maximum": 36.410493827160494
+          },
+          "math_us_abba_speedup": 35.849797473751536,
+          "math_us_baab_speedup": 34.860177505136036,
+          "math_us_absolute_median_difference_us": 10944.5
+        },
+        {
+          "stage": 2,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17194.974000000002,
+              "p10": 16905.547,
+              "p90": 18055.912,
+              "minimum": 16215.469,
+              "maximum": 19218.854
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17183.854,
+              "p10": 16885.911999999997,
+              "p90": 17451.900999999998,
+              "minimum": 16174.062,
+              "maximum": 18486.771
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 116.276,
+              "p10": 64.427,
+              "p90": 139.3755,
+              "minimum": 44.271,
+              "maximum": 248.281
+            },
+            "first_execute_wall_us": 17463.125,
+            "finalize_wrapper_us": 53853.906,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5174.922500000001,
+              "p10": 4850.651,
+              "p90": 5339.870000000001,
+              "minimum": 4675.052,
+              "maximum": 5482.136
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5146.4065,
+              "p10": 4834.349,
+              "p90": 5309.557000000001,
+              "minimum": 4661.823,
+              "maximum": 5438.594
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 116.719,
+              "p10": 114.375,
+              "p90": 143.9065,
+              "minimum": 43.229,
+              "maximum": 372.5
+            },
+            "first_execute_wall_us": 5017.552,
+            "finalize_wrapper_us": 45336.875,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.3227500508461723,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.3779008119606564,
+            "p10": 3.247255705221423,
+            "p90": 3.4617038755419376,
+            "minimum": 3.187524162156158,
+            "maximum": 3.638708860404466
+          },
+          "wall_us_abba_speedup": 3.380237392037401,
+          "wall_us_baab_speedup": 3.3223322839722735,
+          "wall_us_absolute_median_difference_us": 12020.051500000001
+        },
+        {
+          "stage": 2,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17754.1405,
+              "p10": 17405.0,
+              "p90": 18010.8075,
+              "minimum": 17248.49,
+              "maximum": 18590.677
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17696.9525,
+              "p10": 17383.489,
+              "p90": 17907.057,
+              "minimum": 17235.469,
+              "maximum": 18558.802
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 599.1665,
+              "p10": 497.2395,
+              "p90": 694.4795,
+              "minimum": 338.229,
+              "maximum": 699.792
+            },
+            "first_execute_wall_us": 17097.5,
+            "finalize_wrapper_us": 57850.052,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206468,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 338980,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313608,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 12372.5,
+              "p10": 12355.5,
+              "p90": 12433.5,
+              "minimum": 12310,
+              "maximum": 12496
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 13081.5,
+              "p10": 12929.0,
+              "p90": 13163.0,
+              "minimum": 12908,
+              "maximum": 13203
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5652.8385,
+              "p10": 5400.8595000000005,
+              "p90": 6080.833500000001,
+              "minimum": 5369.844,
+              "maximum": 7211.146
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5627.2919999999995,
+              "p10": 5390.9375,
+              "p90": 6055.026,
+              "minimum": 5327.604,
+              "maximum": 7194.479
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 611.8489999999999,
+              "p10": 589.818,
+              "p90": 732.2915,
+              "minimum": 589.271,
+              "maximum": 1460.469
+            },
+            "first_execute_wall_us": 6115.0,
+            "finalize_wrapper_us": 58730.26,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206532,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 339044,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313672,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 321.0,
+              "p10": 318.0,
+              "p90": 323.5,
+              "minimum": 318,
+              "maximum": 325
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 968.5,
+              "p10": 845.0,
+              "p90": 1012.0,
+              "minimum": 824,
+              "maximum": 1026
+            }
+          },
+          "wall_us_speedup": 3.1407478738336505,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.1175566810997264,
+            "p10": 2.9198134570920735,
+            "p90": 3.206577076330073,
+            "minimum": 2.786081566610275,
+            "maximum": 3.2375052933095776
+          },
+          "wall_us_abba_speedup": 3.1503263025721866,
+          "wall_us_baab_speedup": 3.0506249111716492,
+          "wall_us_absolute_median_difference_us": 12101.302000000001,
+          "math_us_speedup": 38.54361370716511,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 38.58996598886644,
+            "p10": 38.3347423510467,
+            "p90": 38.92183461192895,
+            "minimum": 38.10493827160494,
+            "maximum": 39.043956043956044
+          },
+          "math_us_abba_speedup": 38.67658357541791,
+          "math_us_baab_speedup": 38.57830191421637,
+          "math_us_absolute_median_difference_us": 12051.5
+        }
+      ],
+      "thermal_status": [
+        0,
+        0
+      ],
+      "battery_temperature_c": [
+        36.0,
+        36.0
+      ],
+      "power": [
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        },
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        }
+      ],
+      "peak_rss_kib": 119496,
+      "observed_alignment_patterns": [
+        "y=0,wq=0,wk=0,wv=0,q=0,k=0,v=0,vector_bytes=128,scratch_bytes=0"
+      ],
+      "process": 2,
+      "app_visible_complete_write": true
+    },
+    {
+      "numerical_digest": "b307c1d1c193ba6edd0bcb8557ca81b460ff5c7410220cd075cc30e96f5221b2",
+      "metric_checks": 10086,
+      "word_comparisons": 17457,
+      "qnn_executes": 1388,
+      "api_failures": 0,
+      "required_word_mismatches": 0,
+      "accuracy_failures": 0,
+      "finite": true,
+      "input_mutation": 0,
+      "poison_remaining": 0,
+      "canary_failures": 0,
+      "cpu_fallback": 0,
+      "focus_takeovers": 0,
+      "teardown": "PASS",
+      "errors": {
+        "qkv0": {
+          "max_abs": 2.47147319188e-06,
+          "worst_case_rms": 3.36618342726e-07,
+          "worst_relative_l2": 1.95284792319e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "qkv1": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 3.92429089394e-07,
+          "worst_relative_l2": 1.94454865349e-07,
+          "worst_max_relative_floor_0_001": 0.000245050174315
+        },
+        "qkv2": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 7.89937860959e-07,
+          "worst_relative_l2": 2.03847628456e-07,
+          "worst_max_relative_floor_0_001": 0.000737156995445
+        },
+        "dx": {
+          "max_abs": 1.53640447422e-05,
+          "worst_case_rms": 5.68311620338e-06,
+          "worst_relative_l2": 1.128460158e-07,
+          "worst_max_relative_floor_0_001": 0.00013560133844
+        },
+        "dg": {
+          "max_abs": 1.96494390394e-05,
+          "worst_case_rms": 6.32213144842e-06,
+          "worst_relative_l2": 1.797056948e-07,
+          "worst_max_relative_floor_0_001": 0.000809893818628
+        },
+        "db": {
+          "max_abs": 7.89668411016e-06,
+          "worst_case_rms": 2.45734735171e-06,
+          "worst_relative_l2": 4.46424236146e-08,
+          "worst_max_relative_floor_0_001": 1.76951289177e-05
+        },
+        "y": {
+          "max_abs": 5.81823561774e-07,
+          "worst_case_rms": 9.10670022991e-08,
+          "worst_relative_l2": 9.09795236097e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "hat": {
+          "max_abs": 6.66749372158e-07,
+          "worst_case_rms": 9.25150927578e-08,
+          "worst_relative_l2": 9.25165064794e-08,
+          "worst_max_relative_floor_0_001": 0.000110899623496
+        },
+        "inverse": {
+          "max_abs": 1.94379752543e-05,
+          "worst_case_rms": 1.93180674838e-05,
+          "worst_relative_l2": 6.70827025222e-08,
+          "worst_max_relative_floor_0_001": 1.73006447517e-07
+        },
+        "head0": {
+          "max_abs": 1.67515014926e-06,
+          "worst_case_rms": 2.92918713003e-07,
+          "worst_relative_l2": 2.02356380719e-07,
+          "worst_max_relative_floor_0_001": 0.000439971034352
+        },
+        "head1": {
+          "max_abs": 2.4316564895e-06,
+          "worst_case_rms": 3.75628932702e-07,
+          "worst_relative_l2": 1.95699534739e-07,
+          "worst_max_relative_floor_0_001": 0.000604795329803
+        },
+        "head2": {
+          "max_abs": 2.34935266796e-06,
+          "worst_case_rms": 3.56815361218e-07,
+          "worst_relative_l2": 2.20177269581e-07,
+          "worst_max_relative_floor_0_001": 0.000217244482181
+        },
+        "head3": {
+          "max_abs": 2.77017446315e-06,
+          "worst_case_rms": 4.25069380695e-07,
+          "worst_relative_l2": 2.13464237596e-07,
+          "worst_max_relative_floor_0_001": 0.000151114661543
+        },
+        "head4": {
+          "max_abs": 5.7436790506e-06,
+          "worst_case_rms": 8.20712872468e-07,
+          "worst_relative_l2": 2.00678500955e-07,
+          "worst_max_relative_floor_0_001": 0.000525074483691
+        },
+        "head5": {
+          "max_abs": 4.65698120244e-06,
+          "worst_case_rms": 7.9824996472e-07,
+          "worst_relative_l2": 2.07615899014e-07,
+          "worst_max_relative_floor_0_001": 0.000682703323346
+        }
+      },
+      "stage_max_abs": {
+        "0": {
+          "qkv0": 2.47147319188e-06,
+          "qkv1": 2.3994641607e-06,
+          "qkv2": 5.09577405872e-06
+        },
+        "1": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06
+        },
+        "2": {
+          "dx": 1.53640447422e-05,
+          "dg": 1.96494390394e-05,
+          "db": 7.89668411016e-06,
+          "y": 5.81823561774e-07,
+          "hat": 6.66749372158e-07,
+          "inverse": 1.94379752543e-05,
+          "qkv0": 2.4316564895e-06,
+          "head0": 1.67515014926e-06,
+          "head1": 2.4316564895e-06,
+          "qkv1": 2.77017446315e-06,
+          "head2": 2.34935266796e-06,
+          "head3": 2.77017446315e-06,
+          "qkv2": 5.7436790506e-06,
+          "head4": 5.7436790506e-06,
+          "head5": 4.65698120244e-06
+        }
+      },
+      "performance": [
+        {
+          "stage": 0,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15515.4165,
+              "p10": 14854.453000000001,
+              "p90": 16056.6405,
+              "minimum": 14789.323,
+              "maximum": 16507.292
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15500.469000000001,
+              "p10": 14843.9845,
+              "p90": 16031.692,
+              "minimum": 14779.844,
+              "maximum": 16485.156
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 82.9685,
+              "p10": 80.417,
+              "p90": 114.453,
+              "minimum": 80.052,
+              "maximum": 428.958
+            },
+            "first_execute_wall_us": 15778.073,
+            "finalize_wrapper_us": 46189.531,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4091.563,
+              "p10": 3847.4215000000004,
+              "p90": 4595.0779999999995,
+              "minimum": 3719.375,
+              "maximum": 4761.407
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4060.964,
+              "p10": 3838.3334999999997,
+              "p90": 4582.812,
+              "minimum": 3711.25,
+              "maximum": 4751.615
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 83.7495,
+              "p10": 81.276,
+              "p90": 109.79149999999998,
+              "minimum": 52.084,
+              "maximum": 410.781
+            },
+            "first_execute_wall_us": 5081.094,
+            "finalize_wrapper_us": 55466.927,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 24576,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 139360,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 7,
+              "logical_bytes": 81920,
+              "native": 0
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.792051228344767,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.7547740379716084,
+            "p10": 3.5124241818420114,
+            "p90": 4.067211685933735,
+            "minimum": 3.4638054227122606,
+            "maximum": 4.081488907335496
+          },
+          "wall_us_abba_speedup": 3.912561871326835,
+          "wall_us_baab_speedup": 3.5582831876299137,
+          "wall_us_absolute_median_difference_us": 11423.8535
+        },
+        {
+          "stage": 0,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15186.8485,
+              "p10": 14893.542,
+              "p90": 16210.729500000001,
+              "minimum": 14710.677,
+              "maximum": 16429.479
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15175.9895,
+              "p10": 14886.771,
+              "p90": 16198.724,
+              "minimum": 14686.823,
+              "maximum": 16417.708
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 291.849,
+              "p10": 114.714,
+              "p90": 341.51,
+              "minimum": 113.854,
+              "maximum": 437.291
+            },
+            "first_execute_wall_us": 17024.74,
+            "finalize_wrapper_us": 55397.604,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106528,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221344,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163872,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11234.0,
+              "p10": 11196.0,
+              "p90": 12307.5,
+              "minimum": 11195,
+              "maximum": 12313
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11772.0,
+              "p10": 11712.5,
+              "p90": 12843.5,
+              "minimum": 11698,
+              "maximum": 12888
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4171.5625,
+              "p10": 3874.193,
+              "p90": 4515.1565,
+              "minimum": 3718.281,
+              "maximum": 5272.396
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4161.693,
+              "p10": 3864.0885,
+              "p90": 4486.3279999999995,
+              "minimum": 3712.812,
+              "maximum": 5220.156
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 233.516,
+              "p10": 136.0415,
+              "p90": 337.552,
+              "minimum": 114.375,
+              "maximum": 394.323
+            },
+            "first_execute_wall_us": 4527.5,
+            "finalize_wrapper_us": 48381.146,
+            "memory": {
+              "input_bytes": 57344,
+              "output_bytes": 106592,
+              "native_bytes": 0,
+              "host_buffer_lower_bound": 221408,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 1,
+              "tensors": 8,
+              "logical_bytes": 163936,
+              "native": 0
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 317.0,
+              "p10": 314.0,
+              "p90": 320.5,
+              "minimum": 313,
+              "maximum": 322
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 857.5,
+              "p10": 814.0,
+              "p90": 883.5,
+              "minimum": 803,
+              "maximum": 895
+            }
+          },
+          "wall_us_speedup": 3.640565974979399,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.678603618408668,
+            "p10": 3.424552338820041,
+            "p90": 3.8921094280914783,
+            "minimum": 3.230362416295349,
+            "maximum": 4.078096774731228
+          },
+          "wall_us_abba_speedup": 3.776919499678682,
+          "wall_us_baab_speedup": 3.5549321164656433,
+          "wall_us_absolute_median_difference_us": 11015.286,
+          "math_us_speedup": 35.4384858044164,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 36.14060882785533,
+            "p10": 35.08886468114241,
+            "p90": 37.32453840262665,
+            "minimum": 35.0515625,
+            "maximum": 37.48644338118022
+          },
+          "math_us_abba_speedup": 36.19792224669166,
+          "math_us_baab_speedup": 36.08498217864795,
+          "math_us_absolute_median_difference_us": 10917.0
+        },
+        {
+          "stage": 1,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 15429.6875,
+              "p10": 15280.182,
+              "p90": 15834.297,
+              "minimum": 15255.521,
+              "maximum": 16607.553
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 15402.604500000001,
+              "p10": 15267.9945,
+              "p90": 15798.125,
+              "minimum": 15249.427,
+              "maximum": 16596.719
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 44.0625,
+              "p10": 42.7085,
+              "p90": 115.286,
+              "minimum": 40.99,
+              "maximum": 145.99
+            },
+            "first_execute_wall_us": 16263.438,
+            "finalize_wrapper_us": 65541.874,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 4426.484,
+              "p10": 4251.38,
+              "p90": 4850.938,
+              "minimum": 4200.104,
+              "maximum": 4883.75
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 4421.302,
+              "p10": 4244.1405,
+              "p90": 4841.9535,
+              "minimum": 4194.792,
+              "maximum": 4873.854
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 51.3545,
+              "p10": 43.542,
+              "p90": 116.6925,
+              "minimum": 43.125,
+              "maximum": 170.0
+            },
+            "first_execute_wall_us": 4991.563,
+            "finalize_wrapper_us": 55731.77,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 165568,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 17,
+              "logical_bytes": 115844,
+              "native": 3
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.4857660165494777,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.4838341733964624,
+            "p10": 3.314457919592577,
+            "p90": 3.5765682106197247,
+            "minimum": 3.3110799384293443,
+            "maximum": 3.606762386129885
+          },
+          "wall_us_abba_speedup": 3.455602279673591,
+          "wall_us_baab_speedup": 3.4838341733964624,
+          "wall_us_absolute_median_difference_us": 11003.2035
+        },
+        {
+          "stage": 1,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 16124.583,
+              "p10": 15943.125,
+              "p90": 16409.5055,
+              "minimum": 15857.083,
+              "maximum": 16701.042
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 16097.9165,
+              "p10": 15929.219000000001,
+              "p90": 16358.646,
+              "minimum": 15844.584,
+              "maximum": 16667.604
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 453.281,
+              "p10": 281.7975,
+              "p90": 484.245,
+              "minimum": 192.708,
+              "maximum": 801.875
+            },
+            "first_execute_wall_us": 16151.562,
+            "finalize_wrapper_us": 48096.615,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157284,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289668,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239848,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 11240.5,
+              "p10": 11238.0,
+              "p90": 11269.0,
+              "minimum": 11237,
+              "maximum": 11283
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 11824.0,
+              "p10": 11759.0,
+              "p90": 11893.5,
+              "minimum": 11740,
+              "maximum": 11903
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5068.073,
+              "p10": 4890.964,
+              "p90": 5554.896000000001,
+              "minimum": 4750.417,
+              "maximum": 5744.896
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5053.308,
+              "p10": 4875.521500000001,
+              "p90": 5540.7035,
+              "minimum": 4742.344,
+              "maximum": 5701.093
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 454.71349999999995,
+              "p10": 326.1195,
+              "p90": 489.58299999999997,
+              "minimum": 174.792,
+              "maximum": 718.646
+            },
+            "first_execute_wall_us": 5465.209,
+            "finalize_wrapper_us": 45233.021,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 157348,
+              "native_bytes": 16512,
+              "host_buffer_lower_bound": 289732,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 3,
+              "tensors": 20,
+              "logical_bytes": 239912,
+              "native": 3
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 322.5,
+              "p10": 320.5,
+              "p90": 325.5,
+              "minimum": 319,
+              "maximum": 327
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 985.5,
+              "p10": 848.0,
+              "p90": 1022.0,
+              "minimum": 842,
+              "maximum": 1027
+            }
+          },
+          "wall_us_speedup": 3.1816003834198914,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.0948654090403376,
+            "p10": 2.9615402130023227,
+            "p90": 3.300704210815344,
+            "minimum": 2.9488118118690756,
+            "maximum": 3.4375792722507055
+          },
+          "wall_us_abba_speedup": 3.205762468963587,
+          "wall_us_baab_speedup": 3.0759071095770247,
+          "wall_us_absolute_median_difference_us": 11056.51,
+          "math_us_speedup": 34.85426356589147,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 34.93796042178246,
+            "p10": 34.64007822685789,
+            "p90": 35.028225222466844,
+            "minimum": 34.63076923076923,
+            "maximum": 35.06864274570983
+          },
+          "math_us_abba_speedup": 35.00778452832566,
+          "math_us_baab_speedup": 34.79993898937697,
+          "math_us_absolute_median_difference_us": 10918.0
+        },
+        {
+          "stage": 2,
+          "observed": false,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17234.7395,
+              "p10": 16998.6455,
+              "p90": 17974.9485,
+              "minimum": 16790.208,
+              "maximum": 18742.657
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17224.0105,
+              "p10": 16986.953,
+              "p90": 17960.443,
+              "minimum": 16780.781,
+              "maximum": 18672.76
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 116.4845,
+              "p10": 113.9585,
+              "p90": 193.7765,
+              "minimum": 41.979,
+              "maximum": 387.239
+            },
+            "first_execute_wall_us": 20951.875,
+            "finalize_wrapper_us": 56210.156,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5073.5154999999995,
+              "p10": 4887.1615,
+              "p90": 5496.771000000001,
+              "minimum": 4790.0,
+              "maximum": 7183.073
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5062.4220000000005,
+              "p10": 4878.776,
+              "p90": 5471.5625,
+              "minimum": 4781.979,
+              "maximum": 7141.146
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 117.005,
+              "p10": 115.0005,
+              "p90": 219.14049999999997,
+              "minimum": 111.823,
+              "maximum": 325.729
+            },
+            "first_execute_wall_us": 5905.0,
+            "finalize_wrapper_us": 76285.261,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 33280,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 165664,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 23,
+              "logical_bytes": 140420,
+              "native": 6
+            },
+            "math_us": null,
+            "receipt_window_us": null
+          },
+          "wall_us_speedup": 3.397001448009768,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.3739569477101137,
+            "p10": 3.0950754860610474,
+            "p90": 3.5419250947386995,
+            "minimum": 2.8383357515071017,
+            "maximum": 3.6748696665020373
+          },
+          "wall_us_abba_speedup": 3.4765118420542613,
+          "wall_us_baab_speedup": 3.3139627645029304,
+          "wall_us_absolute_median_difference_us": 12161.224
+        },
+        {
+          "stage": 2,
+          "observed": true,
+          "scalar": {
+            "wall_us": {
+              "samples": 16,
+              "median": 17732.656000000003,
+              "p10": 17428.177,
+              "p90": 18010.86,
+              "minimum": 17249.792,
+              "maximum": 18089.375
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 17705.2605,
+              "p10": 17416.588499999998,
+              "p90": 17960.650999999998,
+              "minimum": 17240.885,
+              "maximum": 18077.188
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 591.4314999999999,
+              "p10": 473.69800000000004,
+              "p90": 648.0465,
+              "minimum": 299.636,
+              "maximum": 803.282
+            },
+            "first_execute_wall_us": 17062.032,
+            "finalize_wrapper_us": 35436.875,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206468,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 338980,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313608,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 12374.0,
+              "p10": 12338.5,
+              "p90": 12391.5,
+              "minimum": 12302,
+              "maximum": 12475
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 13068.5,
+              "p10": 12939.0,
+              "p90": 13164.5,
+              "minimum": 12922,
+              "maximum": 13194
+            }
+          },
+          "hvx": {
+            "wall_us": {
+              "samples": 16,
+              "median": 5518.4635,
+              "p10": 5190.3385,
+              "p90": 6193.021000000001,
+              "minimum": 5093.281,
+              "maximum": 8779.532
+            },
+            "qnn_api_us": {
+              "samples": 16,
+              "median": 5508.047500000001,
+              "p10": 5175.2345000000005,
+              "p90": 6181.6404999999995,
+              "minimum": 5070.781,
+              "maximum": 8742.448
+            },
+            "host_allocation_copy_us": {
+              "samples": 16,
+              "median": 592.7605,
+              "p10": 271.198,
+              "p90": 634.7915,
+              "minimum": 222.969,
+              "maximum": 714.479
+            },
+            "first_execute_wall_us": 5958.49,
+            "finalize_wrapper_us": 40432.709,
+            "memory": {
+              "input_bytes": 66048,
+              "output_bytes": 206532,
+              "native_bytes": 41088,
+              "host_buffer_lower_bound": 339044,
+              "dynamic_kernel_scratch": 0
+            },
+            "graph": {
+              "nodes": 4,
+              "tensors": 27,
+              "logical_bytes": 313672,
+              "native": 6
+            },
+            "math_us": {
+              "samples": 16,
+              "median": 322.0,
+              "p10": 320.0,
+              "p90": 325.5,
+              "minimum": 320,
+              "maximum": 327
+            },
+            "receipt_window_us": {
+              "samples": 16,
+              "median": 968.0,
+              "p10": 853.5,
+              "p90": 1016.5,
+              "minimum": 847,
+              "maximum": 1113
+            }
+          },
+          "wall_us_speedup": 3.2133321168111384,
+          "wall_us_paired_speedup": {
+            "samples": 8,
+            "median": 3.1994039961115432,
+            "p10": 2.7360399151426895,
+            "p90": 3.4015369076728086,
+            "minimum": 2.4787400749525927,
+            "maximum": 3.467225626469596
+          },
+          "wall_us_abba_speedup": 3.287711775164064,
+          "wall_us_baab_speedup": 2.9699882590237943,
+          "wall_us_absolute_median_difference_us": 12214.192500000003,
+          "math_us_speedup": 38.42857142857143,
+          "math_us_paired_speedup": {
+            "samples": 8,
+            "median": 38.4409309030398,
+            "p10": 37.99769585253456,
+            "p90": 38.6043683958082,
+            "minimum": 37.884792626728114,
+            "maximum": 38.65163297045101
+          },
+          "math_us_abba_speedup": 38.37835758996171,
+          "math_us_baab_speedup": 38.47753526441052,
+          "math_us_absolute_median_difference_us": 12052.0
+        }
+      ],
+      "thermal_status": [
+        0,
+        0
+      ],
+      "battery_temperature_c": [
+        36.0,
+        36.0
+      ],
+      "power": [
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        },
+        {
+          "ac": true,
+          "usb": false,
+          "wireless": false
+        }
+      ],
+      "peak_rss_kib": 118656,
+      "observed_alignment_patterns": [
+        "y=0,wq=0,wk=0,wv=0,q=0,k=0,v=0,vector_bytes=128,scratch_bytes=0"
+      ],
+      "process": 3,
+      "app_visible_complete_write": true
+    }
+  ],
+  "explicit_kernel_scratch_bytes": 0,
+  "prepack_bytes": 0,
+  "observed_receipt_extra_bytes": 64,
+  "classification": [
+    "HVX_QKV_CODEGEN_VERIFIED",
+    "HVX_QKV_ORDERED_WORD_IDENTITY_VERIFIED",
+    "HVX_QKV_NUMERICAL_VERIFIED",
+    "HVX_QKV_NATIVE_SEGMENT_VERIFIED",
+    "HVX_QKV_OBSERVER_FREE_VERIFIED",
+    "HVX_QKV_KERNEL_SPEEDUP_VERIFIED",
+    "HVX_QKV_SEGMENT_SPEEDUP_VERIFIED"
+  ],
+  "performance_gates": {
+    "kernel": 1.2,
+    "observer_free_segment": 1.1
+  },
+  "regression": {
+    "fast": "PASS",
+    "host_tests_passed": 15,
+    "new_shape_graphs": 24,
+    "qnn": "PASS",
+    "device_smoke": "PASS",
+    "new_package_ffn2": {
+      "status": "PASS",
+      "executes": 596,
+      "word_mismatches": 0,
+      "accuracy_failures": 0
+    },
+    "muon_w8": {
+      "status": "PASS",
+      "matrices": 114,
+      "total_matrices": 114,
+      "source_commit": "a50da5c3a569d34fb6896c8fcffb3754dc7f2312",
+      "full_parity_max_abs": 1.490116119e-08,
+      "full_parity_worst_relative_l2": 4.40269854e-08,
+      "full_parity_minimum_cosine": 1.0
+    },
+    "legacy_op_names_preserved": 39,
+    "scalar_arithmetic_sources_unchanged": true,
+    "ffn2_arithmetic_instruction_words_preserved": 65
+  },
+  "protected_hashes_verified": 5,
+  "verification_complete": true,
+  "training_updates": 0,
+  "training": "NO-GO",
+  "qkv_wrappers": {
+    "scalar_observed": {
+      "allocframe_operand_bytes": 120,
+      "vector_stack_accesses": 0,
+      "arithmetic_helper_static_call_sites": 0,
+      "unexpected_calls": 0
+    },
+    "scalar_no_receipt": {
+      "allocframe_operand_bytes": 96,
+      "vector_stack_accesses": 0,
+      "arithmetic_helper_static_call_sites": 0,
+      "unexpected_calls": 0
+    },
+    "hvx_observed": {
+      "allocframe_operand_bytes": 152,
+      "vector_stack_accesses": 0,
+      "arithmetic_helper_static_call_sites": 3,
+      "unexpected_calls": 0
+    },
+    "hvx_no_receipt": {
+      "allocframe_operand_bytes": 96,
+      "vector_stack_accesses": 0,
+      "arithmetic_helper_static_call_sites": 3,
+      "unexpected_calls": 0
+    }
+  },
+  "observer_contract": {
+    "no_receipt_internal_operands_observed": false,
+    "no_receipt_dsp_timers": null,
+    "hidden_host_ln_oracle_word_differences_are_not_matmul_word_failures": true,
+    "required_actual_final_word_mismatches": 0
+  }
+}

@@ -65,6 +65,7 @@ def main(symbol='hexatrain_ordered_hvx_ffn2', label='FFN2'):
     }
     (out / 'codegen-audit.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result))
+    return out, disasm
 
 
 if __name__ == '__main__':
