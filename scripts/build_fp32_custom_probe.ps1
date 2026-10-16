@@ -12,6 +12,7 @@ $root=Split-Path -Parent $PSScriptRoot
 $out=Join-Path $root 'build/fp32-custom'
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $manifest=Get-Content (Join-Path $HexagonSdkRoot 'hexagon_sdk.json') -Raw | ConvertFrom-Json
+if($manifest.root.id.version -ne '6.6.0.0'){throw 'PINNED_HEXAGON_SDK_MISMATCH'}
 $tools=@($manifest.root.tools.info | Where-Object {$_.name -eq 'Hexagon Tools'})
 if($tools.Count -ne 1 -or $tools[0].build -ne '19.0.07'){throw 'PINNED_HEXAGON_TOOLS_MISMATCH'}
 if((Get-Content (Join-Path $NdkRoot 'source.properties') -Raw) -notmatch 'Pkg.Revision\s*=\s*26.2.11394342'){throw 'PINNED_NDK_MISMATCH'}
@@ -27,8 +28,14 @@ if($ProbeOnly){
   $relative='host_tests/fp32_custom/'+$file
   if((Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant() -ne $reuse.source_hashes.$relative){throw 'PROBE_ONLY_PACKAGE_OR_OTHER_PROBE_SOURCE_CHANGED'}
  }
+ foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h')){
+  $relative='host_tests/fp32_custom/'+$file
+  if((Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant() -ne $reuse.source_hashes.$relative){throw 'PROBE_ONLY_HVX_PACKAGE_SOURCE_CHANGED'}
+ }
 }else{
-& $hex -std=c++17 -mv81 -O2 -G0 -fPIC -shared -ffp-contract=off -fno-vectorize -fno-slp-vectorize -DPREPARE_DISABLED "-I$inc" "-I$HexagonSdkRoot/incs" "-I$HexagonSdkRoot/incs/stddef" "-I$HexagonSdkRoot/rtos/qurt/computev81/include/qurt" $src -o "$out/libHexaFp32Dsp.so"
+& $hex -std=c++17 -mv81 -mhvx -mhvx-length=128B -mhvx-qfloat -mllvm -enable-xqf-gen=true -mllvm -hexagon-qfloat-mode=strict-ieee -O2 -G0 -fPIC -ffp-contract=off -fno-fast-math -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -c (Join-Path $root 'host_tests/fp32_custom/hvx_ffn2.cpp') -o "$out/hvx_ffn2.o"
+if($LASTEXITCODE){throw 'BLOCKED_HVX_CODEGEN'}
+& $hex -std=c++17 -mv81 -O2 -G0 -fPIC -shared -ffp-contract=off -fno-vectorize -fno-slp-vectorize -DPREPARE_DISABLED "-I$inc" "-I$HexagonSdkRoot/incs" "-I$HexagonSdkRoot/incs/stddef" "-I$HexagonSdkRoot/rtos/qurt/computev81/include/qurt" $src "$out/hvx_ffn2.o" -o "$out/libHexaFp32Dsp.so"
 if($LASTEXITCODE){throw 'CUSTOM_DSP_BUILD_FAILED'}
 & $arm --target=aarch64-linux-android26 -std=c++17 -O2 -fPIC -shared -ffp-contract=off "-I$inc" $src "-L$QairtSdkRoot/lib/aarch64-android" -lQnnHtpPrepare -o "$out/libHexaFp32Host.so"
 if($LASTEXITCODE){throw 'CUSTOM_HOST_BUILD_FAILED'}
@@ -43,6 +50,10 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/layernorm_probe.cpp')){
 }
 }
 $sourceHashes=@{}
+foreach($file in @('hvx_ffn2.cpp','hvx_ffn2_op.h','ordered_ffn2_controls.h','ordered_hvx_probe.h')){
+ $relative='host_tests/fp32_custom/'+$file
+ $sourceHashes[$relative]=(Get-FileHash (Join-Path $root $relative)).Hash.ToLowerInvariant()
+}
 foreach($relative in @('host_tests/fp32_custom/package.cpp','host_tests/fp32_custom/probe.cpp',
  'app/src/main/cpp/qnn/layernorm_stability_reference.h','app/src/main/cpp/qnn/layernorm_redesign_reference.h','host_tests/hvx_rpc/fp32_boundary_fixture.h')){
  $sourceHashes[$relative]=(Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash.ToLowerInvariant()
@@ -66,5 +77,5 @@ if(Test-Path (Join-Path $root 'host_tests/fp32_custom/one_layer_probe.cpp')){
 }
 $identity=@{source_sha=(& git -C $root rev-parse HEAD).Trim();source_hashes=$sourceHashes;binary_hashes=$binaryHashes;
  qairt_build_id=$ExpectedBuildId;hexagon_compiler_sha256=(Get-FileHash $hex).Hash.ToLowerInvariant();
- ndk_compiler_sha256=(Get-FileHash $arm).Hash.ToLowerInvariant();fp_contract='off';vectorization='disabled';architecture='v81'}
+ ndk_compiler_sha256=(Get-FileHash $arm).Hash.ToLowerInvariant();fp_contract='off';vectorization='scalar auto-vectorization disabled; explicit HVX FFN2 separate translation unit';hvx_vector_bytes=128;hvx_fp_mode='strict-ieee';architecture='v81'}
 [IO.File]::WriteAllText("$out/build-identity.json",($identity|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
