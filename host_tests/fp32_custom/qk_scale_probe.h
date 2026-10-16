@@ -6,6 +6,7 @@ constexpr double rawGate=.01,scaleGate=.01,scatterGate=.01;
 inline float scaleValue(){return 1.0f/std::sqrt(float(64/2));}
 inline void receipt(const std::vector<uint32_t>& r,bool qk,const std::vector<one::FV>& x,const std::vector<one::FV>& y,unsigned& last){
  segmentstudy::receipt(r,qk?0x48383116u:0x48383117u,x,y,last);
+ if(!qk)std::printf("frontierscale,received_bits=%08x,head_gradient_order=H0Q_H0K_H1Q_H1K\n",r.at(4104));
 }
 inline std::vector<one::Vec> reference(const std::vector<one::FV>& x,bool qk,bool fp){std::vector<one::Vec> v;
  if(qk)for(unsigned h=0;h<2;++h)v.push_back(one::mm(one::d(x[h]),one::d(x[2+h]),32,32,32,false,true,fp));
@@ -49,6 +50,8 @@ inline std::vector<one::FV> forwardAudit(Forward& g,const orderedqkvstudy::Case&
  else {auto host=mmfixture::ln::anchoredFp32Oracle(c.ln,64);for(auto key:{"dx","dg","db"})bad+=metric(g.name,ci,key,std::string(key)=="dx"?ln.dx:std::string(key)=="dg"?ln.dg:ln.db,one::d(std::string(key)=="dx"?host.dx:std::string(key)=="dg"?host.dg:host.db),decode(o.at(std::string(key)=="dx"?g.dx:std::string(key)=="dg"?g.dg:g.db)),.02);}
  std::vector<one::FV> raw;
  if(g.next!=1&&g.observed){for(unsigned j=0;j<4;++j)require(sameFpWords(x[j],slice(o.at(g.rr),8+j*1024,1024)));for(unsigned h=0;h<2;++h)raw.push_back(slice(o.at(g.rr),4104+h*1024,1024));receipt(o.at(g.rr),true,x,raw,last);}
+ if(g.next==2&&g.tap&&!g.observed)for(unsigned h=0;h<2;++h)raw.push_back(decode(o.at(g.scores[h])));
+ if(g.next==2&&!raw.empty())for(unsigned h=0;h<2;++h){auto target=one::mm(one::split(ideal[0],h),one::split(ideal[1],h),32,32,32,false,true);auto fp=one::mm(one::d(x[h]),one::d(x[2+h]),32,32,32,false,true,true);bad+=metric(g.name,ci,"raw"+std::to_string(h),target,fp,raw[h],.01);}
  for(unsigned h=0;h<2;++h){auto ref=one::mm(one::split(ideal[0],h),one::split(ideal[1],h),32,32,32,false,true);auto id=g.next==2?g.scaled[h]:g.scores[h];auto y=decode(o.at(id));actual.push_back(y);
   if(g.next==2)ref=one::mul(ref,{double(scaleValue())});auto fail=metric(g.name,ci,"out"+std::to_string(h),ref,ref,y,.01);if(g.next==0)bad+=fail;
   if(!x.empty()){auto fp=one::mm(one::d(x[h]),one::d(x[2+h]),32,32,32,false,true,true);auto local=one::mm(one::d(x[h]),one::d(x[2+h]),32,32,32,false,true);if(g.next==0)identity+=words(y,one::f(fp),g.name,ci,"received_ordered");if(g.next==2){if(!raw.empty()){identity+=words(raw[h],one::f(fp),g.name,ci,"raw_received_ordered");local=one::mul(one::d(raw[h]),{double(scaleValue())});fp=one::mul(one::d(raw[h]),{double(scaleValue())},true);}else{local=one::mul(fp,{double(scaleValue())});fp=one::mul(fp,{double(scaleValue())},true);}}metric(g.name+"Local",ci,"out"+std::to_string(h),local,fp,y,.01);}
