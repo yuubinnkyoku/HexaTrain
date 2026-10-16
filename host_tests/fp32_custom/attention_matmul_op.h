@@ -3,7 +3,7 @@
 // or production arithmetic is changed. Observer-free kernels never write receipts.
 namespace attentioncustom {
 constexpr unsigned words=8+4096+2048;
-template<bool Observe> uint32_t dprob(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
+template<bool Observe,unsigned Marker=0x0b> uint32_t dprob(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tensor** out,uint32_t ni,const QHPI_Tensor* const* in){
  static unsigned calls=0;
  if(ni!=4||no!=(Observe?3u:2u))return QHPI_ERROR_FATAL;
  for(unsigned i=0;i<4;++i)if(!mmcustom::matrix(in[i],32,32))return QHPI_ERROR_FATAL;
@@ -16,9 +16,9 @@ template<bool Observe> uint32_t dprob(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tenso
  for(unsigned h=0;h<2;++h){for(unsigned j=0;j<1024;++j)if(!std::isfinite(y[h][j]))return QHPI_ERROR_FATAL;if constexpr(Observe)std::memcpy(r+4104+h*1024,y[h],4096);}
  if constexpr(Observe){
  #ifdef __hexagon__
- r[0]=0x4838310bu;
+ r[0]=0x48383100u+Marker;
  #else
- r[0]=0x4350550bu;
+ r[0]=0x43505500u+Marker;
  #endif
  r[1]=++calls;r[2]=4096;r[3]=2048;r[4]=mathEnd-mathStart;r[5]=81;r[6]=32;r[7]=lncustom::now()-start;}
  return QHPI_SUCCESS;

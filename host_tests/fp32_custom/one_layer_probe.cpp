@@ -12,7 +12,7 @@ void mm(DiagnosticGraph& g,const std::string& name,unsigned a,unsigned b,unsigne
 #include "ln1_graph.h"
 inline bool sameFpWords(const one::FV& a,const one::FV& b){return a.size()==b.size()&&(a.empty()||!std::memcmp(a.data(),b.data(),a.size()*4));}
 struct OneGraph {
- DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0,productReceipt=0,lastProduct=0,dotReceipt=0,centerReceipt=0,finalReceipt=0,fusedReceipt=0,lastDot=0,lastCenter=0,lastFinal=0,lastFused=0;unsigned rawReceipt=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
+ DiagnosticGraph g;bool tap,fused,integrated,produced;std::map<std::string,unsigned> in,out;bool receipts=true;unsigned dpr=0,lastDp=0,productReceipt=0,lastProduct=0,dotReceipt=0,centerReceipt=0,finalReceipt=0,fusedReceipt=0,lastDot=0,lastCenter=0,lastFinal=0,lastFused=0;unsigned scaleReceipt=0;unsigned rawReceipt=0;unsigned fr,br,ar=0,cr,wr,h,inv,dx,res,dc,dw,axis,scale,materialReceipt=0,splitReceipt=0,broadcastReceipt=0;unsigned lastF=0,lastB=0,lastC=0,lastW=0,lastA=0,lastMaterial=0,lastSplit=0,lastBroadcast=0;
  unsigned tensor(const std::string& name,unsigned r,unsigned c,bool terminal=false){auto id=g.tensor(name.c_str(),tap||terminal?QNN_TENSOR_TYPE_APP_READ:QNN_TENSOR_TYPE_NATIVE,{1,1,r,c});out[name]=id;return id;}
  unsigned input(const std::string& name,unsigned r,unsigned c){auto id=g.tensor(("input_"+name).c_str(),QNN_TENSOR_TYPE_APP_WRITE,{1,1,r,c});in[name]=id;return id;}
  unsigned binary(const std::string& name,const char* type,unsigned a,unsigned b,unsigned r,unsigned c,bool terminal=false){auto id=tensor(name,r,c,terminal);g.node(name.c_str(),type,"qti.aisw",{a,b},{id});return id;}
@@ -59,6 +59,7 @@ struct OneGraph {
     if(nextAttention){std::array<unsigned,2> kk,qq;std::vector<unsigned> yy;
      for(unsigned head=0;head<2;++head){auto pr="h"+std::to_string(head)+"_";kk[head]=input(pr+"k",32,32);qq[head]=input(pr+"q",32,32);if(closureMode){yy.push_back(tensor(pr+"dqraw",32,32,closureMode==1));yy.push_back(tensor(pr+"dkraw",32,32,closureMode==1));}else{mat(pr+"dqraw",ds[head],kk[head],32,32,false,false,true);mat(pr+"dkraw",ds[head],qq[head],32,32,true,false,true);}}
      if(closureMode){rawReceipt=g.tensor("raw_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,10248},QNN_DATATYPE_INT_32);auto outputs=yy;outputs.push_back(rawReceipt);g.node("dqdk","RawDQDK","HexaFp32",{ds[0],ds[1],kk[0],kk[1],qq[0],qq[1]},outputs);
+      if(closureMode>=3){std::vector<unsigned> scaled;for(unsigned head=0;head<2;++head)for(unsigned j=0;j<2;++j)scaled.push_back(tensor("h"+std::to_string(head)+(j?"_dk":"_dq"),32,32,closureMode==3));scaleReceipt=g.tensor("scale_receipt",QNN_TENSOR_TYPE_APP_READ,{1,1,1,8201},QNN_DATATYPE_INT_32);auto sx=yy;sx.push_back(scale);auto sy=scaled;sy.push_back(scaleReceipt);g.node("score_scale","BackwardScoreScale","HexaFp32",sx,sy);if(closureMode==4)for(unsigned head=0;head<2;++head)for(unsigned j=0;j<2;++j)mat("scatter"+std::to_string(head*2+j),scaled[head*2+j],selectors[head],32,64,false,true,true);}
       if(closureMode==2)for(unsigned head=0;head<2;++head)for(unsigned j=0;j<2;++j){auto key="h"+std::to_string(head)+(j?"_dk":"_dq");binary(key,QNN_OP_ELEMENT_WISE_MULTIPLY,yy[head*2+j],scale,32,32,true);}
      }
     }
@@ -141,7 +142,9 @@ void accumulation(const std::vector<one::Fixture>& fs,const std::vector<one::FV>
 #include "closure_probe.h"
 #include "ordered_hvx_probe.h"
 #include "ordered_qkv_probe.h"
+#include "qk_scale_probe.h"
 int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one::read("one-layer-inputs.bin");unsigned segmentFailures=0,attentionFailures=0,producerFailures=0;std::vector<one::FV> weights(24);std::vector<std::map<std::string,one::FV>> anchors(24),native(24);
+ if(std::string(argv[1])=="oneQkScaleA"||std::string(argv[1])=="oneQkScaleB"){auto rc=qkscalestudy::run(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneHvx"){auto rc=orderedhvxstudy::run(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneQkvHvx"){auto rc=orderedqkvstudy::run(fs);closeProbe();return rc;}
  if(std::string(argv[1]).rfind("oneClosure",0)==0){auto rc=closurestudy::run(argv[1],fs);closeProbe();return rc;}
