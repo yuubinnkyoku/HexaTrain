@@ -2213,9 +2213,14 @@
     "qnn": "PASS",
     "device_smoke": "PASS",
     "muon_w8": {
-      "status": "BLOCKED_ADB_TRANSPORT"
+      "status": "PASS",
+      "matrices": 114,
+      "total_matrices": 114,
+      "full_parity_max_abs": 1.490116119e-08,
+      "full_parity_worst_relative_l2": 4.40269854e-08,
+      "full_parity_minimum_cosine": 1.0
     }
   },
   "protected_hashes_verified": 5,
-  "verification_complete": false
+  "verification_complete": true
 }

@@ -6,9 +6,8 @@ observer-free精度PASSを確認した。Standalone DSP mathは**37.90–39.56�
 observer-free FFN2→Add→LN1＋local Backwardのexecute wallは**2.69–2.75倍**。
 各processが事前基準1.20倍／1.10倍を満たした。
 
-**必須回帰の全工程完了はBLOCKED。** Device smokeはPASSしたが、直後にADB接続が
-消失し、Muon W8 114/114は今回未実行である。以前のW8結果を流用しない。
-このtransport停止と、成立したFFN2の数値／性能結果を分ける。
+**今回の必須回帰も完了した。** Device smokeと、接続復旧後の新規Muon W8 114/114はPASS。
+先のADB transport停止はprivate履歴へ保持し、以前のW8結果は流用していない。
 Production backendは変更せず、40k→60k／200kは引き続き**NO-GO**。
 
 ## A. Design and scope
@@ -279,7 +278,7 @@ HVX_FFN2_NUMERICAL_VERIFIED、HVX_FFN2_NATIVE_SEGMENT_VERIFIED、
 HVX_FFN2_OBSERVER_FREE_VERIFIED、HVX_KERNEL_SPEEDUP_VERIFIED、
 HVX_SEGMENT_SPEEDUP_VERIFIEDを、それぞれの上記scopeで認定する。
 BLOCKED_HVX_CODEGEN／NUMERICS／INTEGRATION、PERFORMANCE_NOT_PROMOTEDは該当しない。
-W8回帰のtransport停止、35-node機構、full1-layer／19-layer correctnessとproduction速度は未解決。
+35-node機構、full1-layer／19-layer correctnessとproduction速度は未解決。
 
 ## H. Provenance, validation and reproduction
 
@@ -310,16 +309,21 @@ SDK header/manual/manifest hashesと全分布は[公開aggregate](results/ordere
 raw reports、各process ledger、compiler/SDK identity、frozen binaries、pilot、final cohort manifestは
 ignored `build/reports/ordered-fp32-hvx-ffn2/`に保存する。
 
-検証は最終Fast71.3s PASS、Host contract/diagnostic suite PASS、追加Host13/13 PASS、既存shape3920＋
+検証はcohort Fast71.3s／W8 closeout Fast62.9s PASS、Host contract/diagnostic suite PASS、
+追加Host13/13 PASS、既存shape3920＋
 新20 graph ownership PASS、Qnn profile1125.8s PASS、Device smoke80.8s PASS。
 Qnnはpinned SDK、core/API、QNN-enabled build、APK ABI/SDK hash/path/2.47混入を検査した。
 optional inventory不足だけadvisory、fallbackなし。新probeはProbeOnlyでpackage/compiler/SDK/
 source hashesを照合してbuildし、freeze後のpackage/probe再buildは0。
 
-Muon W8 114/114はADB_NO_ONLINE_DEVICEで開始前停止。Device smoke後のtransport障害であり、
-数値FAILやoptimizer回帰とは判定しない。オンライン端末もmDNS connect serviceもなかった。
-無断wake／USB設定変更／endpoint推測／別端末reattachは行わない。接続回復後に同一physical
-identityと全安全条件を再検査して、この必須回帰を完了する必要がある。
+Muon W8は当初ADB_NO_ONLINE_DEVICEで開始前停止したが、ユーザーの接続復旧後に同一physical
+identityと全安全条件を再検査し、BACKGROUND_CORRECTNESSで新規実行した。sourceは
+`8d25b41af47c76b5ed33d8c24da43177593740d9`。固定SDKのHVX Muon有効APKをbuild/auditし、
+**114/114 PASS**、maxAbs `1.490116119e-8`、worst relative L2 `4.40269854e-8`、
+minimum cosine `1`を確認した。RPC successとoutput finiteを別に確認し、fallback=false、
+Activity create/resumeとfocus takeoverは0、thermal0→0、battery35°C→35°Cだった。
+FFN2の最終3 processとbinaryは再実行・再buildせず保持した。transport障害は数値FAILへ
+分類せず、無断wake／USB設定変更／endpoint推測／別端末reattachは行っていない。
 
 初期のDozing／Host容量停止はprivate履歴に保持し、容量回復後に全preflightをやり直した。
 各final runでHost≥20GiB、device≥12GiB、awake、top-resumed、active run不在、thermal/power、
@@ -344,6 +348,7 @@ exact hashとclean treeをprivate closeoutおよび完了回答に記録する�
 .\scripts\build_fp32_custom_probe.ps1 -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143 -HexagonSdkRoot $HexagonSdkRoot -NdkRoot $NdkRoot
 python scripts/audit_ordered_hvx_ffn2.py --hexagon-tools-bin $HexagonToolsBin --package build/fp32-custom/libHexaFp32Dsp.so --private-root build/reports/ordered-fp32-hvx-ffn2
 .\scripts\run_fp32_custom_probe.ps1 -Variant oneHvx -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143 -NdkRoot $NdkRoot
+.\scripts\run_qnn_headless_tests.ps1 -Suite hvx-muon-optimizer-benchmark -TestMode BACKGROUND_CORRECTNESS -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId 2.48.40.260702151143 -HexagonSdkRoot $HexagonSdkRoot
 .\scripts\export_public_ordered_hvx_ffn2.ps1 -FinalCohort -SelfTest -OutputPath docs/results/ordered-fp32-hvx-ffn2-summary.json
 ```
 
