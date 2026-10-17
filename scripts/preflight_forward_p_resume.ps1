@@ -1,7 +1,9 @@
 # Read-only, single-attempt safety preflight. Never wakes, reconnects, installs,
 # stops a process or changes foreground/power policy. Failure ends device work.
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
- [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='',[switch]$SelfTest)
+ [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='',[switch]$SelfTest,
+ # Explicit human authorization is required per invocation. Default gate stays 20GiB.
+ [switch]$UserAuthorizedHostStorageWaiver)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -33,8 +35,12 @@ try {
  $analysis=Get-Content (Join-Path $evidence 'analysis-identity-private.json') -Raw|ConvertFrom-Json
  if($analysis.tests.probability_attribution_test.exit_code -ne 0 -or $analysis.tests.probability_reference_test.exit_code -ne 4){throw 'HOST_ATTRIBUTION_NOT_COMPLETE'}
  $record.gates.host_analysis='PASS';$record.gates.sdk_apk_host='PASS'
- if([IO.DriveInfo]::new([IO.Path]::GetPathRoot($root)).AvailableFreeSpace -lt 20GB){throw 'HOST_STORAGE_HEADROOM_LOW'}
- $record.gates.host_storage='PASS'
+ $record.host_free_bytes=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($root)).AvailableFreeSpace
+ if($record.host_free_bytes -lt 20GB){
+  if(!$UserAuthorizedHostStorageWaiver){throw 'HOST_STORAGE_HEADROOM_LOW'}
+  $record.gates.host_storage='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'
+ }else{$record.gates.host_storage='PASS'}
+ $record.host_storage_waiver_requested=[bool]$UserAuthorizedHostStorageWaiver
  $build=Get-Content (Join-Path $root 'build/fp32-custom/build-identity.json') -Raw|ConvertFrom-Json
  $manifest=Get-Content (Join-Path $HexagonSdkRoot 'hexagon_sdk.json') -Raw|ConvertFrom-Json
  $tools=@($manifest.root.tools.info|Where-Object {$_.name -eq 'Hexagon Tools'})
