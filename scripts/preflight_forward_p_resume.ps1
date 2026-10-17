@@ -13,11 +13,17 @@ function Resolve-ForwardPApkHashState([string]$HashText,[string]$ExpectedHash){
  if($parsed.Groups[1].Value.ToLowerInvariant() -ne $ExpectedHash.ToLowerInvariant()){return 'INSTALLED_APK_HASH_MISMATCH'}
  return 'PASS'
 }
+function Resolve-ForwardPHostStorageState([long]$Bytes,[bool]$ExplicitWaiver){
+ if($Bytes -ge 20GB){return 'PASS'}
+ if($ExplicitWaiver){return 'WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'}
+ return 'BLOCKED'
+}
 if($SelfTest){
  $anchor='a'*64;$other='b'*64
  $cases=@(@{text="$anchor  /data/app/fixture/base.apk";expected='PASS'},@{text="`n$anchor  /data/app/fixture/base.apk`r`n";expected='PASS'},@{text="$($anchor.ToUpperInvariant())  /data/app/fixture/base.apk";expected='PASS'},@{text="$other  /data/app/fixture/base.apk";expected='INSTALLED_APK_HASH_MISMATCH'},@{text='permission denied';expected='INSTALLED_APK_HASH_UNKNOWN'})
  foreach($case in $cases){if((Resolve-ForwardPApkHashState $case.text $anchor) -ne $case.expected){throw 'APK_HASH_STATE_SELFTEST_FAILED'}}
- Write-Host 'forward_p_preflight_selftest=PASS cases=5 device_calls=0'
+ foreach($case in @(@{bytes=20GB;waiver=$false;expected='PASS'},@{bytes=19GB;waiver=$false;expected='BLOCKED'},@{bytes=19GB;waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{bytes=21GB;waiver=$true;expected='PASS'})){if((Resolve-ForwardPHostStorageState $case.bytes $case.waiver) -ne $case.expected){throw 'STORAGE_WAIVER_SELFTEST_FAILED'}}
+ Write-Host 'forward_p_preflight_selftest=PASS cases=9 device_calls=0 default_storage_gate_unchanged=1'
  exit 0
 }
 $root=Split-Path -Parent $PSScriptRoot
@@ -36,10 +42,9 @@ try {
  if($analysis.tests.probability_attribution_test.exit_code -ne 0 -or $analysis.tests.probability_reference_test.exit_code -ne 4){throw 'HOST_ATTRIBUTION_NOT_COMPLETE'}
  $record.gates.host_analysis='PASS';$record.gates.sdk_apk_host='PASS'
  $record.host_free_bytes=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($root)).AvailableFreeSpace
- if($record.host_free_bytes -lt 20GB){
-  if(!$UserAuthorizedHostStorageWaiver){throw 'HOST_STORAGE_HEADROOM_LOW'}
-  $record.gates.host_storage='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'
- }else{$record.gates.host_storage='PASS'}
+ $storageState=Resolve-ForwardPHostStorageState $record.host_free_bytes ([bool]$UserAuthorizedHostStorageWaiver)
+ if($storageState -eq 'BLOCKED'){throw 'HOST_STORAGE_HEADROOM_LOW'}
+ $record.gates.host_storage=$storageState
  $record.host_storage_waiver_requested=[bool]$UserAuthorizedHostStorageWaiver
  $build=Get-Content (Join-Path $root 'build/fp32-custom/build-identity.json') -Raw|ConvertFrom-Json
  $manifest=Get-Content (Join-Path $HexagonSdkRoot 'hexagon_sdk.json') -Raw|ConvertFrom-Json
