@@ -3,8 +3,8 @@
 #include "closure_kernel_test.cpp"
 #include "ordered_ffn2_controls.h"
 int main(){
-    demand(qhpi_init()&&registered==47);
-    demand(info.numOperations==47);
+    demand(qhpi_init()&&registered==49);
+    demand(info.numOperations==49);
     for(unsigned i=0;i<37;++i)demand(std::string(names[i]).find("Hvx")==std::string::npos);
     demand(std::string(names[33])=="FFN2"&&std::string(names[34])=="FFN2NoReceipt");
     demand(std::string(names[37])=="FFN2Hvx"&&std::string(names[38])=="FFN2HvxNoReceipt");

@@ -6,7 +6,7 @@
 #include <stdexcept>
 #define need(b) do { if(!(b)) throw std::runtime_error(std::string("ordered QKV host contract line=")+std::to_string(__LINE__)+" expression="+#b); } while(false)
 int main(){
-    need(qhpi_init()&&registered==47&&info.numOperations==47);
+    need(qhpi_init()&&registered==49&&info.numOperations==49);
     need(std::string(names[23])=="ProjectionQKV"&&std::string(names[24])=="ProjectionQKVNoReceipt");
     need(std::string(names[39])=="ProjectionQKVHvx"&&std::string(names[40])=="ProjectionQKVHvxNoReceipt");
     unsigned calls=0;double worst=0;

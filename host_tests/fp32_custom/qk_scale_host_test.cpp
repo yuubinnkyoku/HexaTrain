@@ -3,7 +3,7 @@
 #undef main
 #include <stdexcept>
 #define need(x) do{if(!(x))throw std::runtime_error("qk_scale_host line="+std::to_string(__LINE__));}while(false)
-int main(int argc,char** argv){need(argc==2);need(qhpi_init()&&registered==47&&info.numOperations==47);
+int main(int argc,char** argv){need(argc==2);need(qhpi_init()&&registered==49&&info.numOperations==49);
  need(std::string(names[11])=="MatMulDProbabilities"&&std::string(names[39])=="ProjectionQKVHvx"&&std::string(names[41])=="ForwardQKRaw"&&std::string(names[43])=="BackwardScoreScale");
  auto fs=upstreamreference::fullUpstream(one::read(argv[1]));unsigned calls=0;float scale=1.f/std::sqrt(float(64/2));uint32_t bits;std::memcpy(&bits,&scale,4);need(bits==0x3e3504f3u);
  for(bool qk:{true,false})for(unsigned ci=0;ci<fs.size()+10;++ci)for(bool obs:{true,false}){auto ref=one::reference(fs[ci%fs.size()],true);std::vector<one::FV>x(5);for(unsigned j=0;j<4;++j)x[j]=qk?fs[ci%fs.size()].v.at("h"+std::to_string(j%2)+(j<2?"_q":"_k")):one::f(ref.at("h"+std::to_string(j/2)+(j%2?"_dkraw":"_dqraw")));x[4]={scale};

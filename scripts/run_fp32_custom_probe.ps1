@@ -2,7 +2,7 @@ param(
  [Parameter(Mandatory=$true)][string]$QairtSdkRoot,
  [Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary','oneFinal','oneBroadcast','oneUpstream','oneAttention','oneLn1','oneObserver','oneSoftmax','oneProjection','oneProducer','oneClosureA','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale')][string]$Variant='Copy'
+ [ValidateSet('Copy','Add','Multiply','Affine','chain','chainTap','reshape','htpAdd','htpMultiply','standardAdd','standardMultiply','lnForward','lnBackward','lnMatrix','lnResidual','lnResidualTap','lnResidualFused','matmul','copyNative','mmDirect','mmBoundary','mmLn2','oneStandard','oneSegment','oneBoundary','oneFinal','oneBroadcast','oneUpstream','oneAttention','oneLn1','oneObserver','oneSoftmax','oneProjection','oneProducer','oneClosureA','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')][string]$Variant='Copy'
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
@@ -35,7 +35,7 @@ if($d.Serial -ne $plan.device_serial_private){throw 'PHYSICAL_IDENTITY_MISMATCH'
 Assert-PhoneLmPhysicalDevice -Adb $adb -Device $d.Endpoint
 Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
 Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
-if($Variant -in @('oneBroadcast','oneUpstream','oneAttention','oneLn1','oneObserver','oneSoftmax','oneProjection','oneProducer','oneClosureA','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale')){
+if($Variant -in @('oneBroadcast','oneUpstream','oneAttention','oneLn1','oneObserver','oneSoftmax','oneProjection','oneProducer','oneClosureA','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')){
  $awake=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','dumpsys','power')
  if($awake.Text -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN'}
  $activity=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','dumpsys','activity','activities')
@@ -55,7 +55,7 @@ if($line.Count -ne 1 -or [long](($line[0] -split '\s+')[3])*1024L -lt 12GB){thro
 $research=$Variant -match '^ln|^matmul|^copyNative|^mm'
 $executable=if($Variant -match '^one'){'one_layer_probe'}elseif($research){'layernorm_probe'}else{'fp32_probe'}
 $id='customfp32-'+[guid]::NewGuid().ToString('N')
-$reportBase=if($Variant -eq 'oneProbabilityScale'){'g1-fp32-forward-attention-probability-closure'}elseif($Variant -in @('oneQkScaleA','oneQkScaleB','oneProbabilityScale')){'g1-fp32-qk-score-scale-frontier'}elseif($Variant -eq 'oneQkvHvx'){'ordered-fp32-hvx-qkv'}elseif($Variant -eq 'oneHvx'){'ordered-fp32-hvx-ffn2'}elseif($Variant -match '^oneClosure'){'g1-fp32-segment-closure'}elseif($Variant -in @('oneSoftmax','oneProjection','oneProducer')){'g1-fp32-softmax-ln1-projection'}elseif($Variant -in @('oneAttention','oneLn1','oneObserver')){'g1-fp32-attention-ln1-frontier'}elseif($Variant -in @('oneBroadcast','oneUpstream')){'g1-fp32-broadcast-upstream-frontier'}elseif($Variant -match '^one'){'g1-one-layer-fp32-backward'}elseif($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
+$reportBase=if($Variant -in @('oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')){'g1-forward-p-numerical-attribution-safe-resume'}elseif($Variant -in @('oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')){'g1-fp32-qk-score-scale-frontier'}elseif($Variant -eq 'oneQkvHvx'){'ordered-fp32-hvx-qkv'}elseif($Variant -eq 'oneHvx'){'ordered-fp32-hvx-ffn2'}elseif($Variant -match '^oneClosure'){'g1-fp32-segment-closure'}elseif($Variant -in @('oneSoftmax','oneProjection','oneProducer')){'g1-fp32-softmax-ln1-projection'}elseif($Variant -in @('oneAttention','oneLn1','oneObserver')){'g1-fp32-attention-ln1-frontier'}elseif($Variant -in @('oneBroadcast','oneUpstream')){'g1-fp32-broadcast-upstream-frontier'}elseif($Variant -match '^one'){'g1-one-layer-fp32-backward'}elseif($Variant -match '^mm'){'htp-fp32-custom-matmul-ln2'}elseif($research){'htp-fp32-layernorm-matmul'}else{'htp-fp32-custom-consumer'}
 $report=Join-Path $root "build/reports/$reportBase/$id"
 [IO.Directory]::CreateDirectory($report)|Out-Null
 & (Join-Path $PSScriptRoot 'audit_qnn_apk.ps1') -ApkPath (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$report/apk-audit.txt" *> "$report/apk-audit-console.txt"
@@ -73,13 +73,13 @@ if($Variant -match '^one'){
  if((Get-FileHash -LiteralPath $fixture).Hash.ToLowerInvariant() -ne $fixtureIdentity.sha256){throw 'ONE_LAYER_FIXTURE_MISMATCH'}
  $files+=$fixture
 }
-if($Variant -in @('oneUpstream','oneLn1','oneProjection','oneProducer','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale')){
+if($Variant -in @('oneUpstream','oneLn1','oneProjection','oneProducer','oneClosureB','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')){
  $ln1Fixture=Join-Path $root 'build/reports/g1-fp32-broadcast-upstream-frontier/ln1-parameters.bin'
  $ln1Identity=Get-Content (Join-Path $root 'build/reports/g1-fp32-broadcast-upstream-frontier/ln1-fixture-identity.json') -Raw|ConvertFrom-Json
  if((Get-FileHash -LiteralPath $ln1Fixture).Hash.ToLowerInvariant() -ne $ln1Identity.sha256){throw 'LN1_FIXTURE_IDENTITY_MISMATCH'}
  $files+=$ln1Fixture
 }
-if($Variant -in @('oneLn1','oneProducer','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale')){
+if($Variant -in @('oneLn1','oneProducer','oneClosureC','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')){
  $producer=Join-Path $root 'build/reports/g1-fp32-attention-ln1-frontier/ln1-producers.bin'
  $producerIdentity=Get-Content (Join-Path $root 'build/reports/g1-fp32-attention-ln1-frontier/producer-fixture-identity.json') -Raw|ConvertFrom-Json
  if((Get-FileHash -LiteralPath $producer).Hash.ToLowerInvariant() -ne $producerIdentity.sha256){throw 'PRODUCER_FIXTURE_IDENTITY_MISMATCH'}
@@ -132,10 +132,10 @@ $ledger=[ordered]@{source_sha=(& git -C $root rev-parse HEAD).Trim();build=$buil
 [IO.File]::WriteAllText("$report/identity-private.json",($ledger|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 if($takeovers){throw 'FOCUS_TAKEOVER'}
 $stdout=Get-Content "$report/stdout.txt" -Raw
-if($stdout -match '(?m)^control_nonfinite,' -and $Variant -ne 'oneLn1'){throw 'NONFINITE_CONTROL_OUTSIDE_LN1_DIAGNOSTIC'}
+if($stdout -match '(?m)^control_nonfinite,' -and $Variant -notin @('oneLn1','oneProbabilityMask','oneProbabilitySoftmax')){throw 'NONFINITE_CONTROL_OUTSIDE_LN1_DIAGNOSTIC'}
 # Standard LN1 negative controls may be nonfinite and remain accuracy FAIL.
 # Required Custom outputs still fail closed inside DiagnosticGraph::run.
 if($stdout -notmatch '(?m)^summary,' -or $stdout -match '(?m)^(?!control_nonfinite,)(?:\w*RECEIPT_FAIL|\w*NONFINITE\w*|INPUT_MUTATION)'){throw 'CUSTOM_PROBE_INCOMPLETE_OR_UNSAFE'}
 Write-Host "variant=$Variant exit=$($process.ExitCode) private_report=$report"
 Select-String -Path "$report/stdout.txt" -Pattern '^summary,|^raw_copy,|^result,' | ForEach-Object {$_.Line}
-if($Variant -notin @('standardAdd','standardMultiply','htpAdd','htpMultiply','matmul') -and $process.ExitCode -ne 0){throw 'CUSTOM_ACCURACY_NOT_ESTABLISHED'}
+if($Variant -notin @('standardAdd','standardMultiply','htpAdd','htpMultiply','matmul','oneProbabilitySoftmax') -and $process.ExitCode -ne 0){throw 'CUSTOM_ACCURACY_NOT_ESTABLISHED'}

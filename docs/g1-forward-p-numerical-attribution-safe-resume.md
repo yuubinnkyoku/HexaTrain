@@ -481,3 +481,51 @@ not performed while awaiting the reply, in accordance with the requested
 safety-failure stop. The candidate still has zero device executions; Scale,
 Mask, Softmax, HVX/W8 regression and device cohort remain NOT RUN. The Host
 nine-predicate failure, original thresholds and training NO-GO remain unchanged.
+
+### Authorized APK replacement and first numerical pilot
+
+The user explicitly authorized data-preserving APK replacement and continuation.
+A fresh preflight distinguished a genuine installed-hash mismatch. The existing
+verified cached APK helper installed the audited APK with `pm install -r`;
+installed hash then matched. No app was launched, no data clear/permission/UI
+change occurred, and the installation monitor recorded zero focus takeovers.
+A further complete read-only preflight passed all gates before the probe.
+
+The original47-op candidate then executed `oneProbabilityScale`. Its partial
+records contain passing standalone and native Scale checks, but the combined
+pilot continued into the standard Mask negative control. Standard Mask failed
+on core inputs. At the large-magnitude control it returned nonfinite output;
+the strict diagnostic exit was followed by process exit139 without normal
+context/device/backend teardown. **This is a failed pilot, not a completed
+Scale certification or a final cohort.** Its binary and logs are frozen privately.
+
+The next bounded candidate separates Scale, Mask and standard local Softmax
+processes. Existing `allowNonfiniteControl` is used only for explicitly labelled
+standard negative graphs, which retain FAIL and their original output words;
+Custom graphs retain strict finite/poison/canary/input/API checks. The Mask
+negative control is no longer able to abort Scale's otherwise separate process.
+
+Because standard Mask failure was measured, the conditional mask path reuses
+the existing **AddNoReceipt arithmetic body verbatim**. A paired diagnostic
+wrapper calls it for H0/H1, shares one immutable source mask and owns a separate
+receipt/counter. It never updates the old generic Add global counter. It adds
+`ForwardMaskAdd`/`ForwardMaskAddNoReceipt` after the unchanged47-name prefix;
+existing operation contracts and arithmetic bodies are preserved. Receipt5128
+words contain3072 input and2048 output words plus8 header words; DSP marker is
+`0x48383119`. Shapes are three `[1,1,32,32]` inputs and two such outputs.
+The wrapper verifies the exact source-mask bits and rejects overlap/nonfinite
+input. It is diagnostic-only and supports synchronous single graph execution;
+no concurrent-execute or production integration claim is made.
+
+Gates remain fixed: all44 core cases require local Mask maxAbs≤.001 plus full
+FP32 Add word identity; native allowed/future budgets are .01/.011. All56
+standalone cases require arithmetic identity, finite output and complete writes.
+The existing large-magnitude stress is retained with separately reported double
+error; unavoidable FP32 Add rounding there does not redefine the core gate.
+Standard local Softmax uses all44 source cases plus the existing12 controls,
+stable double reference on the same received FP32 masked input, element1e-6,
+row2e-6, finite/nonnegative and source-conditioned causal invariants. At arbitrary
+very large scores a finite -10000 mask need not suppress every future position;
+the reference uses that exact expression, without substituting -inf or clipping.
+Local Softmax success cannot cancel the original cumulative nine failures or
+authorize P→Backward accuracy certification.
