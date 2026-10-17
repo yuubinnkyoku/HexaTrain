@@ -24,7 +24,7 @@ $flags=@('-std=c++17','-mv81','-O2','-G0','-ffp-contract=off','-fno-fast-math','
 $asm=Get-Content "$out/selective.s" -Raw
 $ir=Get-Content "$out/selective.ll" -Raw
 if($asm -notmatch 'dfadd\(' -or $asm -notmatch 'dfmpyfix\(' -or $asm -notmatch 'convert_sf2df' -or $asm -notmatch 'convert_df2sf' -or $ir -match 'llvm\.fma|fadd fast|fmul fast'){throw 'CODEGEN_CONTRACT_FAILED'}
-$hashes=@{};foreach($file in @('selective.s','selective.ll','selective.o','disassembly-private.txt','undefined-private.txt')){$hashes[$file]=(Get-FileHash "$out/$file").Hash.ToLowerInvariant()}
+$hashes=@{};foreach($file in @('selective.s','selective.ll','selective.o','selective.su','disassembly-private.txt','undefined-private.txt')){$hashes[$file]=(Get-FileHash "$out/$file").Hash.ToLowerInvariant()}
 $libroot=Join-Path $HexagonSdkRoot 'tools/HEXAGON_Tools/19.0.07/Tools/target/hexagon/lib/v81'
 $libs=@{};foreach($name in @('libm.a','libgcc.a','libc.a')){
  $lib=Join-Path $libroot $name

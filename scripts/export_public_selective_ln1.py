@@ -3,6 +3,15 @@ import argparse, collections, copy, hashlib, json, math, pathlib, re, subprocess
 
 GATES={"p_maxAbs":1e-6,"row_error":2e-6,"ds_bound":.00025,"dv_bound":.001,"ds_actual":.002,"dv_actual":.01}
 MASKS=[0,1,2,4,3,5,6,7]
+SCHEMAS={
+    "case":set("kind candidate set reference forward head p_maxAbs rms row_error coordinate".split()),
+    "pair":set("kind candidate set reference forward head gradient ds_signed dv_signed ds_fp_actual dv_fp_actual ds_bound dv_bound bound_coordinate signed_t absolute_t bound_term1 bound_term2 e_at_bound p_at_bound dp_at_bound signed_at_bound dp_error_cosine".split()),
+    "summary":set("kind candidate set reference pairs p_maxAbs row_error ds_bound dv_bound ds_signed dv_signed ds_actual dv_actual p_fail row_fail ds_fail dv_fail actual_fail failures unique_failed_pairs joint_pass".split()),
+    "saved_ln":set("kind candidate set forward y xhat inverse dx dg db saved_affine_replay_delta representation_backward_gate".split()),
+    "consistency":set("kind candidate set anchor_word_mismatches saved_affine_replay_word_mismatches saved_qk_word_mismatches local_qk_gradient_error local_qk_pairs local_qk_gate".split()),
+    "completed":set("kind dsp_execution confirmation".split()),
+    "actual_ln_backward":set("kind mask set cases y xhat inverse dx dg db reconstruction_maxAbs reconstruction_word_mismatches saved_inverse_xhat_replay_maxAbs saved_inverse_xhat_replay_word_mismatches backward_gate input_mutation canary complete_finite dsp_execution".split())}
+def check_schema(x):require(x.get("kind") in SCHEMAS and set(x)==SCHEMAS[x["kind"]],"unapproved record fields")
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def read(p):return json.loads(pathlib.Path(p).read_text(encoding="utf-8-sig"))
 def records(p):
@@ -40,7 +49,7 @@ def analyze(p,model):
     groups=collections.defaultdict(lambda:{"case":[],"pair":[],"summary":None})
     saved=[];consistent=[];same=[]
     for x in records(p):
-        finite(x);k=x["kind"]
+        check_schema(x);finite(x);k=x["kind"]
         if k in ("case","pair","summary"):
             if x["set"]=="same_frozen":same.append(x);continue
             key=(x["candidate"],x["set"],x["reference"])
@@ -78,7 +87,7 @@ def cost(mask):
         "conversion_note":"Actual static conversion sites and spills in codegen; source double center[64] includes float->double->float in unselected paths; compiler removes many. Dynamic counts depend on branches and are not equated to source casts.","qnn_launches":"LN1 + mixed QKV + paired QK = 3 proposed; split QK/V = 4; no graph built"}
 
 def codegen(root):
-    root=root/"codegen-complete"
+    root=root/"codegen-verified"
     ident=read(root/"identity-private.json")
     for name,d in ident["outputs"].items():require(sha(root/name)==d,"codegen hash")
     asm=(root/"selective.s").read_text(encoding="utf-8-sig")
@@ -92,6 +101,9 @@ def codegen(root):
         funcs.append({"function":label,"static_dfadd_sites":len(re.findall(r"dfadd\(",body)),"static_df_partial_multiply_sites":len(re.findall(r"dfmpy(?:fix|ll|lh|hh)\(",body)),"static_sf2df_sites":body.count("convert_sf2df"),"static_df2sf_sites":body.count("convert_df2sf"),"folded_spill_sites":body.count("Folded Spill"),"folded_reload_sites":body.count("Folded Reload"),"calls":sorted(set(re.findall(r"\bcall\s+([A-Za-z0-9_]+)",body)))})
     require(len(funcs)==10,"all actual arithmetic functions")
     require(not re.search(r"llvm\.fma|fadd fast|fmul fast",(root/"selective.ll").read_text()),"strict codegen")
+    stack=(root/"selective.su").read_text(encoding="utf-8-sig")
+    for mask in range(8):
+        require(re.search(r"_ZN9selective2lnILj"+str(mask)+r"E[^\t]*\t"+str(568 if mask in (3,7) else 560)+r"\tstatic",stack),"LN static stack")
     require(sha(root/"link-private.txt")==ident["link_log_sha256"] and sha(root/"link-explicit-private.txt")==ident["explicit_link_log_sha256"],"link evidence")
     return {"source_commit":ident["source_commit"],"compiler_sha256":ident["compiler_sha256"],"source_sha256":ident["source_sha256"],"arithmetic_sha256":ident["arithmetic_sha256"],"sdk_manifest_sha256":ident["sdk_manifest_sha256"],"flags":ident["flags"],"output_hashes":ident["outputs"],"functions":funcs,"runtime_library_hashes":ident["runtime_library_hashes"],"pic_archive_hashes":ident["pic_archive_hashes"],"static_no_undefined_link_exit":ident["static_no_undefined_link_exit"],"explicit_pic_archive_link_exit":ident["explicit_pic_archive_link_exit"],"link_log_sha256":ident["link_log_sha256"],"explicit_link_log_sha256":ident["explicit_link_log_sha256"],"runtime_linkage_verified":False,"latency_measured":False,"native_float64_required":False}
 
@@ -119,7 +131,9 @@ def export(root,repo):
             if s["candidate"] in ("S2","S7"):require(s["joint_pass"],"selected/anchor joint contract")
     saved_id=read(root/"host/saved-final-identity-private.json");require(saved_id["exit_code"]==0 and sha(root/"host/saved-final.jsonl")==saved_id["log_sha256"] and sha(root/"host/selective_ln1_saved_final.exe")==saved_id["exe_sha256"],"actual saved harness identity")
     saved=list(records(root/"host/saved-final.jsonl"));require(len(saved)==16,"saved coverage")
-    for s in saved:require(s["backward_gate"] and s["dx"]<=.02 and s["dg"]<=.02 and s["db"]<=.02 and s["complete_finite"] and s["input_mutation"]==0,"actual saved gate")
+    for s in saved:
+        check_schema(s);finite(s);require(s["backward_gate"] and s["dx"]<=.02 and s["dg"]<=.02 and s["db"]<=.02 and s["complete_finite"] and s["input_mutation"]==0,"actual saved gate")
+    require(set(saved_id)=={"source_commit","exe_sha256","log_sha256","exit_code"},"saved manifest allow-list")
     baseline=read(root/"baseline/analysis-identity-private.json")
     require(baseline["tests"]["probability_reference_test"]["exit_code"]==4,"old expected fail")
     legacyhash=sha(root/"baseline/attribution.jsonl");require(legacyhash=="c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7","original 9/R0-R5 unchanged")
@@ -135,6 +149,12 @@ def export(root,repo):
         p=root/(profile.lower()+"-profile.txt");text=p.read_text(encoding="utf-8-sig")
         require(re.search(r"total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$",text),"profile incomplete "+profile)
         profiles[profile]={"status":"PASS","log_sha256":sha(p)}
+    sdk=(root/"sdk-audit-final.txt").read_text(encoding="utf-8-sig")
+    for token in ("expected_build_id_match=true","qnn_core_headers_present=true","qnn_required_phone_libraries_present=true","resolved_build_id=2.48.40.260702151143"):require(token in sdk,"SDK audit")
+    apk=(root/"apk-audit-final.txt").read_text(encoding="utf-8-sig")
+    for token in ("status=SUCCESS","forbidden_2_47_strings=false","host_sdk_path_present=false"):require(token in apk,"APK audit")
+    profiles["SDK"]={"core":"PASS","optional_inventory":"ADVISORY_EXIT_3","log_sha256":sha(root/"sdk-audit-final.txt")}
+    profiles["existing_APK"]={"status":"SUCCESS","log_sha256":sha(root/"apk-audit-final.txt")}
     initial=read(root/"initial-private.json")
     for p,d in initial["protected"].items():require(sha(repo/p)==d,"protected artifact")
     for p,d in initial["previous_build"]["source_hashes"].items():require(sha(repo/p)==d,"old DSP source")
@@ -157,6 +177,10 @@ def selftest():
     try:validate_group(cases,pairs[:-1],s)
     except ValueError:n+=1
     else:raise ValueError("accepted missing pair")
+    valid={"kind":"summary","candidate":"S0","reference":"source",**s};check_schema(valid)
+    try:check_schema({**valid,"raw_tensor":[1,2]})
+    except ValueError:n+=1
+    else:raise ValueError("accepted raw tensor field")
     print("allowlist_selftest=PASS rejected_corruptions="+str(n)+" allocation_vs_actual_gate_separate=1")
 
 if __name__=="__main__":
