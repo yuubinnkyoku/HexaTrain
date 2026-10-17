@@ -511,7 +511,7 @@
     "old_contract": "FAIL",
     "analysis_suite": "PASS"
   },
-  "analysis_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+  "analysis_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
   "host_compiler_sha256": "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a",
   "host_reproduction": {
     "kind": "ORIGINAL_HOST_ONLY_REPRODUCTION",
@@ -520,14 +520,14 @@
     "executable_sha256": "23ff043ddfd9543fa89a3e13e1c5c215e6c577498185f2d95d837e0301f1058f",
     "current_candidate_attribution_log_matches": true
   },
-  "compiled_device_candidate_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
-  "device_tested_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+  "compiled_device_candidate_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
+  "device_tested_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
   "binary_sha256": {
-    "fp32_probe": "2a06c253a7c097eeeaa93fed9ed872195ea4f1b4583bd31acd2b0d170a8b4596",
+    "libHexaFp32Host.so": "4322bded8951959f4ca37840a638fc6332e7cc03b45b8dd8ab44fe3646df81e9",
     "one_layer_probe": "9726ea13adce1ce4cb3684ad7ae28d8eff3b9011e8a75909a1093978097603f2",
+    "fp32_probe": "2a06c253a7c097eeeaa93fed9ed872195ea4f1b4583bd31acd2b0d170a8b4596",
     "layernorm_probe": "b41b1012ec7026497f06294a9351eaf14db864a15ca0a8b54dcb19015eef4baf",
-    "libHexaFp32Host.so": "f84d18e147d29d05ea1d59bfabae433d4502a38b1a9f64c0a8a17cc43502b3a3",
-    "libHexaFp32Dsp.so": "71d249b192c8495249d4c23b484c0cd2c87f8e517ab2cb0f33cd7a7152559208"
+    "libHexaFp32Dsp.so": "10770ea36f8c994462377e5bce68e4d8619befc7576ddf21cb61d41fd2ad2857"
   },
   "qairt_build_id": "2.48.40.260702151143",
   "qnn_api": "2.37.0",
@@ -566,7 +566,7 @@
     "oneProbabilityScale": {
       "independent_processes": 3,
       "ordered_numerical_digest": "995556389700a88f309c8f04b57f5b9390646f14e1d16b37e77a2094ece0d7d1",
-      "execution_source_commit": "ff6cff8fc56eb7aed78b0eb07edf077e5059dcac",
+      "execution_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
       "api_calls": 596,
       "api_success": true,
       "teardown": true,
@@ -578,7 +578,7 @@
       "finite": true,
       "cpu_fallback": 0,
       "focus_takeover_count": 0,
-      "maximum_battery_temperature_c": 37.0,
+      "maximum_battery_temperature_c": 34.0,
       "maximum_thermal_status": 0,
       "external_power": true,
       "standalone_core_maxAbs": 4.76768263979e-07,
@@ -587,7 +587,7 @@
     "oneProbabilityMask": {
       "independent_processes": 3,
       "ordered_numerical_digest": "542349d60441d3bf81485512608794e7c10044d3fe0e42304c551d01530bfb46",
-      "execution_source_commit": "ff6cff8fc56eb7aed78b0eb07edf077e5059dcac",
+      "execution_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
       "api_calls": 554,
       "api_success": true,
       "teardown": true,
@@ -599,7 +599,7 @@
       "finite": true,
       "cpu_fallback": 0,
       "focus_takeover_count": 0,
-      "maximum_battery_temperature_c": 37.0,
+      "maximum_battery_temperature_c": 34.0,
       "maximum_thermal_status": 0,
       "external_power": true,
       "standard_failed_predicates": 176,
@@ -613,7 +613,7 @@
     "oneProbabilityP": {
       "independent_processes": 3,
       "ordered_numerical_digest": "e08ed25c124bf1a10c629a8b18d3b5129de53395759bbfaaaf2d0f2f42ac3c82",
-      "execution_source_commit": "ff6cff8fc56eb7aed78b0eb07edf077e5059dcac",
+      "execution_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
       "api_calls": 501,
       "api_success": true,
       "teardown": true,
@@ -625,7 +625,7 @@
       "finite": true,
       "cpu_fallback": 0,
       "focus_takeover_count": 0,
-      "maximum_battery_temperature_c": 37.0,
+      "maximum_battery_temperature_c": 34.0,
       "maximum_thermal_status": 0,
       "external_power": true,
       "local_maxAbs": 2.77010371863e-07,
@@ -669,6 +669,17 @@
       "teardown": true,
       "formal_three_process_claim": false
     }
+  },
+  "receipt_source_fix": {
+    "old_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+    "new_source_commit": "65148e19237b162da14042b500892ef5716e9b8d",
+    "changed_source_paths": [
+      "host_tests/fp32_custom/forward_softmax_op.h"
+    ],
+    "math_expressions_changed": false,
+    "receipt_layout_changed": false,
+    "previous_cohort_reused": false,
+    "source_rule": "https://eel.is/c++draft/dcl.type.cv#5"
   },
   "validation": {
     "Fast": "PASS",

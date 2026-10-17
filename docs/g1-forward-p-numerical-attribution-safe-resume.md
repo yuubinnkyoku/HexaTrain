@@ -27,7 +27,7 @@ Initial Host attribution changed no DSP arithmetic. Subsequent measured standard
 Mask/Softmax failures justified bounded diagnostic additions described below.
 Production builders, existing arithmetic bodies and HVX kernels remain unchanged.
 
-Current51-op candidate source: `ecbe619e860d4a897815d1d5268fe66b680df57b`.
+Final51-op candidate source: `65148e19237b162da14042b500892ef5716e9b8d`.
 Three independent processes per variant now verify Scale, reused Custom Mask and
 Custom local Softmax on this binary. Native LN1-origin P still fails the unchanged
 cumulative contract. The intervening ADB transport stop was preserved and resolved
@@ -36,8 +36,8 @@ only after the user's manual reconnection confirmation. Current numerical blocke
 
 | Current artifact | SHA256 |
 | --- | --- |
-| DSP package | `71d249b192c8495249d4c23b484c0cd2c87f8e517ab2cb0f33cd7a7152559208` |
-| Host package | `f84d18e147d29d05ea1d59bfabae433d4502a38b1a9f64c0a8a17cc43502b3a3` |
+| DSP package | `10770ea36f8c994462377e5bce68e4d8619befc7576ddf21cb61d41fd2ad2857` |
+| Host package | `4322bded8951959f4ca37840a638fc6332e7cc03b45b8dd8ab44fe3646df81e9` |
 | one-layer probe | `9726ea13adce1ce4cb3684ad7ae28d8eff3b9011e8a75909a1093978097603f2` |
 
 Source audit reconfirmed rank2 Q/K `[32,32]`, QK transpose flags false/true;
@@ -221,6 +221,16 @@ is unavailable.** No checkpoint was decoded to extend the set.
 Matched sensitivity is much smaller, but the same P element failure persists,
 and the Cartesian FAIL remains part of the original robustness contract.
 
+The maximum signed **P-only** dScores perturbation over all original R5 Cartesian
+pairs is2.90578493277849e-4 atForward21/H1/gradient9, already above the2.5e-4
+allocation. This is a different combination from the largest conservative bound
+(Forward16/H1/gradient9). Thus bound conservatism alone cannot explain away every
+allocation failure. R4, with independently evaluated ideal double Softmax on
+the actual FP32 masked input, still has signed P-only error2.91163815433038e-4;
+R2 already has2.85016061980059e-4. Merely tightening the bound or improving exp/
+normalization cannot certify the existing upstream path under the old allocation.
+These are original Host counterfactual results, not new DSP backward executions.
+
 ## E. Contract judgment
 
 The original gates are unchanged: P1e-6; double row sum2e-6; P-induced dScores
@@ -231,8 +241,9 @@ The original1/8 dScores and1/10 dValue allocations reserve consumer/other-input
 rounding headroom. They guarantee a conservative P-error contribution bound
 for the frozen Cartesian inputs, not a measured training-quality threshold.
 The uniform P box is insufficient; the componentwise check is necessary under
-that registered contract. No mathematical or implementation defect was found
-that would justify changing the old FAIL. The Host exp model limitation is
+that registered contract. No defect in the joint-contract formulas/reference indexing was found that
+would justify changing the old FAIL. A separate receipt qualification fix is
+documented in J; it does not explain or remove the original Host nine. The Host exp model limitation is
 explicitly retained, not silently replaced by another reference.
 
 Three distinct answers: Host local Softmax on correct FP32 masked input is
@@ -271,7 +282,7 @@ active-run absence, Host/device free-space minima, SDK/compiler/package/fixture/
 protected identities, awake/non-target top and power/thermal gates passed.
 All nine completed QNN API/teardown successfully, with required Custom outputs
 finite, input mutation0, complete writes, poison/canary0, DSP receipts, fallback0
-and focus takeovers0. Maximum battery temperature37°C and thermal status0 were
+and focus takeovers0. Maximum battery temperature34°C and thermal status0 were
 recorded before/after these processes; external power was present.
 
 | Target | Current51-op measured result |
@@ -378,8 +389,11 @@ unchanged expected original P exit4. The graph audit covered80 constructions.
 Existing Scalar/HVX word, LN, HeadSplit, Multiply/Softmax-backward Host contracts
 remain intact. Broad Host PASS does not override the targeted P failure.
 
-Current broad Host passed337.0s; Qnn passed357.5s including required core/build-ID,
-shape correctness, QNN-enabled APK and ABI/hash/path/2.47 audit. Optional SDK
+Final-source broad Host passed353.6s; Qnn passed339.0s including required core/build-ID,
+shape correctness, QNN-enabled APK and ABI/hash/path/2.47 audit. The existing
+optional W8 library packaging was retained explicitly for this Qnn build, with
+the pinned Hexagon root; Host APK bytes remained identical to the already
+verified install. This did not select a production training backend. Optional SDK
 inventory advisory did not replace required core checks. Final Fast completion
 is independently validated in the public aggregate.
 
@@ -388,7 +402,7 @@ oneQkvHvx (Scalar/HVX QKV), oneQkScaleA, oneQkScaleB and oneSoftmax (LN2/Softmax
 backward, including inherited separate/fused controls). They used the unchanged
 final package/probe, not historical results or Forward-produced P for backward.
 
-Device profile passed78.5s. Fresh Muon W8 achieved114/114, maxAbs1.490116119e-8,
+Final-source Device profile passed87.8s. Fresh Muon W8 achieved114/114, maxAbs1.490116119e-8,
 worst relative L2 4.40269854e-8, minimum cosine1, RPC success, finite outputs and
 fallback=false. This is the separate existing synthetic W8 component's fresh
 regression alongside this candidate, not a claim that the QHPI package implements
@@ -400,8 +414,8 @@ immediately before execution, during long execution and after completion.
 Device/W8 explicitly used it, with bounded180-second instrumentation timeout.
 Seven synthetic unsafe conditions were rejected without device calls; Fast
 passed. No UI/wake/policy/permission manipulation was introduced. Device/W8
-recorded before/after guard PASS, thermal status0, battery temperatures36°C/35°C
-respectively, and zero focus takeovers.
+recorded before/after guard PASS, thermal status0, battery temperature34°C for
+both suites, and zero focus takeovers.
 
 Each final variant has three complete independent processes and one ordered
 numerical digest; timings, IDs, receipt counters and standard-negative values
@@ -452,7 +466,7 @@ proposal; none is adopted or fitted here.
 |7| Actual gradients? Original Host and current device-P-conditioned Host gradients pass .002/.01. Device backward on produced P is not executed. |
 |8| Matched vs Cartesian? Same-frozen-fixture sensitivity is lower; actual training-state matching unavailable. Native same-fixture ds-bound2.48055e-5; Cartesian FAIL and P element FAIL remain. |
 |9| Old contract? FAIL, nine original predicates retained. Native four-mode diagnosis also fails nine per mode. |
-|10| Formula/indexing bug? None found; signed perturbation/bounds independently checked. Old Host exp model is a documented boundary, not overwritten. |
+|10| Joint-contract formula/indexing bug? None found. A separate volatile receipt-copy issue was fixed and fully retested; it does not remove the nine Host failures. Old Host exp model remains documented. |
 |11| V2? No adopted/proposed numeric threshold. Future theory, independent fixtures, prospective registration and safeguards are required. |
 |12| Awake safety? PASS for all executed final/regression processes; earlier transport stop preserved and manually resolved. |
 |13| New Scale DSP? PASS standalone/native/all observer modes, three processes. |
@@ -480,14 +494,17 @@ Original committed Host analysis snapshot:
 `748c67ce0cbd88739a0ff174284a75b2d7bccb5e`. Its initial execution HEAD and later
 source-hash binding are both preserved. Original logs and three-process digest
 are unchanged. Current targeted Host suite and final QHPI package/probes were
-built from`ecbe619e860d4a897815d1d5268fe66b680df57b`. All final numerical cohort
-and five Custom regression execution HEADs are
-`ff6cff8fc56eb7aed78b0eb07edf077e5059dcac`; their compiled source/binary/fixture
-hashes match the same final build.
+built from`65148e19237b162da14042b500892ef5716e9b8d`. All final numerical cohort
+and five Custom regression execution HEADs are that same commit; their compiled
+source/binary/fixture hashes match the same final build. The earlier
+`ecbe619e860d4a897815d1d5268fe66b680df57b` candidate's binaries and completed
+cohort are frozen separately; none of its device results substitutes for the
+final-source executions.
 
-Guarded Device/W8 runner source is
-`edc8f41` (full hash retained in private provenance). The later safety-script
-addition did not change or rebuild the numerical package/probe. Report/exporter
+The strict Headless guard originated in
+`edc8f41a8eec6355a42dbff858d4dc85621648ec`; final-source Device/W8 execution
+HEAD is`65148e19237b162da14042b500892ef5716e9b8d`. Its guard code is unchanged.
+The receipt-only fix changed the DSP/Host packages; the probe remained identical. Report/exporter
 edits after execution are not represented as device-tested arithmetic changes.
 Final HEAD and clean status are recorded after the final report commit in private
 closeout and the final response; a commit cannot contain its own hash.
@@ -528,6 +545,7 @@ historical checkpoint; it is not the current classification. The original
 Host/safety-stop exporter remains separate and unchanged.
 Raw tensors/checkpoints/corpus/device IDs/endpoints/logs/APK hashes/SDK binaries
 and private absolute paths are excluded. No push, PR, merge or history rewrite.
+
 
 ### Resume after the initial closeout
 
@@ -693,7 +711,7 @@ errors. No native backward graph is executed in that diagnostic. A cumulative
 failure remains a nonzero exit and cannot be promoted to P precision closure.
 
 
-### Final executed stage after manual reconnection
+### Historical first51-op cohort after manual reconnection
 
 The user explicitly confirmed connection and unlock after the new transport
 failure. Full preflight passed, then the current51-op standard Softmax negative
@@ -704,8 +722,9 @@ failure36 prevented backward execution.
 Final Scale/Mask/P cohorts each completed three independent processes on the
 unchanged package/probe and reproduced their ordered numerical digests.
 Five existing Custom device regressions, guarded Device smoke and fresh W8
-114/114 then passed. No device work followed completion; final postprocessing
-only reads Host evidence and protected hashes. These outcomes supersede the
+114/114 then passed. That stage ended device work for postprocessing; the later
+receipt source audit below triggered a distinct new-binary validation phase.
+These outcomes superseded the
 earlier NOT RUN statuses **for the executed targets only**, without erasing
 historical failed pilots or safety stops. Full cumulative P, native backward on
 produced P and full training remain unverified/blocked as detailed in F–I.
@@ -721,3 +740,26 @@ Device smoke uses`verify.ps1 -Profile Device -RequireAwakeSafety`; W8 uses
 `run_qnn_headless_tests.ps1 -Suite hvx-muon-optimizer-benchmark -TestMode BACKGROUND_CORRECTNESS -RequireAwakeSafety -TimeoutSeconds 180`,
 both with pinned SDK arguments. The strict option adds read-only safety checks;
 it never wakes, reconnects, changes notifications/permissions or takes foreground.
+
+
+### Receipt qualification audit and final-source recertification
+
+After the first complete51-op cohort, source review found a byte-copy path that
+cast away volatile qualification from the shifted-score object. It now performs
+a volatile value read into ordinary float`observedShift`, then copies that
+ordinary object's bytes. This avoids relying on an access path that strips
+volatile qualification; the [C++ draft cv access rule](https://eel.is/c++draft/dcl.type.cv#5)
+explains the distinction. No observed arithmetic/receipt word mismatch motivated
+this change, and it is not a correction of the original P-contract formula.
+
+An exact source comparison proves the only package source change is that copy
+in`forward_softmax_op.h`: arithmetic expressions, receipt layout, operation ABI
+and all existing Scalar/HVX sources are unchanged. Nevertheless, new package
+identities were built and all targeted Host tests, broad Host/Qnn profiles,
+pilots, final independent-process cohorts and required device regressions were
+executed again. The earlier cohort is archived separately and not reused.
+
+Final source is`65148e19237b162da14042b500892ef5716e9b8d`; package hashes in A
+identify this corrected source. Its independently recorded numerical digests
+equal the prior candidate's digests, which is an observed equality rather than
+transferred certification. The old nine failures remain exactly reproducible.

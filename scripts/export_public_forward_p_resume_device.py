@@ -345,7 +345,12 @@ def negative_controls(repo, candidate, build):
     pilots=load(candidate/'pilots-private.json')
     matches=[x for x in pilots if x['variant']=='oneProbabilitySoftmax']
     need(len(matches)==1,'STANDARD_SOFTMAX_PILOT_COUNT')
-    item=matches[0];safety_pass(load(candidate/item['preflight_directory']/'device-preflight-private.json'))
+    item=matches[0]
+    # The original pilot runner uses the deterministic directory convention;
+    # resumed pilots also record that directory explicitly. Validate the actual
+    # full preflight in either case, never infer PASS from the pilot summary.
+    preflight=item.get('preflight_directory',f"preflight-{item['variant']}-pilot")
+    safety_pass(load(candidate/preflight/'device-preflight-private.json'))
     folder=repo/item['relative_report_path'];ledger=load(folder/'identity-private.json');text=(folder/'stdout.txt').read_text()
     need(ledger['build']==build and ledger['exit_code']==4 and ledger['status']=='COMPLETE'
          and ledger['focus_takeover_count']==0,'STANDARD_SOFTMAX_PROCESS')
@@ -365,6 +370,26 @@ def negative_controls(repo, candidate, build):
                 all_control_maxAbs=max(float(fields(','.join(m))['abs']) for m in allmetrics),
                 all_control_row_error=max(float(fields(x)['row_error']) for x in local),
                 nonfinite_outputs=0,api_success=True,teardown=True,formal_three_process_claim=False))
+
+
+def receipt_source_fix(repo, candidate, build):
+    file=candidate/'receipt-fix-private.json'
+    if not file.exists():return None
+    audit=load(file);header='host_tests/fp32_custom/forward_softmax_op.h'
+    need(audit['new_source_commit']==build['source_sha'] and audit['changed_source_paths']==[header]
+         and audit['math_expressions_changed'] is False and audit['receipt_layout_changed'] is False
+         and audit['old_cohort_reused'] is False,'RECEIPT_FIX_SCOPE')
+    before=subprocess.check_output(['git','show',audit['old_source_commit']+':'+header],cwd=repo).decode()
+    old='std::memcpy(r+2120+h*1024+base+c,const_cast<const float*>(&shifted),4);'
+    new='float observedShift=shifted;std::memcpy(r+2120+h*1024+base+c,&observedShift,4);'
+    need(before.count(old)==1 and before.replace(old,new)==(repo/header).read_text(),'RECEIPT_FIX_CHANGED_MATH')
+    previous=load(candidate.parent/'candidate-02/build-identity-private.json')
+    need(previous['source_sha']==audit['old_source_commit'] and
+         [k for k,v in previous['source_hashes'].items() if build['source_hashes'].get(k)!=v]==[header],
+         'OTHER_PACKAGE_SOURCE_CHANGED')
+    return dict(old_source_commit=audit['old_source_commit'],new_source_commit=build['source_sha'],
+                changed_source_paths=[header],math_expressions_changed=False,receipt_layout_changed=False,
+                previous_cohort_reused=False,source_rule='https://eel.is/c++draft/dcl.type.cv#5')
 
 
 def export(repo, root, candidate):
@@ -404,6 +429,7 @@ def export(repo, root, candidate):
                 original_gates=dict(P=1e-6,row=2e-6,P_dScores=.00025,P_dValue=.001,dScores=.002,dValue=.01),
                 gate_relaxation=False,scale_bits='0x3e3504f3',mask_allowed_bits='0x00000000',mask_future_bits='0xc61c4000',axis=3,beta=1,
                 cohorts=output,negative_controls=negative_controls(repo,candidate,build),
+                receipt_source_fix=receipt_source_fix(repo,candidate,build),
                 validation=validation,device_safety='PASS_AT_EACH_EXECUTED_PROCESS',
                 historical_transport_stop_preserved=True,current_device_safety_blocked=False,
                 causal_mask_implementation='REUSED_DSP_FP32_ADD',custom_softmax='LOCAL_VERIFIED',
