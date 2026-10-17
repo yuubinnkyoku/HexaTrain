@@ -84,6 +84,8 @@ def complete(text, ledger, variant, build):
     for line in records(text, 'hvxwords'):
         if ',maskStandard' not in line:
             need(fields(line)['count'] == '0', 'WORD_COMPARISON_FAILED')
+    need(len([x for x in records(text,'hvxwords') if x.split(',')[3]=='observer_final'])==376,
+         'CROSS_OBSERVER_WORD_COVERAGE')
     for line in records(text, 'segmentreceipt'):
         f = fields(line)
         need(f.get('raw_inputs') == f.get('complete_output') == '1'
@@ -105,8 +107,10 @@ def complete(text, ledger, variant, build):
     # Cumulative P has its own unchanged joint contract; its metrics must not
     # suppress a valid upstream/local result, nor be silently treated as PASS.
     for m in required:
-        f = fields(','.join(m));need(f['gate'] == '1' and f['nonfinite'] == '0', 'REQUIRED_STAGE_FAILED')
+        f = fields(','.join(m));need(f['gate'] == '1' and f['nonfinite'] == '0'
+                                  and float(f['abs'])<=float(f['limit']), 'REQUIRED_STAGE_FAILED')
     result = dict(ordered_numerical_digest=numeric_digest(text),
+                  execution_source_commit=ledger['source_sha'],
                   api_calls=len(api), api_success=True, teardown=True, dsp_marker=True,
                   input_mutation=0, poison_remaining=0, canary_failures=0,
                   word_mismatches=0, finite=True, cpu_fallback=0, focus_takeover_count=0,
@@ -128,7 +132,16 @@ def complete(text, ledger, variant, build):
         finals=records(text,'mask_native_final')
         need(len(finals)==352 and len({tuple(x.split(',')[1:4]) for x in finals})==352, 'MASK_NATIVE_COVERAGE')
         need(len([m for m in metrics if m[1].startswith('maskCustomStandalone')])==224, 'MASK_STANDALONE_COVERAGE')
+        standard=[m for m in metrics if m[1].startswith('maskStandardH') and int(m[2])<44]
+        need(len(standard)==88 and all(fields(','.join(m))['gate']=='0'
+             and fields(','.join(m))['nonfinite']=='0' for m in standard),'STANDARD_MASK_FAILURE_COVERAGE')
+        first=[int(fields(x)['first_word_mismatch']) for x in records(text,'probmask')
+               if x.split(',')[1].startswith('maskStandardH') and int(x.split(',')[2])<44]
+        need(len(first)==88 and all(q<1024 and q%32<=q//32 for q in first),'STANDARD_MASK_ALLOWED_WORD_FAILURE')
         result.update(standard_failed_predicates=int(s['standard_required_predicate_failures']),
+                      standard_core_maxAbs=max(float(fields(','.join(m))['abs']) for m in standard),
+                      standard_core_first_word_failure_allowed_heads=len(first),
+                      standard_future_only_maximum_separately_measured=False,
                       custom_mask=True,
                       standalone_core_maxAbs=max(float(fields(','.join(m))['abs']) for m in metrics
                         if m[1].startswith('maskCustomStandalone') and int(m[2])<44),
@@ -138,7 +151,8 @@ def complete(text, ledger, variant, build):
              and s['native_backward_executed'] == '0', 'LOCAL_P_OR_UPSTREAM_FAILED')
         local=records(text,'softmax_local')
         need(len(local)==488 and len({tuple(x.split(',')[1:4]) for x in local})==488
-             and all(fields(x)['gate']=='PASS' for x in local), 'LOCAL_P_COVERAGE')
+             and all(fields(x)['gate']=='PASS' and float(fields(x)['row_error'])<=2e-6
+                     and fields(x)['negative']==fields(x)['causal_leak']=='0' for x in local), 'LOCAL_P_COVERAGE')
         exps=records(text,'forward_softmax_receipt')
         need(len(exps)==144 and all(fields(x)['arithmetic_word_mismatches']=='0' for x in exps), 'SOFTMAX_RECEIPT_COVERAGE')
         cumulative=records(text,'p_cumulative');joint=records(text,'p_joint')
@@ -149,8 +163,33 @@ def complete(text, ledger, variant, build):
         need(all(fields(x)['host_gradient_gate_fail']=='0' for x in joint), 'HOST_CONDITIONED_GRADIENT_FAILED')
         pm=[m for m in metrics if m[1].startswith('probabilityNative') and m[3] in ('P0','P1')]
         need(len(pm)==352, 'CUMULATIVE_P_METRICS_MISSING')
+        groups={}
+        for line in joint:
+            parts=line.split(',');f=fields(line);values={k:float(f[k]) for k in
+                ('ds_bound','dv_bound','host_ds_actual','host_dv_actual')}
+            need(all(math.isfinite(x) and x>=0 for x in values.values()),'P_SENSITIVITY_NONFINITE')
+            allocation=int(values['ds_bound']>.00025)+int(values['dv_bound']>.001)
+            consumer=int(values['host_ds_actual']>.002)+int(values['host_dv_actual']>.01)
+            need(allocation==int(f['allocation_fail']) and consumer==int(f['host_gradient_gate_fail']),
+                 'P_BOUND_PREDICATE_MISMATCH')
+            groups.setdefault(tuple(parts[1:4]),[]).append((allocation+consumer,values))
+        pmap={(m[1],m[2],'head='+m[3][1:]):fields(','.join(m)) for m in pm}
+        for line in cumulative:
+            parts=line.split(',');f=fields(line);key=tuple(parts[1:4]);pmetric=pmap[key]
+            need(float(pmetric['limit'])==1e-6 and pmetric['nonfinite']=='0','P_ELEMENT_GATE_CHANGED')
+            error_failed=float(pmetric['abs'])>1e-6
+            need((pmetric['gate']=='0')==error_failed,'P_ELEMENT_PREDICATE_MISMATCH')
+            group=groups[(key[0],key[1],key[2][5:])]
+            expected=int(error_failed)+int(float(f['row_error'])>2e-6 or int(f['invariant_failures'])!=0)+sum(x[0] for x in group)
+            need(expected==int(f['joint_failures']),'CUMULATIVE_P_PREDICATE_MISMATCH')
+            for k in ('ds_bound','dv_bound','host_ds_actual','host_dv_actual'):
+                need(float(f[k])==max(x[1][k] for x in group),'CUMULATIVE_P_MAXIMUM_MISMATCH')
         lm=[m for m in metrics if m[1].startswith(('softmaxCustom','probabilityLocal'))]
+        matched=[x for x in joint if int(x.split(',')[2])<24 and x.split(',')[2]==x.split(',')[4]]
+        need(len(matched)==192,'SAME_FIXTURE_DIAGNOSTIC_COVERAGE')
         result.update(local_maxAbs=max(float(fields(','.join(m))['abs']) for m in lm),
+                      standalone_local_maxAbs=max(float(fields(','.join(m))['abs']) for m in lm if m[1].startswith('softmaxCustom')),
+                      native_received_input_local_maxAbs=max(float(fields(','.join(m))['abs']) for m in lm if m[1].startswith('probabilityLocal')),
                       cumulative_maxAbs=max(float(fields(','.join(m))['abs']) for m in pm),
                       cumulative_failed_predicates=failed,
                       cumulative_joint_contract='FAIL' if failed else 'PASS',
@@ -161,6 +200,8 @@ def complete(text, ledger, variant, build):
                       dv_bound=max(float(fields(x)['dv_bound']) for x in joint),
                       host_conditioned_ds_actual=max(float(fields(x)['host_ds_actual']) for x in joint),
                       host_conditioned_dv_actual=max(float(fields(x)['host_dv_actual']) for x in joint),
+                      same_fixture_diagnostic={k:max(float(fields(x)[k]) for x in matched) for k in
+                                               ('ds_bound','dv_bound','host_ds_actual','host_dv_actual')},
                       native_backward_executed=False, hidden_no_receipt_no_tap_input_directly_measured=False)
     return result
 
@@ -257,6 +298,8 @@ def regressions(repo, candidate, build):
         folder=repo/item['relative_report_path'];ledger=load(folder/'identity-private.json')
         need(ledger['build']==build and ledger['exit_code']==0 and ledger['focus_takeover_count']==0
              and ledger['variant']==item['variant'] and ledger['status']=='COMPLETE', 'CUSTOM_REGRESSION_PROCESS')
+        for k in ('libHexaFp32Dsp.so','libHexaFp32Host.so','one_layer_probe'):
+            need(ledger['hashes'].get(k)==build['binary_hashes'][k],'REGRESSION_STAGED_BINARY')
         text=(folder/'stdout.txt').read_text();api=records(text,'api');summaries=records(text,'summary')
         need(api and all(x.rsplit(',',1)[1]=='0' for x in api) and len(summaries)==1, 'REGRESSION_API_OR_SUMMARY')
         for n in ('contextFree','deviceFree','backendFree'):need(f'api,{n},0' in api,'REGRESSION_TEARDOWN')
@@ -269,6 +312,10 @@ def regressions(repo, candidate, build):
     for key, label in (('device','Device'),('w8','Muon_W8')):
         item=manifest[key];safety_pass(load(candidate/item['preflight_directory']/'device-preflight-private.json'))
         folder=repo/item['relative_report_path'];text=(folder/'device-report.txt').read_text(encoding='utf-8-sig')
+        physical=load(folder/'device-identity-private.json')
+        plan=load(repo/'build/reports/g1-long-linear-200k-primary/run-plan.json')
+        need(physical['stable_device_id']==plan['device_serial_private'] and physical['physical_device_count']==1,
+             'HEADLESS_PHYSICAL_IDENTITY')
         need(load(folder/'status.json')['status']=='PASSED','HEADLESS_STATUS')
         activity=load(folder/'activity-sampling.json')
         need(activity['focus_takeover_count']==0 and activity['foreground_preserved'] is True,'HEADLESS_FOCUS')
@@ -277,8 +324,11 @@ def regressions(repo, candidate, build):
             need(line in text.splitlines(),'HEADLESS_GUARD')
         need(item['runner_exit']==0 and item['candidate_binary_hashes']==build['binary_hashes'], 'HEADLESS_BINDING')
         need(sha(folder/'device-report.txt')==item['report_sha256'],'HEADLESS_REPORT_CHANGED')
+        guard=(candidate/f'{key}.txt').read_text(encoding='utf-8-sig')
+        need('headless_awake_safety_guard=PASS phase=before read_only=1' in guard and
+             'headless_awake_safety_guard=PASS phase=after read_only=1' in guard,'HEADLESS_IMMEDIATE_SAFETY_GUARD')
         if key=='w8':
-            for line in ('full_parity_matrices=114','full_parity_total_matrices=114','rpc_status_success=true',
+            for line in ('status=SUCCESS','full_parity_matrices=114','full_parity_total_matrices=114','rpc_status_success=true',
                          'output_tensors_finite=true','fallback=false','backend_requested=HVX'):
                 need(line in text.splitlines(),'W8_REQUIRED_EVIDENCE')
             result[label]='PASS_114_OF_114'
@@ -289,6 +339,32 @@ def regressions(repo, candidate, build):
                 need(line in text.splitlines(),'DEVICE_REQUIRED_EVIDENCE')
             result[label]='PASS'
     return result
+
+
+def negative_controls(repo, candidate, build):
+    pilots=load(candidate/'pilots-private.json')
+    matches=[x for x in pilots if x['variant']=='oneProbabilitySoftmax']
+    need(len(matches)==1,'STANDARD_SOFTMAX_PILOT_COUNT')
+    item=matches[0];safety_pass(load(candidate/item['preflight_directory']/'device-preflight-private.json'))
+    folder=repo/item['relative_report_path'];ledger=load(folder/'identity-private.json');text=(folder/'stdout.txt').read_text()
+    need(ledger['build']==build and ledger['exit_code']==4 and ledger['status']=='COMPLETE'
+         and ledger['focus_takeover_count']==0,'STANDARD_SOFTMAX_PROCESS')
+    api=records(text,'api');need(api and all(x.rsplit(',',1)[1]=='0' for x in api),'STANDARD_SOFTMAX_API')
+    for n in ('contextFree','deviceFree','backendFree'):need(f'api,{n},0' in api,'STANDARD_SOFTMAX_TEARDOWN')
+    summary=records(text,'summary');need(len(summary)==1,'STANDARD_SOFTMAX_SUMMARY')
+    f=fields(summary[0]);need(f['local_failures']=='224' and f['nonfinite_outputs']=='0','STANDARD_SOFTMAX_FAILURE_NOT_REPRODUCED')
+    allmetrics=[x.split(',') for x in records(text,'onemetric') if x.split(',')[1]=='softmaxStandardLocal']
+    core=[m for m in allmetrics if int(m[2])<44]
+    need(len(core)==88 and all(fields(','.join(m))['gate']=='0' for m in core),'STANDARD_SOFTMAX_CORE_FAILURE')
+    local=records(text,'softmax_local');need(len(local)==112,'STANDARD_SOFTMAX_LOCAL_COVERAGE')
+    worst=max(core,key=lambda m:float(fields(','.join(m))['abs']))
+    return dict(standard_softmax=dict(status='FAIL',phase='PILOT_NEGATIVE_CONTROL',core_failed_heads=88,core_heads=88,
+                local_failed_predicates=224,core_maxAbs=float(fields(','.join(worst))['abs']),
+                worst_forward=int(worst[2]),worst_head=int(worst[3][1:]),
+                core_row_error=max(float(fields(x)['row_error']) for x in local if int(x.split(',')[2])<44),
+                all_control_maxAbs=max(float(fields(','.join(m))['abs']) for m in allmetrics),
+                all_control_row_error=max(float(fields(x)['row_error']) for x in local),
+                nonfinite_outputs=0,api_success=True,teardown=True,formal_three_process_claim=False))
 
 
 def export(repo, root, candidate):
@@ -306,22 +382,31 @@ def export(repo, root, candidate):
             safety_pass(load(candidate/item['preflight_directory']/'device-preflight-private.json'))
             results.append(complete((folder/'stdout.txt').read_text(),ledger,variant,build))
         need(len({r['ordered_numerical_digest'] for r in results})==1, 'PROCESS_NUMERICAL_NONDETERMINISM')
+        need(len({r['execution_source_commit'] for r in results})==1,'PROCESS_EXECUTION_SOURCE_CHANGED')
         output[variant]=dict(independent_processes=3,**results[0])
-    validation={n:profile((candidate/f'{n.lower()}.txt').read_text(encoding='utf-8-sig'),n) for n in ('Fast','Host','Qnn')}
+        output[variant]['maximum_battery_temperature_c']=max(r['maximum_battery_temperature_c'] for r in results)
+        output[variant]['maximum_thermal_status']=max(r['maximum_thermal_status'] for r in results)
+    validation={n:profile((candidate/('fast-final.txt' if n=='Fast' else f'{n.lower()}.txt')).read_text(encoding='utf-8-sig'),n) for n in ('Fast','Host','Qnn')}
     validation.update(regressions(repo,candidate,build))
     classifications=['HOST_P_ERROR_ATTRIBUTION_VERIFIED','HOST_P_JOINT_CONTRACT_FAIL',
                      'BLOCKED_HOST_P_BUDGET','FORWARD_SCALE_DSP_VERIFIED',
-                     'CAUSAL_MASK_DEVICE_VERIFIED','SOFTMAX_P_LOCAL_VERIFIED']
+                     'CAUSAL_MASK_DEVICE_VERIFIED','SOFTMAX_P_LOCAL_VERIFIED','BLOCKED_STANDARD_SOFTMAX']
     return dict(schema=2,status='BLOCKED',branch=BRANCH,research_base=BASE,analysis=analysis,
                 analysis_source_commit=identity['source_commit'],host_compiler_sha256=identity['compiler_sha256'],
-                host_reproduction=dict(independent_processes=3,ordered_numerical_digest=sha(root/'attribution.jsonl')),
+                host_reproduction=dict(kind='ORIGINAL_HOST_ONLY_REPRODUCTION',independent_processes=3,
+                    ordered_numerical_digest=sha(root/'attribution.jsonl'),
+                    executable_sha256=load(root/'analysis-identity-private.json')['tests']['probability_attribution_test']['executable_sha256'],
+                    current_candidate_attribution_log_matches=True),
                 compiled_device_candidate_source_commit=build['source_sha'],device_tested_source_commit=build['source_sha'],
                 binary_sha256=build['binary_hashes'],qairt_build_id=build['qairt_build_id'],qnn_api='2.37.0',architecture='V81',
                 hexagon_compiler_sha256=build['hexagon_compiler_sha256'],ndk_compiler_sha256=build['ndk_compiler_sha256'],
                 fixtures={Path(k).name:v for k,v in FIXTURES.items()},classifications=classifications,
                 original_gates=dict(P=1e-6,row=2e-6,P_dScores=.00025,P_dValue=.001,dScores=.002,dValue=.01),
                 gate_relaxation=False,scale_bits='0x3e3504f3',mask_allowed_bits='0x00000000',mask_future_bits='0xc61c4000',axis=3,beta=1,
-                cohorts=output,validation=validation,device_safety='PASS_AT_EACH_PROCESS',
+                cohorts=output,negative_controls=negative_controls(repo,candidate,build),
+                validation=validation,device_safety='PASS_AT_EACH_EXECUTED_PROCESS',
+                historical_transport_stop_preserved=True,current_device_safety_blocked=False,
+                causal_mask_implementation='REUSED_DSP_FP32_ADD',custom_softmax='LOCAL_VERIFIED',
                 native_P='DIAGNOSTIC_ONLY_JOINT_CONTRACT_FAIL',P_backward='SHAPE_OWNERSHIP_ONLY_NOT_EXECUTED',
                 cumulative_certified=False,observer_free_cumulative_certified=False,backward_certified=False,
                 protected_artifacts='PASS',protected_hash_count=5,previous_branches='PASS',training='NO-GO',training_updates=0,
@@ -364,6 +449,29 @@ if __name__=='__main__':
                 else:raise ValueError('RESULT_CORRUPTION_ACCEPTED '+old)
         need(count==14,'SELFTEST_PROCESS_COVERAGE')
         print('forward_p_resume_process_corruption_checks=PASS corruptions=14 pilot_promotion=0')
+        if not a.stop_preflight:
+            item=next(x for x in load(a.candidate/'pilots-private.json') if x['variant']=='oneProbabilityP')
+            folder=a.repo/item['relative_report_path'];text=(folder/'stdout.txt').read_text();ledger=load(folder/'identity-private.json')
+            complete(text,ledger,'oneProbabilityP',build)
+            changes=[('cumulative_failures=36','cumulative_failures=0'),
+                     ('allocation_fail=1','allocation_fail=0'),
+                     ('joint_failures=3','joint_failures=0'),
+                     ('arithmetic_word_mismatches=0','arithmetic_word_mismatches=1'),
+                     ('native_backward_executed=0','native_backward_executed=1'),
+                     ('limit=1e-06','limit=0.01')]
+            for old,new in changes:
+                need(old in text,'P_SELFTEST_ANCHOR')
+                try:complete(text.replace(old,new),ledger,'oneProbabilityP',build)
+                except ValueError:pass
+                else:raise ValueError('P_FALSE_PROMOTION_ACCEPTED '+old)
+            # Removing the only cumulative P element failure must also fail,
+            # even when all actual Host gradient gates stay within budget.
+            changed=text.replace('abs=1.00750624249e-06,','abs=0,')
+            need(changed!=text,'P_ERROR_ANCHOR')
+            try:complete(changed,ledger,'oneProbabilityP',build)
+            except ValueError:pass
+            else:raise ValueError('CUMULATIVE_ERROR_CORRUPTION_ACCEPTED')
+            print('forward_p_joint_contract_corruption_checks=PASS corruptions=7 old_fail_not_promoted=1')
     result=(export_partial(a.repo,a.private_root,a.candidate,a.stop_preflight) if a.stop_preflight
             else export(a.repo,a.private_root,a.candidate))
     a.output.write_text(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)+'\n',encoding='utf-8')
