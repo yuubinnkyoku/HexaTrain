@@ -1,0 +1,11 @@
+{
+ "schema":1,"host_anchor":"96dea8a7019442454fb33b0b02d25f5fffad48d9",
+ "geometry":"LN1 only T32 D64, S2 normalization-double, exact prior selective::ln<2> body; no high-precision Q/K or QK DSP implementation",
+ "package":"Separate HexaSelectiveLn1; unchanged HexaFp32 51-op binary also registered. Baseline and S2 each Observed/NoReceipt; old arithmetic reused for same-binary control.",
+ "inputs":"44 original LN Forward cases plus existing independent 16 holdout cases. FP32 X,gamma,beta,dy and exact source epsilon. Export frozen Host candidate words and independent source-epsilon double Y/h/inverse/dX/dGamma/dBeta; identity hashes fixed before pilot.",
+ "acceptance":{"candidate_word_mismatches":0,"y_maxAbs":0.002,"xhat_maxAbs":0.002,"inverse_maxAbs":0.002,"dx_maxAbs":0.02,"dg_maxAbs":0.02,"db_maxAbs":0.02,"input_mutation":0,"poison_remaining":0,"canary_failures":0,"required_finite":true,"qnn_api_success":true,"dsp_marker_required_observed":true,"cpu_fallback":false},
+ "variants":"Baseline/S2 x Observed/NoReceipt x Tap/NoTap. Tap exports h/inverse. NoTap h/inverse NATIVE directly feed unchanged LNBackwardNoReceipt; final Y/dX/dGamma/dBeta independently evaluated. Same graph logical tensors; no ideal reinjection. Observer-free final words compared to observed and Host words. Invisible state is not directly observed.",
+ "performance":"Only after all accuracy variants pass, same-binary/geometry/inputs compare baseline/S2: arithmetic and receipt windows observed; execute wall first plus 31 subsequent samples for median/p10/p90. Timing excluded from numerical digest. Each final candidate 3 independent processes; pilot excluded.",
+ "safety":"Explicit human waiver only for Host 20GiB storage threshold in current resume. Every other existing preflight gate unchanged, repeated immediately before execution and each independent process. No wake/unlock/install/foreground/force-stop/endpoint guessing. Stop on safety failure.",
+ "limits":"Standalone LN feasibility and native saved-state/local backward only; cannot certify S2 or C7 LN1-to-P precision. Full training and 40k-to60k/200k NO-GO."
+}
