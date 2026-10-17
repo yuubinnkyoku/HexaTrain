@@ -1,0 +1,13 @@
+{
+  "schema":1,
+  "plan_commit":"df7210d",
+  "development_executable_sha256":"d4ca5b9fd3184b01186ff2cb4d8bfd98b7d6bb409b8b0edff30de108f1e98738",
+  "development_numerical_digest":"cdbfb7a304ba93ef7927966882362e5a3563c411d2fbc0ba002ebb6a6683b3ab",
+  "development_shift_digest":"8ce49b4de1c7ab413ce5be9a24697896530ee7f3d602256beda6c865b0e0a326",
+  "development_joint_pass":["S1","S2","S4","S7"],
+  "selected":"S2",
+  "reason":"Only N is promoted above C6: 2048 explicit double normalized multiplies and 32 double reciprocal/hypot calls, versus S1 double reduction 2048 multiplies and 6144 add/sub plus conversion. S2 has zero saved-xhat affine reconstruction word differences; original LN backward kernel Host gates pass. Runtime hypot cost is unresolved, so lowest logical arithmetic work is not a claim of lowest DSP latency. S1 remains a Pareto alternative, S7 accuracy anchor. No extra arithmetic search.",
+  "confirmation_candidates":["S0","S2","S7"],
+  "confirmation_already_evaluated":false,
+  "failure_policy":"Preserve failures and stop final adoption; do not reselect or tune seed/threshold using confirmation. C7 remains previous Host design anchor."
+}
