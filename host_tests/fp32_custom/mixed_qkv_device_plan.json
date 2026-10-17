@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "scope": "diagnostic-only/default-off; only new arithmetic is double Q/K NN64",
+  "package": "HexaMixedQkv",
+  "operations": ["MixedPrecisionQKV", "MixedPrecisionQKVNoReceipt"],
+  "marker": "0x48383301",
+  "geometry": {"T":32,"D":64,"heads":2,"transpose0":false,"transpose1":false},
+  "qk": "q-increasing binary64 products and addition, no FMA, final binary32 store",
+  "v": "unchanged strict IEEE HVX NN64 helper exactly once",
+  "receipt": {"words":20512,"header_words":32,"input_words":14336,"output_words":6144,"qk_time_slot":24,"v_time_slot":25,"completion_slot":26,"hvx_call_count_slot":27},
+  "fixtures": {"core":44,"holdout":16,"standalone_arithmetic_controls":8,"supplement_v_seed":"707003+case_index*104729; existing precision::next; amplitude .0625"},
+  "gates": {"qk_host_word_mismatches":0,"v_ordered_word_mismatches":0,"core_qkv_double_maxabs":0.002,"ln_saved_maxabs":0.002,"ln_backward_maxabs":0.02,"adjacent_qk_local_maxabs":0.01,"head_word_mismatches":0},
+  "stress_gate": "finite and arithmetic words, no model accuracy claim for set2",
+  "variants": ["ObservedTap","ObservedNoTap","NoReceiptTap","NoReceiptNoTap"],
+  "cohort": {"independent_processes":3,"timing_counter_device_ids_in_digest":false},
+  "p_contract_changed":false,"high_precision_qk_raw_implemented":false,"production_binding":false,"training_updates":0,
+  "power_policy":"research monitoring; ordinary decline, absent external power and noncritical thermal accepted; critical protection/serious faults/identity/awake/run gates retained"
+}

@@ -5,11 +5,14 @@ param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$tr
  # Explicit human authorization is required per invocation. Default gate stays 20GiB.
  [switch]$UserAuthorizedHostStorageWaiver,
  [switch]$UserAuthorizedExternalPowerWaiver,
- [switch]$UserAuthorizedPowerThermalWaiver)
+ [switch]$UserAuthorizedPowerThermalWaiver,
+ [switch]$MixedQkvResearchMonitoring,
+ [string]$ExpectedApkPath='')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 . (Join-Path $PSScriptRoot 'forward_p_resume_thermal_policy.ps1')
+. (Join-Path $PSScriptRoot 'mixed_qkv_monitoring_policy.ps1')
 function Resolve-ForwardPApkHashState([string]$HashText,[string]$ExpectedHash){
  $parsed=[regex]::Match($HashText.Trim(),'(?i)^([0-9a-f]{64})\s+')
  if(!$parsed.Success){return 'INSTALLED_APK_HASH_UNKNOWN'}
@@ -95,16 +98,17 @@ try {
  if($activity.Text -notmatch '(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/'){throw 'TOP_RESUMED_UNKNOWN'}
  if($Matches[1] -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_ALREADY_FOREGROUND'}
  $record.gates.top_resumed='PASS'
- $thermal=Get-PhoneLmThermalBatteryState -Adb $adb -Device $device.Endpoint -Phase 'forward-p-resume'
+ $thermal=if($MixedQkvResearchMonitoring){Get-MixedQkvMonitoringState -Adb $adb -Device $device.Endpoint}else{Get-PhoneLmThermalBatteryState -Adb $adb -Device $device.Endpoint -Phase 'forward-p-resume'}
  $record.thermal_private=$thermal
  $record.power_thermal_waiver_requested=[bool]$UserAuthorizedPowerThermalWaiver
- $thermalState=Resolve-ForwardPResumeThermalState $thermal ([bool]$UserAuthorizedPowerThermalWaiver)
- if($thermalState -eq 'BLOCKED'){throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'}
+ $thermalState=if($MixedQkvResearchMonitoring){Resolve-MixedQkvMonitoringState $thermal}else{Resolve-ForwardPResumeThermalState $thermal ([bool]$UserAuthorizedPowerThermalWaiver)}
+ $record.mixed_qkv_research_monitoring=[bool]$MixedQkvResearchMonitoring
+ if($thermalState -like 'BLOCKED*'){throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'}
  $record.gates.bounded_power_thermal=$thermalState
  $battery=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','dumpsys','battery')
  $record.battery_private=$battery.Text
  $record.external_power_waiver_requested=[bool]$UserAuthorizedExternalPowerWaiver
- $powerState=Resolve-ForwardPExternalPowerState $battery.Text ([bool]$UserAuthorizedExternalPowerWaiver)
+ $powerState=if($MixedQkvResearchMonitoring){'MONITOR_EXTERNAL_POWER'}else{Resolve-ForwardPExternalPowerState $battery.Text ([bool]$UserAuthorizedExternalPowerWaiver)}
  if($powerState -eq 'BLOCKED'){throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'}
  $record.gates.external_power=$powerState
  $record.gates.power_thermal='PASS'
@@ -116,7 +120,8 @@ try {
  if($package.Text.Trim() -notmatch '^package:(/[^\r\n]+/base\.apk)$'){throw 'INSTALLED_APK_UNKNOWN'}
  $installedPath=$Matches[1]
  $installed=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','sha256sum',$installedPath)
- $apkHash=(Get-FileHash (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk')).Hash.ToLowerInvariant()
+ $expectedApk=if($ExpectedApkPath){$ExpectedApkPath}else{Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk'}
+ $apkHash=(Get-FileHash -LiteralPath $expectedApk).Hash.ToLowerInvariant()
  $record.installed_apk_private=@{path=$installedPath;hash_readback=$installed.Text;readback_exit=$installed.ExitCode;expected_sha256=$apkHash}
  $apkState=Resolve-ForwardPApkHashState $installed.Text $apkHash
  if($apkState -ne 'PASS'){throw $apkState}
