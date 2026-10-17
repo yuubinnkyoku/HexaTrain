@@ -4,10 +4,12 @@ param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$tr
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='',[switch]$SelfTest,
  # Explicit human authorization is required per invocation. Default gate stays 20GiB.
  [switch]$UserAuthorizedHostStorageWaiver,
- [switch]$UserAuthorizedExternalPowerWaiver)
+ [switch]$UserAuthorizedExternalPowerWaiver,
+ [switch]$UserAuthorizedPowerThermalWaiver)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
+. (Join-Path $PSScriptRoot 'forward_p_resume_thermal_policy.ps1')
 function Resolve-ForwardPApkHashState([string]$HashText,[string]$ExpectedHash){
  $parsed=[regex]::Match($HashText.Trim(),'(?i)^([0-9a-f]{64})\s+')
  if(!$parsed.Success){return 'INSTALLED_APK_HASH_UNKNOWN'}
@@ -32,7 +34,11 @@ if($SelfTest){
  foreach($case in $cases){if((Resolve-ForwardPApkHashState $case.text $anchor) -ne $case.expected){throw 'APK_HASH_STATE_SELFTEST_FAILED'}}
  foreach($case in @(@{bytes=20GB;waiver=$false;expected='PASS'},@{bytes=19GB;waiver=$false;expected='BLOCKED'},@{bytes=19GB;waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{bytes=21GB;waiver=$true;expected='PASS'})){if((Resolve-ForwardPHostStorageState $case.bytes $case.waiver) -ne $case.expected){throw 'STORAGE_WAIVER_SELFTEST_FAILED'}}
  foreach($case in @(@{text="AC powered: true";waiver=$false;expected='PASS'},@{text="AC powered: false`nUSB powered: false`nWireless powered: false";waiver=$false;expected='BLOCKED'},@{text="AC powered: false`nUSB powered: false`nWireless powered: false";waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{text='unknown';waiver=$true;expected='BLOCKED'},@{text="USB powered: true";waiver=$true;expected='PASS'})){if((Resolve-ForwardPExternalPowerState $case.text $case.waiver) -ne $case.expected){throw 'POWER_WAIVER_SELFTEST_FAILED'}}
- Write-Host 'forward_p_preflight_selftest=PASS cases=14 device_calls=0 default_storage_gate_unchanged=1 default_power_gate_unchanged=1'
+ $safe=[pscustomobject]@{thermal_status=0;battery_temperature_c=39;battery_level=80;battery_health=2;battery_present=$true}
+ $warm=[pscustomobject]@{thermal_status=0;battery_temperature_c=41;battery_level=80;battery_health=2;battery_present=$true}
+ $emergency=[pscustomobject]@{thermal_status=5;battery_temperature_c=41;battery_level=80;battery_health=2;battery_present=$true}
+ foreach($case in @(@{state=$safe;waiver=$false;expected='PASS'},@{state=$safe;waiver=$true;expected='PASS'},@{state=$warm;waiver=$false;expected='BLOCKED'},@{state=$warm;waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{state=$null;waiver=$true;expected='BLOCKED'},@{state=$emergency;waiver=$true;expected='BLOCKED'})){if((Resolve-ForwardPResumeThermalState $case.state $case.waiver) -ne $case.expected){throw 'THERMAL_WAIVER_SELFTEST_FAILED'}}
+ Write-Host 'forward_p_preflight_selftest=PASS cases=20 device_calls=0 default_storage_gate_unchanged=1 default_power_gate_unchanged=1 default_thermal_gate_unchanged=1'
  exit 0
 }
 $root=Split-Path -Parent $PSScriptRoot
@@ -90,8 +96,11 @@ try {
  if($Matches[1] -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_ALREADY_FOREGROUND'}
  $record.gates.top_resumed='PASS'
  $thermal=Get-PhoneLmThermalBatteryState -Adb $adb -Device $device.Endpoint -Phase 'forward-p-resume'
- if($thermal.thermal_status -gt 1 -or $thermal.battery_temperature_c -gt 40 -or $thermal.battery_level -lt 30){throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'}
  $record.thermal_private=$thermal
+ $record.power_thermal_waiver_requested=[bool]$UserAuthorizedPowerThermalWaiver
+ $thermalState=Resolve-ForwardPResumeThermalState $thermal ([bool]$UserAuthorizedPowerThermalWaiver)
+ if($thermalState -eq 'BLOCKED'){throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'}
+ $record.gates.bounded_power_thermal=$thermalState
  $battery=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','dumpsys','battery')
  $record.battery_private=$battery.Text
  $record.external_power_waiver_requested=[bool]$UserAuthorizedExternalPowerWaiver

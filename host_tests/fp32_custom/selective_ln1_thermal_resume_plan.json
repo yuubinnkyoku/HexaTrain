@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "original_plan": "selective_ln1_device_plan.json",
+  "authorization": "User explicitly directed continuation despite the failed safety gate; apply a default-off power/thermal threshold waiver to this bounded diagnostic resume.",
+  "scope": "40C battery temperature, thermal status 1 and battery level 30% study thresholds only. Record actual readings and applied waivers. Numerical gates, frozen inputs, arithmetic and binaries unchanged.",
+  "retained": "Known telemetry, existing SDK emergency/health checks, same physical device, no active run, awake/top-resumed, correct SDK/APK/package, protected artifacts. No automatic wake, foreground takeover, force-stop or training."
+}

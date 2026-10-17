@@ -16,10 +16,23 @@ def safety_waivers(pre,ledger):
    require(pre.get(request) is True and ledger.get(invocation) is True,'explicit waiver evidence')
    result.append(gate)
  return result
+def thermal_evidence(condition,explicit=False):
+ keys=('thermal_status','battery_temperature_c','battery_level','battery_health','battery_present')
+ require(all(k in condition for k in keys),'thermal evidence missing')
+ require(0<=condition['thermal_status']<5 and 0<condition['battery_temperature_c']<=60 and 0<=condition['battery_level']<=100 and condition['battery_health']==2 and condition['battery_present'] is True,'invalid or emergency thermal evidence')
+ normal=condition['thermal_status']<=1 and condition['battery_temperature_c']<=40 and condition['battery_level']>=30
+ require(normal or explicit,'unsafe thermal evidence')
+ return {**{k:condition[k] for k in keys},'gate':'PASS' if normal else 'WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'}
+def thermal_ledger(pre,ledger):
+ explicit=ledger.get('power_thermal_waiver') is True
+ if explicit:require(pre.get('power_thermal_waiver_requested') is True,'thermal authorization evidence')
+ return {k:thermal_evidence(ledger[k],explicit) for k in ('thermal_before','thermal_after')}
 def process(p):
  ledger=read(p/'identity-private.json');text=(p/'stdout.txt').read_text(encoding='utf-8-sig');pre=read(p/'preflight/device-preflight-private.json')
  require(pre['status']=='PASS' and ledger['focus_takeover_count']==0 and ledger['mode']=='BACKGROUND_CORRECTNESS','safety')
  waivers=safety_waivers(pre,ledger)
+ thermal=thermal_ledger(pre,ledger)
+ if any(r['gate'].startswith('WAIVED') for r in thermal.values()) or pre['gates'].get('bounded_power_thermal','PASS').startswith('WAIVED'):waivers.append('bounded_power_thermal')
  require(ledger['build']['binary_hashes']==read(p.parent.parent/'candidate-build-private.json')['binary_hashes'],'candidate fixed')
  apis=[(m[1],int(m[2])) for m in re.finditer(r'^api,([^,]+),(\d+)$',text,re.M)]
  failed=[{'stage':s,'code':c} for s,c in apis if c]
@@ -34,7 +47,7 @@ def process(p):
    if not r['observed']:r['arithmetic_median_us']=None;r['receipt_inclusive_median_us']=None
    performance.append(r)
  complete='summary,selective_ln1,' in text
- result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_USER_WAIVER' if waivers else 'PASS','applied_safety_waivers':waivers,'fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
+ result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_USER_WAIVER' if waivers else 'PASS','applied_safety_waivers':waivers,'thermal':thermal,'fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
  if not complete:result['classification']='BLOCKED_DSP_PRECISION_RUNTIME' if failed else 'UNRESOLVED';return result
  require(len(rows)==2640 and len(execution)==480,'coverage')
  expected=set()
@@ -73,12 +86,20 @@ def main(args):
    if pre['status']!='PASS':stops[p.name]={'status':pre['status'],'reason':pre['reason'],'device_executes':pre['device_executes'],'gates':pre['gates']}
  regressions={}
  for p in sorted((root/'regressions').glob('*')):
-  if not (p/'identity-private.json').exists():continue
+  if not (p/'identity-private.json').exists():
+   if (p/'preflight/device-preflight-private.json').exists():
+    pre=read(p/'preflight/device-preflight-private.json')
+    if pre['status']!='PASS':stops['regression-'+p.name]={'status':pre['status'],'reason':pre['reason'],'device_executes':pre['device_executes'],'gates':pre['gates']}
+   continue
   ledger=read(p/'identity-private.json');text=(p/'stdout.txt').read_text(encoding='utf-8-sig')
+  pre=read(p/'preflight/device-preflight-private.json');require(pre['status']=='PASS','regression preflight')
+  waivers=safety_waivers(pre,ledger);thermal=thermal_ledger(pre,ledger)
+  if any(r['gate'].startswith('WAIVED') for r in thermal.values()) or pre['gates'].get('bounded_power_thermal','PASS').startswith('WAIVED'):waivers.append('bounded_power_thermal')
   require(ledger['build']['binary_hashes']==build['binary_hashes'] and ledger['focus_takeover_count']==0,'regression identity/safety')
   apifail=bool(re.search(r'^api,[^,]+,[1-9]\d*$',text,re.M))
   summary=bool(re.search(r'^summary,',text,re.M))
-  regressions[p.name]={'variant':ledger['variant'],'exit_code':ledger['exit_code'],'fresh_result':'PASS' if ledger['exit_code']==0 and summary and not apifail else 'FAIL','new_and_old_packages_registered':all(x in text for x in ('api,registerS2DSP,0','api,registerOldDSP,0')),'stdout_sha256':sha(p/'stdout.txt')}
+  registered=all(x in text for x in ('api,registerS2DSP,0','api,registerOldDSP,0'))
+  regressions[p.name]={'variant':ledger['variant'],'exit_code':ledger['exit_code'],'fresh_result':'PASS' if ledger['exit_code']==0 and summary and not apifail and registered else 'FAIL','new_and_old_packages_registered':registered,'applied_safety_waivers':waivers,'thermal':thermal,'stdout_sha256':sha(p/'stdout.txt')}
  cohort=[procs.get('final-'+str(i)) for i in (1,2,3)]
  verified=all(p and p.get('all_variants_pass') for p in cohort) and len({p['numerical_digest'] for p in cohort if p})==1
  validation={}
@@ -90,7 +111,9 @@ def main(args):
  data={'schema':1,'branch':'investigation/g1-c7-selective-ln1-dsp-feasibility','build_source_commit':build['source_sha'],'new_binary_sha256':build['binary_hashes'],'old_binary_sha256':build['old_package_bundle']['binary_hashes'],'hexagon_compiler_sha256':build['hexagon_compiler_sha256'],'ndk_compiler_sha256':build['ndk_compiler_sha256'],'geometry':'LN1 T32 D64 S2 only','host_storage_waiver':'EXPLICIT_USER_CURRENT_RESUME_ONLY','safety_stops':stops,'processes':procs,'fresh_bundle_regressions':regressions,'three_independent_processes_verified':bool(verified),'native_c7_probability':'NOT_IMPLEMENTED','training':'NO-GO'}
  data['validation']=validation
  data['external_power_waiver']='EXPLICIT_USER_CURRENT_RESUME_ONLY' if (root/'user-external-power-waiver-private.json').exists() else 'NOT_REQUESTED'
- data['current_classification']='DSP_HIGH_PRECISION_STANDALONE_VERIFIED' if verified else 'BLOCKED_DEVICE_SAFETY' if stops and not procs else 'UNRESOLVED'
+ data['standalone_classification']='DSP_HIGH_PRECISION_STANDALONE_VERIFIED' if verified else 'UNRESOLVED'
+ data['current_classification']='BLOCKED_DEVICE_SAFETY' if any(k.startswith('regression-') for k in stops) else 'DSP_HIGH_PRECISION_STANDALONE_VERIFIED' if verified else 'BLOCKED_DEVICE_SAFETY' if stops and not procs else 'UNRESOLVED'
+ data['required_device_regressions_complete']=False # Smoke and W8 need separate fresh evidence.
  data['prototype']='BUILT_NOT_DEVICE_VERIFIED' if not verified else 'STANDALONE_VERIFIED'
  data['device_smoke_w8']='NOT_RUN' # Only promote with new, separately audited result evidence.
  output=pathlib.Path(args.output).resolve();require(output.parent==repo/'docs/results','aggregate output')
@@ -102,7 +125,8 @@ def selftest():
   p=root/'device/final-1';(p/'preflight').mkdir(parents=True);build={'binary_hashes':{'synthetic':'a'*64}}
   def put(path,x):path.write_text(json.dumps(x),encoding='utf-8')
   put(root/'candidate-build-private.json',build)
-  ledger={'exit_code':0,'source_sha':'0'*40,'focus_takeover_count':0,'mode':'BACKGROUND_CORRECTNESS','build':build,'device_private':'PRIVATE_SENTINEL'};put(p/'identity-private.json',ledger)
+  safe=dict(thermal_status=0,battery_temperature_c=39,battery_level=80,battery_health=2,battery_present=True)
+  ledger={'exit_code':0,'source_sha':'0'*40,'focus_takeover_count':0,'mode':'BACKGROUND_CORRECTNESS','build':build,'thermal_before':safe,'thermal_after':safe,'device_private':'PRIVATE_SENTINEL'};put(p/'identity-private.json',ledger)
   pre={'status':'PASS','gates':{'host_storage':'PASS','external_power':'PASS'},'host_storage_waiver_requested':True};put(p/'preflight/device-preflight-private.json',pre)
   rows=[]
   for s in (0,1):
@@ -123,6 +147,14 @@ def selftest():
   except ValueError:pass
   else:raise ValueError('unauthorized power waiver accepted')
   ledger['external_power_waiver']=True;put(p/'identity-private.json',ledger)
+  for bad in ({**safe,'battery_temperature_c':40.1},{**safe,'thermal_status':2},{**safe,'battery_level':29},{}):
+   try:thermal_evidence(bad)
+   except ValueError:pass
+   else:raise ValueError('unsafe or missing thermal accepted')
+  require(thermal_evidence({**safe,'battery_temperature_c':41},True)['gate'].startswith('WAIVED'),'explicit thermal waiver')
+  try:thermal_evidence({**safe,'thermal_status':5},True)
+  except ValueError:pass
+  else:raise ValueError('emergency thermal accepted')
   changed=[{**r,'execute_us':9999,'arithmetic_us':9999,'receipt_inclusive_us':9999} if r['kind']=='execution' else r for r in rows];emit(changed);require(process(p)['numerical_digest']==a['numerical_digest'],'timing excluded')
   rejected=0
   for bad in (rows[:-1], [{**rows[0],'raw_tensor':[1,2]}]+rows[1:]):
