@@ -529,3 +529,50 @@ very large scores a finite -10000 mask need not suppress every future position;
 the reference uses that exact expression, without substituting -inf or clipping.
 Local Softmax success cannot cancel the original cumulative nine failures or
 authorize P→Backward accuracy certification.
+
+### Conditional local Softmax strategy
+
+The49-op pilot completed normal teardown for Scale and Mask with no required
+accuracy or word failures. The independent standard Softmax pilot then measured
+**88/88 core head element failures**, maximum1.89736825901e-3 against1e-6.
+All outputs were finite; row-normalization errors were around1e-3. The largest
+element error was at the first, effectively one-hot row in several cases. This
+is consistent with a normalization/exp approximation error, but final output
+alone cannot identify the backend's internal operation or dtype. No native P
+closure or standard local Softmax PASS is inferred.
+
+This measured failure activates one bounded Custom strategy: FP32 max shift,
+pinned toolchain `expf`, increasing-column rounded FP32 sum, then FP32 division.
+There is no epsilon, clipping, extra normalization, mask replacement or fitted
+coefficient. Library audit found `float expf(float)`, implemented by
+`libc.a:expf.o` with alias `h_expf` in the V81/G0/PIC toolchain archive, SHA256
+`9927efdb27bc776939f7f3228f96fca5e7c60ba311ba892fd92b318861391a85`.
+The SDK library is prebuilt and its polynomial uses scalar floating multiply/
+accumulate instructions. Our compiler's contraction-off flag does not redefine
+that prebuilt transcendental implementation. No no-FMA/bit-exact exp claim is
+made; existing ordered MatMul/Add/Multiply bodies and strict HVX are unchanged.
+Actual DSP exp accuracy must be independently measured, not inferred from the
+SDK Softmax example or the symbol audit. Disassembly remains private.
+
+`ForwardSoftmax`/`ForwardSoftmaxNoReceipt` append after the49-op prefix. Paired
+receipt8328 words contain2048 inputs,64 row maxima,2048 shifted inputs,2048
+exponents,64 denominators,2048 final probabilities and8 header words. Marker
+is`0x4838311a`. Arithmetic replay checks max, subtraction, ordered sum and
+division using the **received exponent words**. Host exp word differences are
+reported separately from exp-vs-double error; Host libm is not assumed to be a
+DSP bit oracle. NoReceipt has128 bytes of logical row-exponent stack scratch;
+compiler frame/spills are separate and not predicted from this number.
+
+An independent new Host reference models this strategy's FP32 shift/exp/sum/
+divide boundaries. It does not replace the original R5 model or its nine FAIL.
+Forty Host kernel calls passed, max probability error3.29406492416418e-7 against
+double, with complete writes, immutable input, guard/poison checks and invalid
+shape/overlap/nonfinite refusal. These are Host results, not DSP certification.
+
+The next P diagnostic first requires Custom standalone local accuracy, then
+diagnoses the native LN1-origin P in four observer conditions. Local received-
+masked-input error and ideal-LN1-origin cumulative error are distinct records.
+Every cumulative output is evaluated with all25 frozen gradients under the
+unchanged allocations, with separately labelled **Host-conditioned** consumer
+errors. No native backward graph is executed in that diagnostic. A cumulative
+failure remains a nonzero exit and cannot be promoted to P precision closure.

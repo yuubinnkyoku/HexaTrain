@@ -148,6 +148,7 @@ int main(int argc,char** argv){if(argc!=2)return 1;initializeProbe();auto fs=one
  if(std::string(argv[1])=="oneProbabilityScale"){auto rc=probabilitystudy::runScale(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneProbabilityMask"){auto rc=probabilitystudy::runMask(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneProbabilitySoftmax"){auto rc=probabilitystudy::runStandardSoftmax(fs);closeProbe();return rc;}
+ if(std::string(argv[1])=="oneProbabilityP"){auto rc=probabilitystudy::runProbability(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneQkScaleA"||std::string(argv[1])=="oneQkScaleB"){auto rc=qkscalestudy::run(argv[1],fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneHvx"){auto rc=orderedhvxstudy::run(fs);closeProbe();return rc;}
  if(std::string(argv[1])=="oneQkvHvx"){auto rc=orderedqkvstudy::run(fs);closeProbe();return rc;}

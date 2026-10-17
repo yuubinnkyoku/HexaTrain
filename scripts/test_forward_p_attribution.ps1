@@ -15,7 +15,7 @@ $fixtures=@($fixture,$ln,$producer)
 for($i=0;$i -lt 3;$i++){if((Get-FileHash -LiteralPath $fixtures[$i]).Hash.ToLowerInvariant() -ne $expected[$i]){throw 'FROZEN_FIXTURE_MISMATCH'}}
 Copy-Item -LiteralPath $ln -Destination (Join-Path $out 'ln1-parameters.bin')
 if($Legacy){& (Join-Path $PSScriptRoot 'test_ordered_hvx_ffn2_host.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportRoot (Join-Path $out 'legacy')}
-$tests=@('forward_mask_host_test','forward_probability_host_test','probability_graph_test','probability_gate_test','probability_reference_test','probability_attribution_test')
+$tests=@('forward_softmax_host_test','forward_mask_host_test','forward_probability_host_test','probability_graph_test','probability_gate_test','probability_reference_test','probability_attribution_test')
 if($Legacy){$tests=@('ordered_qkv_host_test','ordered_qkv_graph_test','qk_scale_host_test','qk_scale_graph_test')+$tests}
 $compiler=(Get-Command g++).Source
 $identities=@{}

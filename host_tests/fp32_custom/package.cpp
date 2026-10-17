@@ -18,9 +18,9 @@
 namespace {
 constexpr const char* package = "HexaFp32";
 const char* names[] = {"Copy", "Add", "Multiply", "Affine", "LnForward", "LnBackward", "LnResidual", "MatMulDContext", "MatMulDWo", "HeadSplit", "BroadcastMultiply", "MatMulDProbabilities", "MatMulDProbabilitiesNoReceipt", "LnForwardNoReceipt", "LnBackwardNoReceipt", "AddNoReceipt", "MatMulDContextNoReceipt", "MatMulDWoNoReceipt", "HeadSplitNoReceipt", "BroadcastMultiplyNoReceipt", "CopyNoReceipt", "SoftmaxProduct", "SoftmaxProductNoReceipt", "ProjectionQKV", "ProjectionQKVNoReceipt", "SoftmaxReduce", "SoftmaxReduceNoReceipt", "SoftmaxCenter", "SoftmaxCenterNoReceipt", "SoftmaxBackward", "SoftmaxBackwardNoReceipt", "RawDQDK", "RawDQDKNoReceipt", "FFN2", "FFN2NoReceipt", "QKVHeads", "QKVHeadsNoReceipt", "FFN2Hvx", "FFN2HvxNoReceipt", "ProjectionQKVHvx", "ProjectionQKVHvxNoReceipt", "ForwardQKRaw", "ForwardQKRawNoReceipt", "BackwardScoreScale", "BackwardScoreScaleNoReceipt", "ForwardScoreScale", "ForwardScoreScaleNoReceipt"};
-const char** extendedNames(){static const char* all[49];for(unsigned j=0;j<47;++j)all[j]=names[j];all[47]="ForwardMaskAdd";all[48]="ForwardMaskAddNoReceipt";return all;}
+const char** extendedNames(){static const char* all[51];for(unsigned j=0;j<47;++j)all[j]=names[j];all[47]="ForwardMaskAdd";all[48]="ForwardMaskAddNoReceipt";all[49]="ForwardSoftmax";all[50]="ForwardSoftmaxNoReceipt";return all;}
 Qnn_ApiVersion_t apiVersion = QNN_HTP_API_VERSION_INIT;
-QnnOpPackage_Info_t info = {package, nullptr, nullptr, 49, nullptr, 0,
+QnnOpPackage_Info_t info = {package, nullptr, nullptr, 51, nullptr, 0,
     QNN_SDK_BUILD_ID, &apiVersion, nullptr, nullptr, {0}};
 bool initialized = false;
 Qnn_ErrorHandle_t init(QnnOpPackage_GlobalInfrastructure_t) { initialized=true; return QNN_SUCCESS; }
@@ -33,6 +33,7 @@ Qnn_ErrorHandle_t validate(Qnn_OpConfig_t c) {
     if(c.version!=QNN_OPCONFIG_VERSION_1 || !c.v1.packageName || !c.v1.typeName ||
        std::strcmp(c.v1.packageName,package) || c.v1.numOfParams)
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    if(!std::strcmp(c.v1.typeName,"ForwardSoftmax")||!std::strcmp(c.v1.typeName,"ForwardSoftmaxNoReceipt"))return c.v1.numOfInputs==2&&c.v1.numOfOutputs==(!std::strcmp(c.v1.typeName,"ForwardSoftmax")?3u:2u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"ForwardMaskAdd")||!std::strcmp(c.v1.typeName,"ForwardMaskAddNoReceipt"))return c.v1.numOfInputs==3&&c.v1.numOfOutputs==(!std::strcmp(c.v1.typeName,"ForwardMaskAdd")?3u:2u)?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"LnForward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     if(!std::strcmp(c.v1.typeName,"LnBackward"))return c.v1.numOfInputs==4 && c.v1.numOfOutputs==4?QNN_SUCCESS:QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
@@ -135,6 +136,7 @@ QHPI_OpInfo_v1 ops[4] = {};
 #include "qk_scale_ops.h"
 #include "forward_scale_op.h"
 #include "forward_mask_op.h"
+#include "forward_softmax_op.h"
 extern "C" Qnn_ErrorHandle_t HexaFp32InterfaceProvider(QnnOpPackage_Interface_t* p) {
     if(!p)return QNN_OP_PACKAGE_ERROR_INVALID_ARGUMENT;
     *p={};p->interfaceVersion={1,4,0};p->v1_4.init=init;p->v1_4.terminate=terminate;
@@ -151,5 +153,5 @@ extern "C" const char* qhpi_init() {
         k.input_signature=floats;k.min_outputs=2;k.output_signature=outputs;
         ops[j].name=fullNames[j];ops[j].num_kernels=1;ops[j].kernels=&k;
     }
-    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps() && segmentcustom::registerOps() && softmaxcustom::registerOps() && closurecustom::registerOps() && hvxffn2::registerOps() && hvxqkv::registerOps() && qkscalecustom::registerOps() && forwardscale::registerOps() && forwardmask::registerOps()?package:nullptr;
+    return qhpi_register_ops_v1(4,ops,package)==QHPI_SUCCESS && lncustom::registerOps() && mmcustom::registerOps() && headcustom::registerOps() && broadcastcustom::registerOps() && attentioncustom::registerOps() && segmentcustom::registerOps() && softmaxcustom::registerOps() && closurecustom::registerOps() && hvxffn2::registerOps() && hvxqkv::registerOps() && qkscalecustom::registerOps() && forwardscale::registerOps() && forwardmask::registerOps() && forwardsoftmax::registerOps()?package:nullptr;
 }
