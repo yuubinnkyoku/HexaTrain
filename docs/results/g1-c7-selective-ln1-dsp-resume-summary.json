@@ -37,6 +37,26 @@
         "awake": "PASS",
         "top_resumed": "PASS"
       }
+    },
+    "pilot-2": {
+      "status": "BLOCKED",
+      "reason": "INSTALLED_APK_HASH_MISMATCH",
+      "device_executes": 0,
+      "gates": {
+        "host_analysis": "PASS",
+        "sdk_apk_host": "PASS",
+        "host_storage": "PASS",
+        "compiler": "PASS",
+        "package_probe": "PASS",
+        "protected": "PASS",
+        "same_physical_device": "PASS",
+        "active_run_absence": "PASS",
+        "awake": "PASS",
+        "top_resumed": "PASS",
+        "external_power": "WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME",
+        "power_thermal": "PASS",
+        "device_storage": "PASS"
+      }
     }
   },
   "processes": {},
@@ -47,7 +67,7 @@
   "validation": {
     "fast": {
       "status": "PASS",
-      "log_sha256": "f1eedcf69c1af7dcb912545ad422f9edcede776c5472a6dcc7b74b224f8fffbd"
+      "log_sha256": "c03ceaa5721dcb487a74f9e0d8b0640703d7f5a047cfff4243f91b3942c84f30"
     },
     "qnn": {
       "status": "PASS",
@@ -60,6 +80,7 @@
       "attribution_digest": "c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7"
     }
   },
+  "external_power_waiver": "EXPLICIT_USER_CURRENT_RESUME_ONLY",
   "current_classification": "BLOCKED_DEVICE_SAFETY",
   "prototype": "BUILT_NOT_DEVICE_VERIFIED",
   "device_smoke_w8": "NOT_RUN"

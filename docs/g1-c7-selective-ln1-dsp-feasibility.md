@@ -379,3 +379,21 @@ Fast profile PASS 69.3s。Qnn profile PASS 777.5s（Host suite359.3s、QNN APK40
 追記の公開aggregateは`docs/results/g1-c7-selective-ln1-dsp-resume-summary.json`。旧Host aggregateは初回研究のsnapshotとして保持する。追加allow-list exporterは安全停止、binary/source identity、観測variant coverage、タイミングを除く数値digestを扱い、SelfTestで欠損/未許可raw field/unsafe ledgerを拒否、word gateとprivacyを検査した。
 
 Private evidenceは従来root内の`resume-1/`。powerで停止したpilot-1を成功cohortへ混ぜない。再開追記のfinal HEAD、clean tree、旧refs、protected identities、report/aggregate hashesは`resume-1/final-closeout-private.json`にcommit後記録し、旧Host研究のcloseoutを保持する。新private build rootを使用し、従来DSP package/probeやprivate evidenceを上書きしていない。新packageに高精度Q/K/QKは無く、DSP native LN1→P、Full1-layer/19-layer、training readinessは認定しない。40k→60k/200kは引き続きNO-GO。
+
+## L. Explicit battery-only resume
+
+ユーザーが今回の診断について給電なしの継続を明示許可した。`UserAuthorizedExternalPowerWaiver`をdefault-offで追加し、事前登録planへ実測前に記録した（`af37eb0`）。数式、fixture、numerical gate、新旧DSP/Host/probe binaryは変更していない。
+
+Build identity監査で元plan自体もhash対象と確認したため、許可追記は別の`selective_ln1_battery_resume_plan.json`へ移した。元planをbuild時の内容へ戻し、凍結済みmanifestを変更せず照合する。Pilot-2はこれより前のAPK gateで停止しており、変更されたplanでの算術実行はない。
+
+免除するのは既知の外部給電不在のみ。AC/USB/Wirelessの全てがfalseと確認できなければ免除せず、telemetry不明はBLOCKED。電池残量≥30%、電池温度≤40°C、thermal status≤1、awake、top-resumed、active run absence、物理端末同一性、device容量、SDK/APK/protected identity等は維持する。通常の外部給電gateとHost 20GiB gateは引数なしでは変更しない。Preflight SelfTestは14 cases、device calls 0でPASS。
+
+新しいpilot-2のread-only preflightでは、電池84%、35°C、thermal status 0、health 2。同一物理端末、awake、top-resumed、active run absence、Host/device容量、compiler、既存package、protected identityはPASS。外部給電のみ明示免除を実際に適用した。Host容量は通常gateでPASSし、容量免除は使用していない。
+
+続くinstalled APK検査で`INSTALLED_APK_HASH_MISMATCH`を検出し、probe staging/execute前に停止した。pilot-2もdevice executes 0、停止後device操作0。最新のC7作業指示がAPK replacementへの明示許可を要求するため、今回の再build APKを対象とするデータ保持`pm install -r`の許可を依頼した。過去の別APKへの許可を今回の候補の許可として扱っていない。Host上の固定QAIRT/APK再監査は`status=SUCCESS`。アプリ起動・画面操作・データ削除・自動wake・APK replacementは行っていない。
+
+公開exporterは、Host容量と外部給電それぞれの適用免除をpreflight/runner ledger双方の明示flagから検査する。未許可の免除を拒否するSelfTestを追加し、timing除外digest、word gate、privacyの既存検査もPASS。安全停止のpilot-1/pilot-2を認定cohortへ混ぜない。
+
+給電免除追加後のFast profileは63.9sでPASS。数値実装を変更していないため、KのQnn/Host回帰結果とbinary identityを維持する。今回の追加SelfTest/API監査PASSをDSP算術実行のPASSへ転用しない。
+
+現在の阻害条件は給電ではなくAPK一致であり、分類は`BLOCKED_DEVICE_SAFETY`。S2は依然`BUILT_NOT_DEVICE_VERIFIED`。新packageの実機accuracy、runtime linkage、performance、HVX/W8回帰、Device smoke、3-process cohortは未実施。旧Host P contractの9 FAILとHost S2選定結果は従来どおり保持する。次の操作は、今回の監査済みAPKへの明示許可が得られた後のデータ保持installと、全安全gateの新規再確認である。Full1-layer/19-layerは未認定、40k→60k/200kはNO-GO。

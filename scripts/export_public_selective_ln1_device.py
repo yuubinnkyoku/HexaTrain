@@ -7,9 +7,19 @@ def require(x,m):
  if not x:raise ValueError(m)
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def read(p):return json.loads(pathlib.Path(p).read_text(encoding='utf-8-sig'))
+def safety_waivers(pre,ledger):
+ result=[]
+ for gate,request,invocation in (('host_storage','host_storage_waiver_requested','host_storage_waiver'),('external_power','external_power_waiver_requested','external_power_waiver')):
+  state=pre['gates'].get(gate)
+  require(state in ('PASS','WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'),'required safety gate')
+  if state.startswith('WAIVED'):
+   require(pre.get(request) is True and ledger.get(invocation) is True,'explicit waiver evidence')
+   result.append(gate)
+ return result
 def process(p):
  ledger=read(p/'identity-private.json');text=(p/'stdout.txt').read_text(encoding='utf-8-sig');pre=read(p/'preflight/device-preflight-private.json')
  require(pre['status']=='PASS' and ledger['focus_takeover_count']==0 and ledger['mode']=='BACKGROUND_CORRECTNESS','safety')
+ waivers=safety_waivers(pre,ledger)
  require(ledger['build']['binary_hashes']==read(p.parent.parent/'candidate-build-private.json')['binary_hashes'],'candidate fixed')
  apis=[(m[1],int(m[2])) for m in re.finditer(r'^api,([^,]+),(\d+)$',text,re.M)]
  failed=[{'stage':s,'code':c} for s,c in apis if c]
@@ -24,7 +34,7 @@ def process(p):
    if not r['observed']:r['arithmetic_median_us']=None;r['receipt_inclusive_median_us']=None
    performance.append(r)
  complete='summary,selective_ln1,' in text
- result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_HOST_STORAGE_WAIVER' if pre['gates']['host_storage'].startswith('WAIVED') else 'PASS','fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
+ result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_USER_WAIVER' if waivers else 'PASS','applied_safety_waivers':waivers,'fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
  if not complete:result['classification']='BLOCKED_DSP_PRECISION_RUNTIME' if failed else 'UNRESOLVED';return result
  require(len(rows)==2640 and len(execution)==480,'coverage')
  expected=set()
@@ -73,12 +83,13 @@ def main(args):
  verified=all(p and p.get('all_variants_pass') for p in cohort) and len({p['numerical_digest'] for p in cohort if p})==1
  validation={}
  for name in ('fast','qnn'):
-  p=root/(name+'-profile.txt');text=p.read_text(encoding='utf-8-sig');require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',text),'required profile incomplete');validation[name]={'status':'PASS','log_sha256':sha(p)}
+  p=root/('fast-power-resume-profile.txt' if name=='fast' and (root/'fast-power-resume-profile.txt').exists() else name+'-profile.txt');text=p.read_text(encoding='utf-8-sig');require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',text),'required profile incomplete');validation[name]={'status':'PASS','log_sha256':sha(p)}
  host=read(root/'host-regression/analysis-identity-private.json');require(host['tests']['probability_reference_test']['exit_code']==4 and host['tests']['probability_attribution_test']['exit_code']==0,'old contract reproduction')
  require(sha(root/'host-regression/attribution.jsonl')=='c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7','original nine/R0-R5 identity')
  validation['custom_host_regressions']={'status':'PASS','source_commit':host['source_commit'],'old_joint_contract':'FAIL_EXPECTED_EXIT_4','attribution_digest':'c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7'}
  data={'schema':1,'branch':'investigation/g1-c7-selective-ln1-dsp-feasibility','build_source_commit':build['source_sha'],'new_binary_sha256':build['binary_hashes'],'old_binary_sha256':build['old_package_bundle']['binary_hashes'],'hexagon_compiler_sha256':build['hexagon_compiler_sha256'],'ndk_compiler_sha256':build['ndk_compiler_sha256'],'geometry':'LN1 T32 D64 S2 only','host_storage_waiver':'EXPLICIT_USER_CURRENT_RESUME_ONLY','safety_stops':stops,'processes':procs,'fresh_bundle_regressions':regressions,'three_independent_processes_verified':bool(verified),'native_c7_probability':'NOT_IMPLEMENTED','training':'NO-GO'}
  data['validation']=validation
+ data['external_power_waiver']='EXPLICIT_USER_CURRENT_RESUME_ONLY' if (root/'user-external-power-waiver-private.json').exists() else 'NOT_REQUESTED'
  data['current_classification']='DSP_HIGH_PRECISION_STANDALONE_VERIFIED' if verified else 'BLOCKED_DEVICE_SAFETY' if stops and not procs else 'UNRESOLVED'
  data['prototype']='BUILT_NOT_DEVICE_VERIFIED' if not verified else 'STANDALONE_VERIFIED'
  data['device_smoke_w8']='NOT_RUN' # Only promote with new, separately audited result evidence.
@@ -92,7 +103,7 @@ def selftest():
   def put(path,x):path.write_text(json.dumps(x),encoding='utf-8')
   put(root/'candidate-build-private.json',build)
   ledger={'exit_code':0,'source_sha':'0'*40,'focus_takeover_count':0,'mode':'BACKGROUND_CORRECTNESS','build':build,'device_private':'PRIVATE_SENTINEL'};put(p/'identity-private.json',ledger)
-  put(p/'preflight/device-preflight-private.json',{'status':'PASS','gates':{'host_storage':'PASS'},'host_storage_waiver_requested':True})
+  pre={'status':'PASS','gates':{'host_storage':'PASS','external_power':'PASS'},'host_storage_waiver_requested':True};put(p/'preflight/device-preflight-private.json',pre)
   rows=[]
   for s in (0,1):
    for o in (0,1):
@@ -104,6 +115,14 @@ def selftest():
   def emit(rs):
    text='api,contextFree,0\napi,deviceFree,0\napi,backendFree,0\n'+'\n'.join(json.dumps(x) for x in rs)+'\nsummary,selective_ln1,required_failures=0\n';(p/'stdout.txt').write_text(text)
   emit(rows);a=process(p);require(a['all_variants_pass'] and a['safety']=='PASS' and 'PRIVATE_SENTINEL' not in json.dumps(a),'valid fixture/privacy')
+  pre['gates']['external_power']='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME';pre['external_power_waiver_requested']=True;ledger['external_power_waiver']=True
+  put(p/'preflight/device-preflight-private.json',pre);put(p/'identity-private.json',ledger)
+  require(process(p)['applied_safety_waivers']==['external_power'],'applied power waiver')
+  ledger['external_power_waiver']=False;put(p/'identity-private.json',ledger)
+  try:process(p)
+  except ValueError:pass
+  else:raise ValueError('unauthorized power waiver accepted')
+  ledger['external_power_waiver']=True;put(p/'identity-private.json',ledger)
   changed=[{**r,'execute_us':9999,'arithmetic_us':9999,'receipt_inclusive_us':9999} if r['kind']=='execution' else r for r in rows];emit(changed);require(process(p)['numerical_digest']==a['numerical_digest'],'timing excluded')
   rejected=0
   for bad in (rows[:-1], [{**rows[0],'raw_tensor':[1,2]}]+rows[1:]):

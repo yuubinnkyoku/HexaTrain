@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "original_plan": "selective_ln1_device_plan.json",
+  "scope": "Safety authorization addendum only; original build plan and all arithmetic, fixtures, numerical gates and binary identities remain frozen.",
+  "authorization": "Explicit human permission for battery-only continuation in current research resume; default-off UserAuthorizedExternalPowerWaiver required per invocation.",
+  "required": "Known AC/USB/Wireless false, battery >=30%, battery temperature <=40C, thermal status <=1. Unknown power telemetry remains blocked. All other original safety gates remain required.",
+  "limits": "No wake/unlock/foreground takeover/force-stop/endpoint guessing or unauthorized APK replacement. Stop on any remaining safety gate failure. No training."
+}
