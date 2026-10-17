@@ -1,6 +1,6 @@
 # G1 C7 Selective LN1 / DSP feasibility
 
-> A–Jは当初Host研究終了時の証拠。後続の実装・実機再開については末尾Kを参照する。旧Host数値・FAIL・未実測状態を遡って書き換えない。
+> A–Jは当初Host研究終了時の証拠。後続の実装・実機再開はK以降、最新のS2実機成功と回帰はMを参照する。旧Host数値・FAIL・未実測状態を遡って書き換えない。
 
 ## A. Initial evidence
 
@@ -397,3 +397,82 @@ Build identity監査で元plan自体もhash対象と確認したため、許可�
 給電免除追加後のFast profileは63.9sでPASS。数値実装を変更していないため、KのQnn/Host回帰結果とbinary identityを維持する。今回の追加SelfTest/API監査PASSをDSP算術実行のPASSへ転用しない。
 
 現在の阻害条件は給電ではなくAPK一致であり、分類は`BLOCKED_DEVICE_SAFETY`。S2は依然`BUILT_NOT_DEVICE_VERIFIED`。新packageの実機accuracy、runtime linkage、performance、HVX/W8回帰、Device smoke、3-process cohortは未実施。旧Host P contractの9 FAILとHost S2選定結果は従来どおり保持する。次の操作は、今回の監査済みAPKへの明示許可が得られた後のデータ保持installと、全安全gateの新規再確認である。Full1-layer/19-layerは未認定、40k→60k/200kはNO-GO。
+
+## M. Authorized install / actual S2 DSP cohort
+
+### Resume and bounded safety authorization
+
+ユーザーが今回の監査済みAPKのデータ保持installを明示許可した。固定SDKで再監査後、既存verified-cache helperの`pm install -r`を使用し、installed bytes一致、install中focus takeover 0、app launch/UI input/data clear無しを確認した。続くpilot-3とfinal-1/2/3は各processで安全条件を再確認してから実行した。
+
+S2のpilotは38°C、正式cohortは実行前38〜39°C、実行後39°C、thermal status 0、電池83〜85%。通常の温度/電池gate内であり、このcohortの温度免除はない。給電免除は要求flagと実際の適用を分離し、給電が実際に確認されたprocessでは通常PASSと記録する。
+
+その後の既存回帰開始前に`BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE`で一度停止し、probe投入を行わなかった。停止時の旧preflightは取得したthermal objectをthrow後に保存する順序で、具体値を失っていた。この証拠上の欠落を保持し、原因を温度・電池残量・thermal statusのどれかへ断定しない。以後は判定前に測定値をprivate保存するよう修正した。
+
+ユーザーが安全gateを無視して続行するよう明示したため、今回のbounded diagnosticに限るdefault-off `UserAuthorizedPowerThermalWaiver`を追加した。通常の40°C/status≤1/電池≥30%閾値だけを明示免除し、既知telemetry、SDKのemergency/health検査、物理端末同一性、active run absence、awake/top、APK/SDK/package、protected identityは維持する。純粋policyのSelfTestを含むpreflightは20 cases、device calls 0でPASS。算術、fixture、numeric gate、DSP/Host/probe binaryは変更しない。
+
+### Standalone / native saved-state / observer independence
+
+凍結済み60ケース（元44＋既存holdout16）、Baseline/S2 × Receipt有無 × Float Tap有無の8 variantsを実DSPで実行した。S2は各processとも2,640 numerical recordsと480 execution records、required failures 0。全variantで独立double精度gateを満たし、S2の全可視出力は独立Host candidate wordsとmismatch 0。
+
+| S2 output | 60 cases・全variantsのmaxAbs | Registered gate | Host word mismatches |
+|---|---:|---:|---:|
+| Y | 4.3431564878e-7 | 0.002 | 0 |
+| xhat | 4.9209063580e-7 | 0.002 | 0 |
+| inverse | 1.5488809083e-5 | 0.002 | 0 |
+| local dX | 6.6563704138e-5 | 0.02 | 0 |
+| local dGamma | 2.0294970653e-5 | 0.02 | 0 |
+| local dBeta | 7.8966841102e-6 | 0.02 | 0 |
+
+Observed producer receiptのxhat/inverseと、同一graph内の旧LN backward consumerが受信したwordsが一致した。NoTapではxhat/inverseをNATIVEに保持し、Host再注入しない。NoReceipt/NoTapの不可視stateを直接測定したとは主張せず、そのgraph自身のY/dX/dGamma/dBetaを独立referenceと比較した。最終出力はObserved/Tap variantとも全word一致。
+
+同じbinaryの正式3 processのordered numerical digestはすべて`bdea55431a63be1399a766e572d344bd18a41aeed506c82b5ac11074fa9d285d`。Timingを除外し、process間一致とvariant間一致を別々に検査した。Pilotは正式cohortから除外。入力不変、全書込み、finite、poison/canary、Observed DSP marker、QNN API success、context/device/backend teardownを確認した。算術のHost fallback入口は拒否されたままである。
+
+旧Baselineも全variantで既存double accuracy gate内、variant間のwords一致。ただしBaselineのHost words一致は登録gateではなく、HostとDSPにはword差がある。Observed/Tapの60ケースではY 2,147、xhat 2,484、inverse 39、dX 2,322、dGamma 137、dBeta 0 wordsが異なった。これをS2のword identityへ転用しない。Baseline dGamma maxAbs 1.9649443288e-5に対しS2は2.0294970653e-5であり、全metricが一方向に改善したとも主張しない。
+
+### Actual runtime / cost
+
+通常の固定QHPI load条件で新packageの登録、context/finalize/execute、`hypot`等のruntime依存解決が実際に成功した。これは60ケースのbounded geometryについての証拠で、全domainのdenormal/exception/libm精度を認定するものではない。
+
+| Same-binary metric | Baseline | S2 |
+|---|---:|---:|
+| Observed/Tap body median、3 process | 450〜451µs | 394〜395µs |
+| Observed/Tap receipt-inclusive median | 927〜928µs | 874〜876µs |
+| NoReceipt/NoTap execute steady median | 5.228〜5.588ms | 5.272〜5.603ms |
+| NoReceipt/NoTap first execute | 5.813〜6.068ms | 5.689〜5.843ms |
+| NoReceipt/NoTap finalize | 43.677〜55.190ms | 39.792〜51.760ms |
+
+各steady値は同一process内31 samplesのmedianの範囲。全8 variantsのp10/p90と各process値は公開aggregateへ保存する。BodyにはBaseline内部validation/timer等の差があり、純粋なdouble対float instruction throughputとは扱わない。Execute wallはForward＋旧local Backwardの2-node graphとAPI loggingを含む。NoReceipt内部body時間は未測定で、0ではなくnullとしてexportする。Wallの差から有意な速度改善を断定しない。
+
+両候補のNoReceipt/NoTapは2 nodes、11 tensors、NATIVE saved state 8,320 bytes、Host buffers下限33,796 bytes。Observedでは13 tensors、NoTap Host下限84,040 bytes、Tapでは92,360 bytes。明示center scratchは512 bytes、static S2 body frame560 bytes、Baseline body576 bytes（callee stackやbackend workspaceを含まない）。19×8へのwall単純倍算やproduction throughput予測を行わない。
+
+### Existing regressions and preserved negatives
+
+新旧両packageを同一context生成前に登録したfresh regressionで、HVX FFN2、HVX QKV、Forward QKᵀ、Backward Score Scale、Forward Scale、Custom MaskはPASS。標準Maskは旧negative-controlの176 failed predicatesを再現した。
+
+`oneProbabilitySoftmax`は標準HTP Softmaxの負例diagnosticであり、実exit4/local failures224/nonfinite0を再現した。最初にこれを通常のexit0回帰として呼んだためwrapperが停止したが、sourceを監査して負例の意味を分離した。算術修正や閾値変更は行っていない。
+
+同じ既存probe binaryの`oneProbabilityP`を追加実行し、Custom Softmax local failures0、upstream failures0、word mismatches0を確認した。一方、旧累積Pの36 failed predicatesと実exit4は維持した。これら176/224/36は以前の公開Device evidenceと同じ件数である。Expected exit4だけで新しいlocal failureを隠さないよう、allow-list exporterはlocal/upstream/word/finite/APIと累積失敗件数を別々に検査する。P→Backward native executionは0のまま。
+
+### Scope / next investment
+
+`DSP_HIGH_PRECISION_STANDALONE_VERIFIED`はS2 LN1と同一graphのsaved-state/local backwardに限定する。LN1→高精度Q/K→高精度QK→Pは実装しておらず、Host S2合同PASSをDevice cumulative PのPASSへ昇格させない。旧Host C0の9 FAIL、旧Device cumulative Pの36 FAIL、standard Softmaxの224 FAILを保持する。
+
+次の実装投資は、既存HVX Vを維持した高精度Q/Kのbounded mixed invocation（設計Option A）の検証を優先する。その後に高精度QKᵀを接続してS2/C6のFP32 tensor boundariesを再現する。今回のLN1実測だけでMatMul double costを予測せず、既存HVXの速度改善をprecision closureの代用にしない。Backward Head Scatter、V/Gate branches、LN1 dY aggregation、full-layer integrationも未解決のままである。
+
+### Device smoke / fresh W8 / final provenance
+
+必要な既存W8回帰のためHVX有効debug APKとinstrumentation APKをbuildし、固定QAIRT audit、V81、8 workers、既存algorithm identity、asset Skel hash一致を確認した。既存のデータ保持install許可と続行指示の範囲で、同じverified-cache方式で更新し、installed APKs一致、focus takeover 0、app launch/data clear無しを確認した。Production backend選択・optimizer source・W8 ABIは変更していない。最初のGradle呼出しはPowerShellの未quote property引数がtask名へ分割されて失敗した。全引数を配列で渡して再buildし、5m31sで成功。失敗logも保持し、SDKや算術変更で回避していない。
+
+Device smokeと`hvx-muon-optimizer-benchmark`は、各々fresh preflight後に`BACKGROUND_CORRECTNESS`、`RequireAwakeSafety`、`SkipBuild/SkipInstall`、180秒上限で実行し、両方PASS。給電/温度免除は明示要求したが、両試験とも前後38°C、thermal status 0、電池90%で通常閾値内だった。Instrumentation、single-flight、physical identity、APK/SDK一致、focus takeover 0を確認した。Device smokeはSDK device/contextのsmokeであり、tensor算術の証拠は別のS2 probeにある。
+
+W8は**新規実行の114/114**、maxAbs `1.490116119e-8`、worst relative L2 `4.40269854e-8`、minimum cosine `1`、RPC success、finite、fallback false。過去114/114の転用ではない。新S2 packageをproduction builderへ接続した試験ではなく、変更していない既存optimizer経路の独立回帰である。Benchmark内のsynthetic一時stateのみを使用し、checkpoint/training stateを更新していない。W8 timingをS2速度やproduction training throughputへ転用しない。
+
+既存custom回帰8 variantsは、6つのexit0回帰、標準Softmaxのexpected exit4負例、Custom P local PASS＋旧cumulative FAILのexpected exit4を分けて完了した。公開aggregateの`required_regression_satisfied`はこの区別を維持し、標準Softmaxや旧cumulative Pのaccuracy PASSという意味ではない。全て同一の新旧packageをcontext生成前に登録したfresh実行である。
+
+S2 build sourceはKの`b7729eecc1c3fc91992c61edb787c0a17bfcf771`、S2 device-tested sourceは`3717a4999a18eaa973a98ee8dd1b787d9688e998`。既存回帰の安全免除runner sourceは`8d6c636`、追加P診断とheadless/W8 sourceは`2570bf3`。これらの間でS2算術/package/probe/fixture binary変更はなく、上記3-process cohortはKの固定hashと一致する。後続差分はsafety/evidence/reportだけであり、別binaryの結果を代用していない。
+
+公開aggregateはallow-list exporterで再生成し、各processの実測値、適用免除、8 variant coverage、stage errors、3-process digest、timing、fresh regressions、W8数値、SDK/compiler/fixture identityを照合する。APK hashes、端末情報、絶対path、raw logs/tensorsはprivateのみ。元のHost aggregateと過去安全停止を保持する。最終HEAD/clean tree、protected5 identities、旧branch refs、新旧全binary/source hashes、report/aggregate hashesはcommit後のprivate closeoutへ保存する。
+
+最終Fastは63.3s PASS。Host profile450.1s、実装後Qnn profile777.5s（Host suite359.3s、QNN build/API/shape/APK auditを含む）、追加Host numerical/contract suite、新package CPU算術拒否4/4、preflight/headless/exporter SelfTestもPASS。数値sourceを変更せず、HVX有効APKは別の実build/監査とfresh smoke/W8で補った。Qnn profileがbuildした先のAPKとW8 APKを同じidentityとは扱わない。旧Host P合同契約runnerのexpected exit4/9 FAILは独立して保持する。
+
+最終分類は`DSP_HIGH_PRECISION_STANDALONE_VERIFIED`（S2 LN1＋native saved-state/local backward、observer-free final accuracyと3 process一致）と、`PASS_SCOPED_S2_DIAGNOSTIC`（必要な限定回帰を含む）。Host S2合同PASS、旧Host baseline FAIL、旧Device cumulative P FAILを独立に保持する。Native S2 LN1→P、Full1-layer/19-layer、Full Training correctnessは未認定。35/40-node Tap incidentは`REPRODUCED / CAUSE UNRESOLVED`、6031は`UNRESOLVED / DORMANT / WATCH`、40k→60k/200kは引き続きNO-GO。
