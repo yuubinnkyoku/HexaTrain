@@ -68,4 +68,6 @@ int run(const char* fixture){auto original=one::read(fixture),cs=segmentstudy::l
  return failures==9&&comparisons==2200&&matched==48&&std::fabs(pMax-1.00750624248969e-6)<1e-18&&std::fabs(dsMax-4.64227603470169e-4)<1e-15?0:4;
 }
 }
+#ifndef PHONELM_ATTRIBUTION_LIBRARY
 int main(int argc,char** argv){std::cout<<std::setprecision(17);if(argc!=2)return 1;return attribution::run(argv[1]);}
+#endif
