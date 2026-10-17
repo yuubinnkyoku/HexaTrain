@@ -13,7 +13,7 @@ template<bool Observe> uint32_t kernel(QHPI_RuntimeHandle*,uint32_t no,QHPI_Tens
  auto start=lncustom::now();if constexpr(Observe)for(unsigned h=0;h<2;++h)std::memcpy(r+8+h*1024,x[h],4096);auto math=lncustom::now();
  for(unsigned h=0;h<2;++h)for(unsigned row=0;row<32;++row){unsigned base=row*32;float mx=x[h][base];for(unsigned c=1;c<32;++c)if(x[h][base+c]>mx)mx=x[h][base+c];float exponent[32];float sum=+0.f;
   if constexpr(Observe)std::memcpy(r+2056+h*32+row,&mx,4);
-  for(unsigned c=0;c<32;++c){volatile float shifted=x[h][base+c]-mx;float e=::expf(shifted);if(!std::isfinite(e)||e<0)return QHPI_ERROR_FATAL;exponent[c]=e;volatile float next=sum+e;sum=next;if constexpr(Observe){std::memcpy(r+2120+h*1024+base+c,const_cast<const float*>(&shifted),4);std::memcpy(r+4168+h*1024+base+c,&e,4);}}
+  for(unsigned c=0;c<32;++c){volatile float shifted=x[h][base+c]-mx;float e=::expf(shifted);if(!std::isfinite(e)||e<0)return QHPI_ERROR_FATAL;exponent[c]=e;volatile float next=sum+e;sum=next;if constexpr(Observe){float observedShift=shifted;std::memcpy(r+2120+h*1024+base+c,&observedShift,4);std::memcpy(r+4168+h*1024+base+c,&e,4);}}
   if(!std::isfinite(sum)||sum<=0)return QHPI_ERROR_FATAL;if constexpr(Observe)std::memcpy(r+6216+h*32+row,&sum,4);
   for(unsigned c=0;c<32;++c){volatile float p=exponent[c]/sum;if(!std::isfinite(p)||p<0)return QHPI_ERROR_FATAL;y[h][base+c]=p;}
  }
