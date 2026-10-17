@@ -1,6 +1,7 @@
 # Read-only, single-attempt safety preflight. Never wakes, reconnects, installs,
 # stops a process or changes foreground/power policy. Failure ends device work.
-param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId)
+param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
+ [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -17,6 +18,12 @@ try {
  if([IO.DriveInfo]::new([IO.Path]::GetPathRoot($root)).AvailableFreeSpace -lt 20GB){throw 'HOST_STORAGE_HEADROOM_LOW'}
  $record.gates.host_storage='PASS'
  $build=Get-Content (Join-Path $root 'build/fp32-custom/build-identity.json') -Raw|ConvertFrom-Json
+ $manifest=Get-Content (Join-Path $HexagonSdkRoot 'hexagon_sdk.json') -Raw|ConvertFrom-Json
+ $tools=@($manifest.root.tools.info|Where-Object {$_.name -eq 'Hexagon Tools'})
+ if($manifest.root.id.version -ne '6.6.0.0' -or $tools.Count -ne 1 -or $tools[0].build -ne '19.0.07'){throw 'HEXAGON_IDENTITY_MISMATCH'}
+ if((Get-Content (Join-Path $NdkRoot 'source.properties') -Raw) -notmatch 'Pkg.Revision\s*=\s*26.2.11394342'){throw 'NDK_IDENTITY_MISMATCH'}
+ if((Get-FileHash (Join-Path $HexagonSdkRoot 'tools/HEXAGON_Tools/19.0.07/Tools/bin/hexagon-clang++.exe')).Hash.ToLowerInvariant() -ne $build.hexagon_compiler_sha256 -or (Get-FileHash (Join-Path $NdkRoot 'toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe')).Hash.ToLowerInvariant() -ne $build.ndk_compiler_sha256){throw 'COMPILER_IDENTITY_MISMATCH'}
+ $record.gates.compiler='PASS'
  foreach($p in $build.source_hashes.psobject.Properties){if((Get-FileHash (Join-Path $root $p.Name)).Hash.ToLowerInvariant() -ne $p.Value){throw 'BUILD_SOURCE_MISMATCH'}}
  foreach($p in $build.binary_hashes.psobject.Properties){if((Get-FileHash (Join-Path $root "build/fp32-custom/$($p.Name)")).Hash.ToLowerInvariant() -ne $p.Value){throw 'BUILD_BINARY_MISMATCH'}}
  $record.gates.package_probe='PASS';$record.build=$build

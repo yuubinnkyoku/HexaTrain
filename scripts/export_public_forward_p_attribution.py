@@ -60,7 +60,7 @@ def analyze(records):
         paths['R'+str(path)]['allowed_underflow_count'] = sum(r['allowed_underflow'] for r in groups['row'] if r['path'] == path)
     matched = [r for r in groups['impact'] if r['path'] == 5 and r['provenance_same_fixture']]
     worst = max((r for r in f if r['predicate'] == 'ds_bound'), key=lambda r: r['value'])
-    failures = [{k: r[k] for k in FAILURE_FIELDS if r['gradient'] >= 0 or k in FAILURE_FIELDS[:18]} for r in f]
+    failures = [{k: r[k] for k in FAILURE_FIELDS if r['gradient'] >= 0 or k in FAILURE_FIELDS[:16]} for r in f]
     return dict(original={k:s[k] for k in ('failures','p_maxAbs','row_error','ds_bound','dv_bound','ds_actual','dv_actual')},
                 failures=failures, unique_forward_cases=sorted({r['forward'] for r in f}),
                 unique_heads=sorted({r['head'] for r in f}), unique_gradient_cases=sorted({r['gradient'] for r in f if r['gradient']>=0}),
@@ -81,6 +81,9 @@ def analyze(records):
 
 def safety(record):
     need(record['status'] == 'BLOCKED' and record['reason'], 'STOP_NOT_ESTABLISHED')
+    need(record['reason'] in ('DEVICE_NOT_AWAKE_OR_UNKNOWN', 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT',
+                             'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE', 'ADB_NO_ONLINE_DEVICE',
+                             'INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN', 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'), 'UNALLOWLISTED_STOP_REASON')
     need(record['read_only'] is True and record['device_executes'] == 0
          and record['device_operations_after_stop'] == 0, 'DEVICE_PROMOTION')
     # Export this mode only after a real read-only device gate was reached.
@@ -97,6 +100,12 @@ def export(repo, root):
         need(item['exit_code'] == (4 if name=='probability_reference_test' else 0), 'ANALYSIS_EXIT')
     need('attribution_analysis_suite=PASS old_joint_contract=FAIL' in (root/'host-analysis.txt').read_text(encoding='utf-8-sig'), 'SUITE_INCOMPLETE')
     analysis = analyze([json.loads(s) for s in (root/'attribution.jsonl').read_text(encoding='utf-8-sig').splitlines()])
+    repeat = load(root/'host-reproduction-private.json')
+    need(repeat['kind'] == 'HOST_ONLY_REPRODUCTION' and repeat['device_claim'] is False and repeat['processes'] == 3, 'HOST_REPEAT_CLASSIFICATION')
+    need(repeat['sha256'] == sha(root/'attribution.jsonl') and len(repeat['runs']) == 2, 'HOST_REPEAT_COUNT')
+    need({r['host_process'] for r in repeat['runs']} == {2,3}, 'HOST_REPEAT_IDS')
+    for r in repeat['runs']:
+        need(sha(root/f"attribution-repeat-{r['host_process']}.jsonl") == r['sha256'] == repeat['sha256'], 'HOST_REPEAT_DIGEST')
     old = host_record((root/'probability_reference_test.txt').read_text())
     need(old['joint_failures'] == analysis['original']['failures'] == 9, 'ORIGINAL_FAILURE_COUNT')
     for k in ('p_maxAbs','row_error','ds_bound','dv_bound','ds_actual','dv_actual'):
@@ -129,6 +138,7 @@ def export(repo, root):
                       three_process_cohort='NOT_RUN')
     return dict(schema=1,status='BLOCKED',branch=BRANCH,research_base=BASE,analysis=analysis,
                 analysis_source_commit=identity['source_commit'],analysis_executable_sha256=identity['tests']['probability_attribution_test']['executable_sha256'],
+                host_reproduction=dict(independent_processes=3,ordered_numerical_digest=repeat['sha256'],device_claim=False),
                 analysis_log_sha256=identity['tests']['probability_attribution_test']['log_sha256'],host_compiler_sha256=identity['compiler_sha256'],
                 compiled_device_candidate_source_commit=build['source_sha'],device_tested_source_commit=None,
                 binary_sha256=build['binary_hashes'],qairt_build_id=build['qairt_build_id'],qnn_api='2.37.0',architecture='V81',
@@ -137,7 +147,10 @@ def export(repo, root):
                 scale_bits='0x3e3504f3',mask_allowed_bits='0x00000000',mask_future_bits='0xc61c4000',axis=3,beta=1,
                 original_gates=dict(P=1e-6,row=2e-6,P_dScores=.00025,P_dValue=.001,dScores=.002,dValue=.01),gate_relaxation=False,
                 classifications=['HOST_P_ERROR_ATTRIBUTION_VERIFIED','HOST_P_JOINT_CONTRACT_FAIL','BLOCKED_HOST_P_BUDGET','BLOCKED_DEVICE_SAFETY'],
-                safety_reason=stop['reason'],preflight_gates=dict(stop['gates']),device_executes=0,final_processes=0,device_numerical_digests=[],
+                safety_reason=stop['reason'],preflight_gates={k:stop['gates'][k] for k in
+                    ('host_analysis','sdk_apk_host','host_storage','compiler','package_probe','protected',
+                     'same_physical_device','active_run_absence','awake','top_resumed','power_thermal',
+                     'device_storage','installed_apk') if k in stop['gates']},device_executes=0,final_processes=0,device_numerical_digests=[],
                 forward_scale='NOT_RUN',standard_mask='NOT_RUN',standard_softmax='NOT_RUN',custom_softmax='NOT_IMPLEMENTED_CONDITION_NOT_MET',
                 native_P='UNVERIFIED',P_backward='SHAPE_OWNERSHIP_ONLY',validation=validation,
                 protected_artifacts='PASS',protected_hash_count=5,previous_branches='PASS',training='NO-GO',training_updates=0,
