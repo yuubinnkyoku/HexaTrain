@@ -78,9 +78,10 @@ def cost(mask):
         "conversion_note":"Actual static conversion sites and spills in codegen; source double center[64] includes float->double->float in unselected paths; compiler removes many. Dynamic counts depend on branches and are not equated to source casts.","qnn_launches":"LN1 + mixed QKV + paired QK = 3 proposed; split QK/V = 4; no graph built"}
 
 def codegen(root):
-    ident=read(root/"codegen/identity-private.json")
-    for name,d in ident["outputs"].items():require(sha(root/"codegen"/name)==d,"codegen hash")
-    asm=(root/"codegen/selective.s").read_text(encoding="utf-8-sig")
+    root=root/"codegen-link-final"
+    ident=read(root/"identity-private.json")
+    for name,d in ident["outputs"].items():require(sha(root/name)==d,"codegen hash")
+    asm=(root/"selective.s").read_text(encoding="utf-8-sig")
     funcs=[]
     for match in re.finditer(r"\.type\s+([^,\s]+),@function(.*?)\.size\s+\1,",asm,re.S):
         name,body=match.groups()
@@ -90,8 +91,8 @@ def codegen(root):
         else:continue
         funcs.append({"function":label,"static_dfadd_sites":len(re.findall(r"dfadd\(",body)),"static_df_partial_multiply_sites":len(re.findall(r"dfmpy(?:fix|ll|lh|hh)\(",body)),"static_sf2df_sites":body.count("convert_sf2df"),"static_df2sf_sites":body.count("convert_df2sf"),"folded_spill_sites":body.count("Folded Spill"),"folded_reload_sites":body.count("Folded Reload"),"calls":sorted(set(re.findall(r"\bcall\s+([A-Za-z0-9_]+)",body)))})
     require(len(funcs)==10,"all actual arithmetic functions")
-    require(not re.search(r"llvm\.fma|fadd fast|fmul fast",(root/"codegen/selective.ll").read_text()),"strict codegen")
-    return {"source_commit":ident["source_commit"],"compiler_sha256":ident["compiler_sha256"],"source_sha256":ident["source_sha256"],"arithmetic_sha256":ident["arithmetic_sha256"],"sdk_manifest_sha256":ident["sdk_manifest_sha256"],"flags":ident["flags"],"output_hashes":ident["outputs"],"functions":funcs,"runtime_linkage_verified":False,"latency_measured":False,"native_float64_required":False}
+    require(not re.search(r"llvm\.fma|fadd fast|fmul fast",(root/"selective.ll").read_text()),"strict codegen")
+    return {"source_commit":ident["source_commit"],"compiler_sha256":ident["compiler_sha256"],"source_sha256":ident["source_sha256"],"arithmetic_sha256":ident["arithmetic_sha256"],"sdk_manifest_sha256":ident["sdk_manifest_sha256"],"flags":ident["flags"],"output_hashes":ident["outputs"],"functions":funcs,"runtime_library_hashes":ident["runtime_library_hashes"],"static_no_undefined_link_exit":ident["static_no_undefined_link_exit"],"runtime_linkage_verified":False,"latency_measured":False,"native_float64_required":False}
 
 def export(root,repo):
     identity=read(root/"host/identity-private.json")
