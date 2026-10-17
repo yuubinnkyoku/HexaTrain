@@ -612,7 +612,17 @@
       "keyguard_showing_at_snapshot": true,
       "device_executes": 0,
       "device_operations_after_stop": 0
+    },
+    {
+      "status": "BLOCKED",
+      "reason": "INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN",
+      "read_only": true,
+      "awake_at_snapshot": "PASS",
+      "top_resumed_at_snapshot": "PASS",
+      "keyguard_showing_at_snapshot": false,
+      "device_executes": 0,
+      "device_operations_after_stop": 0
     }
   ],
-  "latest_safety_reason": "TOP_RESUMED_UNKNOWN"
+  "latest_safety_reason": "INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN"
 }

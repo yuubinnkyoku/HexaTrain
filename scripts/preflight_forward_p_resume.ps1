@@ -1,10 +1,23 @@
 # Read-only, single-attempt safety preflight. Never wakes, reconnects, installs,
 # stops a process or changes foreground/power policy. Failure ends device work.
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
- [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='')
+ [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='',[switch]$SelfTest)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
+function Resolve-ForwardPApkHashState([string]$HashText,[string]$ExpectedHash){
+ $parsed=[regex]::Match($HashText.Trim(),'(?i)^([0-9a-f]{64})\s+')
+ if(!$parsed.Success){return 'INSTALLED_APK_HASH_UNKNOWN'}
+ if($parsed.Groups[1].Value.ToLowerInvariant() -ne $ExpectedHash.ToLowerInvariant()){return 'INSTALLED_APK_HASH_MISMATCH'}
+ return 'PASS'
+}
+if($SelfTest){
+ $anchor='a'*64;$other='b'*64
+ $cases=@(@{text="$anchor  /data/app/fixture/base.apk";expected='PASS'},@{text="`n$anchor  /data/app/fixture/base.apk`r`n";expected='PASS'},@{text="$($anchor.ToUpperInvariant())  /data/app/fixture/base.apk";expected='PASS'},@{text="$other  /data/app/fixture/base.apk";expected='INSTALLED_APK_HASH_MISMATCH'},@{text='permission denied';expected='INSTALLED_APK_HASH_UNKNOWN'})
+ foreach($case in $cases){if((Resolve-ForwardPApkHashState $case.text $anchor) -ne $case.expected){throw 'APK_HASH_STATE_SELFTEST_FAILED'}}
+ Write-Host 'forward_p_preflight_selftest=PASS cases=5 device_calls=0'
+ exit 0
+}
 $root=Split-Path -Parent $PSScriptRoot
 $evidence=Join-Path $root 'build/reports/g1-forward-p-numerical-attribution-safe-resume'
 $out=if($ReportRoot){[IO.Path]::GetFullPath($ReportRoot)}else{$evidence}
@@ -69,9 +82,12 @@ try {
  $record.gates.device_storage='PASS'
  $package=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','pm','path','com.yuubinnkyoku.phonelm')
  if($package.Text.Trim() -notmatch '^package:(/[^\r\n]+/base\.apk)$'){throw 'INSTALLED_APK_UNKNOWN'}
- $installed=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','sha256sum',$Matches[1])
+ $installedPath=$Matches[1]
+ $installed=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','sha256sum',$installedPath)
  $apkHash=(Get-FileHash (Join-Path $root 'app/build/outputs/apk/debug/app-debug.apk')).Hash.ToLowerInvariant()
- if($installed.Text -notmatch ('^'+$apkHash+'\s')){throw 'INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN'}
+ $record.installed_apk_private=@{path=$installedPath;hash_readback=$installed.Text;readback_exit=$installed.ExitCode;expected_sha256=$apkHash}
+ $apkState=Resolve-ForwardPApkHashState $installed.Text $apkHash
+ if($apkState -ne 'PASS'){throw $apkState}
  $record.gates.installed_apk='PASS'
  $record.status='PASS'
 } catch {$record.reason=$_.Exception.Message;Write-Host "safe_resume=BLOCKED reason=$($record.reason)"} finally {

@@ -451,3 +451,33 @@ app names, device identifiers or private directory names. Existing Host/Qnn
 results retain their original provenance; no new numerical certification follows
 from this scripts/evidence-only change. Fast passed in63.1s for this continuation;
 both Host guard tests and the four new exporter corruption tests passed.
+
+### Resume after manual unlock
+
+The user subsequently confirmed a manual unlock and authorized a fresh check.
+This attempt started from clean `c5fe6cbea8523ece7acf2bb8703c598839482f91`.
+Same physical identity, no active run, awake, top-resumed, external power/thermal,
+device free space, candidate/compiler and protected identities passed. The next
+gate stopped before execution at **INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN**.
+This resolves the observed lock-screen blocker for that snapshot, but not the
+complete device preflight. No device operation followed this stop.
+
+The local APK was re-audited on Host: pinned QAIRT/V81 library hashes, ABI,
+Build ID and forbidden path/version checks passed. The original APK check did
+not retain its hash readback, so this record cannot distinguish a genuine
+installed-package mismatch from an unrecognized readback. It is not evidence
+of a corrupt APK or an incorrect DSP numerical result.
+
+The preflight now retains that readback privately and distinguishes parsed hash
+mismatch from unavailable/invalid hash output. It accepts whitespace and hex case
+as the shared repository hash checks do, without relaxing byte identity. Five
+Host-only self-tests passed, covering exact/whitespace/case matches, a genuine
+mismatch and invalid output. Fast passed in64.9s. No kernel/probe math changed.
+
+The user was asked whether to use the existing data-preserving verified APK
+replacement helper (`pm install -r`, no app launch/UI input) followed by a new
+complete preflight, or permit read-only diagnosis only. That device action was
+not performed while awaiting the reply, in accordance with the requested
+safety-failure stop. The candidate still has zero device executions; Scale,
+Mask, Softmax, HVX/W8 regression and device cohort remain NOT RUN. The Host
+nine-predicate failure, original thresholds and training NO-GO remain unchanged.

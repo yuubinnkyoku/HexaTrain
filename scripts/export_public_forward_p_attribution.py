@@ -86,7 +86,7 @@ def safety(record):
     need(record['reason'] in ('DEVICE_NOT_AWAKE_OR_UNKNOWN', 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT',
                              'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE', 'ADB_NO_ONLINE_DEVICE',
                              'INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN', 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN',
-                             'TOP_RESUMED_UNKNOWN'), 'UNALLOWLISTED_STOP_REASON')
+                             'TOP_RESUMED_UNKNOWN','INSTALLED_APK_HASH_UNKNOWN','INSTALLED_APK_HASH_MISMATCH'), 'UNALLOWLISTED_STOP_REASON')
     need(record['read_only'] is True and record['device_executes'] == 0
          and record['device_operations_after_stop'] == 0, 'DEVICE_PROMOTION')
     # Export this mode only after a real read-only device gate was reached.
