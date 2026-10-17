@@ -47,14 +47,31 @@ Adb @('shell','chmod','700',"$remote/$executable")|Out-Null
 function Top {$a=Adb @('shell','dumpsys','activity','activities');$m=[regex]::Match($a,'(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/');if(!$m.Success){throw 'TOP_RESUMED_UNKNOWN'};return $m.Groups[1].Value}
 if((Top) -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_FOREGROUND'}
 if((Adb @('shell','dumpsys','power')) -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN'}
+Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+if((Adb @('shell','ps','-A')) -match '(?m)\b(?:fp32_probe|layernorm_probe|one_layer_probe|selective_ln1_probe|selective_ln1_regression_probe|mixed_qkv_probe|mixed_s2_regression_probe|mixed_existing_regression_probe)\s*$'){throw 'ACTIVE_CUSTOM_PROBE_BEFORE_EXECUTE'}
 $thermalBefore=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint
 $beforeState=Resolve-MixedQkvMonitoringState $thermalBefore
 if($beforeState -like 'BLOCKED*'){throw 'POWER_THERMAL_UNSAFE'}
 $argument=if($Variant -eq 'mixed_qkv'){'mixed-inputs.bin selective-ln1-inputs.bin'}elseif($Variant -eq 'selective_ln1'){'selective-ln1-inputs.bin'}else{$Variant}
-$cmd="cd $remote && export LD_LIBRARY_PATH=$remote && export ADSP_LIBRARY_PATH='$remote;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp' && ./$executable $argument"
+$cmd="cd $remote && export LD_LIBRARY_PATH=$remote && export ADSP_LIBRARY_PATH='$remote;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp' && ( ./$executable $argument & child=`$!; echo owned_probe_pid=`$child; wait `$child )"
 $process=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'shell',('"'+$cmd+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$out/stdout.txt" -RedirectStandardError "$out/stderr.txt"
-$takeovers=0;$started=[DateTime]::UtcNow
-do {if((Top) -eq 'com.yuubinnkyoku.phonelm'){$takeovers++};if(([DateTime]::UtcNow-$started).TotalSeconds -gt 240){throw 'PROBE_TIMEOUT_NO_DEVICE_KILL'};$process.WaitForExit(2000)|Out-Null;$process.Refresh()}while(!$process.HasExited)
+$takeovers=0;$started=[DateTime]::UtcNow;$lastMonitor=$started;$monitorSamples=@($thermalBefore)
+function Stop-OwnedDiagnostic([string]$Reason,[object]$State){
+ # Only this invocation's announced PID, verified by cmdline. Never app force-stop.
+ $pidMatch=[regex]::Match(([IO.File]::ReadAllText("$out/stdout.txt")),'(?m)^owned_probe_pid=(\d+)\s*$')
+ $cancelled=$false
+ if($pidMatch.Success){$owned=[int]$pidMatch.Groups[1].Value;$cmdline=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$owned/cmdline") -AllowFailure;if($cmdline.ExitCode -eq 0 -and $cmdline.Text.Split([char]0)[0] -eq "./$executable"){Adb @('shell','kill','-INT',"$owned")|Out-Null;$cancelled=$true}}
+ @{reason=$Reason;state=$State;owned_probe_cancelled=$cancelled;no_app_force_stop=$true}|ConvertTo-Json -Depth 8|Out-File "$out/runtime-monitor-stop-private.json" -Encoding utf8
+ throw $Reason
+}
+do {
+ if((Top) -eq 'com.yuubinnkyoku.phonelm'){$takeovers++;Stop-OwnedDiagnostic 'TARGET_FOREGROUND_DURING_PROBE' $null}
+ if(([DateTime]::UtcNow-$lastMonitor).TotalSeconds -ge 10){$sample=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint;$monitorSamples+=$sample;$lastMonitor=[DateTime]::UtcNow;if((Resolve-MixedQkvMonitoringState $sample) -like 'BLOCKED*'){Stop-OwnedDiagnostic 'CRITICAL_PROTECTION_DURING_PROBE' $sample};if((Adb @('shell','dumpsys','power')) -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){Stop-OwnedDiagnostic 'AWAKE_LOST_DURING_PROBE' $sample}}
+ if(([DateTime]::UtcNow-$started).TotalSeconds -gt 240){Stop-OwnedDiagnostic 'OWNED_PROBE_TIMEOUT' $null}
+ $process.WaitForExit(2000)|Out-Null;$process.Refresh()
+}while(!$process.HasExited)
+$monitorSamples|ConvertTo-Json -Depth 8|Out-File "$out/runtime-monitor-samples-private.json" -Encoding utf8
 $after=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint
 $afterState=Resolve-MixedQkvMonitoringState $after
 @{source_sha=(git -C $root rev-parse HEAD);build=$build;device_private=$d;hashes=$hashes;variant=$Variant;mode='BACKGROUND_CORRECTNESS';research_monitoring_policy='MIXED_QKV_USER_DIRECTED';host_storage_waiver=[bool]$UserAuthorizedHostStorageWaiver;external_power_waiver=[bool]$UserAuthorizedExternalPowerWaiver;power_thermal_waiver=[bool]$UserAuthorizedPowerThermalWaiver;thermal_before_gate=$beforeState;thermal_after_gate=$afterState;exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$thermalBefore;thermal_after=$after;protected_identity='PASS';status='COMPLETE';started_utc=$started.ToString('o')}|ConvertTo-Json -Depth 22|Out-File "$out/identity-private.json" -Encoding utf8
