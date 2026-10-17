@@ -106,9 +106,18 @@ def export(repo,root):
     headless={}
     bundle=read(root/'headless-private.json')
     require(bundle['candidate_binary_hashes']==build['binary_hashes'],'headless candidate association')
-    for suite,rel in bundle['suites'].items():
-        p=repo/rel;text=(p/'report.txt').read_text(encoding='utf-8-sig')
-        headless[suite]=headless_metrics(suite,text)
+    require(sha(root/'approved-apk/app-debug.apk')==bundle['apk_sha256'] and sha(root/'approved-apk/app-debug-androidTest.apk')==bundle['test_apk_sha256'],'explicit existing APK identity')
+    for suite,record in bundle['suites'].items():
+        p=(repo/record['report_relative_path']).resolve();prepath=(repo/record['preflight_relative_path']).resolve()
+        require(p.is_relative_to(repo/'build/reports/qnn-headless') and prepath.is_relative_to(root),'headless evidence containment')
+        status=read(p/'status.json');pre=read(prepath);device=read(p/'device-identity-private.json');activity=read(p/'activity-sampling.json');condition=read(p/'device-condition-private.json')
+        require(record['exit_code']==0 and pre['status']=='PASS' and status['status']=='PASSED' and status['suite']==suite,'headless status')
+        require(device['physical_device_count']==1 and device['stable_device_id']==pre['device_private']['Serial'],'headless physical identity')
+        require(activity['foreground_preserved'] is True and activity['focus_takeover_count']==0 and activity['sample_count']>0,'headless focus')
+        require(0<=condition['maximum_thermal_status']<4,'headless critical thermal')
+        require(re.search(r'^OK \(', (p/'instrumentation.txt').read_text(encoding='utf-8-sig'),re.M),'instrumentation incomplete')
+        text=(p/'device-report.txt').read_text(encoding='utf-8-sig')
+        headless[suite]={**headless_metrics(suite,text),'source_commit':bundle['source_commit'],'thermal_before':thermal(condition['before']),'thermal_after':thermal(condition['after']),'maximum_sampled_thermal_status':condition['maximum_thermal_status'],'report_sha256':sha(p/'device-report.txt')}
     require(set(headless)=={'device-probe','hvx-muon-optimizer-benchmark'},'required headless missing')
     return {'schema':1,'branch':'investigation/g1-s2-mixed-qkv-df-hvx-v','build_source_commit':build['source_sha'],'binary_sha256':build['binary_hashes'],'compiler_sha256':{'hexagon':build['hexagon_compiler_sha256'],'ndk':build['ndk_compiler_sha256']},'sdk':{'qairt_build_id':build['qairt_build_id'],'qnn_api':'2.37.0','htp':'v81','hexagon_sdk':'6.6.0.0','tools':'19.0.07','ndk':'26.2.11394342'},'processes':processes,'fresh_regressions':regressions,'validation':validation,'headless':headless,'three_independent_processes_verified':True,'classifications':['DSP_MIXED_QKV_STANDALONE_VERIFIED','DSP_DOUBLE_QK_PROJECTION_VERIFIED','HVX_V_PATH_PRESERVED','S2_MIXED_QKV_NATIVE_SEGMENT_VERIFIED','MIXED_QKV_HEADS_LOSSLESS_VERIFIED','MIXED_QKV_ADJACENT_QK_VERIFIED','OBSERVER_FREE_SEGMENT_VERIFIED','DSP_MIXED_QKV_PERFORMANCE_MEASURED'],'high_precision_qk_raw':'NOT_IMPLEMENTED','native_p':'UNVERIFIED','old_p_joint_contract':'FAIL_PRESERVED','training':'NO-GO'}
 
