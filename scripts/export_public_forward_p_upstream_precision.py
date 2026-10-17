@@ -162,6 +162,16 @@ def export(root, out):
     doc["representation_floor"]=floor_public
     doc["representation_floor_limitation"]="Only nearest-FP32 final P establishes an elementwise output representation floor. Isolated upstream boundary paths are counterfactuals, not unavoidable cumulative error floors."
     doc["floor_executable_sha256"]=floor_id["exe_sha256"]
+    sdk=(root/"sdk-audit.txt").read_text(encoding="utf-8-sig")
+    apk=(root/"apk-audit.txt").read_text(encoding="utf-8-sig")
+    need("qnn_core_headers_present=true" in sdk and "qnn_required_phone_libraries_present=true" in sdk and "expected_build_id_match=true" in sdk,"current SDK core audit")
+    need("status=SUCCESS" in apk and "forbidden_2_47_strings=false" in apk and "host_sdk_path_present=false" in apk,"current APK audit")
+    doc["validation"]["SDK_readonly"]={"status":"CORE_AND_BUILD_ID_PASS_OPTIONAL_INVENTORY_ADVISORY","log_sha256":digest(root/"sdk-audit.txt")}
+    doc["validation"]["existing_APK_readonly"]={"status":"PASS","new_build":False,"log_sha256":digest(root/"apk-audit.txt")}
+    first=(root/"fast-first-gradle-daemon-failure.txt").read_text(encoding="utf-8-sig")
+    need("Could not connect to the Gradle daemon" in first,"Fast initial failure identity")
+    doc["Fast_attempts"]=[{"status":"INFRASTRUCTURE_FAILURE","reason":"GRADLE_DAEMON_CONNECTION_FAILURE","log_sha256":digest(root/"fast-first-gradle-daemon-failure.txt")},{"status":"PASS","same_profile_and_conditions":True}]
+    doc["sdk_identity"]={"QAIRT":"2.48.40.260702151143","QNN_API":"2.37.0","HTP":"V81","Hexagon_SDK":"6.6.0.0","Hexagon_tools":"19.0.07","NDK":"26.2.11394342","NDK_compiler_sha256":initial["previous_build"]["ndk_compiler_sha256"]}
     out.parent.mkdir(parents=True,exist_ok=True);out.write_text(json.dumps(doc,ensure_ascii=False,indent=2,allow_nan=False)+"\n",encoding="utf-8")
     print("upstream_public_export=PASS old_contract=FAIL C7_host_contract=PASS new_device_certification=NOT_RUN")
 
