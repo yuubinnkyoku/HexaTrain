@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "base": "dc8ffd3cb963eff953429230689ed6ff624a1091",
+  "candidates": {"S0":0,"S1":1,"S2":2,"S3":4,"S4":3,"S5":5,"S6":6,"S7":7},
+  "bits": "R=1 N=2 A=4; all candidates use double Q/K and QK with FP32 outputs and saved Q/K",
+  "rounding_contract": "S0 calls unchanged anchored FP32 LN oracle. R selects direct two-pass double mean/center/variance. R-N continuous uses double variance directly. R without N rounds center and rms to FP32 before existing hypot normalization. Without R, existing anchored Kahan mean/amax/squares/rms are FP32. N selects double epsilon/sqrt/reciprocal and normalized multiply; h stays double only when A also selected. Inverse and xhat saved outputs always FP32. A selects double gamma product/beta sum and rounds final Y. Without A, h is rounded before separate FP32 gamma product and beta sum. All-high S7 must word-match C7 Y/xhat/inverse/Q/K/raw/P. Epsilon is source float 1e-5f. Both legacy/source ideal references retained.",
+  "gates": {"p":1e-6,"row":2e-6,"ds_bound":0.00025,"dv_bound":0.001,"ds_actual":0.002,"dv_actual":0.01,"ln_backward":0.02},
+  "development": "Original frozen 44x2x25, same frozen 24x2, existing holdout 16x2x8. Both epsilon references and both Host Softmax models. No additional arithmetic variants planned.",
+  "selection": "Freeze development PASS candidates in selection-private.json before confirmation. Rank by double LN operation groups R/N/A, then actual operation counts, saved representation consistency and ABI risk. Confirmation evaluates selected candidate plus S0/S7 anchors exactly once; failure is retained, no reselection on confirmation results.",
+  "confirmation": {
+    "seeds":[1000003,1010033,1020089,1030127,1040167,1050209,1060253,1070299,1080341,1090391,1100447,1110499,1120543,1130597,1140647,1150697],
+    "generator":"Same uint32 LCG as prior holdout; generate X,dy,gamma,beta,Wq,Wk in that order. Independent seeds and weights; no checkpoint values.",
+    "patterns":["ordinary asymmetric heads",".5+1e-5*u low variance","4096+.0625*u large offset","alternating +/-4 plus .003*u","near tied QK: small .002 weights","competing logits .25 weights","large centered X 64*u","head asymmetric weights column<32 scale .07 else .18"],
+    "gamma":"1+.375*u", "beta":".0625*u", "weight_scales":[0.12,0.12,0.12,0.12,0.002,0.25,0.12,0.12],
+    "gradient_seeds":[2000003,2010041,2020069,2030113,2040151,2050189,2060231,2070263],
+    "gradient":"Independent generated dp then dc per head. dp magnitudes cycle 4,32,256,512; dc alternate 2,16. Mixed signs, no frozen gradient9/12 copy. Cartesian16x2x8=256.",
+    "limitations":"Synthetic finite stress, no actual training matched trajectory. All gates fixed; do not discard seeds after evaluation."
+  },
+  "prototype":"At most one bounded geometry. Entry requires selected candidate full original contract and independent confirmation, defined saved-state/ABI, pinned codegen and current safe device. Otherwise complete Host/design/audit and report NOT IMPLEMENTED/NOT MEASURED."
+}
