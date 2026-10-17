@@ -47,13 +47,18 @@ param(
     # never wakes, changes focus, power policy or permissions.
     [switch]$RequireAwakeSafety,
     [switch]$UserAuthorizedPowerThermalWaiver,
-    [switch]$UserAuthorizedExternalPowerWaiver
+    [switch]$UserAuthorizedExternalPowerWaiver,
+    [switch]$MixedQkvResearchMonitoring,
+    # Explicit audited, already-installed artifact; never installs or rebuilds it.
+    [string]$AuditedExistingApkPath = "",
+    [string]$AuditedExistingTestApkPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "qairt_version.ps1")
 . (Join-Path $PSScriptRoot "nicopedia_runner_common.ps1")
 . (Join-Path $PSScriptRoot "forward_p_resume_thermal_policy.ps1")
+. (Join-Path $PSScriptRoot "mixed_qkv_monitoring_policy.ps1")
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
     -ExpectedBuildId $ExpectedBuildId
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -77,16 +82,17 @@ function Get-AndroidIntegerField([string]$Text, [string]$Name, [string]$Source) 
 }
 function Assert-AwakeSafetyEvidence([string]$Power, [string]$Battery,
         [string]$Top, [Collections.IDictionary]$Condition,
-        [bool]$ExplicitThermalWaiver=$false,[bool]$ExplicitExternalWaiver=$false) {
+        [bool]$ExplicitThermalWaiver=$false,[bool]$ExplicitExternalWaiver=$false,
+        [bool]$ResearchMonitoring=$false) {
     if ($Power -notmatch '(?m)^\s*mWakefulness=Awake\s*$') { throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN' }
     if (-not $Top -or $Top -eq 'UNKNOWN') { throw 'TOP_RESUMED_UNKNOWN' }
     if ($Top -eq 'com.yuubinnkyoku.phonelm') { throw 'TARGET_ALREADY_FOREGROUND' }
-    $state=Resolve-ForwardPResumeThermalState ([pscustomobject]$Condition) $ExplicitThermalWaiver
-    if ($state -eq 'BLOCKED') {
+    $state=if($ResearchMonitoring){Resolve-MixedQkvMonitoringState ([pscustomobject]$Condition)}else{Resolve-ForwardPResumeThermalState ([pscustomobject]$Condition) $ExplicitThermalWaiver}
+    if ($state -like 'BLOCKED*') {
         throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'
     }
     if ($state.StartsWith('WAIVED')) { Write-Host 'headless_power_thermal_waiver=APPLIED explicit_user=1' }
-    if ($Battery -notmatch '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$') {
+    if (!$ResearchMonitoring -and $Battery -notmatch '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$') {
         foreach($kind in @('AC','USB','Wireless')){if(!$ExplicitExternalWaiver -or $Battery -notmatch "(?m)^\s*$kind powered:\s*false\s*$"){throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'}}
         Write-Host 'headless_external_power_waiver=APPLIED explicit_user=1'
     }
@@ -177,6 +183,11 @@ if (-not $reportRoot.StartsWith($reportBase + [IO.Path]::DirectorySeparatorChar,
 if (Test-Path -LiteralPath $reportRoot) { throw "Report run already exists: $RunId" }
 $apk = Join-Path $root "app\build\outputs\apk\debug\app-debug.apk"
 $testApk = Join-Path $root "app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk"
+if($AuditedExistingApkPath -or $AuditedExistingTestApkPath){
+    if(!$SkipBuild -or !$SkipInstall -or !$AuditedExistingApkPath -or !$AuditedExistingTestApkPath){throw 'EXPLICIT_EXISTING_APKS_REQUIRE_SKIP_BUILD_AND_INSTALL'}
+    $apk=[IO.Path]::GetFullPath($AuditedExistingApkPath)
+    $testApk=[IO.Path]::GetFullPath($AuditedExistingTestApkPath)
+}
 [IO.Directory]::CreateDirectory($reportRoot) | Out-Null
 
 function Get-PrivateAdbOutput([string]$Endpoint, [string[]]$Arguments) {
@@ -237,6 +248,10 @@ function Adb([string[]]$Arguments) {
 }
 function Private-Cat([string]$Path) { return (Adb @("shell", "run-as", $package, "cat", $Path)) -join "`n" }
 function Get-DeviceCondition {
+    if($MixedQkvResearchMonitoring){
+        $s=Get-MixedQkvMonitoringState -Adb $adb -Device $device
+        $d=[ordered]@{};foreach($p in $s.PSObject.Properties){$d[$p.Name]=$p.Value};return $d
+    }
     $thermal = (Adb @("shell", "dumpsys", "thermalservice")) -join "`n"
     $thermalMatch = [regex]::Match($thermal, '(?m)^Thermal Status:\s*(\d+)')
     if (-not $thermalMatch.Success) { throw "Android thermal status is unavailable." }
@@ -327,7 +342,7 @@ try {
     $beforeTop = Top-Package
     if ($RequireAwakeSafety) {
         Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-              ((Adb @('shell','dumpsys','battery')) -join "`n") $beforeTop $conditionBefore ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
+              ((Adb @('shell','dumpsys','battery')) -join "`n") $beforeTop $conditionBefore ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver) ([bool]$MixedQkvResearchMonitoring)
         Write-Host 'headless_awake_safety_guard=PASS phase=before read_only=1'
     }
     $instrumentStdout = Join-Path $reportRoot "instrumentation.txt"
@@ -370,7 +385,7 @@ try {
                 Assert-SafeDeviceCondition $conditionDuring
                 if ($RequireAwakeSafety) {
                     Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-                          ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionDuring ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
+                          ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionDuring ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver) ([bool]$MixedQkvResearchMonitoring)
                 }
             } catch {
                 $instrumentProcess.Kill()
@@ -386,7 +401,7 @@ try {
     Assert-SafeDeviceCondition $conditionAfter
     if ($RequireAwakeSafety) {
         Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-              ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionAfter ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
+              ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionAfter ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver) ([bool]$MixedQkvResearchMonitoring)
         Write-Host 'headless_awake_safety_guard=PASS phase=after read_only=1'
     }
     [ordered]@{
