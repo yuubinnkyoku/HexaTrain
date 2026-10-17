@@ -115,8 +115,8 @@ def export(root,repo):
         require(ids==({"S0","S2","S7"} if key.startswith("confirmation") else {"S"+str(i) for i in range(8)}),"candidate coverage")
         for s in a["summaries"]:
             if s["candidate"] in ("S2","S7"):require(s["joint_pass"],"selected/anchor joint contract")
-    saved_id=read(root/"host/saved-identity-private.json");require(saved_id["exit_code"]==0 and sha(root/"host/saved.jsonl")==saved_id["log_sha256"] and sha(root/"host/selective_ln1_saved_test.exe")==saved_id["exe_sha256"],"actual saved harness identity")
-    saved=list(records(root/"host/saved.jsonl"));require(len(saved)==16,"saved coverage")
+    saved_id=read(root/"host/saved-final-identity-private.json");require(saved_id["exit_code"]==0 and sha(root/"host/saved-final.jsonl")==saved_id["log_sha256"] and sha(root/"host/selective_ln1_saved_final.exe")==saved_id["exe_sha256"],"actual saved harness identity")
+    saved=list(records(root/"host/saved-final.jsonl"));require(len(saved)==16,"saved coverage")
     for s in saved:require(s["backward_gate"] and s["dx"]<=.02 and s["dg"]<=.02 and s["db"]<=.02 and s["complete_finite"] and s["input_mutation"]==0,"actual saved gate")
     baseline=read(root/"baseline/analysis-identity-private.json")
     require(baseline["tests"]["probability_reference_test"]["exit_code"]==4,"old expected fail")

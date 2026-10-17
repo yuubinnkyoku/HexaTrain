@@ -25,5 +25,18 @@ $asm=Get-Content "$out/selective.s" -Raw
 $ir=Get-Content "$out/selective.ll" -Raw
 if($asm -notmatch 'dfadd\(' -or $asm -notmatch 'dfmpyfix\(' -or $asm -notmatch 'convert_sf2df' -or $asm -notmatch 'convert_df2sf' -or $ir -match 'llvm\.fma|fadd fast|fmul fast'){throw 'CODEGEN_CONTRACT_FAILED'}
 $hashes=@{};foreach($file in @('selective.s','selective.ll','selective.o','disassembly-private.txt','undefined-private.txt')){$hashes[$file]=(Get-FileHash "$out/$file").Hash.ToLowerInvariant()}
-@{source_commit=(git -C $root rev-parse HEAD);source_sha256=(Get-FileHash $src).Hash.ToLowerInvariant();arithmetic_sha256=(Get-FileHash (Join-Path $root 'host_tests/fp32_custom/selective_ln1_arithmetic.h')).Hash.ToLowerInvariant();compiler_sha256=(Get-FileHash $cc).Hash.ToLowerInvariant();sdk_manifest_sha256=(Get-FileHash (Join-Path $HexagonSdkRoot 'hexagon_sdk.json')).Hash.ToLowerInvariant();flags=$flags;outputs=$hashes;runtime_linkage_verified=$false;runtime_rounding_verified=$false;device_executes=0;status='COMPILE_ONLY'}|ConvertTo-Json -Depth 8|Out-File "$out/identity-private.json" -Encoding utf8
+$libroot=Join-Path $HexagonSdkRoot 'tools/HEXAGON_Tools/19.0.07/Tools/target/hexagon/lib/v81'
+$libs=@{};foreach($name in @('libm.a','libgcc.a')){
+ $lib=Join-Path $libroot $name
+ & (Join-Path $bin 'hexagon-nm.exe') --defined-only $lib > "$out/$name-symbols-private.txt" 2> "$out/$name-nm-stderr-private.txt"
+ if($LASTEXITCODE){throw 'RUNTIME_LIBRARY_NM_FAILED'}
+ $libs[$name]=(Get-FileHash $lib).Hash.ToLowerInvariant()
+}
+$libtext=(Get-Content "$out/libm.a-symbols-private.txt" -Raw)+(Get-Content "$out/libgcc.a-symbols-private.txt" -Raw)
+foreach($symbol in @('__hexagon_divdf3','hypot','sqrt')){if($libtext -notmatch "(?m)\bT\s+$symbol\s*$"){throw "RUNTIME_SYMBOL_MISSING $symbol"}}
+# Plain host-built V81 shared ELF only. No QHPI op/package, device deployment,
+# loading or execution. Link success is not DSP runtime math certification.
+& $cc @flags -fPIC -shared '-Wl,--no-undefined' $src -o "$out/selective-link-only.so" > "$out/link-private.txt" 2>&1
+$linkCode=$LASTEXITCODE
+@{source_commit=(git -C $root rev-parse HEAD);source_sha256=(Get-FileHash $src).Hash.ToLowerInvariant();arithmetic_sha256=(Get-FileHash (Join-Path $root 'host_tests/fp32_custom/selective_ln1_arithmetic.h')).Hash.ToLowerInvariant();compiler_sha256=(Get-FileHash $cc).Hash.ToLowerInvariant();sdk_manifest_sha256=(Get-FileHash (Join-Path $HexagonSdkRoot 'hexagon_sdk.json')).Hash.ToLowerInvariant();flags=$flags;outputs=$hashes;runtime_library_hashes=$libs;static_no_undefined_link_exit=$linkCode;runtime_linkage_verified=$false;runtime_rounding_verified=$false;device_executes=0;status='COMPILE_ONLY'}|ConvertTo-Json -Depth 8|Out-File "$out/identity-private.json" -Encoding utf8
 Write-Host 'selective_codegen=PASS runtime=UNMEASURED'
