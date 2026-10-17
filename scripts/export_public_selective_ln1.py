@@ -127,10 +127,13 @@ def export(root,repo):
     for key,a in analyses.items():
         ids={s["candidate"] for s in a["summaries"]}
         require(ids==({"S0","S2","S7"} if key.startswith("confirmation") else {"S"+str(i) for i in range(8)}),"candidate coverage")
+        sets={"confirmation"} if key.startswith("confirmation") else {"frozen","holdout"}
+        require({(s["candidate"],s["set"],s["reference"]) for s in a["summaries"]}=={(c,t,r) for c in ids for t in sets for r in ("source","legacy")},"reference/model/set coverage")
         for s in a["summaries"]:
             if s["candidate"] in ("S2","S7"):require(s["joint_pass"],"selected/anchor joint contract")
     saved_id=read(root/"host/saved-final-identity-private.json");require(saved_id["exit_code"]==0 and sha(root/"host/saved-final.jsonl")==saved_id["log_sha256"] and sha(root/"host/selective_ln1_saved_final.exe")==saved_id["exe_sha256"],"actual saved harness identity")
     saved=list(records(root/"host/saved-final.jsonl"));require(len(saved)==16,"saved coverage")
+    require({(s["mask"],s["set"],s["cases"]) for s in saved}=={(m,t,n) for m in range(8) for t,n in (("frozen",44),("holdout",16))},"saved mask/set coverage")
     for s in saved:
         check_schema(s);finite(s);require(s["backward_gate"] and s["dx"]<=.02 and s["dg"]<=.02 and s["db"]<=.02 and s["complete_finite"] and s["input_mutation"]==0,"actual saved gate")
     require(set(saved_id)=={"source_commit","exe_sha256","log_sha256","exit_code"},"saved manifest allow-list")
