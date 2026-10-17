@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,[Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[Parameter(Mandatory=$true)][string]$ReportRoot,[switch]$UserAuthorizedHostStorageWaiver,[ValidateSet('selective_ln1','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')][string]$Variant='selective_ln1')
+param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,[Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,[switch]$UserAuthorizedHostStorageWaiver,[ValidateSet('selective_ln1','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')][string]$Variant='selective_ln1')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -8,6 +8,8 @@ $out=[IO.Path]::GetFullPath($ReportRoot)
 if(!$out.StartsWith([IO.Path]::GetFullPath((Join-Path $root 'build/reports'))+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'PRIVATE_EVIDENCE_REQUIRED'}
 if(Test-Path "$out/identity-private.json"){throw 'EXISTING_PROCESS_EVIDENCE'}
 if(git -C $root status --porcelain){throw 'COMMITTED_SOURCE_REQUIRED'}
+$qnn=Get-Content -LiteralPath $QnnValidationLog -Raw
+if($qnn -notmatch '===== verify.ps1 -Profile Qnn =====' -or $qnn -notmatch 'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$'){throw 'CURRENT_QNN_PROFILE_NOT_COMPLETE'}
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $waiver=@{};if($UserAuthorizedHostStorageWaiver){$waiver.UserAuthorizedHostStorageWaiver=$true}
 & (Join-Path $PSScriptRoot 'preflight_forward_p_resume.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -HexagonSdkRoot $HexagonSdkRoot -NdkRoot $NdkRoot -ReportRoot "$out/preflight" @waiver *> "$out/preflight.txt"
