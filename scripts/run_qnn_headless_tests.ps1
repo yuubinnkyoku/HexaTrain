@@ -45,12 +45,15 @@ param(
     [switch]$SelfTest,
     # Opt-in strict safety used by the Forward P resume study. Read-only;
     # never wakes, changes focus, power policy or permissions.
-    [switch]$RequireAwakeSafety
+    [switch]$RequireAwakeSafety,
+    [switch]$UserAuthorizedPowerThermalWaiver,
+    [switch]$UserAuthorizedExternalPowerWaiver
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "qairt_version.ps1")
 . (Join-Path $PSScriptRoot "nicopedia_runner_common.ps1")
+. (Join-Path $PSScriptRoot "forward_p_resume_thermal_policy.ps1")
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot `
     -ExpectedBuildId $ExpectedBuildId
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -73,21 +76,24 @@ function Get-AndroidIntegerField([string]$Text, [string]$Name, [string]$Source) 
     return [int]$match.Groups[1].Value
 }
 function Assert-AwakeSafetyEvidence([string]$Power, [string]$Battery,
-        [string]$Top, [Collections.IDictionary]$Condition) {
+        [string]$Top, [Collections.IDictionary]$Condition,
+        [bool]$ExplicitThermalWaiver=$false,[bool]$ExplicitExternalWaiver=$false) {
     if ($Power -notmatch '(?m)^\s*mWakefulness=Awake\s*$') { throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN' }
     if (-not $Top -or $Top -eq 'UNKNOWN') { throw 'TOP_RESUMED_UNKNOWN' }
     if ($Top -eq 'com.yuubinnkyoku.phonelm') { throw 'TARGET_ALREADY_FOREGROUND' }
-    if ([int]$Condition.thermal_status -gt 1 -or [double]$Condition.battery_temperature_c -gt 40 -or
-        [int]$Condition.battery_level -lt 30 -or [int]$Condition.battery_health -ne 2) {
+    $state=Resolve-ForwardPResumeThermalState ([pscustomobject]$Condition) $ExplicitThermalWaiver
+    if ($state -eq 'BLOCKED') {
         throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'
     }
+    if ($state.StartsWith('WAIVED')) { Write-Host 'headless_power_thermal_waiver=APPLIED explicit_user=1' }
     if ($Battery -notmatch '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$') {
-        throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'
+        foreach($kind in @('AC','USB','Wireless')){if(!$ExplicitExternalWaiver -or $Battery -notmatch "(?m)^\s*$kind powered:\s*false\s*$"){throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'}}
+        Write-Host 'headless_external_power_waiver=APPLIED explicit_user=1'
     }
 }
 if ($SelfTest) {
     $awakeFixture="mWakefulness=Awake`n";$powerFixture="AC powered: true`n"
-    $safeFixture=@{thermal_status=0;battery_temperature_c=37;battery_level=90;battery_health=2}
+    $safeFixture=@{thermal_status=0;battery_temperature_c=37;battery_level=90;battery_health=2;battery_present=$true}
     Assert-AwakeSafetyEvidence $awakeFixture $powerFixture 'example.reader' $safeFixture
     $unsafeFixtures=@(
         @{power='';battery=$powerFixture;top='example.reader';condition=$safeFixture},
@@ -104,6 +110,8 @@ if ($SelfTest) {
         try{Assert-AwakeSafetyEvidence $fixture.power $fixture.battery $fixture.top $fixture.condition}catch{$rejected=$true}
         if(!$rejected){throw 'AWAKE_SAFETY_SELFTEST_ACCEPTED_UNSAFE'}
     }
+    $warmFixture=$safeFixture.Clone();$warmFixture.battery_temperature_c=41
+    Assert-AwakeSafetyEvidence $awakeFixture "AC powered: false`nUSB powered: false`nWireless powered: false" 'example.reader' $warmFixture $true $true
     Write-Host 'headless_awake_safety_selftest=PASS rejected=7 device_calls=0'
     if ((Resolve-StablePhysicalIdentity "stable-a" "stable-a") -ne "stable-a") {
         throw "HEADLESS_SELFTEST_IDENTITY_EQUAL"
@@ -233,11 +241,14 @@ function Get-DeviceCondition {
     $thermalMatch = [regex]::Match($thermal, '(?m)^Thermal Status:\s*(\d+)')
     if (-not $thermalMatch.Success) { throw "Android thermal status is unavailable." }
     $battery = (Adb @("shell", "dumpsys", "battery")) -join "`n"
+    $present=[regex]::Match($battery,'(?m)^\s*present:\s*(true|false)\s*$')
+    if(!$present.Success){throw 'Android battery presence is unavailable.'}
     [ordered]@{
         thermal_status = [int]$thermalMatch.Groups[1].Value
         battery_level = Get-AndroidIntegerField $battery "level" "battery"
         battery_temperature_c = (Get-AndroidIntegerField $battery "temperature" "battery") / 10.0
         battery_health = Get-AndroidIntegerField $battery "health" "battery"
+        battery_present = $present.Groups[1].Value -eq 'true'
     }
 }
 function Assert-SafeDeviceCondition([Collections.IDictionary]$Condition) {
@@ -316,7 +327,7 @@ try {
     $beforeTop = Top-Package
     if ($RequireAwakeSafety) {
         Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-            ((Adb @('shell','dumpsys','battery')) -join "`n") $beforeTop $conditionBefore
+              ((Adb @('shell','dumpsys','battery')) -join "`n") $beforeTop $conditionBefore ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
         Write-Host 'headless_awake_safety_guard=PASS phase=before read_only=1'
     }
     $instrumentStdout = Join-Path $reportRoot "instrumentation.txt"
@@ -359,7 +370,7 @@ try {
                 Assert-SafeDeviceCondition $conditionDuring
                 if ($RequireAwakeSafety) {
                     Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-                        ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionDuring
+                          ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionDuring ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
                 }
             } catch {
                 $instrumentProcess.Kill()
@@ -375,7 +386,7 @@ try {
     Assert-SafeDeviceCondition $conditionAfter
     if ($RequireAwakeSafety) {
         Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
-            ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionAfter
+              ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionAfter ([bool]$UserAuthorizedPowerThermalWaiver) ([bool]$UserAuthorizedExternalPowerWaiver)
         Write-Host 'headless_awake_safety_guard=PASS phase=after read_only=1'
     }
     [ordered]@{
@@ -384,6 +395,8 @@ try {
         after = $conditionAfter
         maximum_thermal_status = ($thermalSamples | Measure-Object -Maximum).Maximum
         cooldown_requested = $false
+        power_thermal_waiver_requested = [bool]$UserAuthorizedPowerThermalWaiver
+        external_power_waiver_requested = [bool]$UserAuthorizedExternalPowerWaiver
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $reportRoot "device-condition-private.json") -Encoding utf8
     $instrumentOutput = Get-Content -Raw -LiteralPath $instrumentStdout
     $afterTop = Top-Package
