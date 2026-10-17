@@ -3,7 +3,8 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='',[switch]$SelfTest,
  # Explicit human authorization is required per invocation. Default gate stays 20GiB.
- [switch]$UserAuthorizedHostStorageWaiver)
+ [switch]$UserAuthorizedHostStorageWaiver,
+ [switch]$UserAuthorizedExternalPowerWaiver)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -18,12 +19,20 @@ function Resolve-ForwardPHostStorageState([long]$Bytes,[bool]$ExplicitWaiver){
  if($ExplicitWaiver){return 'WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'}
  return 'BLOCKED'
 }
+function Resolve-ForwardPExternalPowerState([string]$BatteryText,[bool]$ExplicitWaiver){
+ if($BatteryText -match '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$'){return 'PASS'}
+ # A waiver allows known battery-only operation, never unknown power telemetry.
+ foreach($kind in @('AC','USB','Wireless')){if($BatteryText -notmatch "(?m)^\s*$kind powered:\s*false\s*$"){return 'BLOCKED'}}
+ if($ExplicitWaiver){return 'WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'}
+ return 'BLOCKED'
+}
 if($SelfTest){
  $anchor='a'*64;$other='b'*64
  $cases=@(@{text="$anchor  /data/app/fixture/base.apk";expected='PASS'},@{text="`n$anchor  /data/app/fixture/base.apk`r`n";expected='PASS'},@{text="$($anchor.ToUpperInvariant())  /data/app/fixture/base.apk";expected='PASS'},@{text="$other  /data/app/fixture/base.apk";expected='INSTALLED_APK_HASH_MISMATCH'},@{text='permission denied';expected='INSTALLED_APK_HASH_UNKNOWN'})
  foreach($case in $cases){if((Resolve-ForwardPApkHashState $case.text $anchor) -ne $case.expected){throw 'APK_HASH_STATE_SELFTEST_FAILED'}}
  foreach($case in @(@{bytes=20GB;waiver=$false;expected='PASS'},@{bytes=19GB;waiver=$false;expected='BLOCKED'},@{bytes=19GB;waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{bytes=21GB;waiver=$true;expected='PASS'})){if((Resolve-ForwardPHostStorageState $case.bytes $case.waiver) -ne $case.expected){throw 'STORAGE_WAIVER_SELFTEST_FAILED'}}
- Write-Host 'forward_p_preflight_selftest=PASS cases=9 device_calls=0 default_storage_gate_unchanged=1'
+ foreach($case in @(@{text="AC powered: true";waiver=$false;expected='PASS'},@{text="AC powered: false`nUSB powered: false`nWireless powered: false";waiver=$false;expected='BLOCKED'},@{text="AC powered: false`nUSB powered: false`nWireless powered: false";waiver=$true;expected='WAIVED_BY_EXPLICIT_USER_FOR_CURRENT_RESUME'},@{text='unknown';waiver=$true;expected='BLOCKED'},@{text="USB powered: true";waiver=$true;expected='PASS'})){if((Resolve-ForwardPExternalPowerState $case.text $case.waiver) -ne $case.expected){throw 'POWER_WAIVER_SELFTEST_FAILED'}}
+ Write-Host 'forward_p_preflight_selftest=PASS cases=14 device_calls=0 default_storage_gate_unchanged=1 default_power_gate_unchanged=1'
  exit 0
 }
 $root=Split-Path -Parent $PSScriptRoot
@@ -85,7 +94,10 @@ try {
  $record.thermal_private=$thermal
  $battery=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','dumpsys','battery')
  $record.battery_private=$battery.Text
- if($battery.Text -notmatch '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$'){throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'}
+ $record.external_power_waiver_requested=[bool]$UserAuthorizedExternalPowerWaiver
+ $powerState=Resolve-ForwardPExternalPowerState $battery.Text ([bool]$UserAuthorizedExternalPowerWaiver)
+ if($powerState -eq 'BLOCKED'){throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'}
+ $record.gates.external_power=$powerState
  $record.gates.power_thermal='PASS'
  $df=Invoke-PhoneLmAdb -Adb $adb -Device $device.Endpoint -Arguments @('shell','df','-k','/data/user/0')
  $line=@($df.Text -split "`n"|Where-Object {$_ -match '^\S+\s+\d+\s+\d+\s+\d+\s+\d+%'})

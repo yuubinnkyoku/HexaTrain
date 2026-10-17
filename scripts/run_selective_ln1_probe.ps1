@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,[Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,[switch]$UserAuthorizedHostStorageWaiver,[ValidateSet('selective_ln1','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')][string]$Variant='selective_ln1')
+param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,[Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,[switch]$UserAuthorizedHostStorageWaiver,[switch]$UserAuthorizedExternalPowerWaiver,[ValidateSet('selective_ln1','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB','oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax')][string]$Variant='selective_ln1')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -11,7 +11,7 @@ if(git -C $root status --porcelain){throw 'COMMITTED_SOURCE_REQUIRED'}
 $qnn=Get-Content -LiteralPath $QnnValidationLog -Raw
 if($qnn -notmatch '===== verify.ps1 -Profile Qnn =====' -or $qnn -notmatch 'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$'){throw 'CURRENT_QNN_PROFILE_NOT_COMPLETE'}
 [IO.Directory]::CreateDirectory($out)|Out-Null
-$waiver=@{};if($UserAuthorizedHostStorageWaiver){$waiver.UserAuthorizedHostStorageWaiver=$true}
+$waiver=@{};if($UserAuthorizedHostStorageWaiver){$waiver.UserAuthorizedHostStorageWaiver=$true};if($UserAuthorizedExternalPowerWaiver){$waiver.UserAuthorizedExternalPowerWaiver=$true}
 & (Join-Path $PSScriptRoot 'preflight_forward_p_resume.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -HexagonSdkRoot $HexagonSdkRoot -NdkRoot $NdkRoot -ReportRoot "$out/preflight" @waiver *> "$out/preflight.txt"
 if($LASTEXITCODE){throw 'DEVICE_SAFETY_GATE_FAILED'}
 $preflight=Get-Content "$out/preflight/device-preflight-private.json" -Raw|ConvertFrom-Json
@@ -50,7 +50,7 @@ $process=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'shell',(
 $takeovers=0;$started=[DateTime]::UtcNow
 do {if((Top) -eq 'com.yuubinnkyoku.phonelm'){$takeovers++};if(([DateTime]::UtcNow-$started).TotalSeconds -gt 120){throw 'PROBE_TIMEOUT_NO_DEVICE_KILL'};$process.WaitForExit(2000)|Out-Null;$process.Refresh()}while(!$process.HasExited)
 $after=Get-PhoneLmThermalBatteryState -Adb $adb -Device $d.Endpoint -Phase 's2-after-execute'
-@{source_sha=(git -C $root rev-parse HEAD);build=$build;device_private=$d;hashes=$hashes;variant=$Variant;mode='BACKGROUND_CORRECTNESS';host_storage_waiver=[bool]$UserAuthorizedHostStorageWaiver;exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$thermalBefore;thermal_after=$after;protected_identity='PASS';status='COMPLETE';started_utc=$started.ToString('o')}|ConvertTo-Json -Depth 22|Out-File "$out/identity-private.json" -Encoding utf8
+@{source_sha=(git -C $root rev-parse HEAD);build=$build;device_private=$d;hashes=$hashes;variant=$Variant;mode='BACKGROUND_CORRECTNESS';host_storage_waiver=[bool]$UserAuthorizedHostStorageWaiver;external_power_waiver=[bool]$UserAuthorizedExternalPowerWaiver;exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$thermalBefore;thermal_after=$after;protected_identity='PASS';status='COMPLETE';started_utc=$started.ToString('o')}|ConvertTo-Json -Depth 22|Out-File "$out/identity-private.json" -Encoding utf8
 if($takeovers){throw 'FOREGROUND_TAKEOVER'}
 $text=Get-Content "$out/stdout.txt" -Raw
 if($text -notmatch '(?m)^summary,'){throw 'PROBE_INCOMPLETE'}
