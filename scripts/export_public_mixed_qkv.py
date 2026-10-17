@@ -1,5 +1,5 @@
 """Allow-list exporter for the bounded Mixed QKV experiment; raw data stays private."""
-import argparse, hashlib, json, pathlib, re
+import argparse, hashlib, json, pathlib, re, tempfile
 from export_public_selective_ln1_device import regression_summary, headless_metrics
 
 def require(x, message):
@@ -123,6 +123,23 @@ def selftest():
     row={'stage':0,'mixed':1,'observed':0,'tap':0,'case':0,'field':'qkv0','hash':'a'*16}
     require(digest([row])==digest([dict(row)]),'digest stable')
     require(digest([row])!=digest([{**row,'hash':'b'*16}]),'digest detects numerical change')
+    with tempfile.TemporaryDirectory() as tmp:
+        p=pathlib.Path(tmp);(p/'preflight').mkdir();build={'binary_hashes':{'fixture':'a'*64}}
+        ledger={'exit_code':0,'focus_takeover_count':0,'build':build,'research_monitoring_policy':'MIXED_QKV_USER_DIRECTED','source_sha':'0'*40,'thermal_before':safe,'thermal_after':safe,'device_private':'PRIVATE_SENTINEL'}
+        (p/'identity-private.json').write_text(json.dumps(ledger));(p/'preflight/device-preflight-private.json').write_text(json.dumps({'status':'PASS','mixed_qkv_research_monitoring':True}))
+        nums=[dict(kind='numerical',stage=s,mixed=m,observed=o,tap=t,case=c,set=0 if c<44 else 1 if c<60 else 2,field=f,maxAbs=0,rms=0,word_mismatches=0,variant_mismatches=0,hash='0'*16,gate=1) for s,m,o,t,c,f in sorted(expected_keys())]
+        executions=[dict(kind='execution',stage=s,mixed=m,observed=o,tap=t,case=c,native_receipts_checked=o,execute_us=1) for s in range(4) for m in (0,1) for o in (0,1) for t in (0,1) for c in range(68 if s==0 else 60)]
+        perfs=[dict(kind='performance',stage=s,mixed=m,observed=o,tap=t,samples=31,finalize_us=1,first_us=1,median_us=1,p10_us=1,p90_us=1,math_us=1,receipt_us=1,qk_us=1,v_us=1,nodes=1,tensors=1,native_bytes=1,host_bytes=1,mixed_explicit_scratch_bytes=0) for s in range(4) for m in (0,1) for o in (0,1) for t in (0,1)]
+        prefix='\n'.join('api,'+s+',0' for s in ('registerOldDSP','registerS2DSP','registerMixedDSP','contextFree','deviceFree','backendFree'))
+        suffix='summary,mixed_qkv,required_failures=0,input_mutation=0,finite=1,poison_remaining=0,canary=1,teardown=1\n'
+        def emit(numerical,exe): (p/'stdout.txt').write_text(prefix+'\n'+'\n'.join(json.dumps(r) for r in numerical+exe+perfs)+'\n'+suffix)
+        emit(nums,executions);a=parse_process(p,build);require('PRIVATE_SENTINEL' not in json.dumps(a),'private field leaked')
+        emit(nums,[{**r,'execute_us':9999} for r in executions]);require(parse_process(p,build)['numerical_digest']==a['numerical_digest'],'timing entered digest')
+        for bad in (nums[:-1],nums+[nums[0]],[{**nums[0],'raw_tensor':[1]}]+nums[1:],[{**nums[0],'word_mismatches':1}]+nums[1:],[{**nums[0],'gate':0}]+nums[1:]):
+            emit(bad,executions)
+            try: parse_process(p,build)
+            except ValueError: pass
+            else: raise ValueError('bad numerical coverage/privacy/accuracy accepted')
     print('mixed_exporter_selftest=PASS coverage=22632 device_calls=0')
 
 if __name__=='__main__':
