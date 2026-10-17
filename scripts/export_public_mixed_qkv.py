@@ -95,8 +95,8 @@ def export(repo,root):
         require(ok,'unexpected local regression '+variant)
         regressions[variant]={'status':status,'exit_code':ledger['exit_code'],'summary':summary,'all_three_packages_registered':True,'thermal_before':thermal(ledger['thermal_before']),'thermal_after':thermal(ledger['thermal_after']),'stdout_sha256':sha(p/'stdout.txt')}
     validation={}
-    for name in ('fast','qnn-profile'):
-        p=root/(name+'.txt');text=p.read_text(encoding='utf-8-sig')
+    for name in ('fast','host-profile','qnn-profile'):
+        p=root/('fast-completion.txt' if name=='fast' and (root/'fast-completion.txt').exists() else 'fast-closeout.txt' if name=='fast' and (root/'fast-closeout.txt').exists() else 'fast-final.txt' if name=='fast' and (root/'fast-final.txt').exists() else name+'.txt');text=p.read_text(encoding='utf-8-sig')
         require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',text),'profile incomplete '+name)
         validation[name]={'status':'PASS','sha256':sha(p)}
     host=read(root/'host-regression/identity-private.json')
@@ -120,6 +120,28 @@ def export(repo,root):
         headless[suite]={**headless_metrics(suite,text),'source_commit':bundle['source_commit'],'thermal_before':thermal(condition['before']),'thermal_after':thermal(condition['after']),'maximum_sampled_thermal_status':condition['maximum_thermal_status'],'report_sha256':sha(p/'device-report.txt')}
     require(set(headless)=={'device-probe','hvx-muon-optimizer-benchmark'},'required headless missing')
     return {'schema':1,'branch':'investigation/g1-s2-mixed-qkv-df-hvx-v','build_source_commit':build['source_sha'],'binary_sha256':build['binary_hashes'],'compiler_sha256':{'hexagon':build['hexagon_compiler_sha256'],'ndk':build['ndk_compiler_sha256']},'sdk':{'qairt_build_id':build['qairt_build_id'],'qnn_api':'2.37.0','htp':'v81','hexagon_sdk':'6.6.0.0','tools':'19.0.07','ndk':'26.2.11394342'},'processes':processes,'fresh_regressions':regressions,'validation':validation,'headless':headless,'three_independent_processes_verified':True,'classifications':['DSP_MIXED_QKV_STANDALONE_VERIFIED','DSP_DOUBLE_QK_PROJECTION_VERIFIED','HVX_V_PATH_PRESERVED','S2_MIXED_QKV_NATIVE_SEGMENT_VERIFIED','MIXED_QKV_HEADS_LOSSLESS_VERIFIED','MIXED_QKV_ADJACENT_QK_VERIFIED','OBSERVER_FREE_SEGMENT_VERIFIED','DSP_MIXED_QKV_PERFORMANCE_MEASURED'],'high_precision_qk_raw':'NOT_IMPLEMENTED','native_p':'UNVERIFIED','old_p_joint_contract':'FAIL_PRESERVED','training':'NO-GO'}
+
+def host_only(repo,root):
+    build=read(repo/'build/fp32-mixed-qkv/build-identity.json');host=read(root/'host-suite/identity-private.json');old=read(root/'host-regression/identity-private.json');stop=read(root/'device/initial-readonly/host-timeout-private.json');static=read(root/'hvx-frozen-static-identity-private.json')
+    require(stop['status']=='BLOCKED' and stop['reason']=='HOST_ADB_PREFLIGHT_UNRESPONSIVE_IDENTITY_UNKNOWN' and stop['device_probe_executes']==0 and stop['package_staging_started'] is False,'blocked evidence')
+    require(stop.get('host_preflight_terminated') is True,'preflight still running')
+    for k,v in build['binary_hashes'].items():require(sha(repo/'build/fp32-mixed-qkv'/k)==v,'candidate changed')
+    for k,v in build['source_hashes'].items():require(sha(repo/k)==v,'candidate source changed')
+    require(host['fixture_sha256']==build['binary_hashes']['mixed-inputs.bin'],'Host/device fixture identity')
+    require(all(x['exit_code']==0 for x in host['tests'].values()),'new Host suite')
+    require(len(old['tests'])==24 and old['tests']['probability_reference_test']['exit_code']==4,'old Host regression')
+    require(old['tests']['probability_attribution_test']['log_sha256']=='c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7','nine failure attribution changed')
+    profiles={}
+    for name in ('fast','host-profile','qnn-profile'):
+        p=root/('fast-completion.txt' if name=='fast' and (root/'fast-completion.txt').exists() else 'fast-closeout.txt' if name=='fast' and (root/'fast-closeout.txt').exists() else 'fast-final.txt' if name=='fast' and (root/'fast-final.txt').exists() else name+'.txt');text=p.read_text(encoding='utf-8-sig');require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',text),'profile missing '+name);profiles[name]={'status':'PASS','log_sha256':sha(p)}
+    require(static['identical'] is True and static['old_sha256']==static['new_sha256'],'V helper static mismatch')
+    require(static['old_frozen_package_sha256']==sha(repo/'build/fp32-custom/libHexaFp32Dsp.so'),'old frozen package changed')
+    require('status=SUCCESS' in (root/'approved-apk-audit.txt').read_text(encoding='utf-8-sig'),'existing APK Host audit')
+    metrics=read(root/'host-assessment-private.json')
+    for field in ('candidate_local_maxabs','candidate_ideal_ln_maxabs'):
+        require(set(metrics[field])=={'Q','K','V_ordered_reference'},'Host metric allow-list')
+        require(all(isinstance(v,(int,float)) and 0<=v<=.002 for v in metrics[field].values()),'Host accuracy metrics')
+    return {'schema':1,'branch':'investigation/g1-s2-mixed-qkv-df-hvx-v','base':'984bea42006c043111b3d5dec353a73b426b4192','build_source_commit':build['source_sha'],'host_suite_source_commit':host['source_sha'],'binary_sha256':build['binary_hashes'],'compiler_sha256':{'hexagon':build['hexagon_compiler_sha256'],'ndk':build['ndk_compiler_sha256'],'host_gpp':host['compiler_sha256']},'sdk':{'qairt_build_id':build['qairt_build_id'],'qnn_api':'2.37.0','htp':'v81','hexagon_sdk':'6.6.0.0','tools':'19.0.07','ndk':'26.2.11394342'},'host':{**{k:metrics[k] for k in ('cases','core_cases','holdout_cases','arithmetic_only_controls','qk_words_checked','qk_word_mismatches','qk_baseline_different_words','candidate_local_maxabs','candidate_ideal_ln_maxabs')},'independent_numerical_processes':3,'fixture_sha256':host['fixture_sha256'],'graphs':32,'preparation_operations':2,'cpu_arithmetic_rejected':2,'old_tests':24,'old_expected_exit4':1,'old_joint_contract_failed_predicates':9},'static_codegen':{'double_products':'dfmpyfix/dfmpyll/dfmpylh/dfmpyhh','double_accumulation':'q-ordered dfadd','final_store':'convert_df2sf','fma_contraction':False,'v_helper_bytes':static['helper_bytes'],'v_helper_instruction_sha256':static['new_sha256'],'v_helper_machine_code_identical':True,'wrapper_observed_static_frame_bytes':136,'wrapper_no_receipt_static_frame_bytes':96,'double_projection_static_frame_bytes':32,'hvx_helper_static_frame_bytes':0,'new_explicit_scratch_bytes':0,'runtime_verified':False},'validation':profiles,'device':{'status':'NOT_RUN','reason':stop['reason'],'probe_executes':0,'package_staging_started':False,'host_preflight_terminated':True,'owned_host_client_cancel':'OS_ACCESS_DENIED','other_adb_processes_terminated':False,'automatic_reconnect':False,'endpoint_guessing':False,'apk_replacement':False},'three_independent_device_processes_verified':False,'device_regressions':{k:'NOT_RUN' for k in ('S2_LN1','HVX_FFN2','HVX_QKV','Forward_QK','Backward_ScoreScale','Forward_Scale','Mask','Softmax_local','LN2_Softmax_backward','Device_smoke','Muon_W8_114')},'performance':'UNMEASURED','classifications':['BLOCKED_DEVICE_SAFETY','UNRESOLVED'],'high_precision_qk_raw':'NOT_IMPLEMENTED','native_p':'UNVERIFIED','old_p_joint_contract':'FAIL_PRESERVED','overall_status':'BLOCKED_REQUIRED_DEVICE_VALIDATION','training':'NO-GO'}
 
 def selftest():
     require(len(expected_keys())==22632,'expected coverage model')
@@ -152,10 +174,10 @@ def selftest():
     print('mixed_exporter_selftest=PASS coverage=22632 device_calls=0')
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--root');p.add_argument('--output');p.add_argument('--self-test',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--root');p.add_argument('--output');p.add_argument('--self-test',action='store_true');p.add_argument('--host-only',action='store_true');a=p.parse_args()
     if a.self_test: selftest()
     else:
         repo=pathlib.Path(__file__).resolve().parents[1];root=pathlib.Path(a.root).resolve()
         require(root.is_relative_to(repo/'build/reports'),'private evidence containment')
-        data=export(repo,root);pathlib.Path(a.output).write_text(json.dumps(data,indent=2,allow_nan=False)+'\n',encoding='utf-8')
-        print('mixed_public_export=PASS independent_processes=3')
+        data=host_only(repo,root) if a.host_only else export(repo,root);pathlib.Path(a.output).write_text(json.dumps(data,indent=2,allow_nan=False)+'\n',encoding='utf-8')
+        print('mixed_public_export=PASS scope='+('HOST_ONLY_DEVICE_BLOCKED' if a.host_only else 'DEVICE_THREE_PROCESSES'))

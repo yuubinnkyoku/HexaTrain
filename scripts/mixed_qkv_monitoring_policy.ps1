@@ -25,6 +25,8 @@ function Get-MixedQkvMonitoringState([string]$Adb,[string]$Device) {
  $m=[regex]::Match($thermal.Text,'(?im)^\s*(?:Current\s+)?Thermal\s+Status\s*:\s*(\d+)\s*$');if($m.Success){$state.thermal_status=[int]$m.Groups[1].Value}
  foreach($spec in @(@('health','battery_health',1),@('temperature','battery_temperature_c',10),@('voltage','battery_voltage_mv',1),@('level','battery_level',1))){$m=[regex]::Match($battery.Text,"(?im)^\s*$($spec[0])\s*:\s*(-?\d+)\s*$");if($m.Success){$state[$spec[1]]=[double]$m.Groups[1].Value/$spec[2]}}
  $m=[regex]::Match($battery.Text,'(?im)^\s*present\s*:\s*(true|false)\s*$');if($m.Success){$state.battery_present=$m.Groups[1].Value -eq 'true'}
- $state.external_power=($battery.Text -match '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$')
+ $state.external_power=$null
+ if($battery.Text -match '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$'){$state.external_power=$true}
+ elseif(@('AC','USB','Wireless'|Where-Object {$battery.Text -notmatch "(?m)^\s*$_ powered:\s*false\s*$"}).Count -eq 0){$state.external_power=$false}
  return [pscustomobject]$state
 }

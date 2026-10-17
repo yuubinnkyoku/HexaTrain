@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "branch": "investigation/g1-s2-mixed-qkv-df-hvx-v",
+  "base": "984bea42006c043111b3d5dec353a73b426b4192",
+  "build_source_commit": "32b0e2797151ca653225712e9b72871f51c03132",
+  "host_suite_source_commit": "0522347f8d6719d3616231fa6646ab9f2621a806",
+  "binary_sha256": {
+    "mixed_qkv_probe": "39247f7d6cb3d4683452c818c07139ad0c5852e075776c80e9a67db08e2c2c86",
+    "mixed_s2_regression_probe": "e7f9bf7c612e413be990da5d16771b9a6aab3660f98bd5afe2f4ae2a976a2a72",
+    "libHexaMixedQkvDsp.so": "787dd5dcc97a7e5e2883d8671171288e023a23e40a64b7246572c5c5d30001c5",
+    "libHexaMixedQkvHost.so": "829fa8d78b6d61bc2c078c7ab32484fdfb3d37fb7f132ec89fc9f1c6a6823354",
+    "mixed-inputs.bin": "8ffbe05a7bc95900a07453588926a6368df0b496909d7a9cf314a603e5935eeb",
+    "mixed_existing_regression_probe": "b0bfef759832c8eb48a41ea0695ceceaa5251734833851b2d32ed950c39009de"
+  },
+  "compiler_sha256": {
+    "hexagon": "039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047",
+    "ndk": "ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3",
+    "host_gpp": "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a"
+  },
+  "sdk": {
+    "qairt_build_id": "2.48.40.260702151143",
+    "qnn_api": "2.37.0",
+    "htp": "v81",
+    "hexagon_sdk": "6.6.0.0",
+    "tools": "19.0.07",
+    "ndk": "26.2.11394342"
+  },
+  "host": {
+    "cases": 68,
+    "core_cases": 44,
+    "holdout_cases": 16,
+    "arithmetic_only_controls": 8,
+    "qk_words_checked": 278528,
+    "qk_word_mismatches": 0,
+    "qk_baseline_different_words": 217966,
+    "candidate_local_maxabs": {
+      "Q": 2.370703153786735e-07,
+      "K": 2.379033983146428e-07,
+      "V_ordered_reference": 5.121447905764853e-06
+    },
+    "candidate_ideal_ln_maxabs": {
+      "Q": 6.992563057472978e-07,
+      "K": 6.266309844349394e-07,
+      "V_ordered_reference": 5.55975684335408e-06
+    },
+    "independent_numerical_processes": 3,
+    "fixture_sha256": "8ffbe05a7bc95900a07453588926a6368df0b496909d7a9cf314a603e5935eeb",
+    "graphs": 32,
+    "preparation_operations": 2,
+    "cpu_arithmetic_rejected": 2,
+    "old_tests": 24,
+    "old_expected_exit4": 1,
+    "old_joint_contract_failed_predicates": 9
+  },
+  "static_codegen": {
+    "double_products": "dfmpyfix/dfmpyll/dfmpylh/dfmpyhh",
+    "double_accumulation": "q-ordered dfadd",
+    "final_store": "convert_df2sf",
+    "fma_contraction": false,
+    "v_helper_bytes": 244,
+    "v_helper_instruction_sha256": "78c4d391f72efbdd39946cdf65a7d5212dcd7ed5269b26a40a124fbe499fe306",
+    "v_helper_machine_code_identical": true,
+    "wrapper_observed_static_frame_bytes": 136,
+    "wrapper_no_receipt_static_frame_bytes": 96,
+    "double_projection_static_frame_bytes": 32,
+    "hvx_helper_static_frame_bytes": 0,
+    "new_explicit_scratch_bytes": 0,
+    "runtime_verified": false
+  },
+  "validation": {
+    "fast": {
+      "status": "PASS",
+      "log_sha256": "f20a9525bdc8df4f3be8caa1035ee3d56e1d58269c456d5ff393cd43fe0512b9"
+    },
+    "host-profile": {
+      "status": "PASS",
+      "log_sha256": "35dc1c2536ad54aa0fd7bc283d143184e23b247895e3676294cca0d84932048c"
+    },
+    "qnn-profile": {
+      "status": "PASS",
+      "log_sha256": "bc19bc5b0114789408fec630cf2639872d8451d31d88e6aefab56fceda944b3e"
+    }
+  },
+  "device": {
+    "status": "NOT_RUN",
+    "reason": "HOST_ADB_PREFLIGHT_UNRESPONSIVE_IDENTITY_UNKNOWN",
+    "probe_executes": 0,
+    "package_staging_started": false,
+    "host_preflight_terminated": true,
+    "owned_host_client_cancel": "OS_ACCESS_DENIED",
+    "other_adb_processes_terminated": false,
+    "automatic_reconnect": false,
+    "endpoint_guessing": false,
+    "apk_replacement": false
+  },
+  "three_independent_device_processes_verified": false,
+  "device_regressions": {
+    "S2_LN1": "NOT_RUN",
+    "HVX_FFN2": "NOT_RUN",
+    "HVX_QKV": "NOT_RUN",
+    "Forward_QK": "NOT_RUN",
+    "Backward_ScoreScale": "NOT_RUN",
+    "Forward_Scale": "NOT_RUN",
+    "Mask": "NOT_RUN",
+    "Softmax_local": "NOT_RUN",
+    "LN2_Softmax_backward": "NOT_RUN",
+    "Device_smoke": "NOT_RUN",
+    "Muon_W8_114": "NOT_RUN"
+  },
+  "performance": "UNMEASURED",
+  "classifications": [
+    "BLOCKED_DEVICE_SAFETY",
+    "UNRESOLVED"
+  ],
+  "high_precision_qk_raw": "NOT_IMPLEMENTED",
+  "native_p": "UNVERIFIED",
+  "old_p_joint_contract": "FAIL_PRESERVED",
+  "overall_status": "BLOCKED_REQUIRED_DEVICE_VALIDATION",
+  "training": "NO-GO"
+}

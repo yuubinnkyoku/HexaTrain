@@ -13,8 +13,24 @@ $qnn=Get-Content -LiteralPath $QnnValidationLog -Raw
 if($qnn -notmatch '===== verify.ps1 -Profile Qnn =====' -or $qnn -notmatch 'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$'){throw 'CURRENT_QNN_PROFILE_NOT_COMPLETE'}
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $waiver=@{};if($UserAuthorizedHostStorageWaiver){$waiver.UserAuthorizedHostStorageWaiver=$true};if($UserAuthorizedExternalPowerWaiver){$waiver.UserAuthorizedExternalPowerWaiver=$true};if($UserAuthorizedPowerThermalWaiver){$waiver.UserAuthorizedPowerThermalWaiver=$true}
-& (Join-Path $PSScriptRoot 'preflight_forward_p_resume.ps1') -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -HexagonSdkRoot $HexagonSdkRoot -NdkRoot $NdkRoot -ReportRoot "$out/preflight" -MixedQkvResearchMonitoring -ExpectedApkPath "$root/build/reports/g1-s2-mixed-qkv-df-hvx-v/approved-apk/app-debug.apk" @waiver *> "$out/preflight.txt"
-if($LASTEXITCODE){throw 'DEVICE_SAFETY_GATE_FAILED'}
+$preflightArgs=@('-NoProfile','-File',(Join-Path $PSScriptRoot 'preflight_forward_p_resume.ps1'),'-QairtSdkRoot',$QairtSdkRoot,'-ExpectedBuildId',$ExpectedBuildId,'-HexagonSdkRoot',$HexagonSdkRoot,'-NdkRoot',$NdkRoot,'-ReportRoot',"$out/preflight",'-MixedQkvResearchMonitoring','-ExpectedApkPath',"$root/build/reports/g1-s2-mixed-qkv-df-hvx-v/approved-apk/app-debug.apk")
+foreach($key in $waiver.Keys){$preflightArgs+="-$key"}
+# Bound the Host preflight itself: an unresponsive ADB launch must never turn
+# this diagnostic into indefinite polling. No server or unknown child is killed.
+if(@($preflightArgs|Where-Object {$_ -match '"'}).Count){throw 'PREFLIGHT_ARGUMENT_QUOTE_REJECTED'}
+$quoted=@($preflightArgs|ForEach-Object {'"'+$_+'"'})
+$preflightProcess=Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $quoted -WindowStyle Hidden -PassThru -RedirectStandardOutput "$out/preflight.txt" -RedirectStandardError "$out/preflight-stderr.txt"
+$preflightStart=[DateTime]::UtcNow
+while(!$preflightProcess.WaitForExit(1000)){
+ if(([DateTime]::UtcNow-$preflightStart).TotalSeconds -ge 180){
+  $hostStopped=$false
+  try{$preflightProcess.Kill();$hostStopped=$true}catch{}
+  @{reason='HOST_PREFLIGHT_TIMEOUT';device_probe_executes=0;only_owned_host_preflight_terminated=$hostStopped;child_client_cancellation_unverified=$true}|ConvertTo-Json|Out-File "$out/preflight-timeout-private.json" -Encoding utf8
+  throw 'HOST_PREFLIGHT_TIMEOUT_NO_DEVICE_EXECUTION'
+ }
+}
+$preflightProcess.Refresh()
+if($preflightProcess.ExitCode){throw 'DEVICE_SAFETY_GATE_FAILED'}
 $preflight=Get-Content "$out/preflight/device-preflight-private.json" -Raw|ConvertFrom-Json
 if($preflight.status -ne 'PASS'){throw 'PREFLIGHT_NOT_PASS'}
 $build=Get-Content (Join-Path $root 'build/fp32-mixed-qkv/build-identity.json') -Raw|ConvertFrom-Json
@@ -59,9 +75,14 @@ $process=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'shell',(
 $takeovers=0;$started=[DateTime]::UtcNow;$lastMonitor=$started;$monitorSamples=@($thermalBefore)
 function Stop-OwnedDiagnostic([string]$Reason,[object]$State){
  # Only this invocation's announced PID, verified by cmdline. Never app force-stop.
- $pidMatch=[regex]::Match(([IO.File]::ReadAllText("$out/stdout.txt")),'(?m)^owned_probe_pid=(\d+)\s*$')
+ $pidMatch=$null
+ try{
+  $stream=[IO.File]::Open("$out/stdout.txt",[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+  $reader=[IO.StreamReader]::new($stream)
+  try{$pidMatch=[regex]::Match($reader.ReadToEnd(),'(?m)^owned_probe_pid=(\d+)\s*$')}finally{$reader.Dispose()}
+ }catch{}
  $cancelled=$false
- if($pidMatch.Success){$owned=[int]$pidMatch.Groups[1].Value;$cmdline=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$owned/cmdline") -AllowFailure;if($cmdline.ExitCode -eq 0 -and $cmdline.Text.Split([char]0)[0] -eq "./$executable"){Adb @('shell','kill','-INT',"$owned")|Out-Null;$cancelled=$true}}
+ if($null -ne $pidMatch -and $pidMatch.Success){$owned=[int]$pidMatch.Groups[1].Value;$cmdline=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$owned/cmdline") -AllowFailure;if($cmdline.ExitCode -eq 0 -and $cmdline.Text.Split([char]0)[0] -eq "./$executable"){Adb @('shell','kill','-INT',"$owned")|Out-Null;$cancelled=$true}}
  @{reason=$Reason;state=$State;owned_probe_cancelled=$cancelled;no_app_force_stop=$true}|ConvertTo-Json -Depth 8|Out-File "$out/runtime-monitor-stop-private.json" -Encoding utf8
  throw $Reason
 }
