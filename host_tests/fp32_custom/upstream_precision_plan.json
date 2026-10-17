@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "base": "3c8190a79803dbd73a5ced370710fbc5ee0c6218",
+  "purpose": "Prospective Host-only candidate definitions and independent synthetic holdout, frozen before evaluation",
+  "immutable_gates": {"p": 0.000001, "row": 0.000002, "ds_bound": 0.00025, "dv_bound": 0.001, "ds_actual": 0.002, "dv_actual": 0.01},
+  "matrix": {"C0": [0,0,0], "C1": [1,0,0], "C2": [0,1,0], "C3": [0,0,1], "C4": [1,1,0], "C5": [1,0,1], "C6": [0,1,1], "C7": [1,1,1]},
+  "matrix_definition": "Bits select full double LN, double-product/double-sum Q/K, double-product/double-sum QK; every stage output rounded to float; V unchanged. Source FP32 epsilon and scale promoted to double. Also evaluate against unchanged legacy double-epsilon reference.",
+  "extensions": ["LN reduction only", "LN normalization only", "LN affine only", "QK double sum of rounded products", "QK Kahan", "QK Neumaier", "QK Kahan after high LN", "Q/K double sum of rounded products", "Q/K Kahan", "Q/K Neumaier", "Q/K and QK Kahan", "preserve LN Y", "preserve Q/K", "preserve LN Y and Q/K", "preserve raw through scale"],
+  "holdout": {
+    "kind": "independent synthetic, not checkpoint-derived, not actual training trajectory",
+    "seeds": [20903, 49937, 81229, 104729, 130363, 155921, 181081, 205019, 230003, 255043, 280001, 305093, 330017, 355009, 380041, 405023],
+    "generator": "uint32 LCG state=1664525*state+1013904223; value=((state>>8)%20001-10000)/10000 in float; order X,dy,gamma,beta,Wq,Wk; no checkpoint parameters",
+    "patterns": ["ordinary", "low variance .25+1e-4*u", "large mean 1024+.01*u", "alternating cancellation", "small logits", "competing logits", "small X", "large centered X"],
+    "weight_scales_by_pattern": [0.1,0.1,0.1,0.1,0.0001,0.2,0.05,0.1],
+    "gradient_seeds": [7717, 12919, 17891, 22993, 27997, 33013, 37997, 43003],
+    "gradient_generator": "For each seed and each head, generate dp then dc; dp scale cycles .25,2,16,64; dc scale alternates .25,4; Cartesian 16*2*8=256 pairs"
+  },
+  "selection": "Evaluate all candidates on frozen 44*2*25 first; select by full joint contract, high precision work, storage and saved-state compatibility. Apply unchanged algorithms to preregistered holdout; no per-case correction or threshold tuning.",
+  "device_gate": "No prototype unless Host original joint contract and independent validation, saved-state audit, bounded SDK feasibility/cost and safe device all support one candidate. A multi-stage design may stop at feasibility."
+}
