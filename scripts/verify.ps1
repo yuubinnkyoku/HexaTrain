@@ -21,7 +21,8 @@ param(
     [string]$ExpectedBuildId = "",
     [string]$PrGateBaseRef = "",
     # Device profile: headless suite name (Tier 2 BACKGROUND_CORRECTNESS only).
-    [string]$DeviceSuite = "device-probe"
+    [string]$DeviceSuite = "device-probe",
+    [switch]$RequireAwakeSafety
 )
 
 $ErrorActionPreference = "Stop"
@@ -129,6 +130,7 @@ try {
                     "-ExpectedBuildId", $ExpectedBuildId,
                     "-Suite", $DeviceSuite,
                     "-TestMode", "BACKGROUND_CORRECTNESS")
+                if ($RequireAwakeSafety) { $suiteArgs += @('-RequireAwakeSafety','-TimeoutSeconds','180') }
                 Invoke-PwshScript "run_qnn_headless_tests" `
                     (Join-Path $Root "scripts\run_qnn_headless_tests.ps1") $suiteArgs
                 "headless suite=$DeviceSuite identity/finite/fallback checks ok"

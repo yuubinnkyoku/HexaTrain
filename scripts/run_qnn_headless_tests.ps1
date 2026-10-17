@@ -42,7 +42,10 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipAudit,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    # Opt-in strict safety used by the Forward P resume study. Read-only;
+    # never wakes, changes focus, power policy or permissions.
+    [switch]$RequireAwakeSafety
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,7 +72,39 @@ function Get-AndroidIntegerField([string]$Text, [string]$Name, [string]$Source) 
     if (-not $match.Success) { throw "Android $Source $Name is unavailable." }
     return [int]$match.Groups[1].Value
 }
+function Assert-AwakeSafetyEvidence([string]$Power, [string]$Battery,
+        [string]$Top, [Collections.IDictionary]$Condition) {
+    if ($Power -notmatch '(?m)^\s*mWakefulness=Awake\s*$') { throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN' }
+    if (-not $Top -or $Top -eq 'UNKNOWN') { throw 'TOP_RESUMED_UNKNOWN' }
+    if ($Top -eq 'com.yuubinnkyoku.phonelm') { throw 'TARGET_ALREADY_FOREGROUND' }
+    if ([int]$Condition.thermal_status -gt 1 -or [double]$Condition.battery_temperature_c -gt 40 -or
+        [int]$Condition.battery_level -lt 30 -or [int]$Condition.battery_health -ne 2) {
+        throw 'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE'
+    }
+    if ($Battery -notmatch '(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$') {
+        throw 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT'
+    }
+}
 if ($SelfTest) {
+    $awakeFixture="mWakefulness=Awake`n";$powerFixture="AC powered: true`n"
+    $safeFixture=@{thermal_status=0;battery_temperature_c=37;battery_level=90;battery_health=2}
+    Assert-AwakeSafetyEvidence $awakeFixture $powerFixture 'example.reader' $safeFixture
+    $unsafeFixtures=@(
+        @{power='';battery=$powerFixture;top='example.reader';condition=$safeFixture},
+        @{power=$awakeFixture;battery='AC powered: false';top='example.reader';condition=$safeFixture},
+        @{power=$awakeFixture;battery=$powerFixture;top='UNKNOWN';condition=$safeFixture},
+        @{power=$awakeFixture;battery=$powerFixture;top='com.yuubinnkyoku.phonelm';condition=$safeFixture}
+    )
+    foreach($change in @(@{thermal_status=2},@{battery_temperature_c=40.1},@{battery_level=29})){
+        $badCondition=$safeFixture.Clone();foreach($key in $change.Keys){$badCondition[$key]=$change[$key]}
+        $unsafeFixtures+=@{power=$awakeFixture;battery=$powerFixture;top='example.reader';condition=$badCondition}
+    }
+    foreach($fixture in $unsafeFixtures){
+        $rejected=$false
+        try{Assert-AwakeSafetyEvidence $fixture.power $fixture.battery $fixture.top $fixture.condition}catch{$rejected=$true}
+        if(!$rejected){throw 'AWAKE_SAFETY_SELFTEST_ACCEPTED_UNSAFE'}
+    }
+    Write-Host 'headless_awake_safety_selftest=PASS rejected=7 device_calls=0'
     if ((Resolve-StablePhysicalIdentity "stable-a" "stable-a") -ne "stable-a") {
         throw "HEADLESS_SELFTEST_IDENTITY_EQUAL"
     }
@@ -279,6 +314,11 @@ try {
     $conditionBefore = Get-DeviceCondition
     Assert-SafeDeviceCondition $conditionBefore
     $beforeTop = Top-Package
+    if ($RequireAwakeSafety) {
+        Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
+            ((Adb @('shell','dumpsys','battery')) -join "`n") $beforeTop $conditionBefore
+        Write-Host 'headless_awake_safety_guard=PASS phase=before read_only=1'
+    }
     $instrumentStdout = Join-Path $reportRoot "instrumentation.txt"
     $instrumentStderr = Join-Path $reportRoot "instrumentation-stderr.txt"
     $instrumentArguments = @(
@@ -317,6 +357,10 @@ try {
             $lastThermalSample = [DateTime]::UtcNow
             try {
                 Assert-SafeDeviceCondition $conditionDuring
+                if ($RequireAwakeSafety) {
+                    Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
+                        ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionDuring
+                }
             } catch {
                 $instrumentProcess.Kill()
                 throw
@@ -329,6 +373,11 @@ try {
     $conditionAfter = Get-DeviceCondition
     $thermalSamples.Add([int]$conditionAfter.thermal_status)
     Assert-SafeDeviceCondition $conditionAfter
+    if ($RequireAwakeSafety) {
+        Assert-AwakeSafetyEvidence ((Adb @('shell','dumpsys','power')) -join "`n") `
+            ((Adb @('shell','dumpsys','battery')) -join "`n") (Top-Package) $conditionAfter
+        Write-Host 'headless_awake_safety_guard=PASS phase=after read_only=1'
+    }
     [ordered]@{
         schema_version = 1
         before = $conditionBefore
