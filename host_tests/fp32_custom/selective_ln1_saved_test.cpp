@@ -1,6 +1,7 @@
 #define PHONELM_PRECISION_LIBRARY
 #include "upstream_precision_test.cpp"
 #include "selective_ln1_arithmetic.h"
+#include <HTP/core/qhpi.h>
 // Opaque QHPI Host mocks exercise the unchanged actual LN backward kernel.
 struct QHPI_Tensor {QHPI_Shape shape;QHPI_Element_Type dtype;void* data;};
 extern "C" QHPI_Shape qhpi_tensor_shape(const QHPI_Tensor* t){return t->shape;}
