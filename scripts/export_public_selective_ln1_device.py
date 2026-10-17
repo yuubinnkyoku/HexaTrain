@@ -1,5 +1,5 @@
 """Allow-list resume evidence; never exports raw logs, paths or device IDs."""
-import argparse, collections, hashlib, json, pathlib, re
+import argparse, collections, hashlib, json, pathlib, re, tempfile
 NUM=set('kind s2 observed tap set case field maxAbs rms word_mismatches hash gate'.split())
 EXEC=set('kind s2 observed tap set case dsp_marker native_consumer_words_checked execute_us arithmetic_us receipt_inclusive_us'.split())
 PERF=set('kind s2 observed tap samples finalize_us first_execute_us steady_median_us p10_us p90_us arithmetic_median_us receipt_inclusive_median_us nodes tensors native_logical_bytes host_buffer_lower_bound_bytes explicit_center_scratch_bytes'.split())
@@ -24,7 +24,7 @@ def process(p):
    if not r['observed']:r['arithmetic_median_us']=None;r['receipt_inclusive_median_us']=None
    performance.append(r)
  complete='summary,selective_ln1,' in text
- result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_HOST_STORAGE_WAIVER' if pre.get('host_storage_waiver_requested') else 'PASS','fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
+ result={'exit_code':ledger['exit_code'],'source_commit':ledger['source_sha'],'api_failures':failed,'safety':'PASS_WITH_EXPLICIT_HOST_STORAGE_WAIVER' if pre['gates']['host_storage'].startswith('WAIVED') else 'PASS','fallback':False,'completed':complete,'stdout_sha256':sha(p/'stdout.txt')}
  if not complete:result['classification']='BLOCKED_DSP_PRECISION_RUNTIME' if failed else 'UNRESOLVED';return result
  require(len(rows)==2640 and len(execution)==480,'coverage')
  expected=set()
@@ -53,9 +53,12 @@ def process(p):
  return result
 def main(args):
  repo=pathlib.Path(__file__).resolve().parents[1];root=pathlib.Path(args.private_root).resolve();require(root.is_relative_to(repo/'build/reports'),'private root')
- build=read(root/'candidate-build-private.json');procs={}
+ build=read(root/'candidate-build-private.json');procs={};stops={}
  for p in sorted((root/'device').glob('*')):
   if (p/'identity-private.json').exists():procs[p.name]=process(p)
+  elif (p/'preflight/device-preflight-private.json').exists():
+   pre=read(p/'preflight/device-preflight-private.json')
+   if pre['status']!='PASS':stops[p.name]={'status':pre['status'],'reason':pre['reason'],'device_executes':pre['device_executes'],'gates':pre['gates']}
  regressions={}
  for p in sorted((root/'regressions').glob('*')):
   if not (p/'identity-private.json').exists():continue
@@ -66,8 +69,41 @@ def main(args):
   regressions[p.name]={'variant':ledger['variant'],'exit_code':ledger['exit_code'],'fresh_result':'PASS' if ledger['exit_code']==0 and summary and not apifail else 'FAIL','new_and_old_packages_registered':all(x in text for x in ('api,registerS2DSP,0','api,registerOldDSP,0')),'stdout_sha256':sha(p/'stdout.txt')}
  cohort=[procs.get('final-'+str(i)) for i in (1,2,3)]
  verified=all(p and p.get('all_variants_pass') for p in cohort) and len({p['numerical_digest'] for p in cohort if p})==1
- data={'schema':1,'branch':'investigation/g1-c7-selective-ln1-dsp-feasibility','build_source_commit':build['source_sha'],'new_binary_sha256':build['binary_hashes'],'old_binary_sha256':build['old_package_bundle']['binary_hashes'],'hexagon_compiler_sha256':build['hexagon_compiler_sha256'],'ndk_compiler_sha256':build['ndk_compiler_sha256'],'geometry':'LN1 T32 D64 S2 only','host_storage_waiver':'EXPLICIT_USER_CURRENT_RESUME_ONLY','processes':procs,'fresh_bundle_regressions':regressions,'three_independent_processes_verified':bool(verified),'native_c7_probability':'NOT_IMPLEMENTED','training':'NO-GO'}
+ data={'schema':1,'branch':'investigation/g1-c7-selective-ln1-dsp-feasibility','build_source_commit':build['source_sha'],'new_binary_sha256':build['binary_hashes'],'old_binary_sha256':build['old_package_bundle']['binary_hashes'],'hexagon_compiler_sha256':build['hexagon_compiler_sha256'],'ndk_compiler_sha256':build['ndk_compiler_sha256'],'geometry':'LN1 T32 D64 S2 only','host_storage_waiver':'EXPLICIT_USER_CURRENT_RESUME_ONLY','safety_stops':stops,'processes':procs,'fresh_bundle_regressions':regressions,'three_independent_processes_verified':bool(verified),'native_c7_probability':'NOT_IMPLEMENTED','training':'NO-GO'}
  output=pathlib.Path(args.output).resolve();require(output.parent==repo/'docs/results','aggregate output')
  encoded=json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False)+'\n';require(not re.search(r'[A-Za-z]:[\\/]|/data/|device_private|endpoint',encoded,re.I),'private data leak');output.write_text(encoded,encoding='utf-8');print('selective_device_aggregate=PASS three_processes='+str(bool(verified)))
+def selftest():
+ repo=pathlib.Path(__file__).resolve().parents[1]
+ with tempfile.TemporaryDirectory(dir=repo/'build/reports',prefix='s2-export-selftest-') as tmp:
+  root=pathlib.Path(tmp).resolve();require(root.is_relative_to(repo/'build/reports'),'temporary output containment')
+  p=root/'device/final-1';(p/'preflight').mkdir(parents=True);build={'binary_hashes':{'synthetic':'a'*64}}
+  def put(path,x):path.write_text(json.dumps(x),encoding='utf-8')
+  put(root/'candidate-build-private.json',build)
+  ledger={'exit_code':0,'source_sha':'0'*40,'focus_takeover_count':0,'mode':'BACKGROUND_CORRECTNESS','build':build,'device_private':'PRIVATE_SENTINEL'};put(p/'identity-private.json',ledger)
+  put(p/'preflight/device-preflight-private.json',{'status':'PASS','gates':{'host_storage':'PASS'},'host_storage_waiver_requested':True})
+  rows=[]
+  for s in (0,1):
+   for o in (0,1):
+    for t in (0,1):
+     for g,n in ((0,44),(1,16)):
+      for c in range(n):
+       for f in (range(6) if o or t else (0,3,4,5)):rows.append(dict(kind='numerical',s2=s,observed=o,tap=t,set=g,case=c,field=f,maxAbs=1e-7,rms=1e-8,word_mismatches=0,hash='0'*16,gate=1))
+       rows.append(dict(kind='execution',s2=s,observed=o,tap=t,set=g,case=c,dsp_marker=0x48383200+(2 if s else 0) if o else 0,native_consumer_words_checked=o,execute_us=1,arithmetic_us=1,receipt_inclusive_us=1))
+  def emit(rs):
+   text='api,contextFree,0\napi,deviceFree,0\napi,backendFree,0\n'+'\n'.join(json.dumps(x) for x in rs)+'\nsummary,selective_ln1,required_failures=0\n';(p/'stdout.txt').write_text(text)
+  emit(rows);a=process(p);require(a['all_variants_pass'] and a['safety']=='PASS' and 'PRIVATE_SENTINEL' not in json.dumps(a),'valid fixture/privacy')
+  changed=[{**r,'execute_us':9999,'arithmetic_us':9999,'receipt_inclusive_us':9999} if r['kind']=='execution' else r for r in rows];emit(changed);require(process(p)['numerical_digest']==a['numerical_digest'],'timing excluded')
+  rejected=0
+  for bad in (rows[:-1], [{**rows[0],'raw_tensor':[1,2]}]+rows[1:]):
+   emit(bad)
+   try:process(p)
+   except ValueError:rejected+=1
+   else:raise ValueError('corrupt export accepted')
+  bad=[dict(r) for r in rows];next(r for r in bad if r['kind']=='numerical' and r['s2'])['word_mismatches']=1;emit(bad);require(not process(p)['selected_contract_pass'],'word gate')
+  emit(rows);ledger['focus_takeover_count']=1;put(p/'identity-private.json',ledger)
+  try:process(p)
+  except ValueError:rejected+=1
+  else:raise ValueError('unsafe ledger accepted')
+ print('selective_device_export_selftest=PASS rejected_corruptions='+str(rejected)+' timing_excluded=1 word_gate=1 privacy=1 device_calls=0')
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--private-root',required=True);p.add_argument('--output',required=True);main(p.parse_args())
+ p=argparse.ArgumentParser();p.add_argument('--private-root');p.add_argument('--output');p.add_argument('--selftest',action='store_true');args=p.parse_args();selftest() if args.selftest else main(args)
