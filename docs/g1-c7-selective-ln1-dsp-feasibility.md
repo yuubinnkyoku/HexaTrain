@@ -1,5 +1,7 @@
 # G1 C7 Selective LN1 / DSP feasibility
 
+> A–Jは当初Host研究終了時の証拠。後続の実装・実機再開については末尾Kを参照する。旧Host数値・FAIL・未実測状態を遡って書き換えない。
+
 ## A. Initial evidence
 
 **C6 + LN1 normalizationのみのS2が、旧P合同契約をHostでPASSした。** Full C7をそのまま移植する前に、S2のLN1 standaloneを実装候補とする。これは実DSPの精度・性能認定ではない。
@@ -322,3 +324,58 @@ Private rootは`build/reports/g1-c7-selective-ln1-dsp-feasibility/`。Public agg
 分類は`SELECTIVE_LN1_MATRIX_VERIFIED`、`SELECTIVE_LN1_JOINT_CONTRACT_PASS`（S2 Host）、`C7_HOST_REFERENCE_REPRODUCED`、`MINIMAL_HOST_PRECISION_SUBSET_IDENTIFIED`（評価範囲内）、`LN1_SAVED_STATE_CONTRACT_CHARACTERIZED`、`QKV_MIXED_PRECISION_ABI_DESIGNED`、`DSP_DOUBLE_CODEGEN_AUDITED`、`BLOCKED_DEVICE_SAFETY`。Runtime linkage/rounding/latencyは`UNRESOLVED`。DSP standalone/performance/C7 native PのVERIFIED分類は使用しない。
 
 35/40-node Tap incidentは`REPRODUCED / CAUSE UNRESOLVED`、6031は`UNRESOLVED / DORMANT / WATCH`。Full Attention / Full1-layer / Full19-layer correctnessは未認定。
+
+## K. S2 standalone implementation / safe resume
+
+### Authorization and safety
+
+ユーザーの続行指示により再開。最初のread-only再計測はHost free 18.88GiBで既定20GiB gate未達。ユーザーが**今回に限りHost容量gateを免除、他の安全条件は維持**と明示したため、default-offの`UserAuthorizedHostStorageWaiver`引数を設けた。既定20GiB、SDK/端末の他gateは不変。SelfTestは通常容量PASS、容量不足BLOCKED、明示免除時のみ許可を検査する。
+
+免除指定の初回read-only preflightは同一物理端末、awake、top-resumed、active run absence、external power/thermal、device storage、APK、SDK/compiler、旧package、protected identityをPASS。実行許可は後のprocessへ持ち越さず、投入直前に再検査する。
+
+Qnn profile終了後のpilot-1 preflightでは、Host容量は約78.3GiBで通常gateもPASSした。一方、`EXTERNAL_POWER_UNKNOWN_OR_ABSENT`で停止。probe投入前、device execute 0、停止後device操作0。初回preflightのpower PASSを後の状態へ転用しない。手動の給電確認を依頼し、wake/unlock/foreground/force-stop/root/APK replacementを実施していない。
+
+### Implemented bounded geometry
+
+**新packageはbuild済み、当該power停止時点ではDSP未実行**。別名`HexaSelectiveLn1`にBaseline/S2 × Observed/NoReceiptの4 operationsを追加。既存`HexaFp32` 51 operations・ABI・receipts・HVX binaryは変更しない。
+
+S2は前研究と同じ`selective::ln<2>` body、T32/D64のLN1のみ。Q/KやQKᵀのdouble DSP実装へ拡張していない。Baselineは旧LN1 kernel bodyを再利用し、新library内でnamespaceを分離して旧counter/global symbol ownershipとの衝突を避ける。Host準備用packageは算術呼出しを全4入口で拒否する。Host単体検査用macroをDevice/Android packageのbuildに指定しない。
+
+同一binaryに旧BaselineとS2を含み、同じinput/backend/外側timer条件で比較する。4 inputsはFP32 X/gamma/beta/source epsilon、3 outputsはFP32 Y/xhat/inverse。Observedのみ独立marker/receiptを追加。Source epsilonは1e-5fのまま。Native xhat/inverseは同一graphの旧`LnBackward`または`LnBackwardNoReceipt`が直接受け取る。Host正解を中間へ再注入しない。
+
+8 variantsはBaseline/S2 × Observed/NoReceipt × Tap/NoTap。NoTapではh/inverseをNATIVE、final Y/dX/dGamma/dBetaのみAPP_READとする。Observedではproducer保存値・Backward consumer受信値を全word照合。NoReceipt/NoTapの不可視stateを直接観測したとは主張しない。
+
+### Fixed fixtures and gates
+
+Device planは`7a1deb2`で実測前にcommit。元44ケース＋既存独立holdout16ケースの60ケースをFP32で凍結。CandidateごとのHost wordsと、Custom bodyを呼ばないsource-epsilon independent double Y/xhat/inverse/dX/dGamma/dBetaを別に保存する。
+
+Host fixture exporterは新registration 4 operations、signature拒否、入力不変、全面書込み・finiteを検査し、60ケースでPASS。初compileのInfo構造体field位置誤りを修正してから凍結・実機buildへ進んだ。旧数学やthreshold変更ではない。
+
+事前登録gateはS2 Host words mismatch 0、Y/xhat/inverse maxAbs≤0.002、local backward dX/dGamma/dBeta≤0.02、finite、poison/canary、input mutation0、API success、Observed DSP marker、CPU fallback無し。BaselineのHost word差も別metricに残す。全variantがPASSした場合のみtimingを収集し、正式候補は同一final binaryを3独立processで確認する。
+
+Timingは31 steady samplesのmedian/p10/p90、first execute、finalize、Observedのkernel-body/receipt-inclusive window、execute wallを記録する設計。NoReceiptの内部arithmetic時間は未測定扱い。WallはForward＋local Backwardの2-node graphで、probeのAPI loggingも含む。旧Baseline body内のvalidation/timer費用もbody windowに含まれるため、純粋なDF instruction throughputやproduction speedupと解釈しない。
+
+### Build / runtime evidence
+
+固定SDK・compilerで新DSP/Host package、Standalone probe、regression probeのbuildがPASS。通常QHPI link条件ではdouble division helperがbinary内で解決し、`hypot/hypotf/sqrtf`等はruntime importとして残る。固定SDK dynamic libc/libgccには該当exportがある。先のbare `--no-undefined` linkとは条件が異なる。**新packageの実loader解決と算術実行は、power停止時点ではUNVERIFIED**。
+
+| Identity | SHA256 / commit |
+|---|---|
+| New build source | `b7729eecc1c3fc91992c61edb787c0a17bfcf771` |
+| New DSP package | `7f4db8c5f7ab6b25903e090cb9024d54c19c8b0d962d8e1452cb0ed8d337df7c` |
+| New Host package | `8f87dee9eedff60d6c28b74f3b9a9f5cd81f4f272e5b64d988c12c1e55204370` |
+| Standalone probe | `70fe2a42282c23b792e78f654b40de5a4a3f00c4f76925f5fbb9cb9f86b22d2a` |
+| Regression probe | `73213a492ca408e86e4adeb45f76e41dffa0177b269152d6c29186e0f7aef485` |
+| Frozen device inputs / Host words / double targets | `492d82c6e6b28080c078f2fb3d1ab84abb4946dc2224af62702fa3a2773d6c02` |
+
+既存回帰probeを変更せず再利用するwrapperは、新旧両packageをcontext生成前に同時登録する。これにより将来のfresh HVX FFN2/QKV、QK/Scale、Mask、Softmax回帰を新bundleのidentityへ紐付ける。W8/Device smokeも新規実行した結果のみ記録し、過去の114/114を転用しない。
+
+### Resume validation / current limits
+
+Fast profile PASS 69.3s。Qnn profile PASS 777.5s（Host suite359.3s、QNN APK407.3s、SDK/APK auditを含む）。新Host packageのCPU算術拒否4/4、invalid signature拒否4/4はPASS。旧Scalar MatMul/Multiply、LN、HeadSplit、Softmax、QK/Scale、HVX FFN2/QKV arithmetic/ABIのHost回帰も新規実行PASS。旧P合同契約runnerはexpected exit4、元9 FAILを説明するattribution/R0–R5 logは元のSHA256と一致した。
+
+現時点の分類は`BLOCKED_DEVICE_SAFETY`（外部給電）。S2は`BUILT_NOT_DEVICE_VERIFIED`、Standalone精度・runtime loading・性能・Device smoke・新bundleのHVX/W8実機回帰・3-process cohortはNOT RUN。最新APKのinstalled一致も、power gateより後の確認になるため未完了である。未実行工程を過去の実機PASSで補わない。
+
+追記の公開aggregateは`docs/results/g1-c7-selective-ln1-dsp-resume-summary.json`。旧Host aggregateは初回研究のsnapshotとして保持する。追加allow-list exporterは安全停止、binary/source identity、観測variant coverage、タイミングを除く数値digestを扱い、SelfTestで欠損/未許可raw field/unsafe ledgerを拒否、word gateとprivacyを検査した。
+
+Private evidenceは従来root内の`resume-1/`。powerで停止したpilot-1を成功cohortへ混ぜない。再開追記のfinal HEAD、clean tree、旧refs、protected identities、report/aggregate hashesは`resume-1/final-closeout-private.json`にcommit後記録し、旧Host研究のcloseoutを保持する。新private build rootを使用し、従来DSP package/probeやprivate evidenceを上書きしていない。新packageに高精度Q/K/QKは無く、DSP native LN1→P、Full1-layer/19-layer、training readinessは認定しない。40k→60k/200kは引き続きNO-GO。

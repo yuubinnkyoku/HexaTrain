@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "branch": "investigation/g1-c7-selective-ln1-dsp-feasibility",
+  "build_source_commit": "b7729eecc1c3fc91992c61edb787c0a17bfcf771",
+  "new_binary_sha256": {
+    "selective_ln1_regression_probe": "73213a492ca408e86e4adeb45f76e41dffa0177b269152d6c29186e0f7aef485",
+    "selective-ln1-inputs.bin": "492d82c6e6b28080c078f2fb3d1ab84abb4946dc2224af62702fa3a2773d6c02",
+    "selective_ln1_probe": "70fe2a42282c23b792e78f654b40de5a4a3f00c4f76925f5fbb9cb9f86b22d2a",
+    "libHexaSelectiveLn1Host.so": "8f87dee9eedff60d6c28b74f3b9a9f5cd81f4f272e5b64d988c12c1e55204370",
+    "libHexaSelectiveLn1Dsp.so": "7f4db8c5f7ab6b25903e090cb9024d54c19c8b0d962d8e1452cb0ed8d337df7c"
+  },
+  "old_binary_sha256": {
+    "libHexaFp32Host.so": "4322bded8951959f4ca37840a638fc6332e7cc03b45b8dd8ab44fe3646df81e9",
+    "one_layer_probe": "9726ea13adce1ce4cb3684ad7ae28d8eff3b9011e8a75909a1093978097603f2",
+    "fp32_probe": "2a06c253a7c097eeeaa93fed9ed872195ea4f1b4583bd31acd2b0d170a8b4596",
+    "layernorm_probe": "b41b1012ec7026497f06294a9351eaf14db864a15ca0a8b54dcb19015eef4baf",
+    "libHexaFp32Dsp.so": "10770ea36f8c994462377e5bce68e4d8619befc7576ddf21cb61d41fd2ad2857"
+  },
+  "hexagon_compiler_sha256": "039c2fc1840b06a3601fa63972d86d1b575d7a1afeae2f3504a1843df147c047",
+  "ndk_compiler_sha256": "ce4566f8c00c9d36d2724bd4af6a2714d8daed1c09f2290d7c4751a766fbb7b3",
+  "geometry": "LN1 T32 D64 S2 only",
+  "host_storage_waiver": "EXPLICIT_USER_CURRENT_RESUME_ONLY",
+  "safety_stops": {
+    "pilot-1": {
+      "status": "BLOCKED",
+      "reason": "EXTERNAL_POWER_UNKNOWN_OR_ABSENT",
+      "device_executes": 0,
+      "gates": {
+        "host_analysis": "PASS",
+        "sdk_apk_host": "PASS",
+        "host_storage": "PASS",
+        "compiler": "PASS",
+        "package_probe": "PASS",
+        "protected": "PASS",
+        "same_physical_device": "PASS",
+        "active_run_absence": "PASS",
+        "awake": "PASS",
+        "top_resumed": "PASS"
+      }
+    }
+  },
+  "processes": {},
+  "fresh_bundle_regressions": {},
+  "three_independent_processes_verified": false,
+  "native_c7_probability": "NOT_IMPLEMENTED",
+  "training": "NO-GO",
+  "validation": {
+    "fast": {
+      "status": "PASS",
+      "log_sha256": "f1eedcf69c1af7dcb912545ad422f9edcede776c5472a6dcc7b74b224f8fffbd"
+    },
+    "qnn": {
+      "status": "PASS",
+      "log_sha256": "41c32190148182556b550fbd76ca5a49fe3aae9d65360c9cc111af3bdfbfa16f"
+    },
+    "custom_host_regressions": {
+      "status": "PASS",
+      "source_commit": "89c617d09a554031b3904ca7cd5147f7420b41f5",
+      "old_joint_contract": "FAIL_EXPECTED_EXIT_4",
+      "attribution_digest": "c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7"
+    }
+  },
+  "current_classification": "BLOCKED_DEVICE_SAFETY",
+  "prototype": "BUILT_NOT_DEVICE_VERIFIED",
+  "device_smoke_w8": "NOT_RUN"
+}

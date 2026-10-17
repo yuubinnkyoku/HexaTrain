@@ -54,6 +54,8 @@ def process(p):
 def main(args):
  repo=pathlib.Path(__file__).resolve().parents[1];root=pathlib.Path(args.private_root).resolve();require(root.is_relative_to(repo/'build/reports'),'private root')
  build=read(root/'candidate-build-private.json');procs={};stops={}
+ for name,d in build['binary_hashes'].items():require(sha(repo/'build/fp32-selective-ln1'/name)==d,'candidate binary changed')
+ for name,d in build['source_hashes'].items():require(sha(repo/name)==d,'candidate source changed')
  for p in sorted((root/'device').glob('*')):
   if (p/'identity-private.json').exists():procs[p.name]=process(p)
   elif (p/'preflight/device-preflight-private.json').exists():
@@ -69,7 +71,17 @@ def main(args):
   regressions[p.name]={'variant':ledger['variant'],'exit_code':ledger['exit_code'],'fresh_result':'PASS' if ledger['exit_code']==0 and summary and not apifail else 'FAIL','new_and_old_packages_registered':all(x in text for x in ('api,registerS2DSP,0','api,registerOldDSP,0')),'stdout_sha256':sha(p/'stdout.txt')}
  cohort=[procs.get('final-'+str(i)) for i in (1,2,3)]
  verified=all(p and p.get('all_variants_pass') for p in cohort) and len({p['numerical_digest'] for p in cohort if p})==1
+ validation={}
+ for name in ('fast','qnn'):
+  p=root/(name+'-profile.txt');text=p.read_text(encoding='utf-8-sig');require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',text),'required profile incomplete');validation[name]={'status':'PASS','log_sha256':sha(p)}
+ host=read(root/'host-regression/analysis-identity-private.json');require(host['tests']['probability_reference_test']['exit_code']==4 and host['tests']['probability_attribution_test']['exit_code']==0,'old contract reproduction')
+ require(sha(root/'host-regression/attribution.jsonl')=='c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7','original nine/R0-R5 identity')
+ validation['custom_host_regressions']={'status':'PASS','source_commit':host['source_commit'],'old_joint_contract':'FAIL_EXPECTED_EXIT_4','attribution_digest':'c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7'}
  data={'schema':1,'branch':'investigation/g1-c7-selective-ln1-dsp-feasibility','build_source_commit':build['source_sha'],'new_binary_sha256':build['binary_hashes'],'old_binary_sha256':build['old_package_bundle']['binary_hashes'],'hexagon_compiler_sha256':build['hexagon_compiler_sha256'],'ndk_compiler_sha256':build['ndk_compiler_sha256'],'geometry':'LN1 T32 D64 S2 only','host_storage_waiver':'EXPLICIT_USER_CURRENT_RESUME_ONLY','safety_stops':stops,'processes':procs,'fresh_bundle_regressions':regressions,'three_independent_processes_verified':bool(verified),'native_c7_probability':'NOT_IMPLEMENTED','training':'NO-GO'}
+ data['validation']=validation
+ data['current_classification']='DSP_HIGH_PRECISION_STANDALONE_VERIFIED' if verified else 'BLOCKED_DEVICE_SAFETY' if stops and not procs else 'UNRESOLVED'
+ data['prototype']='BUILT_NOT_DEVICE_VERIFIED' if not verified else 'STANDALONE_VERIFIED'
+ data['device_smoke_w8']='NOT_RUN' # Only promote with new, separately audited result evidence.
  output=pathlib.Path(args.output).resolve();require(output.parent==repo/'docs/results','aggregate output')
  encoded=json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False)+'\n';require(not re.search(r'[A-Za-z]:[\\/]|/data/|device_private|endpoint',encoded,re.I),'private data leak');output.write_text(encoded,encoding='utf-8');print('selective_device_aggregate=PASS three_processes='+str(bool(verified)))
 def selftest():
