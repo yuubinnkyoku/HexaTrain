@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "status": "BLOCKED",
   "branch": "investigation/g1-forward-p-attribution-safe-resume",
   "research_base": "52f5f04edf70a69fdc48251baddb2348472f5c1d",
@@ -511,23 +511,21 @@
     "old_contract": "FAIL",
     "analysis_suite": "PASS"
   },
-  "analysis_source_commit": "748c67ce0cbd88739a0ff174284a75b2d7bccb5e",
-  "analysis_executable_sha256": "23ff043ddfd9543fa89a3e13e1c5c215e6c577498185f2d95d837e0301f1058f",
+  "analysis_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+  "host_compiler_sha256": "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a",
   "host_reproduction": {
     "independent_processes": 3,
-    "ordered_numerical_digest": "c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7",
-    "device_claim": false
+    "ordered_numerical_digest": "c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7"
   },
-  "analysis_log_sha256": "c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7",
-  "host_compiler_sha256": "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a",
-  "compiled_device_candidate_source_commit": "ac5be47c155725a0a442da540ab0359b34602a88",
-  "device_tested_source_commit": null,
+  "compiled_device_candidate_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+  "device_pilot_source_commit": "ecbe619e860d4a897815d1d5268fe66b680df57b",
+  "device_certified_source_commit": null,
   "binary_sha256": {
-    "one_layer_probe": "06fce37163459854f2c6c5f7e6a31b91a64b098a304a5dbf57afbb7019d0abea",
-    "libHexaFp32Host.so": "480014e5f0259a04b8065c2e911930a0f19b41568a5fc5b0182adb9499c2b210",
-    "libHexaFp32Dsp.so": "45aebb0312f7d7f39cf01c61e9456cc3e87c70b73854db68c755ea2df6428d4c",
+    "fp32_probe": "2a06c253a7c097eeeaa93fed9ed872195ea4f1b4583bd31acd2b0d170a8b4596",
+    "one_layer_probe": "9726ea13adce1ce4cb3684ad7ae28d8eff3b9011e8a75909a1093978097603f2",
     "layernorm_probe": "b41b1012ec7026497f06294a9351eaf14db864a15ca0a8b54dcb19015eef4baf",
-    "fp32_probe": "2a06c253a7c097eeeaa93fed9ed872195ea4f1b4583bd31acd2b0d170a8b4596"
+    "libHexaFp32Host.so": "f84d18e147d29d05ea1d59bfabae433d4502a38b1a9f64c0a8a17cc43502b3a3",
+    "libHexaFp32Dsp.so": "71d249b192c8495249d4c23b484c0cd2c87f8e517ab2cb0f33cd7a7152559208"
   },
   "qairt_build_id": "2.48.40.260702151143",
   "qnn_api": "2.37.0",
@@ -539,11 +537,68 @@
     "ln1-parameters.bin": "7102ec13544df457922942e3282b15a8612da91c51156692000fc0dd0a21f97f",
     "ln1-producers.bin": "ee9e3185b9a5857d874b5791a1e4b34c153401367dc208a1b74fa3bafa1a9580"
   },
-  "scale_bits": "0x3e3504f3",
-  "mask_allowed_bits": "0x00000000",
-  "mask_future_bits": "0xc61c4000",
-  "axis": 3,
-  "beta": 1,
+  "classifications": [
+    "HOST_P_ERROR_ATTRIBUTION_VERIFIED",
+    "HOST_P_JOINT_CONTRACT_FAIL",
+    "BLOCKED_HOST_P_BUDGET",
+    "BLOCKED_DEVICE_SAFETY",
+    "UNRESOLVED"
+  ],
+  "safety_reason": "ADB_TRANSPORT_FAILURE",
+  "safety_failure_is_numerical_failure": false,
+  "read_only_failed_preflight": true,
+  "device_operations_after_stop": 0,
+  "completed_current_candidate_pilots": {
+    "oneProbabilityScale": {
+      "certified": false,
+      "phase": "PILOT",
+      "ordered_numerical_digest": "995556389700a88f309c8f04b57f5b9390646f14e1d16b37e77a2094ece0d7d1",
+      "api_calls": 596,
+      "api_success": true,
+      "teardown": true,
+      "dsp_marker": true,
+      "input_mutation": 0,
+      "poison_remaining": 0,
+      "canary_failures": 0,
+      "word_mismatches": 0,
+      "finite": true,
+      "cpu_fallback": 0,
+      "focus_takeover_count": 0,
+      "maximum_battery_temperature_c": 37.0,
+      "maximum_thermal_status": 0,
+      "external_power": true,
+      "standalone_core_maxAbs": 4.76768263979e-07,
+      "native_maxAbs": 6.50802195956e-06
+    },
+    "oneProbabilityMask": {
+      "certified": false,
+      "phase": "PILOT",
+      "ordered_numerical_digest": "542349d60441d3bf81485512608794e7c10044d3fe0e42304c551d01530bfb46",
+      "api_calls": 554,
+      "api_success": true,
+      "teardown": true,
+      "dsp_marker": true,
+      "input_mutation": 0,
+      "poison_remaining": 0,
+      "canary_failures": 0,
+      "word_mismatches": 0,
+      "finite": true,
+      "cpu_fallback": 0,
+      "focus_takeover_count": 0,
+      "maximum_battery_temperature_c": 37.0,
+      "maximum_thermal_status": 0,
+      "external_power": true,
+      "standard_failed_predicates": 176,
+      "custom_mask": true,
+      "standalone_core_maxAbs": 0.00048828125,
+      "native_maxAbs": 0.000490612061185
+    }
+  },
+  "final_processes": 0,
+  "current_candidate_standard_softmax": "NOT_RUN",
+  "current_candidate_custom_softmax": "HOST_ONLY",
+  "native_P": "NOT_RUN",
+  "P_backward": "SHAPE_OWNERSHIP_ONLY_NOT_EXECUTED",
   "original_gates": {
     "P": 1e-06,
     "row": 2e-06,
@@ -553,46 +608,24 @@
     "dValue": 0.01
   },
   "gate_relaxation": false,
-  "classifications": [
-    "HOST_P_ERROR_ATTRIBUTION_VERIFIED",
-    "HOST_P_JOINT_CONTRACT_FAIL",
-    "BLOCKED_HOST_P_BUDGET",
-    "BLOCKED_DEVICE_SAFETY"
-  ],
-  "safety_reason": "EXTERNAL_POWER_UNKNOWN_OR_ABSENT",
-  "preflight_gates": {
-    "host_analysis": "PASS",
-    "sdk_apk_host": "PASS",
-    "host_storage": "PASS",
-    "compiler": "PASS",
-    "package_probe": "PASS",
-    "protected": "PASS",
-    "same_physical_device": "PASS",
-    "active_run_absence": "PASS",
-    "awake": "PASS",
-    "top_resumed": "PASS"
-  },
-  "device_executes": 0,
-  "final_processes": 0,
-  "device_numerical_digests": [],
-  "forward_scale": "NOT_RUN",
-  "standard_mask": "NOT_RUN",
-  "standard_softmax": "NOT_RUN",
-  "custom_softmax": "NOT_IMPLEMENTED_CONDITION_NOT_MET",
-  "native_P": "UNVERIFIED",
-  "P_backward": "SHAPE_OWNERSHIP_ONLY",
+  "scale_bits": "0x3e3504f3",
+  "mask_allowed_bits": "0x00000000",
+  "mask_future_bits": "0xc61c4000",
+  "axis": 3,
+  "beta": 1,
   "validation": {
     "Fast": "PASS",
     "Host": "PASS",
     "Qnn": "PASS",
-    "attribution_analysis": "PASS",
-    "original_P_joint_contract": "FAIL",
     "Device": "DEVICE_REGRESSION_NOT_RUN",
     "HVX_FFN2_device": "DEVICE_REGRESSION_NOT_RUN",
     "HVX_QKV_device": "DEVICE_REGRESSION_NOT_RUN",
     "Muon_W8": "DEVICE_REGRESSION_NOT_RUN",
-    "three_process_cohort": "NOT_RUN"
+    "final_three_process_cohort": "NOT_RUN"
   },
+  "cumulative_certified": false,
+  "observer_free_cumulative_certified": false,
+  "backward_certified": false,
   "protected_artifacts": "PASS",
   "protected_hash_count": 5,
   "previous_branches": "PASS",
@@ -601,28 +634,5 @@
   "full_one_layer": "UNVERIFIED",
   "full_19_layer": "UNVERIFIED",
   "observer_incident": "REPRODUCED / CAUSE UNRESOLVED",
-  "incident_6031": "UNRESOLVED / DORMANT / WATCH",
-  "resume_attempts": [
-    {
-      "status": "BLOCKED",
-      "reason": "TOP_RESUMED_UNKNOWN",
-      "read_only": true,
-      "awake_at_snapshot": "PASS",
-      "top_resumed_at_snapshot": "UNKNOWN",
-      "keyguard_showing_at_snapshot": true,
-      "device_executes": 0,
-      "device_operations_after_stop": 0
-    },
-    {
-      "status": "BLOCKED",
-      "reason": "INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN",
-      "read_only": true,
-      "awake_at_snapshot": "PASS",
-      "top_resumed_at_snapshot": "PASS",
-      "keyguard_showing_at_snapshot": false,
-      "device_executes": 0,
-      "device_operations_after_stop": 0
-    }
-  ],
-  "latest_safety_reason": "INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN"
+  "incident_6031": "UNRESOLVED / DORMANT / WATCH"
 }

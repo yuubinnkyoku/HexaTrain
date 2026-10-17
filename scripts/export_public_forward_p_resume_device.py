@@ -57,6 +57,15 @@ def complete(text, ledger, variant, build):
          and ledger['focus_takeover_count'] == 0 and ledger['protected_identity'] == 'PASS',
          'PROCESS_NOT_COMPLETE')
     need(ledger['build'] == build, 'COHORT_BINARY_CHANGED')
+    temperatures=[];thermal=[]
+    for phase in ('before','after'):
+        battery=ledger['battery_'+phase];status=ledger['thermal_'+phase]
+        t=re.search(r'(?m)^\s*temperature:\s*(\d+)\s*$',battery)
+        level=re.search(r'(?m)^\s*level:\s*(\d+)\s*$',battery)
+        th=re.search(r'(?m)^\s*Thermal Status:\s*(\d+)\s*$',status)
+        need(t and level and th and int(t[1])<=400 and int(level[1])>=30 and int(th[1])<=1
+             and re.search(r'(?m)^\s*(?:AC|USB|Wireless) powered:\s*true\s*$',battery), 'PROCESS_POWER_THERMAL')
+        temperatures.append(int(t[1])/10);thermal.append(int(th[1]))
     for k, v in build['binary_hashes'].items():
         if k in ('libHexaFp32Dsp.so', 'libHexaFp32Host.so', 'one_layer_probe'):
             need(ledger['hashes'].get(k) == v, 'STAGED_BINARY_MISMATCH')
@@ -79,6 +88,9 @@ def complete(text, ledger, variant, build):
         f = fields(line)
         need(f.get('raw_inputs') == f.get('complete_output') == '1'
              and f.get('marker', '').startswith('483831'), 'DSP_RECEIPT_FAILED')
+    need(len(records(text,'segmentreceipt'))=={'oneProbabilityScale':232,'oneProbabilityMask':320,'oneProbabilityP':264}[variant],
+         'DSP_RECEIPT_COVERAGE')
+    need(len(records(text,'qkvreceipt'))==88 and len(records(text,'qkvheads'))==88, 'QKV_RECEIPT_COVERAGE')
     for line in records(text, 'qkvreceipt'):
         need(fields(line).get('all_words') == '1', 'QKV_RECEIPT_FAILED')
     for line in records(text, 'qkvheads'):
@@ -97,7 +109,8 @@ def complete(text, ledger, variant, build):
     result = dict(ordered_numerical_digest=numeric_digest(text),
                   api_calls=len(api), api_success=True, teardown=True, dsp_marker=True,
                   input_mutation=0, poison_remaining=0, canary_failures=0,
-                  word_mismatches=0, finite=True, cpu_fallback=0, focus_takeover_count=0)
+                  word_mismatches=0, finite=True, cpu_fallback=0, focus_takeover_count=0,
+                  maximum_battery_temperature_c=max(temperatures),maximum_thermal_status=max(thermal),external_power=True)
     if variant == 'oneProbabilityScale':
         need(s['accuracy_failures'] == '0' and ledger['exit_code'] == 0, 'SCALE_FAILED')
         for mode in range(4):
@@ -105,6 +118,7 @@ def complete(text, ledger, variant, build):
             need(len(subset) == 88 and len({(m[2],m[3]) for m in subset}) == 88, 'SCALE_NATIVE_COVERAGE')
         standalone=[m for m in metrics if m[1].startswith('forwardScaleStandalone') and int(m[2])<44]
         need(len(standalone)==176, 'SCALE_STANDALONE_COVERAGE')
+        need(len([m for m in metrics if m[1].startswith('forwardScaleStandalone')])==224, 'SCALE_CONTROL_COVERAGE')
         result.update(standalone_core_maxAbs=max(float(fields(','.join(m))['abs']) for m in standalone),
                       native_maxAbs=max(float(fields(','.join(m))['abs']) for m in metrics
                                         if m[1].startswith('forwardScaleNative') and m[3] in ('final0','final1')))
@@ -113,6 +127,7 @@ def complete(text, ledger, variant, build):
              and ledger['exit_code'] == 0, 'MASK_FAILED')
         finals=records(text,'mask_native_final')
         need(len(finals)==352 and len({tuple(x.split(',')[1:4]) for x in finals})==352, 'MASK_NATIVE_COVERAGE')
+        need(len([m for m in metrics if m[1].startswith('maskCustomStandalone')])==224, 'MASK_STANDALONE_COVERAGE')
         result.update(standard_failed_predicates=int(s['standard_required_predicate_failures']),
                       custom_mask=True,
                       standalone_core_maxAbs=max(float(fields(','.join(m))['abs']) for m in metrics
@@ -122,11 +137,12 @@ def complete(text, ledger, variant, build):
         need(s['local_failures'] == s['upstream_failures'] == '0'
              and s['native_backward_executed'] == '0', 'LOCAL_P_OR_UPSTREAM_FAILED')
         local=records(text,'softmax_local')
-        need(len(local)==488 and all(fields(x)['gate']=='PASS' for x in local), 'LOCAL_P_COVERAGE')
+        need(len(local)==488 and len({tuple(x.split(',')[1:4]) for x in local})==488
+             and all(fields(x)['gate']=='PASS' for x in local), 'LOCAL_P_COVERAGE')
         exps=records(text,'forward_softmax_receipt')
         need(len(exps)==144 and all(fields(x)['arithmetic_word_mismatches']=='0' for x in exps), 'SOFTMAX_RECEIPT_COVERAGE')
         cumulative=records(text,'p_cumulative');joint=records(text,'p_joint')
-        need(len(cumulative)==352 and len(joint)==8800 and
+        need(len(cumulative)==352 and len({tuple(x.split(',')[1:4]) for x in cumulative})==352 and len(joint)==8800 and
              len({tuple(x.split(',')[1:5]) for x in joint})==8800, 'CARTESIAN_P_COVERAGE')
         failed=sum(int(fields(x)['joint_failures']) for x in cumulative)
         need(failed==int(s['cumulative_failures']) and ledger['exit_code']==(4 if failed else 0), 'JOINT_STATUS_CONTRADICTION')
@@ -166,6 +182,66 @@ def host(repo, root, candidate):
     need(repeat['processes']==3 and repeat['sha256']==sha(root/'attribution.jsonl'), 'HOST_REPRODUCTION_MISSING')
     for i in (2,3):need(sha(root/f'attribution-repeat-{i}.jsonl')==repeat['sha256'], 'HOST_REPEAT_CHANGED')
     return analysis, identity
+
+
+def anchors(repo, root, candidate):
+    build=load(candidate/'build-identity-private.json')
+    need(build==load(repo/'build/fp32-custom/build-identity.json'), 'FINAL_BUILD_CHANGED')
+    for k,v in build['binary_hashes'].items():need(sha(repo/'build/fp32-custom'/k)==v,'FINAL_BINARY_CHANGED')
+    for k,v in build['source_hashes'].items():need(sha(repo/k)==v,'FINAL_SOURCE_CHANGED')
+    need(build['qairt_build_id']=='2.48.40.260702151143' and build['fp_contract']=='off'
+         and build['hvx_fp_mode']=='strict-ieee', 'BUILD_CONFIGURATION_CHANGED')
+    initial=load(root/'start-private.json')
+    need(initial['base']==BASE, 'BASE_CHANGED')
+    for ref in initial['refs']:
+        name,expected=ref.split()
+        if name!='refs/heads/'+BRANCH:
+            need(subprocess.check_output(['git','rev-parse',name],cwd=repo,text=True).strip()==expected,'PROTECTED_REF_CHANGED')
+    for k,v in initial['protected']['protected_sha256'].items():need(sha(repo/k)==v,'PROTECTED_ARTIFACT_CHANGED')
+    for k,v in FIXTURES.items():need(sha(repo/k)==v,'FROZEN_FIXTURE_CHANGED')
+    return build
+
+
+def export_partial(repo, root, candidate, stop_directory):
+    analysis,identity=host(repo,root,candidate);build=anchors(repo,root,candidate)
+    stop=load(candidate/stop_directory/'device-preflight-private.json')
+    need(stop['status']=='BLOCKED' and stop['reason']=='ADB_TRANSPORT_FAILURE: adb operation failed'
+         and stop['read_only'] is True and stop['device_executes']==0
+         and stop['device_operations_after_stop']==0, 'TRANSPORT_STOP_NOT_ESTABLISHED')
+    need(all(stop['gates'].get(k)=='PASS' for k in SAFETY_GATES[:6]), 'HOST_PREFLIGHT_INCOMPLETE')
+    pilots={}
+    for item in load(candidate/'pilots-private.json'):
+        need(item['phase']=='PILOT' and item['variant'] in VARIANTS[:2], 'UNVALIDATED_PILOT')
+        variant=item['variant'];folder=repo/item['relative_report_path']
+        safety_pass(load(candidate/f'preflight-{variant}-pilot/device-preflight-private.json'))
+        pilots[variant]=dict(certified=False,phase='PILOT',**complete(
+            (folder/'stdout.txt').read_text(),load(folder/'identity-private.json'),variant,build))
+    need(set(pilots)==set(VARIANTS[:2]), 'COMPLETED_PILOT_COVERAGE')
+    validation={n:profile((candidate/f'{n.lower()}.txt').read_text(encoding='utf-8-sig'),n) for n in ('Fast','Host','Qnn')}
+    validation.update(Device='DEVICE_REGRESSION_NOT_RUN',HVX_FFN2_device='DEVICE_REGRESSION_NOT_RUN',
+                      HVX_QKV_device='DEVICE_REGRESSION_NOT_RUN',Muon_W8='DEVICE_REGRESSION_NOT_RUN',
+                      final_three_process_cohort='NOT_RUN')
+    return dict(schema=2,status='BLOCKED',branch=BRANCH,research_base=BASE,analysis=analysis,
+                analysis_source_commit=identity['source_commit'],host_compiler_sha256=identity['compiler_sha256'],
+                host_reproduction=dict(independent_processes=3,ordered_numerical_digest=sha(root/'attribution.jsonl')),
+                compiled_device_candidate_source_commit=build['source_sha'],device_pilot_source_commit=build['source_sha'],
+                device_certified_source_commit=None,binary_sha256=build['binary_hashes'],
+                qairt_build_id=build['qairt_build_id'],qnn_api='2.37.0',architecture='V81',
+                hexagon_compiler_sha256=build['hexagon_compiler_sha256'],ndk_compiler_sha256=build['ndk_compiler_sha256'],
+                fixtures={Path(k).name:v for k,v in FIXTURES.items()},
+                classifications=['HOST_P_ERROR_ATTRIBUTION_VERIFIED','HOST_P_JOINT_CONTRACT_FAIL',
+                                 'BLOCKED_HOST_P_BUDGET','BLOCKED_DEVICE_SAFETY','UNRESOLVED'],
+                safety_reason='ADB_TRANSPORT_FAILURE',safety_failure_is_numerical_failure=False,
+                read_only_failed_preflight=True,device_operations_after_stop=0,
+                completed_current_candidate_pilots=pilots,final_processes=0,
+                current_candidate_standard_softmax='NOT_RUN',current_candidate_custom_softmax='HOST_ONLY',
+                native_P='NOT_RUN',P_backward='SHAPE_OWNERSHIP_ONLY_NOT_EXECUTED',
+                original_gates=dict(P=1e-6,row=2e-6,P_dScores=.00025,P_dValue=.001,dScores=.002,dValue=.01),
+                gate_relaxation=False,scale_bits='0x3e3504f3',mask_allowed_bits='0x00000000',mask_future_bits='0xc61c4000',axis=3,beta=1,
+                validation=validation,cumulative_certified=False,observer_free_cumulative_certified=False,backward_certified=False,
+                protected_artifacts='PASS',protected_hash_count=5,previous_branches='PASS',training='NO-GO',training_updates=0,
+                full_one_layer='UNVERIFIED',full_19_layer='UNVERIFIED',observer_incident='REPRODUCED / CAUSE UNRESOLVED',
+                incident_6031='UNRESOLVED / DORMANT / WATCH')
 
 
 def regressions(repo, candidate, build):
@@ -217,20 +293,7 @@ def regressions(repo, candidate, build):
 
 def export(repo, root, candidate):
     analysis,identity=host(repo,root,candidate)
-    build=load(candidate/'build-identity-private.json')
-    need(build==load(repo/'build/fp32-custom/build-identity.json'), 'FINAL_BUILD_CHANGED')
-    for k,v in build['binary_hashes'].items():need(sha(repo/'build/fp32-custom'/k)==v,'FINAL_BINARY_CHANGED')
-    for k,v in build['source_hashes'].items():need(sha(repo/k)==v,'FINAL_SOURCE_CHANGED')
-    need(build['qairt_build_id']=='2.48.40.260702151143' and build['fp_contract']=='off'
-         and build['hvx_fp_mode']=='strict-ieee', 'BUILD_CONFIGURATION_CHANGED')
-    initial=load(root/'start-private.json')
-    need(initial['base']==BASE, 'BASE_CHANGED')
-    for ref in initial['refs']:
-        name,expected=ref.split()
-        if name!='refs/heads/'+BRANCH:
-            need(subprocess.check_output(['git','rev-parse',name],cwd=repo,text=True).strip()==expected,'PROTECTED_REF_CHANGED')
-    for k,v in initial['protected']['protected_sha256'].items():need(sha(repo/k)==v,'PROTECTED_ARTIFACT_CHANGED')
-    for k,v in FIXTURES.items():need(sha(repo/k)==v,'FROZEN_FIXTURE_CHANGED')
+    build=anchors(repo,root,candidate)
     cohort=load(candidate/'final-cohort-private.json')
     need(len(cohort)==9 and all(r['phase']=='FINAL' for r in cohort), 'FINAL_COHORT_COUNT')
     output={}
@@ -269,7 +332,8 @@ def export(repo, root, candidate):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,default=Path('.'))
     p.add_argument('--private-root',type=Path,required=True);p.add_argument('--candidate',type=Path,required=True)
-    p.add_argument('--output',type=Path,required=True);p.add_argument('--self-test',action='store_true');a=p.parse_args()
+    p.add_argument('--output',type=Path,required=True);p.add_argument('--self-test',action='store_true')
+    p.add_argument('--stop-preflight',type=Path);a=p.parse_args()
     if a.self_test:
         good=dict(status='PASS',read_only=True,device_executes=0,device_operations_after_stop=0,
                   gates={k:'PASS' for k in SAFETY_GATES})
@@ -282,6 +346,25 @@ if __name__=='__main__':
         need(numeric_digest('onemetric,a,0,x,abs=0\napi_us,x,1\n')==
              numeric_digest('onemetric,a,0,x,abs=0\napi_us,x,99\n'),'TIMING_IN_DIGEST')
         print('forward_p_resume_exporter_selftest=PASS safety_corruptions=4 timing_excluded=1')
-    result=export(a.repo,a.private_root,a.candidate)
+        build=load(a.candidate/'build-identity-private.json');count=0
+        for item in load(a.candidate/'pilots-private.json'):
+            if item['variant'] not in VARIANTS[:2]:continue
+            folder=a.repo/item['relative_report_path'];text=(folder/'stdout.txt').read_text();ledger=load(folder/'identity-private.json')
+            complete(text,ledger,item['variant'],build)
+            for key,value in [('exit_code',139),('focus_takeover_count',1),('status','PARTIAL')]:
+                changed=deepcopy(ledger);changed[key]=value
+                try:complete(text,changed,item['variant'],build)
+                except ValueError:count+=1
+                else:raise ValueError('PROCESS_CORRUPTION_ACCEPTED '+key)
+            for old,new in [('api,backendFree,0','api,backendFree,1'),('poison_remaining=0','poison_remaining=1'),
+                            ('word_mismatches=0','word_mismatches=1'),('finite=1','finite=0')]:
+                need(old in text,'SELFTEST_ANCHOR_MISSING')
+                try:complete(text.replace(old,new),ledger,item['variant'],build)
+                except ValueError:count+=1
+                else:raise ValueError('RESULT_CORRUPTION_ACCEPTED '+old)
+        need(count==14,'SELFTEST_PROCESS_COVERAGE')
+        print('forward_p_resume_process_corruption_checks=PASS corruptions=14 pilot_promotion=0')
+    result=(export_partial(a.repo,a.private_root,a.candidate,a.stop_preflight) if a.stop_preflight
+            else export(a.repo,a.private_root,a.candidate))
     a.output.write_text(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)+'\n',encoding='utf-8')
     print('forward_p_device_export=PASS cumulative_certification=BLOCKED')

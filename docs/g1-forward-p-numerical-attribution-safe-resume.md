@@ -12,7 +12,7 @@ Two independent blockers were retained: the original Host P joint contract had
 nine failed predicates; the previous device attempt stopped before execution at
 `DEVICE_NOT_AWAKE_OR_UNKNOWN`. Fast/Host/Qnn success did not cancel either.
 
-The unchanged, previously untested device candidate has compiled source
+The initial, previously untested device candidate had compiled source
 `ac5be47c155725a0a442da540ab0359b34602a88`:
 
 | Artifact | SHA256 |
@@ -21,9 +21,22 @@ The unchanged, previously untested device candidate has compiled source
 | Host package | `480014e5f0259a04b8065c2e911930a0f19b41568a5fc5b0182adb9499c2b210` |
 | one-layer probe | `06fce37163459854f2c6c5f7e6a31b91a64b098a304a5dbf57afbb7019d0abea` |
 
-The last historical device-tested source remains
-`b6794c4572d10c163acb5201e811546ac564243e`; its PASS is not a PASS for this candidate.
-No production or DSP arithmetic was changed in this study.
+The initial last device-tested source was
+`b6794c4572d10c163acb5201e811546ac564243e`; its PASS is not transferred.
+Initial Host attribution changed no DSP arithmetic. Subsequent measured standard
+Mask/Softmax failures justified bounded diagnostic additions described below.
+Production builders, existing arithmetic bodies and HVX kernels remain unchanged.
+
+Current51-op candidate source: `ecbe619e860d4a897815d1d5268fe66b680df57b`.
+Scale/Mask pilots completed, then the next process stopped at an ADB transport
+safety gate. **BLOCKED_HOST_P_BUDGET** and **BLOCKED_DEVICE_SAFETY** have distinct
+causes. Pilot success is not final three-process certification.
+
+| Current artifact | SHA256 |
+| --- | --- |
+| DSP package | `71d249b192c8495249d4c23b484c0cd2c87f8e517ab2cb0f33cd7a7152559208` |
+| Host package | `f84d18e147d29d05ea1d59bfabae433d4502a38b1a9f64c0a8a17cc43502b3a3` |
+| one-layer probe | `9726ea13adce1ce4cb3684ad7ae28d8eff3b9011e8a75909a1093978097603f2` |
 
 Source audit reconfirmed rank2 Q/K `[32,32]`, QK transpose flags false/true;
 FP32 scale `1.0f/std::sqrt(float(64/2))`, bits `0x3e3504f3`; and a row-major
@@ -235,43 +248,49 @@ upstream accuracy research under the existing contract.
 
 ## F. Device resume
 
-One read-only preflight was attempted after Host attribution and Qnn completion.
-Pinned package/probe/source/compiler checks, protected artifacts and Host
-storage passed. Same physical device, absence of active training/headless/custom
-probe, awake and non-target top-resumed all passed. **The old awake blocker
-was not reproduced.** Thermal status0, healthy/present battery88%,35°C were
-captured privately.
+Historical safety stops and the user's subsequent manual unlock/APK replacement
+authorization are preserved in the chronological notes below. The audited APK
+was replaced using the existing data-preserving helper; installed bytes matched,
+without app launch, input, data clear or focus takeover. Full preflights passed
+before each completed pilot, including physical identity, active-run absence,
+awake/non-target top, storage, power/thermal, SDK/compiler/package/fixture and
+protected identities. Awake was rechecked immediately before each probe.
 
-The new preflight additionally required confirmed AC/USB/wireless external
-power. All reported false, so it stopped with
-`EXTERNAL_POWER_UNKNOWN_OR_ABSENT`. This is an **additional conservative
-condition introduced by this study's preflight**, not a previously mandated
-repository requirement or proof that battery operation was unsafe. The healthy
-battery/thermal readings must not be described as an unsafe-device finding.
-The stop condition was retained, and there were **zero device operations after
-the stop**, zero staging operations, zero probe executions and no automatic
-wake/reconnect, force-stop, foreground takeover or power-policy change.
+The51-op Scale and Mask each completed one independent pilot process with QNN API
+success, required Custom outputs finite, input mutation0, complete writes,
+poison/canary0, DSP receipts, fallback0, focus takeovers0 and normal context/
+device/backend teardown. Battery temperature was37°C and thermal status0
+before/after both. These observations apply to these specific processes.
 
-Device free space and installed-APK identity checks occur after the power gate
-and were **not reached**. SDK/local APK/V81 Stub/Skel audit passed in Qnn;
-installed APK correctness and complete device readiness are not claimed.
-There was no immediate pre-probe awake recheck because no probe was submitted.
+Before the next standard Softmax process, a fresh read-only preflight failed at
+`ADB_TRANSPORT_FAILURE`. Host/binary/compiler/protected checks passed; physical
+identity and subsequent current device conditions could not be established.
+No probe was submitted and no device operation/retry followed this stop. No
+endpoint was guessed, reattached or switched. This is a transport/safety evidence
+failure, **not a numerical FAIL or proof of a sleeping device**. Manual
+reconnection/readiness confirmation was requested; Host work continued without
+device polling. Earlier authorized resume phases are not represented as zero
+device operations across the whole study.
 
 | Device experiment | Result |
 | --- | --- |
-| Custom Forward Scale standalone/native, four observer conditions | NOT RUN |
-| Standard Scale negative control, new candidate | NOT RUN |
-| Standard finite Mask Add | NOT RUN |
-| Standard Softmax, correct masked inputs | NOT RUN |
-| Conditional Custom Mask/Softmax | Not implemented; required standard failure unmeasured |
-| LN1→P / observer-free cumulative P | UNVERIFIED |
-| Final same-binary three-process cohort | NOT RUN, zero processes |
+| Current Custom Scale standalone, Observed/NoReceipt | PILOT PASS; core maxAbs4.76768263979e-7; ordered word mismatches0 |
+| Current native LN1→Scale, four Tap/Receipt modes | PILOT PASS; maxAbs6.50802195956e-6≤.01; cross-mode final words identical |
+| Current standard Scale negative | H0 max.00868434926008,0/44 FAIL; H1 max.0102382000946,1/44 FAIL |
+| Current standard Mask Add |88/88 core heads FAIL;176 predicates (absolute+word); largest core error4.0018029213; large control nonfinite retained as failed negative |
+| Current reused Custom Mask standalone | PILOT PASS; core maxAbs.00048828125≤.001; all56 cases ordered words/finite/complete writes |
+| Current native LN1→Mask, four modes | PILOT PASS; maxAbs.000490612061185 within allowed/future .01/.011; final cross-mode words identical |
+| Standard Softmax,49-op pilot |88/88 core element FAIL, maxAbs.00189736825901;224 local failed predicates across56 cases; normal teardown |
+| Standard Softmax, current51-op package | NOT RUN, transport stop before process |
+| Conditional Custom Softmax, current51-op | Host PASS/build PASS; DSP NOT RUN |
+| LN1→P / observer-free cumulative P | NOT RUN / UNVERIFIED |
+| Final same-binary three-process cohort | NOT RUN, zero final processes |
 
-The existing `oneProbabilityScale` remains the first device step after a future
-fully passing preflight and a clean committed source. Scale must pass before
-Mask, then local Softmax. The current Scale probe includes a standalone Mask
-diagnostic only after its own Scale gates; it is not a P executor. No unexecuted
-Mask/Softmax graph scaffold is represented as a complete device experiment.
+The old47-op combined pilot exited139 during a standard Mask nonfinite stress
+without normal teardown; it remains a failed pilot. The49-op pilots used a
+separate binary and cannot certify51-op results. Measured standard Softmax failure
+justified one bounded Custom implementation; its DSP accuracy is still unknown.
+Neither previous results nor Host expf prove the new DSP path.
 
 ## G. Native P and saved state
 
@@ -302,35 +321,43 @@ materialization/registry and eight-microbatch accumulation. No full1-layer or
 
 ## H. Regression
 
-The new targeted suite rebuilt/reran13 legacy FFN2/arithmetic/reference/shape
-tests, two QKV tests, two QK/BackwardScale tests, three Forward Scale/graph/bound
-tests, the original P assessment and the new attribution test. The20 ordinary
-tests passed; original P test returned expected exit4; attribution analysis
-returned exit0. Existing Scalar/HVX word, LN, HeadSplit, Multiply/Softmax-backward
-Host contracts remain intact. These are Host contracts, not DSP execution.
+The current candidate's targeted suite rebuilt/reran13 legacy FFN2/arithmetic/
+reference/shape tests plus11 current tests: QKV2, QK/BackwardScale2, Forward
+Scale/Mask/Softmax3, graph/bounds2, original P1 and attribution1. There were23
+zero exits and the unchanged expected original P exit4. The graph audit covered80
+constructions, both Mask/Softmax choices, four observer conditions and same-ID
+saved P scaffolding. Existing Scalar/HVX word, LN, HeadSplit, Multiply/Softmax-
+backward Host contracts remain intact. These are Host contracts, not execution
+of those kernels on DSP.
 
-Qnn profile **PASS382.8s**, including Host shape/contracts, pinned SDK check,
-QNN-enabled APK and ABI/hash/path/2.47 audit. Optional inventory advisory remains;
-required core and Build ID passed. Fast **PASS72.8s**. A separate broad Host
-profile **PASS306.1s** was also run; its completed result is in the allow-list aggregate.
-Broad Host PASS cannot override the targeted P joint-contract FAIL.
+Current Fast passed75.0s and broad Host passed337.0s. The current Qnn profile is
+recorded independently in the public aggregate after completion; the earlier
+382.8s Qnn run is historical. Host/profile success does not cancel the targeted
+P joint-contract FAIL.
 
-Device smoke, actual candidate HVX FFN2/QKV, Scalar QK, BackwardScale,
-Softmax-backward and Muon W8 **DEVICE_REGRESSION_NOT_RUN**. No historical
-114/114 or previous binary numerical results are substituted. There are no
-device numerical digests or final device processes.
+Device smoke, actual current candidate HVX FFN2/QKV, Scalar QK, BackwardScale,
+Softmax-backward and Muon W8 are **DEVICE_REGRESSION_NOT_RUN**. No historical
+114/114 or previous binary numerical result substitutes for them. There are no
+final device processes. Completed current pilot ordered numerical digests,
+excluding timing/IDs and standard negative-control values, are:
 
-Three **Host-only** independent executions of the identical attribution binary
+- Scale: `995556389700a88f309c8f04b57f5b9390646f14e1d16b37e77a2094ece0d7d1`.
+- Mask: `542349d60441d3bf81485512608794e7c10044d3fe0e42304c551d01530bfb46`.
+
+These do not prove three-process repeatability. Cross-observer full word equality
+inside each pilot is a distinct, actually checked property.
+
+Three Host-only independent executions of the identical attribution binary
 produced the same ordered numerical/log digest
 `c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7`.
-The log excludes timing/process/device IDs and includes deterministic fixture
-IDs. This does not satisfy the required three-process device cohort.
+The new candidate's full attribution log has that same digest. This is not the
+missing three-process device cohort.
 
 All five protected artifact hashes and previous branch refs are checked at
 start/export/closeout. The40k checkpoint remains
 `89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d`.
-No checkpoint decode, corpus/order/cache changes, optimizer/codec/production ABI
-change, training update or final-test execution occurred.
+No protected checkpoint decode, corpus/order/cache change, optimizer/codec/
+production ABI change, training update or final-test execution occurred.
 35/40-node Tap incident: **REPRODUCED / CAUSE UNRESOLVED**.
 6031: **UNRESOLVED / DORMANT / WATCH**.
 
@@ -340,16 +367,18 @@ change, training update or final-test execution occurred.
 and ordered QK rounding boundaries, before Softmax optimization or native saved-P
 backward certification. A higher-precision diagnostic counterfactual can establish
 what would meet the unchanged budget, but changing production mathematics or
-ordered-FP32 contracts is outside this study. Local DSP Scale/Mask/Softmax
-measurements remain necessary once a fully passing device preflight is available.
-Host evidence does not establish any HTP Softmax failure or justify Custom exp.
+ordered-FP32 contracts is outside this study. Finish the bounded DSP Softmax local
+diagnostic after safe connectivity returns, then diagnose cumulative P without
+changing its budget. Standard Softmax failure is measured on the49-op pilot; the
+new51-op Custom exp path remains unverified. Local math certification and saved-P
+backward certification must remain separate.
 
 | # | Question / answer |
 | --- | --- |
 | 1 | Nine old FAIL reproduced? Yes, unchanged original exit4 and independent attribution. |
 | 2 | Concentration? Forward16,17,20,21,22; six Forward/head pairs; gradients9/12 for eight bounds, one P predicate. |
 | 3 | Largest P growth? Upstream through ordered QK dominates the worst cumulative case; R2≈9.215e-7 before Softmax/Scale rounding. Counterfactual attribution is not uniquely additive. |
-| 4 | Host local Softmax error? Max2.46768e-7 on received FP32 scores; DSP unknown. |
+| 4 | Host local Softmax? Original model max2.46768e-7; new strict-shift strategy max3.29406e-7 on its controls.49-op standard DSP local max.00189737 FAIL; new Custom DSP unknown. |
 | 5 | Upstream vs local separated? Yes, R4 vs R5 and received-operand local checks. |
 | 6 | Bound conservatism? Worst bound2.42306× same-combination signed maximum; cancellation ratio .296518 for ΣdP e. |
 | 7 | Actual gradient gates? Tested Host dScores2.87716e-4<.002, dValue4.50467e-5<.01; DSP unmeasured. |
@@ -357,22 +386,23 @@ Host evidence does not establish any HTP Softmax failure or justify Custom exp.
 | 9 | Old P contract? FAIL, nine predicates. |
 | 10 | Formula/indexing bug? None found; bound identity checked independently. Host exp model limitation documented. |
 | 11 | V2 needed? Potential future investigation, no adoption or fitted threshold. Requires theory, independent fixtures, prospective preregistration and regression safeguards. |
-| 12 | Awake gate? PASS this attempt. Complete safety preflight stopped at added external-power condition. |
-| 13 | Candidate DSP Scale? NOT RUN. |
-| 14 | Standard Mask? NOT RUN. |
-| 15 | Standard Softmax local? NOT RUN. Host local model is within local gate. |
-| 16 | Custom Softmax needed? Unknown; no measured standard failure, none implemented. |
+| 12 | Awake gate? Resolved for completed pilots; full preflights PASS. Latest attempt stopped earlier at ADB transport, so current device state is unknown. |
+| 13 | Candidate DSP Scale? Standalone/native/four observer modes PILOT PASS; final3-process and device regressions incomplete, no formal VERIFIED. |
+| 14 | Standard Mask? Current88/88 core heads FAIL; reused Add Custom standalone/native PILOT PASS. |
+| 15 | Standard Softmax local?49-op measured FAIL;51-op remeasurement NOT RUN after transport stop. |
+| 16 | Custom Softmax needed? Measured standard failure justified one bounded implementation. Host PASS; new DSP path untested. |
 | 17 | LN1→P cumulative precision? Host original joint contract FAIL; device unverified. |
 | 18 | Observer-free P? UNVERIFIED, no executed graph. |
 | 19 | Native Forward P→Backward? Shape/ownership audit only; numerical certification withheld. |
 | 20 | Candidate HVX/W8 device regressions? NOT RUN; historical results not reused. |
-| 21 | Largest precision blocker? Cumulative upstream P error and its frozen Cartesian propagation budget; device local accuracy remains unknown. |
+| 21 | Largest precision blocker? Upstream cumulative P error and its Cartesian allocation. Safe connectivity and new Custom Softmax local DSP evidence are unresolved prerequisites. |
 | 22 | Full1-layer missing? Accurate saved Forward producers, Attention/FFN branches, scatter/projection/Gate gradients, LN1 dY sums, complete materialization/accumulation and executed ownership tests. |
 | 23 | 40k→60k/200k? **NO-GO**, zero training updates. |
 
 Classifications: **HOST_P_ERROR_ATTRIBUTION_VERIFIED**, **HOST_P_JOINT_CONTRACT_FAIL**,
-**BLOCKED_HOST_P_BUDGET**, **BLOCKED_DEVICE_SAFETY**. No DSP/local/native/cumulative/
-observer-free/backward-connected P classification is granted.
+**BLOCKED_HOST_P_BUDGET**, **BLOCKED_DEVICE_SAFETY**, **UNRESOLVED**. Current device
+stop is transport-related. No formal DSP/local/native/cumulative/observer-free/
+backward-connected P classification is granted.
 
 ## J. Provenance and reproduction
 
@@ -381,8 +411,11 @@ Committed analysis source snapshot:
 with base HEAD and new uncommitted analysis files; the later committed snapshot
 was bound against all nine test source hashes. Private identity records retain
 both execution HEAD and the post-run source binding, rather than claiming those
-files existed in the base commit. All inherited compiled source hashes remain
-unchanged. Final HEAD/clean status are recorded after the report commit in private
+files existed in the base commit. Original analysis logs/digests remain unchanged. New51-op build and targeted Host
+suite source is`ecbe619e860d4a897815d1d5268fe66b680df57b`; completed pilot execution
+HEAD is`a93a3cdd2c18201107ccbb6df9d83fcf4d9f9d34` (exporter-only addition).
+Package/probe source hashes match the build. Later report/exporter edits are not
+attributed to these numerical pilots. Final HEAD/clean status are recorded after the report commit in private
 closeout and the final response; a commit cannot contain its own hash.
 
 QAIRT2.48.40.260702151143, QNN API2.37.0, HTPV81, Hexagon SDK6.6.0.0,
@@ -410,10 +443,14 @@ Private evidence: `build/reports/g1-forward-p-numerical-attribution-safe-resume/
 Source/executable/log identities, all row distributions, repeat digests, partial
 device checks, protected/ref snapshots and complete profile logs remain private.
 The [public aggregate](results/g1-forward-p-numerical-attribution-safe-resume-summary.json)
-is produced by `scripts/export_public_forward_p_attribution.py`, which validates
-original FAIL, coverage, gates, bounds, source/binary/fixture/protected identities,
-profiles and safety stop before selecting allowed scalar fields. It rejects nine
-test corruptions and cannot emit a device VERIFIED classification in this mode.
+is produced by`scripts/export_public_forward_p_resume_device.py`. Its explicit
+transport-stop mode validates current Host FAIL, coverage, bounds, source/binary/
+fixture/protected identities, profiles, both completed current pilot processes,
+their passed preflights, and the later stop before selecting allowed fields.
+Pilot results cannot generate a VERIFIED classification. Complete-process mode
+requires three independently validated processes per lane and fresh current
+regressions; it is not an override of the stop-mode classification. The original
+Host/safety-stop exporter remains separate and unchanged.
 Raw tensors/checkpoints/corpus/device IDs/endpoints/logs/APK hashes/SDK binaries
 and private absolute paths are excluded. No push, PR, merge or history rewrite.
 
@@ -551,8 +588,11 @@ The SDK library is prebuilt and its polynomial uses scalar floating multiply/
 accumulate instructions. Our compiler's contraction-off flag does not redefine
 that prebuilt transcendental implementation. No no-FMA/bit-exact exp claim is
 made; existing ordered MatMul/Add/Multiply bodies and strict HVX are unchanged.
-Actual DSP exp accuracy must be independently measured, not inferred from the
-SDK Softmax example or the symbol audit. Disassembly remains private.
+Final DSP symbol inspection found`expf` undefined (runtime resolved), not a linked
+definition of the inspected libc archive member. The archive audit therefore
+does not establish which implementation executes on the device. Actual DSP exp
+accuracy must be independently measured from receipts; no library identity or
+accuracy is inferred from the example/archive alone. Disassembly remains private.
 
 `ForwardSoftmax`/`ForwardSoftmaxNoReceipt` append after the49-op prefix. Paired
 receipt8328 words contain2048 inputs,64 row maxima,2048 shifted inputs,2048
