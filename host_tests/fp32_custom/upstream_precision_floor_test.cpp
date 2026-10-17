@@ -1,0 +1,11 @@
+#define PHONELM_PRECISION_LIBRARY
+#include "upstream_precision_test.cpp"
+// Nearest-float P is a representation lower bound in elementwise maxAbs.
+// Isolated upstream boundary experiments are counterfactuals, not lower-bound
+// proofs: subsequent arithmetic can amplify, cancel or reshape those errors.
+int main(int argc,char** argv){std::cout<<std::setprecision(17);try{if(argc!=2)return 1;auto original=one::read(argv[1]);auto fs=segmentstudy::lnCases(original);auto hs=precision::synthetic();std::vector<std::array<precision::Gradient,2>> gr;for(auto& z:upstreamreference::fullUpstream(original)){auto a=one::reference(z,true);std::array<precision::Gradient,2> g;for(unsigned h=0;h<2;++h){auto key="h"+std::to_string(h)+"_";g[h]={a.at(key+"dp"),a.at(key+"dc")};}gr.push_back(g);}
+ for(unsigned set=0;set<2;++set){auto& cases=set?hs:fs;auto gradients=set?precision::syntheticGradients():gr;precision::Totals totals[4];for(auto& z:cases){auto c=one::lncase(z);c.x=z.v.at("layerinput");c.gamma=z.v.at("gamma1");c.beta=z.v.at("beta1");auto ln=precision::idealLn(c);auto wq=one::d(z.v.at("wq")),wk=one::d(z.v.at("wk"));auto q=one::mm(ln.y,wq,32,64,64),k=one::mm(ln.y,wk,32,64,64);auto yq=one::mm(precision::stored(ln.y),wq,32,64,64),yk=one::mm(precision::stored(ln.y),wk,32,64,64);auto ref=precision::ideal(c,wq,wk);
+ for(unsigned h=0;h<2;++h){auto raw=one::mm(one::split(q,h),one::split(k,h),32,32,32,false,true);auto finish=[](const one::Vec& raw){return one::softmax(probabilitycontract::masked(one::mul(raw,{double(probabilitycontract::scale())})));};std::array<one::Vec,4> paths={precision::stored(ref[h]),finish(one::mm(one::split(yq,h),one::split(yk,h),32,32,32,false,true)),finish(one::mm(precision::stored(one::split(q,h)),precision::stored(one::split(k,h)),32,32,32,false,true)),finish(precision::stored(raw))};
+ for(unsigned p=0;p<4;++p){totals[p].probability(z.index,h,attribution::stats(ref[h],paths[p]));for(auto& g:gradients)totals[p].add(z.index,h,attribution::impact(g[h].dp,g[h].dc,ref[h],paths[p]));}
+ }}const char* ids[]={"nearest_FP32_P","isolated_LN_Y_storage","isolated_QK_storage","isolated_raw_storage"};for(unsigned p=0;p<4;++p)totals[p].print(ids[p],set?"holdout":"frozen","source");}
+ return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 4;}}
