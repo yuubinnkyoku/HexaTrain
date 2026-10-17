@@ -7,8 +7,10 @@ import argparse
 from copy import deepcopy
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
+import tempfile
 from export_public_forward_probability import FIXTURES, host_record, need, profile, sha, load
 
 BASE = '52f5f04edf70a69fdc48251baddb2348472f5c1d'
@@ -83,11 +85,29 @@ def safety(record):
     need(record['status'] == 'BLOCKED' and record['reason'], 'STOP_NOT_ESTABLISHED')
     need(record['reason'] in ('DEVICE_NOT_AWAKE_OR_UNKNOWN', 'EXTERNAL_POWER_UNKNOWN_OR_ABSENT',
                              'BOUNDED_DIAGNOSTIC_POWER_THERMAL_UNSAFE', 'ADB_NO_ONLINE_DEVICE',
-                             'INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN', 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN'), 'UNALLOWLISTED_STOP_REASON')
+                             'INSTALLED_APK_IDENTITY_MISMATCH_OR_UNKNOWN', 'DEVICE_STORAGE_HEADROOM_LOW_OR_UNKNOWN',
+                             'TOP_RESUMED_UNKNOWN'), 'UNALLOWLISTED_STOP_REASON')
     need(record['read_only'] is True and record['device_executes'] == 0
          and record['device_operations_after_stop'] == 0, 'DEVICE_PROMOTION')
     # Export this mode only after a real read-only device gate was reached.
     need(record['gates']['package_probe'] == record['gates']['protected'] == record['gates']['host_analysis'] == 'PASS', 'HOST_PREFLIGHT_INCOMPLETE')
+
+
+def resume_records(root):
+    result=[]
+    for path in sorted(root.glob('resume-*/device-preflight-private.json')):
+        record=load(path);safety(record)
+        text=record.get('activity_private','')
+        keyguard=bool(re.search(r'(?im)^\s*(?:mKeyguardShowing|isKeyguardShowing|KeyguardShowing)\s*=\s*true\b',text))
+        known_top=bool(re.search(r'(?m)^\s*topResumedActivity=.*\su\d+\s+([^/\s]+)/',text))
+        if record['reason']=='TOP_RESUMED_UNKNOWN':
+            need(record['gates'].get('awake')=='PASS' and not known_top, 'TOP_STATE_CONTRADICTION')
+        result.append(dict(status='BLOCKED',reason=record['reason'],read_only=True,
+                           awake_at_snapshot=record['gates'].get('awake','NOT_REACHED'),
+                           top_resumed_at_snapshot='PASS' if known_top else 'UNKNOWN',
+                           keyguard_showing_at_snapshot=keyguard,
+                           device_executes=0,device_operations_after_stop=0))
+    return result
 
 
 def export(repo, root):
@@ -176,10 +196,34 @@ def self_test(records):
     print('attribution_exporter_selftest=PASS corruptions=9')
 
 
+def resume_self_test():
+    good=dict(status='BLOCKED',reason='TOP_RESUMED_UNKNOWN',read_only=True,device_executes=0,device_operations_after_stop=0,
+              gates=dict(package_probe='PASS',protected='PASS',host_analysis='PASS',awake='PASS'),
+              activity_private='  isKeyguardShowing=true\n  ResumedActivity: ActivityRecord{fake u0 example.invalid/.Main}')
+    with tempfile.TemporaryDirectory() as tmp:
+        root=Path(tmp);folder=root/'resume-01';folder.mkdir();file=folder/'device-preflight-private.json'
+        file.write_text(json.dumps(good))
+        need(resume_records(root)[0]['keyguard_showing_at_snapshot'], 'KEYGUARD_PARSE_FAILED')
+        for key,value in [('device_executes',1),('device_operations_after_stop',1),
+                          ('activity_private','topResumedActivity=ActivityRecord{fake u0 example.invalid/.Main}'),
+                          ('gates',dict(package_probe='PASS',protected='PASS',host_analysis='PASS',awake='UNKNOWN'))]:
+            changed=deepcopy(good);changed[key]=value;file.write_text(json.dumps(changed))
+            try:resume_records(root)
+            except ValueError:pass
+            else:raise ValueError('RESUME_CORRUPTION_ACCEPTED '+key)
+    print('resume_exporter_selftest=PASS corruptions=4 no_device_calls=1')
+
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--repo',type=Path,default=Path('.'));parser.add_argument('--private-root',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--self-test',action='store_true');args=parser.parse_args()
-    if args.self_test:self_test([json.loads(s) for s in (args.private_root/'attribution.jsonl').read_text(encoding='utf-8-sig').splitlines()])
+    if args.self_test:
+        self_test([json.loads(s) for s in (args.private_root/'attribution.jsonl').read_text(encoding='utf-8-sig').splitlines()])
+        resume_self_test()
     public=export(args.repo,args.private_root)
+    resumed=resume_records(args.private_root)
+    if resumed:
+        public['resume_attempts']=resumed
+        public['latest_safety_reason']=resumed[-1]['reason']
     args.output.write_text(json.dumps(public,indent=2,ensure_ascii=False,allow_nan=False)+'\n',encoding='utf-8')
     print('attribution_export=PASS certification=BLOCKED')

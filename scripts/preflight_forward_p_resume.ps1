@@ -1,18 +1,23 @@
 # Read-only, single-attempt safety preflight. Never wakes, reconnects, installs,
 # stops a process or changes foreground/power policy. Failure ends device work.
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
- [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot)
+ [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,[string]$ReportRoot='')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 $root=Split-Path -Parent $PSScriptRoot
-$out=Join-Path $root 'build/reports/g1-forward-p-numerical-attribution-safe-resume'
+$evidence=Join-Path $root 'build/reports/g1-forward-p-numerical-attribution-safe-resume'
+$out=if($ReportRoot){[IO.Path]::GetFullPath($ReportRoot)}else{$evidence}
+$privateReports=[IO.Path]::GetFullPath((Join-Path $root 'build/reports'))+[IO.Path]::DirectorySeparatorChar
+if(!$out.StartsWith($privateReports,[StringComparison]::OrdinalIgnoreCase)){throw 'PREFLIGHT_REPORT_MUST_BE_PRIVATE'}
+if(Test-Path -LiteralPath (Join-Path $out 'device-preflight-private.json')){throw 'PREFLIGHT_EVIDENCE_ALREADY_EXISTS'}
+[IO.Directory]::CreateDirectory($out)|Out-Null
 $record=[ordered]@{status='BLOCKED';reason=$null;read_only=$true;device_executes=0;device_operations_after_stop=0;gates=[ordered]@{}}
 try {
  Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
- $qnn=Get-Content (Join-Path $out 'qnn.txt') -Raw
+ $qnn=Get-Content (Join-Path $evidence 'qnn.txt') -Raw
  if($qnn -notmatch '===== verify.ps1 -Profile Qnn =====' -or $qnn -notmatch 'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$'){throw 'QNN_PROFILE_NOT_COMPLETE'}
- $analysis=Get-Content (Join-Path $out 'analysis-identity-private.json') -Raw|ConvertFrom-Json
+ $analysis=Get-Content (Join-Path $evidence 'analysis-identity-private.json') -Raw|ConvertFrom-Json
  if($analysis.tests.probability_attribution_test.exit_code -ne 0 -or $analysis.tests.probability_reference_test.exit_code -ne 4){throw 'HOST_ATTRIBUTION_NOT_COMPLETE'}
  $record.gates.host_analysis='PASS';$record.gates.sdk_apk_host='PASS'
  if([IO.DriveInfo]::new([IO.Path]::GetPathRoot($root)).AvailableFreeSpace -lt 20GB){throw 'HOST_STORAGE_HEADROOM_LOW'}

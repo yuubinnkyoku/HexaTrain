@@ -416,3 +416,38 @@ profiles and safety stop before selecting allowed scalar fields. It rejects nine
 test corruptions and cannot emit a device VERIFIED classification in this mode.
 Raw tensors/checkpoints/corpus/device IDs/endpoints/logs/APK hashes/SDK binaries
 and private absolute paths are excluded. No push, PR, merge or history rewrite.
+
+### Resume after the initial closeout
+
+A later user-authorized continuation started from clean HEAD
+`387191b861ce98c5d88abad93b5f200402fddd55` on the same branch. It made one new
+read-only preflight attempt in a separate private child directory. The original
+preflight, Host attribution, candidate binaries and original nine failures were
+preserved. No DSP/probe arithmetic, numerical contract or production code changed.
+
+Same physical identity, active-run absence, package/probe/compiler/protected
+identities, Host storage and the awake snapshot passed. The next gate stopped at
+**TOP_RESUMED_UNKNOWN**, before checking external power, device free space or
+installed APK. Offline inspection of the already-captured activity dump found
+keyguard showing, while the required `topResumedActivity` record was absent.
+There were cached ResumedActivity/focused-app records, but these do not satisfy
+the current top-resumed contract while keyguard is showing. No fallback to those
+records, unlock, input event, wake or further device query was performed.
+
+Thus this continuation's stop is separate from both the original awake failure
+and the preceding external-power stop. Awake alone does not establish a fully
+ready device. A user was asked to unlock the device manually; a new device
+attempt requires a subsequent reply and a fresh complete preflight. Device
+executions and operations after this stop remain zero. Scale/Mask/Softmax,
+HVX/W8 device regressions and the device cohort remain NOT RUN.
+
+The preflight now accepts an explicit private `ReportRoot`, refuses to overwrite
+an existing preflight record, and rejects report destinations outside ignored
+`build/reports`. Two Host guard tests verify those early exits without device
+calls. Four new fixture-contained exporter tests reject contradictory top state,
+unknown awake state or false device-execution claims. The public aggregate keeps
+the original stop and adds a distinct latest-attempt summary with no raw dump,
+app names, device identifiers or private directory names. Existing Host/Qnn
+results retain their original provenance; no new numerical certification follows
+from this scripts/evidence-only change. Fast passed in63.1s for this continuation;
+both Host guard tests and the four new exporter corruption tests passed.

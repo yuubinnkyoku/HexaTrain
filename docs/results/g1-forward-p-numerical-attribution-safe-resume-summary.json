@@ -601,5 +601,18 @@
   "full_one_layer": "UNVERIFIED",
   "full_19_layer": "UNVERIFIED",
   "observer_incident": "REPRODUCED / CAUSE UNRESOLVED",
-  "incident_6031": "UNRESOLVED / DORMANT / WATCH"
+  "incident_6031": "UNRESOLVED / DORMANT / WATCH",
+  "resume_attempts": [
+    {
+      "status": "BLOCKED",
+      "reason": "TOP_RESUMED_UNKNOWN",
+      "read_only": true,
+      "awake_at_snapshot": "PASS",
+      "top_resumed_at_snapshot": "UNKNOWN",
+      "keyguard_showing_at_snapshot": true,
+      "device_executes": 0,
+      "device_operations_after_stop": 0
+    }
+  ],
+  "latest_safety_reason": "TOP_RESUMED_UNKNOWN"
 }
