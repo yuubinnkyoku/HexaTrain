@@ -3,7 +3,7 @@ param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$tr
  [Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,
  [ValidateSet('standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual','performance')][string]$Mode,
  [ValidateRange(1,60)][int]$ForwardLimit=60,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v1',[switch]$SelfTest)
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v2',[switch]$SelfTest)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -52,7 +52,9 @@ foreach($p in $build.source_hashes.PSObject.Properties){if((Get-FileHash "$root/
 $probe="$candidateDir/saved_p_backward_probe"
 if((Get-FileHash $probe).Hash.ToLowerInvariant() -ne $build.probe_sha256){throw 'CANDIDATE_BINARY_CHANGED'}
 $files=@($probe,"$root/build/reports/g1-native-saved-p-backward-dsp/gradients.bin")
-foreach($p in $build.binary_hashes.PSObject.Properties){if((Get-FileHash "$candidateDir/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'REPAIR_BINARY_CHANGED'};if($p.Name -like 'lib*.so'){$files+="$candidateDir/$($p.Name)"}}
+if($build.PSObject.Properties.Name -contains 'binary_hashes'){
+ foreach($p in $build.binary_hashes.PSObject.Properties){if((Get-FileHash "$candidateDir/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'REPAIR_BINARY_CHANGED'};if($p.Name -like 'lib*.so'){$files+="$candidateDir/$($p.Name)"}}
+}
 if($Mode -in @('native_softmax','native_dvalue','dual','performance')){
  $permit=Get-Content "$root/build/reports/g1-backward-primitive-precision-repair/native-permit-private.json" -Raw|ConvertFrom-Json
  if($permit.standalone_pass -ne $true -or $permit.four_observers_pass -ne $true -or $permit.forward_joint_pass -ne $true -or $permit.probe_sha256 -ne $build.probe_sha256){throw 'NATIVE_ENTRY_NOT_CERTIFIED'}

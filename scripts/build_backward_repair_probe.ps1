@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v1')
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v2')
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot/qairt_version.ps1"
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
@@ -22,7 +22,7 @@ $src="$root/host_tests/fp32_custom";$inc="$QairtSdkRoot/include/QNN"
 $common=@('-std=c++17','-O2','-ffp-contract=off','-fno-fast-math',"-I$inc")
 foreach($name in @('contract','prepare','graph')){
  $source=if($name -eq 'graph'){"$src/backward_repair_graph_test.cpp"}else{"$src/backward_repair_contract_test.cpp"}
- $extra=if($name -eq 'contract'){@('-DBACKWARD_REPAIR_HOST_CONTRACT')}else{@()}
+ $extra=@(if($name -eq 'contract'){'-DBACKWARD_REPAIR_HOST_CONTRACT'})
  & $hostcc @common @extra $source "$root/app/src/main/cpp/tiny_language_model_cpu.cpp" "$root/app/src/main/cpp/qnn/qnn_graph_shape_validator.cpp" -o "$out/$name.exe" *> "$out/$name-build.txt"
  if($LASTEXITCODE){throw "HOST_BUILD $name"}
  if($name -eq 'contract'){& "$out/$name.exe" "$root/build/fp32-double-qk/double-inputs.bin" "$root/build/reports/g1-native-saved-p-backward-dsp/gradients.bin" *> "$out/$name.txt"}else{& "$out/$name.exe" *> "$out/$name.txt"}
