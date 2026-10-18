@@ -194,10 +194,10 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
       hmx_only_resource = HAP_compute_res_acquire(&attr, 10000);
       if (hmx_only_resource) {
         hmx_only_lock_status = HAP_compute_res_hmx_lock2(
-            hmx_only_resource, HAP_COMPUTE_RES_HMX_SHARED);
+            hmx_only_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
         if (!hmx_only_lock_status) {
           (void)HAP_compute_res_hmx_unlock2(
-              hmx_only_resource, HAP_COMPUTE_RES_HMX_SHARED);
+              hmx_only_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
         }
         (void)HAP_compute_res_release(hmx_only_resource);
         hmx_only_resource = 0;
@@ -224,17 +224,16 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
           combined_lock_status = HMX_ERR_VTCM;
         } else {
           combined_lock_status = HAP_compute_res_hmx_lock2(
-              combined_resource, HAP_COMPUTE_RES_HMX_SHARED);
+              combined_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
+          metadata[6] = combined_lock_status;
           if (!combined_lock_status) {
             /* Execute HMX only if lock succeeded. */
             run_one(vtcm, 0, &results[0], &results[1]);
             run_one(vtcm, 1, &results[2], &results[3]);
             metadata[7] = 1;
             metadata[8] = 2;
-            metadata[6] = HAP_compute_res_hmx_unlock2(
-                combined_resource, HAP_COMPUTE_RES_HMX_SHARED);
-          } else {
-            metadata[6] = combined_lock_status;
+            (void)HAP_compute_res_hmx_unlock2(
+                combined_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
           }
         }
         (void)HAP_compute_res_release(combined_resource);
