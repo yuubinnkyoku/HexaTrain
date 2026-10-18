@@ -1,11 +1,12 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
- [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot)
+ [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='candidate')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 if(git -C $root status --porcelain){throw 'COMMITTED_SOURCE_REQUIRED'}
-$out=Join-Path $root 'build/fp32-saved-p-backward'
+$out=Join-Path $root "build/fp32-saved-p-backward-$Candidate"
 if(Test-Path "$out/build-identity.json"){throw 'CANDIDATE_ALREADY_BUILT'}
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $plan=Get-Content "$root/host_tests/fp32_custom/saved_p_backward_device_plan.json" -Raw|ConvertFrom-Json

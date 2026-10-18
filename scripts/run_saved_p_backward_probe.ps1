@@ -2,12 +2,23 @@ param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$tr
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
  [Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,
  [ValidateSet('standalone_softmax','standalone_dvalue')][string]$Mode,
- [ValidateRange(1,60)][int]$ForwardLimit=60)
+ [ValidateRange(1,60)][int]$ForwardLimit=60,
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='candidate',[switch]$SelfTest)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
 . (Join-Path $PSScriptRoot 'mixed_qkv_monitoring_policy.ps1')
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
+function Test-SavedPStagingCollision([hashtable]$Hashes,[string]$Name,[string]$Hash) {
+ return ($Hashes.ContainsKey($Name) -and $Hashes[$Name] -ne $Hash)
+}
+if($SelfTest) {
+ $hashesTest=@{same='a'}
+ if((Test-SavedPStagingCollision $hashesTest 'new' 'b') -or
+    (Test-SavedPStagingCollision $hashesTest 'same' 'a') -or
+    !(Test-SavedPStagingCollision $hashesTest 'same' 'b')){throw 'STAGING_COLLISION_SELFTEST'}
+ Write-Host 'saved_p_runner_selftest=PASS staging_cases=3 device_calls=0';exit 0
+}
 $root=Split-Path -Parent $PSScriptRoot;$out=[IO.Path]::GetFullPath($ReportRoot)
 if(!$out.StartsWith([IO.Path]::GetFullPath("$root/build/reports")+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'PRIVATE_REPORT_REQUIRED'}
 if(Test-Path $out){throw 'EXCLUSIVE_PROCESS_REPORT_REQUIRED'}
@@ -23,9 +34,10 @@ $preflight=Get-Content "$out/preflight/device-preflight-private.json" -Raw|Conve
 if($preflight.status -ne 'PASS'){throw 'PREFLIGHT_NOT_PASS'}
 $adb=Join-Path $env:LOCALAPPDATA 'Android/Sdk/platform-tools/adb.exe';$d=$preflight.device_private
 function Adb {param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments);$r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments $Arguments;if($r.ExitCode){throw 'ADB_OPERATION_FAILED'};return $r.Text}
-$build=Get-Content "$root/build/fp32-saved-p-backward/build-identity.json" -Raw|ConvertFrom-Json
+$candidateDir="$root/build/fp32-saved-p-backward-$Candidate"
+$build=Get-Content "$candidateDir/build-identity.json" -Raw|ConvertFrom-Json
 foreach($p in $build.source_hashes.PSObject.Properties){if((Get-FileHash "$root/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'CANDIDATE_SOURCE_CHANGED'}}
-$probe="$root/build/fp32-saved-p-backward/saved_p_backward_probe"
+$probe="$candidateDir/saved_p_backward_probe"
 if((Get-FileHash $probe).Hash.ToLowerInvariant() -ne $build.probe_sha256){throw 'CANDIDATE_BINARY_CHANGED'}
 $files=@($probe,"$root/build/reports/g1-native-saved-p-backward-dsp/gradients.bin")
 if((Get-FileHash $files[1]).Hash.ToLowerInvariant() -ne $build.gradient_sha256){throw 'FROZEN_GRADIENT_CHANGED'}
@@ -44,7 +56,7 @@ $remote='/data/local/tmp/hexasbp-'+$build.probe_sha256.Substring(0,16)
 Adb @('shell','mkdir','-p',$remote)|Out-Null;$hashes=@{}
 foreach($file in $files) {
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash $file).Hash.ToLowerInvariant()
- if($hashes.ContainsKey($name)&&$hashes[$name] -ne $hash){throw 'STAGING_NAME_COLLISION'}
+ if(Test-SavedPStagingCollision $hashes $name $hash){throw 'STAGING_NAME_COLLISION'}
  Adb @('push',$file,$remote)|Out-Null
  if(((Adb @('shell','sha256sum',"$remote/$name")) -split '\s+')[0] -ne $hash){throw 'STAGED_HASH_MISMATCH'};$hashes[$name]=$hash
 }
@@ -61,7 +73,10 @@ $cmd="cd $remote && export LD_LIBRARY_PATH=$remote && export ADSP_LIBRARY_PATH='
 $process=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'shell',('"'+$cmd+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$out/stdout.txt" -RedirectStandardError "$out/stderr.txt"
 $started=[DateTime]::UtcNow;$lastMonitor=$started;$samples=@($before);$takeovers=0
 function Stop-Owned([string]$Reason) {
- $text=[IO.File]::ReadAllText("$out/stdout.txt");$m=[regex]::Match($text,'(?m)^owned_probe_pid=(\d+)\s*$');$cancelled=$false
+ $stream=[IO.File]::Open("$out/stdout.txt",[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+ $reader=[IO.StreamReader]::new($stream)
+ try{$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
+ $m=[regex]::Match($text,'(?m)^owned_probe_pid=(\d+)\s*$');$cancelled=$false
  if($m.Success){$owned=[int]$m.Groups[1].Value;$r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$owned/cmdline") -AllowFailure
   if(!$r.ExitCode -and $r.Text.Split([char]0)[0] -eq './saved_p_backward_probe'){Adb @('shell','kill','-INT',"$owned")|Out-Null;$cancelled=$true}}
  @{reason=$Reason;owned_probe_cancelled=$cancelled}|ConvertTo-Json|Out-File "$out/stop-private.json" -Encoding utf8
