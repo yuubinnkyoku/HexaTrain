@@ -1,0 +1,132 @@
+{
+  "base": "be4271efd1b8fb71f0c66f3ae7c35f04571aa78e",
+  "branch": "investigation/g1-native-saved-p-backward-dsp",
+  "coverage": {
+    "P_predicates": "once per forward/head, separate core/holdout",
+    "core": [
+      44,
+      2,
+      25
+    ],
+    "core_pairs": 2200,
+    "holdout": [
+      16,
+      2,
+      8
+    ],
+    "holdout_pairs": 256
+  },
+  "digest": "SHA256 of canonical sorted numerical records and output word hashes keyed by mode/observer/forward/head/gradient; exclude timing,counters,IDs,timestamps. All required coverage independently checked before three-process claim.",
+  "dvalue": {
+    "dtype": "FLOAT_32",
+    "formula": "P^T*dContext",
+    "operator": "qti.aisw:MatMul",
+    "transpose0": true,
+    "transpose1": false
+  },
+  "failure_classes": [
+    "BLOCKED_SOFTMAX_BACKWARD_ACCURACY",
+    "BLOCKED_DVALUE_ACCURACY",
+    "BLOCKED_NATIVE_P_FANOUT",
+    "BLOCKED_OBSERVER_INDEPENDENCE",
+    "BLOCKED_DEVICE_SAFETY",
+    "UNRESOLVED"
+  ],
+  "forward_base": "e05f3539e2e0c0e461157a3abf1d9833d74b392b",
+  "full_attention_or_layer_certification": false,
+  "gates": {
+    "actual_dMaskedLogits": 0.002,
+    "actual_dValue": 0.01,
+    "observer_final_word_mismatches": 0,
+    "p_induced_ds_bound": 0.00025,
+    "p_induced_dv_bound": 0.001,
+    "p_maxAbs": 1e-06,
+    "p_row_error": 2e-06,
+    "standalone_dvalue_vs_received_input_double": 0.01,
+    "standalone_softmax_vs_received_input_double": 0.002
+  },
+  "geometry": {
+    "D": 64,
+    "Dh": 32,
+    "H": 2,
+    "T": 32,
+    "rank4": [
+      1,
+      1,
+      32,
+      32
+    ],
+    "row_major": true
+  },
+  "gradient_selection": "Unchanged fullUpstream(original)->reference(fp32=true) 25, syntheticGradients() 8; exact existing FP32 words, exclusive new derivative file; no rescale",
+  "gradient_sha256": "c742bfa2ed410a5f1aa42cb51b9d4b0e9ae5e35b3813d52661283c8027ab969b",
+  "local_boundary_comparisons": "Report product/reduction/centered deltas and received-input independent errors. No invented bitwise gate or numerical threshold for unspecified internal reduction order.",
+  "modes": [
+    "standalone_softmax",
+    "standalone_dvalue",
+    "forward",
+    "native_softmax",
+    "native_dvalue",
+    "dual"
+  ],
+  "negative_controls": [
+    "C0 nine FAIL",
+    "old device cumulative P 36 FAIL",
+    "standard Scale known FAIL",
+    "standard Mask 176 predicate FAIL",
+    "standard Softmax 224 local FAIL",
+    "35/40 Tap REPRODUCED/CAUSE UNRESOLVED",
+    "6031 UNRESOLVED/DORMANT/WATCH"
+  ],
+  "observability_limit": "Standard QNN primitives have no received-word receipts. Tap can expose P/intermediates but cannot independently prove an invisible read. Do not substitute existing fused Custom SoftmaxBackward or add arithmetic kernels for receipts.",
+  "observer_conditions": [
+    "Observed+Tap",
+    "Observed+NoTap",
+    "NoReceipt+Tap",
+    "NoReceipt+NoTap"
+  ],
+  "ownership": "One existing two-output ForwardSoftmax node, one P output ID per head; product/final-product/dValue share that ID. NoTap native P, no graph input, no Host reinjection, no duplicate producer. Full graph context retained until consumers finish; native mutation/lifetime requires device evidence.",
+  "performance": "Only after accuracy: same final bundle, common Forward/LN-control nodes, first+finalize, discard warmup,31 steady samples median/p10/p90; no-receipt internal timers null; memory/node/tensor inventory; no layer extrapolation.",
+  "plan_id": "g1-native-saved-p-backward-dsp",
+  "processes": 3,
+  "production_source_sha256": "8e61527d3b59370e2e36484717ab2ad2c59b060d46e622efa279c84108ad73e6",
+  "protected_forward_identities": {
+    "double_fixture": "f577f12b24a7ec21c3ffd6935f2683385725daa0c87ea039f71207e2791d1ed2",
+    "double_qk_dsp": "962a98c6f30e4e8f610abba22f69cd2f08fb216d5ed111586b45d7c73f8991e7",
+    "double_qk_host": "e2df381e1682ab12e68784ee22ddc468fe553d5cf12c778a167c75990a83ea0a",
+    "forward_probe": "911d66e8b0fc3ba56afd544b5c588f3ef4f0027ee08f92a96b809ee4d44b56f6",
+    "original_fixture": "388f4d8b30b86997d2f03f732e5a3210f7e2b3015af883579e3f0659df9d9f4f"
+  },
+  "references": {
+    "A": "Independent ideal double P and original frozen gradients",
+    "B": "Recovered separate FP32 product, serial sum, subtraction, product; serial FP32 MatMul",
+    "C": "Host on actual device P (never DSP certification)",
+    "D": "Actual HTP output"
+  },
+  "rounding_contract": "Separate FP32 declared tensor boundaries. Production does not specify standard HTP reduction/MatMul internal order or precision. Serial FP32 oracle B is a diagnostic comparison, never a bitwise hardware gate. No FMA/fast-math in Host oracle.",
+  "safety": "Existing research monitoring; ordinary battery/temp/no external power recorded, critical/emergency protection retained. Fresh identity/awake/top/no-training/no-QNN/APK/SDK/storage/protected checks per process. No wake/unlock/install/force-stop/root/power changes.",
+  "schema": 1,
+  "sequence": "Standalone gate before native. Standalone FAIL blocks native certification. Pilot separate from final cohort. Stop device on unsafe preflight, preserve Host progress.",
+  "softmax_backward": {
+    "dtype": "FLOAT_32",
+    "nodes": [
+      "hN_softmax_product:ElementWiseMultiply(dp,P)",
+      "hN_softmax_dot:ReduceSum(product,axis=3,keep_dims=true)",
+      "hN_softmax_centered:ElementWiseSubtract(dp,dot)",
+      "hN_dscores:ElementWiseMultiply(P,centered)"
+    ],
+    "output_boundary": "dMaskedLogits == historical dScores; no scale applied here",
+    "package": "qti.aisw"
+  },
+  "toolchain": {
+    "api": "2.37.0",
+    "arch": "V81",
+    "hexagon_sdk": "6.6.0.0",
+    "host": "g++ 15.2.0",
+    "host_compiler_sha256": "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a",
+    "ndk": "26.2.11394342",
+    "qairt": "2.48.40.260702151143",
+    "tools": "19.0.07"
+  },
+  "training": "NO-GO"
+}
