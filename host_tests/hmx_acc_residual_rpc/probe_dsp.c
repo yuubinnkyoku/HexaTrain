@@ -55,7 +55,7 @@ static void init_bias(uint32_t *dst, uint16_t scale_bits,
   }
 }
 
-static void run_one(uint8_t *base, unsigned extra_four_bits,
+static void run_one(uint8_t *base, unsigned extra_four_bits, int q,
                     int *hi_bits, int *residual_bits) {
   uint16_t *act = (uint16_t *)(base + 0 * TILE_BYTES);
   uint16_t *wgt = (uint16_t *)(base + 1 * TILE_BYTES);
@@ -64,14 +64,15 @@ static void run_one(uint8_t *base, unsigned extra_four_bits,
   uint32_t *bias0 = (uint32_t *)(base + 4 * TILE_BYTES);
   uint32_t *bias1 = (uint32_t *)((uint8_t *)bias0 + BIAS_BYTES);
 
-  // 0x3c01 = 1 + 2^-10. Every other input is zero.
+  // a = 1 + 2^-q as exact FP16 (q in [6,10]).
+  const uint16_t a_bits = (uint16_t)(0x3c00u + (1u << (10 - q)));
   // (spatial=0, channel=0) and (channel=0, out=0) both map to tile[0].
   memset(act, 0, TILE_BYTES);
   memset(wgt, 0, TILE_BYTES);
   memset(hi, 0xa5, TILE_BYTES);
   memset(residual, 0xa5, TILE_BYTES);
-  act[0] = 0x3c01;
-  wgt[0] = 0x3c01;
+  act[0] = a_bits;
+  wgt[0] = a_bits;
 
   // 64.0 FP16 = 0x5400, +65504 FP16 = 0x7bff.
   // Bias set 0: 64*x. Bias set 1: -64*x + min(65504, feedback).
@@ -140,7 +141,9 @@ int hexatrain_hmx_acc_residual_close(remote_handle64 handle) {
 
 int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
                                    int *results, int resultsLen,
-                                   int *metadata, int metadataLen) {
+                                   int *metadata, int metadataLen,
+                                   int q, int mode) {
+  (void)mode;
   probe_context_t *context = (probe_context_t *)(uintptr_t)handle;
   if (!context || context->tag != HMX_MAGIC ||
        !results || resultsLen < 4 || !metadata || metadataLen < 9) {
@@ -228,8 +231,8 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
           metadata[6] = combined_lock_status;
           if (!combined_lock_status) {
             /* Execute HMX only if lock succeeded. */
-            run_one(vtcm, 0, &results[0], &results[1]);
-            run_one(vtcm, 1, &results[2], &results[3]);
+            run_one(vtcm, 0, (int)q, &results[0], &results[1]);
+            run_one(vtcm, 1, (int)q, &results[2], &results[3]);
             metadata[7] = 1;
             metadata[8] = 2;
             (void)HAP_compute_res_hmx_unlock2(

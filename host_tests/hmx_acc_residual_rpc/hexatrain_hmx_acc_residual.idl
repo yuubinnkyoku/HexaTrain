@@ -7,5 +7,5 @@
 // slots: [hi_rnd0, residual_rnd0, hi_extra4, residual_extra4].
 // No production-training integration or implicit CPU fallback.
 interface hexatrain_hmx_acc_residual : remote_handle64 {
-  long run(rout sequence<long> results, rout sequence<long> metadata);
+  long run(rout sequence<long> results, rout sequence<long> metadata, in long q, in long mode);
 };

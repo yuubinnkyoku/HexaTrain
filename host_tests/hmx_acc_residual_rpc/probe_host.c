@@ -21,8 +21,12 @@ static double fp16_to_double(uint16_t bits) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 1) {
-    fprintf(stderr, "usage: %s\n", argv[0]);
+  int q = 10;
+  int mode = 0;
+  if (argc >= 2) q = atoi(argv[1]);
+  if (argc >= 3) mode = atoi(argv[2]);
+  if (q < 6 || q > 10) {
+    fprintf(stderr, "usage: %s [q=6..10] [mode]\n", argv[0]);
     return 2;
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
@@ -57,14 +61,15 @@ int main(int argc, char **argv) {
   }
   memset(result, 0, 4 * sizeof(int));
   memset(meta, 0, 9 * sizeof(int));
-  status = hexatrain_hmx_acc_residual_run(handle, result, 4, meta, 9);
+  status = hexatrain_hmx_acc_residual_run(handle, result, 4, meta, 9, q, mode);
   printf("rpc_status=%d magic=0x%x dsp_arch=%d vtcm_bytes=%d "
          "kernel_us=%d power=%d modeA_lock=%d modeB_lock=%d hmx_executed=%d trials=%d\n",
          status, meta[0], meta[1], meta[2], meta[3], meta[4],
          meta[5], meta[6], meta[7], meta[8]);
 
-  const double a = 1.0 + ldexp(1.0, -10);
+  const double a = 1.0 + ldexp(1.0, -q);
   const double oracle = a * a;
+  printf("q=%d mode=%d a=%.17g oracle=%.17g\n", q, mode, a, oracle);
   int pass = status == 0 && meta[0] == 0x484d5831 &&
               meta[1] == 81 && meta[4] == 0 && meta[6] == 0 &&
               meta[7] == 1 && meta[8] == 2;
