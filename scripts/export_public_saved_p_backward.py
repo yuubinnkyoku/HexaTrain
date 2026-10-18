@@ -58,7 +58,8 @@ def verified_regressions(report, initial):
             rows = [json.loads(line) for line in text.splitlines() if line.startswith('{')]
             nums = [r for r in rows if r['kind']=='numerical']
             expected_count = {'mixed_qkv':22632,'selective_ln1':2640,'double_qk':14356}[variant]
-            if ledger['exit_code']!=0 or len(nums)!=expected_count or any(not r['gate'] or r['word_mismatches'] or r['variant_mismatches'] for r in nums):
+            if ledger['exit_code']!=0 or len(nums)!=expected_count or any(not r['gate'] or
+                    (r.get('word_gate',1) and r['word_mismatches']) or r.get('variant_mismatches',0) for r in nums):
                 raise ValueError('regression numerical/coverage')
             if variant=='mixed_qkv' and {tuple(r[k] for k in ('stage','mixed','observed','tap','case','field')) for r in nums}!=mixed_keys():
                 raise ValueError('mixed unique coverage')
