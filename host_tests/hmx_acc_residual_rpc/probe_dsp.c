@@ -37,6 +37,7 @@ enum {
   HMX_ERR_LOCK = 14004,
   HMX_ERR_UNLOCK = 14005,
   HMX_ERR_POWER = 14006,
+  PROBE_REVISION = 2,
 };
 
 typedef struct probe_context {
@@ -94,6 +95,12 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 6) {
     init_bias(bias0, 0x5400, 0, 0);        // same set0 twice
     init_bias(bias1, 0x5400, 0, 0);
+  } else if (mode == 7) {
+    init_bias(bias0, 0, 0x4400, 0);        // set0 alone +4
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 8) {
+    init_bias(bias0, 0, 0, 0);
+    init_bias(bias1, 0, 0x4400, 0);        // set1 alone +4
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -123,12 +130,17 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
 
   // First convert retains ACC; optionally keeps 4 extra feedback bits.
   uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
-  if (mode == 5) first_rs |= (1u << 12);  // first convert uses bias set1
+  if (mode == 5 || mode == 8) first_rs |= (1u << 12);  // first convert uses bias set1
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(first_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
 
-  // Rs[13:12]=1 -> bias set 1.
+  if (mode == 7 || mode == 8) {
+    *hi_bits = hi[0];
+    *residual_bits = 0;
+    return;
+  }
+
   // Rs[3:2]=1 -> previous convert state used as output bias.
   // Rs[4]=0 -> min; Rs[0]=0 -> clear/swap after convert.
   // This is a *hypothesis test*, not proof that h-x survives rounding.
@@ -186,6 +198,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   metadata[6] = 0;  // mode B (combined) lock status
   metadata[7] = 0;  // HMX executed flag
   metadata[8] = 0;  // trial count
+  metadata[9] = PROBE_REVISION;
+  metadata[10] = q;
+  metadata[11] = mode;
 
   static int power_client = 0;
   HAP_power_request_t power_req;
