@@ -2,12 +2,16 @@
 import argparse
 import json
 import pathlib
+import re
 from prepare_saved_p_backward import sha,ROOT
 
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--sdk',type=pathlib.Path,required=True);p.add_argument('--output',type=pathlib.Path,required=True);a=p.parse_args()
-    require=a.sdk.resolve()==pathlib.Path('C:/Qualcomm/AIStack/QAIRT/2.48.40.260702').resolve()
+    config=(ROOT/'scripts/qairt_version.ps1').read_text(encoding='utf-8-sig')
+    anchors=re.findall(r"(?m)^\$PhoneLmQairtSdkRoot = '([^']+)'\s*$",config)
+    if len(anchors)!=1:raise ValueError('pinned root configuration ambiguous')
+    require=a.sdk.resolve()==pathlib.Path(anchors[0]).resolve()
     if not require:raise ValueError('fixed SDK only')
     needles={
         'include/QNN/QnnTypes.h':['QNN_PRECISION_FLOAT32','QNN_PRECISION_FLOAT16'],

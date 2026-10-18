@@ -33,8 +33,8 @@ def validate(value,probe,protected=True):
     require(value['cohort_processes'] in (0,3),'missing process')
     for mode,entry in value['repair'].items():
         exact_keys(entry,'status consumers core_pairs_per_variant holdout_pairs_per_variant observer_variants observer_word_mismatches arithmetic_word_mismatches numerical_digest processes')
-        require(entry['status'] in ('NOT_EXECUTED','PILOT_PASS','PASS','NUMERICAL_OR_WORD_FAIL'),'repair status')
-        if entry['status']!='NOT_EXECUTED':
+        require(entry['status'] in ('NOT_EXECUTED','API_FAILURE','PILOT_PASS','PASS','NUMERICAL_OR_WORD_FAIL'),'repair status')
+        if entry['status'] not in ('NOT_EXECUTED','API_FAILURE'):
             require((entry['core_pairs_per_variant'],entry['holdout_pairs_per_variant'],entry['observer_variants'])==(2200,256,4),'incomplete coverage/observer downgrade')
             require(len(entry['consumers'])==(2 if mode=='dual' else 1),'missing consumer')
             for c in entry['consumers']:
@@ -128,7 +128,13 @@ def make(report):
     entries={m:dict(status='NOT_EXECUTED',consumers=[],core_pairs_per_variant=0,holdout_pairs_per_variant=0,observer_variants=0,observer_word_mismatches=None,arithmetic_word_mismatches=None,numerical_digest=None,processes=0) for m in MODES}
     folders=['pilot-softmax','pilot-dvalue','pilot-native-softmax','pilot-native-dvalue','pilot-dual']
     for mode,folder in zip(MODES,folders):
-        if (report/folder/'identity-private.json').exists():entries[mode]=compact(assess(report/folder),1)
+        if (report/folder/'identity-private.json').exists():
+            identity=read(report/folder/'identity-private.json')
+            if identity['exit_code'] in (0,4):entries[mode]=compact(assess(report/folder),1)
+            else:
+                require(read(report/folder/'execution-before-readback-private.json')['exit_code']==identity['exit_code'],'runtime failure completion')
+                require(sha(report/folder/'saved-p-words.bin')==identity['raw_evidence_sha256'],'runtime raw SHA')
+                entries[mode]['status']='API_FAILURE'
     cohort_count=0
     if all((report/f'cohort-{i}/identity-private.json').exists() for i in (1,2,3)):
         cohorts=[assess_cohort(report/f'cohort-{i}') for i in (1,2,3)]
@@ -165,6 +171,8 @@ def make(report):
         classes+=['CUSTOM_SOFTMAX_BACKWARD_STANDALONE_VERIFIED','CUSTOM_DVALUE_STANDALONE_VERIFIED','BACKWARD_OBSERVER_INDEPENDENCE_VERIFIED','SAVED_P_SINGLE_NATIVE_VERIFIED','SAVED_P_DUAL_NATIVE_VERIFIED','SAVED_P_BACKWARD_TOTAL_GRADIENT_VERIFIED']
     else:classes+=['UNRESOLVED']
     if performance is not None:classes+=['BACKWARD_REPAIR_PERFORMANCE_MEASURED']
+    if entries['standalone_softmax']['status']=='API_FAILURE':classes+=['BLOCKED_SOFTMAX_BACKWARD_REPAIR']
+    if entries['standalone_dvalue']['status']=='API_FAILURE':classes+=['BLOCKED_DVALUE_REPAIR']
     if not any(entries[m]['status']!='NOT_EXECUTED' for m in MODES):classes+=['BLOCKED_DEVICE_SAFETY']
     value=dict(schema=1,base=initial['base'],source_commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
         compiled_source_commit=build['compiled_source_sha'],bundle_source_commit=build['bundle_source_sha'],branch='investigation/g1-backward-primitive-precision-repair',
