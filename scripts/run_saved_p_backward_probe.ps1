@@ -105,10 +105,15 @@ $samples+=,$after;$samples|ConvertTo-Json -Depth 8|Out-File "$out/monitor-privat
  exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$before;thermal_after=$after;
  duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds}|ConvertTo-Json -Depth 18|Out-File "$out/execution-before-readback-private.json" -Encoding utf8
 $binaryHash=((Adb @('shell','sha256sum',"$remote/saved-p-words.bin")) -split '\s+')[0]
-Adb @('pull',"$remote/saved-p-words.bin","$out/saved-p-words.bin")|Out-Null
+Adb @('shell',"toybox gzip -c $remote/saved-p-words.bin > $remote/saved-p-words.bin.gz")|Out-Null
+$compressedHash=((Adb @('shell','sha256sum',"$remote/saved-p-words.bin.gz")) -split '\s+')[0]
+Adb @('pull',"$remote/saved-p-words.bin.gz","$out/saved-p-words.bin.gz")|Out-Null
+if((Get-FileHash "$out/saved-p-words.bin.gz").Hash.ToLowerInvariant() -ne $compressedHash){throw 'COMPRESSED_OUTPUT_EVIDENCE_HASH_MISMATCH'}
+& python -c "import gzip,sys,shutil; src=gzip.open(sys.argv[1],'rb'); dst=open(sys.argv[2],'xb'); shutil.copyfileobj(src,dst); dst.close(); src.close()" "$out/saved-p-words.bin.gz" "$out/saved-p-words.bin"
+if($LASTEXITCODE){throw 'LOSSLESS_EVIDENCE_DECODE_FAILED'}
 if((Get-FileHash "$out/saved-p-words.bin").Hash.ToLowerInvariant() -ne $binaryHash){throw 'OUTPUT_EVIDENCE_HASH_MISMATCH'}
 @{source_sha=(git -C $root rev-parse HEAD);build=$build;hashes=$hashes;device_private=$d;mode=$Mode;forward_limit=$ForwardLimit;
- raw_evidence_sha256=$binaryHash;
+ raw_evidence_sha256=$binaryHash;compressed_evidence_sha256=$compressedHash;
  exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$before;thermal_after=$after;
  monitoring='USER_DIRECTED_RESEARCH';run_mode='BACKGROUND_CORRECTNESS';protected_identity='PASS';
  duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds}|ConvertTo-Json -Depth 18|Out-File "$out/identity-private.json" -Encoding utf8

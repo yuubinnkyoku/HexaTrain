@@ -89,8 +89,8 @@ def validate(value, expected_probe):
 
 def make(report):
     initial = read(report / 'initial-private.json')
-    build = read(ROOT / 'build/fp32-saved-p-backward-readback-fixed/build-identity.json')
-    if sha(ROOT / 'build/fp32-saved-p-backward-readback-fixed/saved_p_backward_probe') != build['probe_sha256']:
+    build = read(ROOT / 'build/fp32-saved-p-backward-compressed-final/build-identity.json')
+    if sha(ROOT / 'build/fp32-saved-p-backward-compressed-final/saved_p_backward_probe') != build['probe_sha256']:
         raise ValueError('wrong current binary')
     for path, digest in build['source_hashes'].items():
         if sha(ROOT / path) != digest:
