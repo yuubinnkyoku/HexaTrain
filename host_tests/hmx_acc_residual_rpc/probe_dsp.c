@@ -152,6 +152,11 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   metadata[1] = __HEXAGON_ARCH__;
   metadata[2] = VTCM_BYTES;
   metadata[3] = 0;  // DSP kernel microseconds
+  metadata[4] = 0;  // power status
+  metadata[5] = 0;  // mode A (HMX-only) lock status
+  metadata[6] = 0;  // mode B (combined) lock status
+  metadata[7] = 0;  // HMX executed flag
+  metadata[8] = 0;  // trial count
 
   static int power_client = 0;
   HAP_power_request_t power_req;
@@ -162,41 +167,102 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   power_req.hmx_v2.set_clock = 0;
   int power_status = HAP_power_set(&power_client, &power_req);
   metadata[4] = power_status;
-  if (power_status) return HMX_ERR_POWER;
-
-  compute_res_attr_t attr;
-  int status = HAP_compute_res_attr_init(&attr);
-  if (status) return HMX_ERR_ALLOC;
-  status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
-  if (status) return HMX_ERR_ALLOC;
-  status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
-  if (status) return HMX_ERR_ALLOC;
-
-  int resource = HAP_compute_res_acquire(&attr, 10000);
-  if (!resource) return HMX_ERR_ALLOC;
-  uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
-  if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
-    HAP_compute_res_release(resource);
-    return HMX_ERR_VTCM;
+  if (power_status) {
+    HAP_power_request_t power_down;
+    memset(&power_down, 0, sizeof(power_down));
+    power_down.type = HAP_power_set_HMX_v2;
+    power_down.hmx_v2.set_power = 1;
+    power_down.hmx_v2.power_up = 0;
+    power_down.hmx_v2.set_clock = 0;
+    (void)HAP_power_set(&power_client, &power_down);
+    return HMX_ERR_POWER;
   }
 
-  status = HAP_compute_res_hmx_lock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
-  metadata[5] = status;
-  if (status) {
-    (void)HAP_compute_res_release(resource);
-    return HMX_ERR_LOCK;
-  }
-
+  int combined_lock_status = 0;
+  int hmx_only_lock_status = 0;
+  uint8_t *vtcm = NULL;
+  int combined_resource = 0;
+  int hmx_only_resource = 0;
   const uint64_t start = HAP_perf_get_time_us();
-  run_one(vtcm, 0, &results[0], &results[1]);
-  run_one(vtcm, 1, &results[2], &results[3]);
-  const uint64_t elapsed = HAP_perf_get_time_us() - start;
 
-  // Teardown returns are recorded; not independently verified across SDK revisions.
+  /* Mode A: HMX-only resource (htp-ops-lib style). */
+  {
+    compute_res_attr_t attr;
+    int status = HAP_compute_res_attr_init(&attr);
+    if (!status) status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
+    if (!status) {
+      hmx_only_resource = HAP_compute_res_acquire(&attr, 10000);
+      if (hmx_only_resource) {
+        hmx_only_lock_status = HAP_compute_res_hmx_lock2(
+            hmx_only_resource, HAP_COMPUTE_RES_HMX_SHARED);
+        if (!hmx_only_lock_status) {
+          (void)HAP_compute_res_hmx_unlock2(
+              hmx_only_resource, HAP_COMPUTE_RES_HMX_SHARED);
+        }
+        (void)HAP_compute_res_release(hmx_only_resource);
+        hmx_only_resource = 0;
+      } else {
+        hmx_only_lock_status = -1;
+      }
+    } else {
+      hmx_only_lock_status = status;
+    }
+  }
+  metadata[5] = hmx_only_lock_status;
+
+  /* Mode B: combined VTCM + HMX resource (current style). */
+  {
+    compute_res_attr_t attr;
+    int status = HAP_compute_res_attr_init(&attr);
+    if (!status) status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
+    if (!status) status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
+    if (!status) {
+      combined_resource = HAP_compute_res_acquire(&attr, 10000);
+      if (combined_resource) {
+        vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
+        if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
+          combined_lock_status = HMX_ERR_VTCM;
+        } else {
+          combined_lock_status = HAP_compute_res_hmx_lock2(
+              combined_resource, HAP_COMPUTE_RES_HMX_SHARED);
+          if (!combined_lock_status) {
+            /* Execute HMX only if lock succeeded. */
+            run_one(vtcm, 0, &results[0], &results[1]);
+            run_one(vtcm, 1, &results[2], &results[3]);
+            metadata[7] = 1;
+            metadata[8] = 2;
+            metadata[6] = HAP_compute_res_hmx_unlock2(
+                combined_resource, HAP_COMPUTE_RES_HMX_SHARED);
+          } else {
+            metadata[6] = combined_lock_status;
+          }
+        }
+        (void)HAP_compute_res_release(combined_resource);
+        combined_resource = 0;
+      } else {
+        combined_lock_status = -1;
+        metadata[6] = combined_lock_status;
+      }
+    } else {
+      combined_lock_status = status;
+      metadata[6] = combined_lock_status;
+    }
+  }
+
+  const uint64_t elapsed = HAP_perf_get_time_us() - start;
   metadata[3] = elapsed > 0x7fffffffULL ? 0x7fffffff : (int)elapsed;
-  metadata[6] = HAP_compute_res_hmx_unlock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
-  metadata[7] = 1;  // Direct HMX code executed (no CPU fallback path)
-  metadata[8] = 2;  // Two convert-feedback configurations.
-  (void)HAP_compute_res_release(resource);
-  return 0;
+
+  /* Power down. */
+  {
+    HAP_power_request_t power_down;
+    memset(&power_down, 0, sizeof(power_down));
+    power_down.type = HAP_power_set_HMX_v2;
+    power_down.hmx_v2.set_power = 1;
+    power_down.hmx_v2.power_up = 0;
+    power_down.hmx_v2.set_clock = 0;
+    (void)HAP_power_set(&power_client, &power_down);
+  }
+
+  if (metadata[7] == 1) return 0;
+  return HMX_ERR_LOCK;
 }
