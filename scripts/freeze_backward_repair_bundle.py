@@ -19,12 +19,15 @@ def main():
         if sha(old/p)!=h:raise ValueError('immutable bundle changed: '+p)
     # Host/DSP bodies were not changed by the cohort/evidence harness revision.
     earlier=json.loads((ROOT/'build/fp32-saved-p-backward-repair-v3/build-identity.json').read_text(encoding='utf-8-sig'))
-    for p in ('libHexaBackwardRepairDsp.so','libHexaBackwardRepairHost.so'):
-        if earlier['binary_hashes'][p]!=build['binary_hashes'][p]:raise ValueError('arithmetic package bytes changed')
+    earlier_dir=ROOT/'build/fp32-saved-p-backward-repair-v3'
+    for p in ('repair.o','repair.s','repair.ll','libHexaBackwardRepairHost.so'):
+        if sha(earlier_dir/p)!=sha(old/p):raise ValueError('arithmetic codegen changed')
     shutil.copytree(old,out)  # exclusive destination; preserves every older build.
     updated=dict(build,bundle_leaf=out.name,compiled_source_sha=build['source_sha'],bundle_source_sha=git('rev-parse','HEAD'),
                  runner_source_sha=git('rev-parse','HEAD'),binary_recompile=False,arithmetic_candidate_count=1,
-                 previous_runner_sha256=build['source_hashes']['scripts/run_backward_repair_probe.ps1'])
+                 previous_runner_sha256=build['source_hashes']['scripts/run_backward_repair_probe.ps1'],
+                 earlier_DSP_link_bytes_equal=earlier['binary_hashes']['libHexaBackwardRepairDsp.so']==build['binary_hashes']['libHexaBackwardRepairDsp.so'],
+                 earlier_object_assembly_IR_equal=True)
     updated['source_hashes']=dict(build['source_hashes'])
     for p in ('scripts/run_backward_repair_probe.ps1','scripts/freeze_backward_repair_bundle.py'):
         updated['source_hashes'][p]=sha(ROOT/p)
