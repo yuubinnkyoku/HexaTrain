@@ -49,7 +49,7 @@ template<bool Value,bool Tap,bool Observe> uint32_t kernel(QHPI_RuntimeHandle*,u
  }
  auto now=[](){
 #ifdef __hexagon__
- return HAP_perf_get_time_us();
+ if constexpr(Observe)return HAP_perf_get_time_us();else return uint64_t(0);
 #else
  return uint64_t(0);
 #endif
