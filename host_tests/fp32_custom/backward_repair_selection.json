@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "plan": "backward_primitive_precision_plan.json",
+  "candidate": "ordered-fp32-v1",
+  "evidence": {
+    "product_subtract_final": "All 2514944 words per Tap observer agree with predeclared half-operands/half-result model. Every arithmetic stage has received-input local error; reducing only dot error is insufficient.",
+    "reduce": "Max received-product local error 0.21875; half-output-double-sum model still mismatches 1834/78592 words. Internal order/precision unresolved.",
+    "dvalue": "All predeclared models mismatch; transpose is source-correct. Internal precision unresolved, old accuracy FAIL retained.",
+    "host_softmax": {"core_maxAbs": 0.00006335392899359249, "holdout_maxAbs": 0.0000022067718461471486},
+    "host_dvalue": {"core_maxAbs": 0.0000168030018699028, "holdout_maxAbs": 0.0000027630283376822717},
+    "documented_float32": "Accepted graph setting; 600 pilot pairs, 246 union accuracy/observer failures, 696 observer word mismatches.",
+    "documented_float32_compensation": "Accepted graph setting; same 246/600 failures and 696 observer word mismatches. Does not meet original gates. Production untouched."
+  },
+  "selection": "One fused Softmax path retaining every separate FP32 rounding boundary, plus one ordered TN32 dValue path. All four Softmax primitives need precision repair, so selective replacement would replace all four nodes and retain extra dispatch. Fused path selected for explicit contract and receipts, not an unmeasured speed claim. Individual alternative is analyzed, not simultaneously implemented.",
+  "namespace": "HexaBackwardRepair",
+  "ops": ["Softmax", "SoftmaxNoReceipt", "SoftmaxTap", "SoftmaxTapNoReceipt", "DValueTN32", "DValueTN32NoReceipt"],
+  "arithmetic": "Exactly the previously preregistered ordered FP32 contracts. No double required because FP32 Host passes. Compiler contraction/vectorization/unrolling off; scalar FP32 instruction audit required. NoReceipt performs no receipt copies/timers.",
+  "receipt": {"header_words": 32, "softmax_words": 5184, "dvalue_words": 3104, "fields": "header, received P1024, received gradient1024, output1024; Softmax additionally product1024,dot32,centered1024"},
+  "tap": "SoftmaxTap exposes product,dot,centered as extra math outputs of the same op; NoTap has only final output plus optional receipt. Scratch is explicit and bounded. Actual DSP words must satisfy independent oracle and observer identity.",
+  "native": "No device native execution until independently assessed standalone permit. Existing Forward math and packages unchanged. Same P ID fans to both new consumers per head. Full4 observer native variants, all core/holdout; three fresh confirmation processes after binary freeze.",
+  "controls": {"rank": [2,4], "standard_stages": 6, "cases_per_head": 24, "heads": 2, "executes": 576, "selected_forward_ids": [2,4,10,14,16,19,23,44], "gradients": "Each core selected forward G0 and G9; holdout G0 and G0 of synthetic set. Eight independent structural controls per head. Diagnostic controls do not modify frozen fixtures."},
+  "extra_model_checks": "Apply output-half rounding to predeclared MatMul accumulation models, and half-rounded pairwise sum; explicitly hypotheses within the operand/product/accumulation/output attribution, not repair candidate tuning.",
+  "unchanged": ["old gates", "old FAIL", "frozen fixtures", "Forward binaries", "Production", "protected state", "training NO-GO"]
+}
