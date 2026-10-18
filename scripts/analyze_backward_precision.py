@@ -111,7 +111,7 @@ def main():
             exact=x.astype(np.float64)-y.astype(np.float64) if sub else x.astype(np.float64)*y.astype(np.float64)
             err=np.abs(actual.astype(np.float64)-exact)
             pos=np.unravel_index(np.argmax(err),err.shape)
-            local[name]=dict(models={n:metric(actual,v) for n,v in models.items()},received_double_maxAbs=float(err[pos]),
+            local[name]=dict(models={n:metric(actual,v) for n,v in models.items()},received_double_maxAbs=float(err[pos]),received_double_rms=float(np.sqrt(np.mean(err**2))),
                 worst=dict(case=list(keys[pos[0]]),coordinate=int(pos[1])),
                 single_product_fma='No accumulation in a binary multiply; FMA cannot explain local multiplication rounding.',
                 large_gradient_words=int(np.count_nonzero(np.abs(g)>32)))
@@ -120,7 +120,7 @@ def main():
             fp16_accumulate=ordered(half(pr),'half'),fp16_inputs_fp32_accumulate=ordered(half(pr)),
             bf16_accumulate=ordered(bf(pr),'bf'),bf16_inputs_fp32_accumulate=ordered(bf(pr)),
             double_final_fp32=pr.astype(np.float64).sum(axis=-1).astype(np.float32),
-            fp16_output_double_sum=half(pr.astype(np.float64).sum(axis=-1)))
+            fp16_output_double_sum=half(pr.astype(np.float64).sum(axis=-1)),fp16_output_pairwise_sum=half(pairwise(pr)))
         exact=pr.astype(np.float64).sum(axis=-1)
         local['reduce']=dict(models={n:metric(dot,v) for n,v in reductions.items()},received_double_maxAbs=float(np.max(np.abs(dot-exact))),
                              upstream_product_dot_error=float(np.max(np.abs(exact-(p.astype(np.float64)*g.astype(np.float64)).reshape(-1,32,32).sum(axis=-1)))))
@@ -155,6 +155,8 @@ def main():
         dmodels[label+'_product_fp32_sum']=ordered(q(qt))
         dmodels[label+'_accumulation']=ordered(q(qt),'half' if label=='fp16' else 'bf')
     actual=np.stack([v[3] for k,v in base_d]).reshape(-1,32,32)
+    # Output conversion is a separately preregistered attribution dimension.
+    dmodels.update({n+'_half_output':half(v) for n,v in list(dmodels.items())})
     report['attribution']['dvalue_models']={n:metric(actual.reshape(-1,1024),v.reshape(-1,1024)) for n,v in dmodels.items()}
     core=np.array([k[2]<44 for k,v in base_d])
     for name,val in [('dvalue_ordered_fp32',dmodels['ordered_fp32']),('dvalue_full_double',dexact.astype(np.float32))]:
