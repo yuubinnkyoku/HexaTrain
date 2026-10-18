@@ -101,7 +101,10 @@ try {
 }
 $after=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint
 $samples+=,$after;$samples|ConvertTo-Json -Depth 8|Out-File "$out/monitor-private.json" -Encoding utf8
-$binaryHash=(Adb @('shell','sha256sum',"$remote/saved-p-words.bin") -split '\s+')[0]
+@{source_sha=(git -C $root rev-parse HEAD);build=$build;mode=$Mode;forward_limit=$ForwardLimit;
+ exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$before;thermal_after=$after;
+ duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds}|ConvertTo-Json -Depth 18|Out-File "$out/execution-before-readback-private.json" -Encoding utf8
+$binaryHash=((Adb @('shell','sha256sum',"$remote/saved-p-words.bin")) -split '\s+')[0]
 Adb @('pull',"$remote/saved-p-words.bin","$out/saved-p-words.bin")|Out-Null
 if((Get-FileHash "$out/saved-p-words.bin").Hash.ToLowerInvariant() -ne $binaryHash){throw 'OUTPUT_EVIDENCE_HASH_MISMATCH'}
 @{source_sha=(git -C $root rev-parse HEAD);build=$build;hashes=$hashes;device_private=$d;mode=$Mode;forward_limit=$ForwardLimit;

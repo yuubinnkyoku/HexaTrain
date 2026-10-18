@@ -47,9 +47,11 @@ def validate(value, expected_probe):
     keys(value['standalone'], 'softmax dvalue')
     all_complete = True
     for name, entry in value['standalone'].items():
-        keys(entry, 'status maxAbs worst core_pairs_per_variant holdout_pairs_per_variant observer_variants failed_pairs accuracy_failed_pairs observer_mismatch_pairs numerical_digest actual_gradient_gate ordered_fp32_is_word_gate independent_python_double_recheck')
+        keys(entry, 'status maxAbs worst core_pairs_per_variant holdout_pairs_per_variant observer_variants failed_pairs accuracy_failed_pairs observer_mismatch_pairs numerical_digest actual_gradient_gate ordered_fp32_is_word_gate independent_python_double_recheck process_exit_evidence')
         if entry['status'] not in ('PASS', 'NUMERICAL_FAIL', 'OBSERVER_FAIL', 'UNRESOLVED'):
             raise ValueError('invalid status')
+        if entry['process_exit_evidence'] not in ('CAPTURED', 'UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY') or (entry['status']=='PASS' and entry['process_exit_evidence']!='CAPTURED'):
+            raise ValueError('missing process completion evidence for PASS')
         complete = entry['core_pairs_per_variant'] == 2200 and entry['holdout_pairs_per_variant'] == 256 and entry['observer_variants'] == 4
         all_complete &= complete
         if entry['status'] != 'UNRESOLVED' and not complete:
@@ -87,8 +89,8 @@ def validate(value, expected_probe):
 
 def make(report):
     initial = read(report / 'initial-private.json')
-    build = read(ROOT / 'build/fp32-saved-p-backward-binary-evidence/build-identity.json')
-    if sha(ROOT / 'build/fp32-saved-p-backward-binary-evidence/saved_p_backward_probe') != build['probe_sha256']:
+    build = read(ROOT / 'build/fp32-saved-p-backward-readback-fixed/build-identity.json')
+    if sha(ROOT / 'build/fp32-saved-p-backward-readback-fixed/saved_p_backward_probe') != build['probe_sha256']:
         raise ValueError('wrong current binary')
     for path, digest in build['source_hashes'].items():
         if sha(ROOT / path) != digest:
@@ -116,7 +118,10 @@ def make(report):
             raise ValueError('raw evidence identity mismatch')
         result = assess(process / 'stdout.txt', mode, 60)
         expected_exit = 4 if result['required_failed_pairs'] else 0
-        if identity['exit_code'] != expected_exit:
+        recovered_failure = (result['classification']=='NUMERICAL_FAIL' and identity['exit_code'] is None and
+                             identity.get('declared_probe_exit')==4 and identity.get('readback_recovered') is True and
+                             identity.get('exit_status')=='UNKNOWN_OUTER_ADB_COMMAND_FAILURE_AFTER_COMPLETE_PROBE_SUMMARY')
+        if identity['exit_code'] != expected_exit and not recovered_failure:
             raise ValueError('unexpected exit cannot be expected negative control')
         if any(c != {'core': 2200, 'holdout': 256} for c in result['coverage'].values()) or len(result['coverage']) != 4:
             raise ValueError('coverage incomplete')
@@ -129,6 +134,7 @@ def make(report):
             'failed_pairs': result['required_failed_pairs'], 'numerical_digest': result['numerical_digest'],
             'accuracy_failed_pairs': result['accuracy_failed_pairs'], 'observer_mismatch_pairs': result['observer_mismatch_pairs'],
             'actual_gradient_gate': .002 if name == 'softmax' else .01, 'ordered_fp32_is_word_gate': False,
+            'process_exit_evidence': 'UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY' if recovered_failure else 'CAPTURED',
             'independent_python_double_recheck': result['independent_python_double_recheck']}
         if result['classification'] == 'NUMERICAL_FAIL':
             output['classifications'].append('BLOCKED_SOFTMAX_BACKWARD_ACCURACY' if name == 'softmax' else 'BLOCKED_DVALUE_ACCURACY')
@@ -143,6 +149,7 @@ def selftest():
     entry = {'status': 'NUMERICAL_FAIL', 'maxAbs': .1, 'worst': dict(forward=0, head=0, gradient=0, coordinate=0, observed=1, tap=1),
              'core_pairs_per_variant': 2200, 'holdout_pairs_per_variant': 256, 'observer_variants': 4, 'failed_pairs': 1,
              'accuracy_failed_pairs': 1, 'observer_mismatch_pairs': 0,
+             'process_exit_evidence': 'CAPTURED',
              'numerical_digest': 'a'*64, 'actual_gradient_gate': .002, 'ordered_fp32_is_word_gate': False, 'independent_python_double_recheck': 'PASS'}
     value = dict(schema=1, source_commit='a'*40, candidate_source_commit='a'*40, branch='investigation/test',
                  base='be4271efd1b8fb71f0c66f3ae7c35f04571aa78e', forward_base='e05f3539e2e0c0e461157a3abf1d9833d74b392b',
