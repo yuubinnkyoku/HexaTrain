@@ -126,7 +126,13 @@ def make(report):
             local[observer+'_'+stage]=entry['received_double_maxAbs']
     models['dvalue']={name:{k:m[k] for k in model_fields} for name,m in attr['attribution']['dvalue_models'].items()}
     entries={m:dict(status='NOT_EXECUTED',consumers=[],core_pairs_per_variant=0,holdout_pairs_per_variant=0,observer_variants=0,observer_word_mismatches=None,arithmetic_word_mismatches=None,numerical_digest=None,processes=0) for m in MODES}
-    folders=['pilot-softmax','pilot-dvalue','pilot-native-softmax','pilot-native-dvalue','pilot-dual']
+    suffix=''
+    for stage in ('dual','singles','standalone'):
+        path=report/'permits'/stage/'native-permit-private.json'
+        if path.exists():
+            permit=read(path);require(permit['probe_sha256']==build['probe_sha256'],'pilot selection binary')
+            suffix=permit.get('pilot_suffix','');require(bool(re.fullmatch('[a-z0-9-]{0,32}',suffix)),'unsafe selected pilot suffix');break
+    folders=[name+('-'+suffix if suffix else '') for name in ['pilot-softmax','pilot-dvalue','pilot-native-softmax','pilot-native-dvalue','pilot-dual']]
     for mode,folder in zip(MODES,folders):
         if (report/folder/'identity-private.json').exists():
             identity=read(report/folder/'identity-private.json')
