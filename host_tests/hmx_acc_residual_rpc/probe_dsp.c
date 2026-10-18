@@ -167,16 +167,16 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     init_bias(bias0, 0x5400, hi_bits | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
   } else if (mode == 24) {
-    // scale sweep: scale=32 (0x5000), hi=33 (0x5420), bias=-33
-    init_bias(bias0, 0x5000, 0x5420 | 0x8000u, 0);
+    // scale sweep: scale=32 (0x5000), hi=33 (0x5020), bias=-33
+    init_bias(bias0, 0x5000, 0x5020 | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
   } else if (mode == 25) {
     // scale sweep: scale=64 (0x5400), hi=66 (0x5420), bias=-66
     init_bias(bias0, 0x5400, 0x5420 | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
   } else if (mode == 26) {
-    // scale sweep: scale=128 (0x5800), hi=132 (0x5c20), bias=-132
-    init_bias(bias0, 0x5800, 0x5c20 | 0x8000u, 0);
+    // scale sweep: scale=128 (0x5800), hi=132 (0x5820), bias=-132
+    init_bias(bias0, 0x5800, 0x5820 | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
