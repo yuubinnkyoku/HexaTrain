@@ -30,7 +30,7 @@ def distance(actual, expected):
 
 
 def assess(path, mode, limit, raw_binary=None):
-    records, operands, summaries = {}, {}, []
+    records, operands, summaries, apis = {}, {}, [], []
     current = None
     with path.open(encoding='utf-8-sig') as stream:
         for line in stream:
@@ -57,6 +57,11 @@ def assess(path, mode, limit, raw_binary=None):
                 operands[current][fields[1]] = [int(w, 16) for w in fields[3:]]
             elif line.startswith('summary,'):
                 summaries.append(line)
+            elif line.startswith('api,'):
+                fields = line.split(',')
+                if len(fields) != 3 or int(fields[2]) != 0:
+                    raise ValueError('QNN API failure')
+                apis.append(fields[1])
     if raw_binary is None and (path.parent / 'saved-p-words.bin').exists():
         raw_binary = path.parent / 'saved-p-words.bin'
     if raw_binary is not None:
@@ -86,6 +91,10 @@ def assess(path, mode, limit, raw_binary=None):
                 for fi in range(limit) for gi in range(25 if fi < 44 else 8) for h in range(2)}
     if set(records) != expected or set(operands) != expected or len(summaries) != 1:
         raise ValueError('incomplete coverage or terminal summary')
+    if (apis.count('graphExecute') != len(expected)//2 or apis.count('graphFinalize') != 4 or
+            not {'backendCreate','registerOldDSP','registerS2DSP','registerMixedDSP','registerDoubleDSP',
+                 'contextFree','deviceFree','backendFree'} <= set(apis)):
+        raise ValueError('missing HTP initialization, graph execution or teardown evidence')
     all_worst, local_worst, counts, failed, canonical = {}, {}, {}, 0, []
     accuracy_failures = observer_pairs = observer_words = 0
     plan = json.loads((ROOT / 'host_tests/fp32_custom/saved_p_backward_device_plan.json').read_text(encoding='utf-8-sig'))
@@ -159,6 +168,7 @@ def assess(path, mode, limit, raw_binary=None):
             'observer_mismatch_words': observer_words,
             'pairs': len(expected), 'coverage': counts, 'worst': all_worst, 'local_boundary_worst': local_worst,
             'independent_python_double_recheck': 'PASS', 'numerical_digest': digest,
+            'qnn_api_success': True, 'graph_executes': apis.count('graphExecute'),
             'execution_invariants': {k: terminal[k] for k in ('cpu_arithmetic_fallback', 'input_mutation', 'finite',
                 'poison_remaining', 'canary', 'teardown', 'native_execution')},
             'interpretation': 'DSP standalone on frozen external P; no actual Forward-produced native P certification'}
