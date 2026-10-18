@@ -65,7 +65,8 @@ Run `hexatrain_hmx_acc_residual_test` without arguments.
 
 The host **rejects non-V81 CDSP** rather than silently emulating the
 operation on a CPU. The DSP requests HMX plus 12 KiB of VTCM, and errors
-out if allocation, 2-KiB alignment, HMX locking, or release fails.
+out if allocation, 2-KiB alignment, or HMX locking fails. Teardown
+is attempted, but its return status is not verified across SDK revisions.
 
 ## Interpreting the output
 
