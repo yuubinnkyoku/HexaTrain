@@ -223,7 +223,7 @@ NoReceiptの内部timerはnull。std QNN内部timerも取得したと主張し�
 
 | Check | Current evidence |
 |---|---|
-| Fast | PASS、215.3秒。最終closeout gateは別途実行 |
+| Fast | closeout PASS、89.5秒。public artifact追加後にもFastを確認し、各logは別名で保存 |
 | Host | PASS、511.0秒 |
 | Qnn | PASS、444.9秒、fixed SDK build / APK audit |
 | New arithmetic / preparation / graph Host suite | PASS、29,472 calls / 6 rejected preparation kernels / 24 graphs |
@@ -245,7 +245,7 @@ dValue bound=0.000027855243723208197。source/legacy references、Core/Holdout�
 
 各processで同一物理端末、SDK/compiler、approved existing APK、package/fixture/protected hashes、
 storage、active training/competing QNNなし、awake/top-resumedをfresh確認した。
-BACKGROUND_CORRECTNESS、foreground takeover=0。通常のbattery低下、35℃等の通常温度、
+BACKGROUND_CORRECTNESS、foreground takeover=0。通常のbattery低下、35〜41℃の記録温度、
 外部給電条件を研究停止理由にしていない。sleep時は停止し、ユーザーの手動wake後に再確認した。
 6031の前後でもthermal status0 / health2を記録した。critical保護条件は維持した。
 自動wake/unlock、force-stop、root、clock/power変更、APK交換、firmware/SDK変更はしていない。
@@ -270,6 +270,9 @@ Host数学とcodegenは成立したが、実機修復成功は未証明。
 復帰に必要な外部条件は端末runtimeの回復、Awake、ADBの同一端末接続。
 再開時もfresh preflightから行い、既存evidenceは上書きしない。
 
+Host側の最終照合ではprotected 5 files、開始時の50 refs、frozen repairのbinaryと23 source hashesを
+再確認した。現在branchの追加commitだけを許容し、他のrefsは開始時と一致した。
+
 再現入口は `build_backward_repair_probe.ps1`、`run_backward_repair_probe.ps1`、
 `assess_backward_repair.py`。runnerにはfixed QAIRT root/Build ID、Hexagon SDK、NDK、
 完了したQnn validation log、新しいprivate ReportRootを明示する。
@@ -277,6 +280,32 @@ frozen bundleのStandaloneを先に独立評価し、両方の全件gateが成�
 `permit_backward_repair_native.py` が段階別permitを生成する。gateのwaiverはない。
 Native single成功前にdualへ進まず、dual accuracy成功前に性能・5-role正式cohortへ進まない。
 cohortは同じbinaryで3つの独立OS process、各process内で全required rolesを検査する計画。
+
+手動でruntimeが回復した後の再開例を示す。`HEXAGON_SDK_ROOT` と `ANDROID_NDK_ROOT` は
+事前照合済みの固定Hexagon SDK 6.6.0.0 / NDK 26.2.11394342 rootを明示する。
+既存失敗folderを再利用せず、下記の新folderも存在したら別の未使用suffixを選ぶ。
+最初に既存Forward Pのbounded recovery controlを実施し、fresh preflightと旧合同gateを確認する。
+
+```powershell
+. ./scripts/qairt_version.ps1
+$repairArgs = @{
+    QairtSdkRoot = $PhoneLmQairtSdkRoot
+    ExpectedBuildId = $PhoneLmQairtBuildId
+    HexagonSdkRoot = $env:HEXAGON_SDK_ROOT
+    NdkRoot = $env:ANDROID_NDK_ROOT
+    QnnValidationLog = 'build/reports/g1-backward-primitive-precision-repair/qnn-profile.txt'
+    Candidate = 'repair-final'
+    Mode = 'standalone_softmax'
+    ReportRoot = 'build/reports/g1-backward-primitive-precision-repair/pilot-softmax-recovery'
+}
+./scripts/run_backward_repair_probe.ps1 @repairArgs
+python scripts/assess_backward_repair.py `
+    --report-root $repairArgs.ReportRoot `
+    --output build/reports/g1-backward-primitive-precision-repair/softmax-recovery-assessment-private.json
+```
+
+API6031 / process139が再発したら同じruntimeで繰り返さず、完了記録とpartial rawを保存する。
+上記のindependent assessorは不完全なAPI/coverageをPASSにせず拒否する。
 
 PV/Gate/Output、実dContext/dP producers、dQ/dK、Head Scatter、projection gradients、LN1 dY aggregationは
 引き続き未認定。FULL_ATTENTION_BACKWARD / FULL_ATTENTION / FULL1_LAYER / FULL19_LAYER /
