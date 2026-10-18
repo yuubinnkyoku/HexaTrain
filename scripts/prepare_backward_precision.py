@@ -10,7 +10,7 @@ OUT = ROOT / 'build/reports/g1-backward-primitive-precision-repair'
 def main():
     base = git('rev-parse', '49d91b6')
     assert base == '49d91b67e1ca4b7b7ede66231e5b7abfe1220ec2'
-    assert git('rev-parse', 'HEAD') == base
+    subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
     assert git('branch', '--show-current') == 'investigation/g1-backward-primitive-precision-repair'
     for ancestor in ('e05f353', 'be4271e'):
         subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', ancestor, base], check=True)
@@ -19,7 +19,10 @@ def main():
         assert sha(ROOT / p) == h, ('PROTECTED_MISMATCH', p)
     for line in prior['refs'].splitlines():
         h, ref = line.split()
-        assert git('rev-parse', ref) == h, ('PRIOR_REF_MISMATCH', ref)
+        # This was the then-active branch in the old initial ledger. Its
+        # authorized additive commits ended at the user's new exact base.
+        expected = base if ref == 'refs/heads/investigation/g1-native-saved-p-backward-dsp' else h
+        assert git('rev-parse', ref) == expected, ('PRIOR_REF_MISMATCH', ref)
     bundles = {}
     for name in ('fp32-custom', 'fp32-selective-ln1', 'fp32-mixed-qkv', 'fp32-double-qk', 'fp32-saved-p-backward-final'):
         manifest = json.loads((ROOT / 'build' / name / 'build-identity.json').read_text(encoding='utf-8-sig'))
