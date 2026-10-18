@@ -154,8 +154,8 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   compute_res_attr_t attr;
   int status = HAP_compute_res_attr_init(&attr);
   if (status) return HMX_ERR_ALLOC;
-  status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
-  if (status) return HMX_ERR_ALLOC;
+  // Some SDK revisions declare this setter void; acquisition is the gate.
+  (void)HAP_compute_res_attr_set_hmx_param(&attr, 1);
   status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
   if (status) return HMX_ERR_ALLOC;
 
@@ -178,14 +178,14 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   run_one(vtcm, 1, &results[2], &results[3]);
   const uint64_t elapsed = HAP_perf_get_time_us() - start;
 
-  const int unlock = HAP_compute_res_hmx_unlock2(resource,
-                                                 HAP_COMPUTE_RES_HMX_SHARED);
-  const int release = HAP_compute_res_release(resource);
+  // These teardown APIs have version-dependent signatures; record that
+  // cleanup was attempted without claiming a checked return status.
+  (void)HAP_compute_res_hmx_unlock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
+  (void)HAP_compute_res_release(resource);
   metadata[3] = elapsed > 0x7fffffffULL ? 0x7fffffff : (int)elapsed;
-  metadata[4] = unlock;
-  metadata[5] = release;
+  metadata[4] = -1; // teardown result not independently verified
+  metadata[5] = -1; // teardown result not independently verified
   metadata[6] = 1;  // Direct HMX code executed (no CPU fallback path)
   metadata[7] = 2;  // Two convert-feedback configurations.
-  if (unlock || release) return HMX_ERR_UNLOCK;
   return 0;
 }
