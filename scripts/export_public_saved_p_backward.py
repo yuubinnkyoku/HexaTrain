@@ -35,7 +35,7 @@ def verified_regressions(report, initial):
     from export_public_selective_ln1_device import regression_summary, headless_metrics
     from export_public_double_qk import mixed_keys
     status = {}
-    for name, log in (('Fast','fast-final.txt'),('Host','host-profile.txt'),('Qnn','qnn-profile.txt')):
+    for name, log in (('Fast','fast-closeout.txt'),('Host','host-profile.txt'),('Qnn','qnn-profile.txt')):
         text = (report / log).read_text(encoding='utf-8-sig')
         if f'===== verify.ps1 -Profile {name} =====' not in text or not re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$', text):
             raise ValueError('missing required profile ' + name)
@@ -98,7 +98,7 @@ def verified_regressions(report, initial):
 
 
 def validate(value, expected_probe):
-    keys(value, 'schema source_commit candidate_source_commit branch base forward_base plan_sha256 probe_sha256 gradient_sha256 classifications standalone native coverage_complete cohort_processes performance regression training limitations')
+    keys(value, 'schema source_commit candidate_source_commit branch base forward_base plan_sha256 probe_sha256 gradient_sha256 classifications standalone native standalone_coverage_complete cohort_processes performance regression training limitations')
     if value['schema'] != 1 or value['base'] != 'be4271efd1b8fb71f0c66f3ae7c35f04571aa78e' or value['training'] != 'NO-GO':
         raise ValueError('provenance/training contract')
     if value['probe_sha256'] != expected_probe or not re.fullmatch('[0-9a-f]{64}', expected_probe):
@@ -137,7 +137,7 @@ def validate(value, expected_probe):
             if entry['status'] == 'OBSERVER_FAIL' and (entry['accuracy_failed_pairs'] or not entry['observer_mismatch_pairs']):
                 raise ValueError('observer attribution')
             keys(entry['worst'], 'forward head gradient coordinate observed tap')
-    if value['coverage_complete'] != all_complete:
+    if value['standalone_coverage_complete'] != all_complete:
         raise ValueError('coverage claim inconsistent')
     for field, status in value['regression'].items():
         if not re.fullmatch('[A-Za-z0-9_]+', field) or status not in ('PASS', 'FAIL', 'BLOCKED', 'NOT_EXECUTED', 'HISTORICAL_ONLY'):
@@ -182,7 +182,7 @@ def make(report):
               'plan_sha256': build['plan_sha256'], 'probe_sha256': build['probe_sha256'], 'gradient_sha256': build['gradient_sha256'],
               'classifications': ['UNRESOLVED'], 'standalone': {},
               'native': {name: 'NOT_EXECUTED' for name in ('softmax', 'dvalue', 'dual', 'lifetime', 'observer_free', 'sensitivity')},
-              'coverage_complete': True, 'cohort_processes': 0, 'performance': None,
+              'standalone_coverage_complete': True, 'cohort_processes': 0, 'performance': None,
               'regression': verified_regressions(report, initial), 'training': 'NO-GO',
               'limitations': ['Fixed G1 diagnostic geometry and reference-derived frozen gradients.', 'No native Saved-P or full Attention/layer/training certification.']}
     for name, mode in (('softmax', 'standalone_softmax'), ('dvalue', 'standalone_dvalue')):
@@ -233,7 +233,7 @@ def selftest():
                  plan_sha256='a'*64, probe_sha256='a'*64, gradient_sha256='a'*64, classifications=['UNRESOLVED'],
                  standalone={'softmax': entry, 'dvalue': dict(entry, actual_gradient_gate=.01)},
                  native={k: 'NOT_EXECUTED' for k in ('softmax', 'dvalue', 'dual', 'lifetime', 'observer_free', 'sensitivity')},
-                 coverage_complete=True, cohort_processes=0, performance=None, regression={'Fast': 'PASS'}, training='NO-GO', limitations=[])
+                 standalone_coverage_complete=True, cohort_processes=0, performance=None, regression={'Fast': 'PASS'}, training='NO-GO', limitations=[])
     validate(value, 'a'*64)
     mutations = [lambda x: x['standalone']['softmax'].pop('maxAbs'),
                  lambda x: x['native'].update(dual='PASS'),
