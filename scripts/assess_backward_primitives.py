@@ -28,6 +28,26 @@ def assess(directory):
             require(all(np.isfinite(fields[i]).all() for i in fields if i!=3),'nonfinite control input')
             rows[key]=fields
     require(set(rows)==expected,'primitive incomplete coverage')
+    frozen_p=(ROOT/'build/fp32-double-qk/double-inputs.bin').read_bytes()
+    frozen_g=(ROOT/'build/reports/g1-native-saved-p-backward-dsp/gradients.bin').read_bytes()
+    plan=read(ROOT/'host_tests/fp32_custom/saved_p_backward_device_plan.json')
+    require(__import__('hashlib').sha256(frozen_p).hexdigest()==plan['protected_forward_identities']['double_fixture'] and __import__('hashlib').sha256(frozen_g).hexdigest()==plan['gradient_sha256'],'control frozen source hashes')
+    rr,cc=np.indices((32,32));ii=rr*32+cc
+    for (rank,stage,ci,head),fields in rows.items():
+        if ci<16:
+            fi=[2,4,10,14,16,19,23,44][ci//2];gi=(9 if ci%2 else 0) if fi<44 else 25
+            p=np.frombuffer(frozen_p,dtype='<f4',count=1024,offset=12+fi*122888+65544+head*4096).reshape(32,32)
+            g=np.frombuffer(frozen_g,dtype='<f4',count=1024,offset=16+((gi*2+head)*2+int(stage==5))*4096).reshape(32,32)
+        else:
+            s=ci-16
+            p=((rr==0)&(cc==3)) if s==0 else rr==cc if s==1 else cc==(rr*7+3)%32 if s==2 else cc==(rr+head+1)%32 if s==3 else (ii%11-5)/32 if s==4 else np.where(cc%2,-.25,.25) if s==5 else np.where(ii%2,1/1024,16) if s==6 else np.where(ii%2,0x80000000,1).astype(np.uint32).view(np.float32)
+            g=(rr*3-cc*5+head*7) if s==4 else np.where(rr%2,-128,128) if s==5 else np.where(ii%2,1024,1/1024) if s==6 else np.where(ii%2,0x80000001,0).astype(np.uint32).view(np.float32) if s==7 else (ii*13+head*7)%31-15
+            p,g=np.asarray(p,dtype=np.float32),np.asarray(g,dtype=np.float32)
+        product=np.float32(p*g);dot=ordered(product);center=np.float32(g-dot[:,None])
+        a=product if stage==1 else g if stage==3 else p
+        b=dot if stage==3 else center if stage==4 else g
+        require(np.array_equal(fields[1].view(np.uint32),a.view(np.uint32).reshape(-1)),'independent control A words')
+        if stage!=1:require(np.array_equal(fields[2].view(np.uint32),b.view(np.uint32).reshape(-1)),'independent control B words')
     text=(directory/'stdout.txt').read_text(encoding='utf-8-sig')
     apis=[l.split(',')[1:] for l in text.splitlines() if l.startswith('api,')]
     require(all(a[1]=='0' for a in apis),'primitive API')
@@ -38,7 +58,7 @@ def assess(directory):
     nonfinite=sum(int(np.count_nonzero(~np.isfinite(v[3]))) for v in rows.values())
     require(int(terminal[0]['nonfinite_words'])==nonfinite and int(terminal[0]['finite'])==int(nonfinite==0),'nonfinite FAIL masking')
     for name,value in dict(input_mutation='0',poison_remaining='0',canary='1',teardown='1',cpu_arithmetic_fallback='0').items():require(terminal[0][name]==value,'primitive invariant')
-    result=dict(classification='NUMERICAL_FAIL_CONTROLS_COMPLETE' if nonfinite else 'RECEIVED_INPUT_CONTROLS_COMPLETE',nonfinite_output_words=nonfinite,controls=576,ranks=[2,4],stages={},structural_dvalue={})
+    result=dict(classification='NUMERICAL_FAIL_CONTROLS_COMPLETE' if nonfinite else 'RECEIVED_INPUT_CONTROLS_COMPLETE',nonfinite_output_words=nonfinite,controls=576,ranks=[2,4],independent_input_identity='PASS',stages={},structural_dvalue={})
     labels=['product','reduce_correct_product','product_reduce_native','subtract_known_dot','final_multiply','dvalue_TN32']
     for r in (2,4):
         for s in range(6):
