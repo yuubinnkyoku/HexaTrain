@@ -17,6 +17,7 @@
 
 #include <HAP_compute_res.h>
 #include <HAP_perf.h>
+#include <HAP_power.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,7 @@ enum {
   HMX_ERR_VTCM = 14003,
   HMX_ERR_LOCK = 14004,
   HMX_ERR_UNLOCK = 14005,
+  HMX_ERR_POWER = 14006,
 };
 
 typedef struct probe_context {
@@ -141,7 +143,7 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
                                    int *metadata, int metadataLen) {
   probe_context_t *context = (probe_context_t *)(uintptr_t)handle;
   if (!context || context->tag != HMX_MAGIC ||
-      !results || resultsLen < 4 || !metadata || metadataLen < 8) {
+       !results || resultsLen < 4 || !metadata || metadataLen < 9) {
     return HMX_ERR_ARG;
   }
   memset(results, 0, (size_t)resultsLen * sizeof(int));
@@ -150,6 +152,17 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   metadata[1] = __HEXAGON_ARCH__;
   metadata[2] = VTCM_BYTES;
   metadata[3] = 0;  // DSP kernel microseconds
+
+  static int power_client = 0;
+  HAP_power_request_t power_req;
+  memset(&power_req, 0, sizeof(power_req));
+  power_req.type = HAP_power_set_HMX_v2;
+  power_req.hmx_v2.set_power = 1;
+  power_req.hmx_v2.power_up = 1;
+  power_req.hmx_v2.set_clock = 0;
+  int power_status = HAP_power_set(&power_client, &power_req);
+  metadata[4] = power_status;
+  if (power_status) return HMX_ERR_POWER;
 
   compute_res_attr_t attr;
   int status = HAP_compute_res_attr_init(&attr);
@@ -167,14 +180,12 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     return HMX_ERR_VTCM;
   }
 
-  unsigned int *hmx_busy = NULL;
-  status = HAP_compute_res_hmx_lock4(resource, &hmx_busy, 10000);
-  metadata[4] = status;
-  if (status || !hmx_busy) {
+  status = HAP_compute_res_hmx_lock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
+  metadata[5] = status;
+  if (status) {
     (void)HAP_compute_res_release(resource);
     return HMX_ERR_LOCK;
   }
-  *hmx_busy = 1;
 
   const uint64_t start = HAP_perf_get_time_us();
   run_one(vtcm, 0, &results[0], &results[1]);
@@ -183,10 +194,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
 
   // Teardown returns are recorded; not independently verified across SDK revisions.
   metadata[3] = elapsed > 0x7fffffffULL ? 0x7fffffff : (int)elapsed;
-  if (hmx_busy) *hmx_busy = 0;
-  metadata[5] = HAP_compute_res_hmx_unlock4(resource, hmx_busy);
-  metadata[6] = 1;  // Direct HMX code executed (no CPU fallback path)
-  metadata[7] = 2;  // Two convert-feedback configurations.
+  metadata[6] = HAP_compute_res_hmx_unlock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
+  metadata[7] = 1;  // Direct HMX code executed (no CPU fallback path)
+  metadata[8] = 2;  // Two convert-feedback configurations.
   (void)HAP_compute_res_release(resource);
   return 0;
 }

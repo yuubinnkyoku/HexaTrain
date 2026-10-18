@@ -46,9 +46,9 @@ int main(int argc, char **argv) {
   if (status) return 6;
 
   int *result = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
-                                   RPCMEM_DEFAULT_FLAGS, 4 * sizeof(int));
+                                    RPCMEM_DEFAULT_FLAGS, 4 * sizeof(int));
   int *meta = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
-                                 RPCMEM_DEFAULT_FLAGS, 8 * sizeof(int));
+                                  RPCMEM_DEFAULT_FLAGS, 9 * sizeof(int));
   if (!result || !meta) {
     if (result) rpcmem_free(result);
     if (meta) rpcmem_free(meta);
@@ -56,17 +56,18 @@ int main(int argc, char **argv) {
     return 7;
   }
   memset(result, 0, 4 * sizeof(int));
-  memset(meta, 0, 8 * sizeof(int));
-  status = hexatrain_hmx_acc_residual_run(handle, result, 4, meta, 8);
+  memset(meta, 0, 9 * sizeof(int));
+  status = hexatrain_hmx_acc_residual_run(handle, result, 4, meta, 9);
   printf("rpc_status=%d magic=0x%x dsp_arch=%d vtcm_bytes=%d "
-         "kernel_us=%d unlock=%d release=%d hmx_executed=%d trials=%d\n",
+         "kernel_us=%d power=%d lock=%d unlock=%d hmx_executed=%d trials=%d\n",
          status, meta[0], meta[1], meta[2], meta[3], meta[4],
-         meta[5], meta[6], meta[7]);
+         meta[5], meta[6], meta[7], meta[8]);
 
   const double a = 1.0 + ldexp(1.0, -10);
   const double oracle = a * a;
   int pass = status == 0 && meta[0] == 0x484d5831 &&
-             meta[1] == 81 && meta[6] == 1 && meta[7] == 2;
+              meta[1] == 81 && meta[4] == 0 && meta[5] == 0 &&
+              meta[7] == 1 && meta[8] == 2;
   for (int trial = 0; trial < 2; ++trial) {
     const uint16_t hi_bits = (uint16_t)result[2 * trial];
     const uint16_t residual_bits = (uint16_t)result[2 * trial + 1];
