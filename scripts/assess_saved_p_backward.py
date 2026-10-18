@@ -6,6 +6,16 @@ import math
 import pathlib
 import struct
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def word_hash(words):
+    value = 14695981039346656037
+    for word in words:
+        for shift in (0, 8, 16, 24):
+            value = ((value ^ ((word >> shift) & 255)) * 1099511628211) & ((1 << 64) - 1)
+    return f'{value:016x}'
+
 
 def floats(words):
     return [struct.unpack('<f', struct.pack('<I', w))[0] for w in words]
@@ -19,7 +29,7 @@ def distance(actual, expected):
     return {'maxAbs': diffs[index], 'coordinate': index}
 
 
-def assess(path, mode, limit):
+def assess(path, mode, limit, raw_binary=None):
     records, operands, summaries = {}, {}, []
     current = None
     with path.open(encoding='utf-8-sig') as stream:
@@ -47,11 +57,43 @@ def assess(path, mode, limit):
                 operands[current][fields[1]] = [int(w, 16) for w in fields[3:]]
             elif line.startswith('summary,'):
                 summaries.append(line)
+    if raw_binary is None and (path.parent / 'saved-p-words.bin').exists():
+        raw_binary = path.parent / 'saved-p-words.bin'
+    if raw_binary is not None:
+        operands = {}
+        names = {1: 'P', 2: 'gradient', 3: 'output', 4: 'product', 5: 'dot', 6: 'centered'}
+        with raw_binary.open('rb') as f:
+            def read_words(n):
+                b = f.read(n * 4)
+                if len(b) != n * 4:
+                    raise ValueError('truncated binary evidence')
+                return struct.unpack('<' + str(n) + 'I', b)
+            if read_words(4) != (0x53425002, 1, 0 if mode == 'standalone_softmax' else 1, limit):
+                raise ValueError('binary evidence header')
+            while f.peek(1):
+                o, t, fi, gi, h, fields = read_words(6)
+                key = (o, t, fi, gi, h)
+                if key in operands or fields != (6 if mode == 'standalone_softmax' and t else 3):
+                    raise ValueError('binary record identity')
+                raw = {}
+                for _ in range(fields):
+                    field, head, count = read_words(3)
+                    if field not in names or head != h or names[field] in raw or count != (32 if field == 5 else 1024):
+                        raise ValueError('binary field identity')
+                    raw[names[field]] = read_words(count)
+                operands[key] = raw
     expected = {(o, t, fi, gi, h) for o in (1, 0) for t in (1, 0)
                 for fi in range(limit) for gi in range(25 if fi < 44 else 8) for h in range(2)}
     if set(records) != expected or set(operands) != expected or len(summaries) != 1:
         raise ValueError('incomplete coverage or terminal summary')
     all_worst, local_worst, counts, failed, canonical = {}, {}, {}, 0, []
+    accuracy_failures = observer_pairs = observer_words = 0
+    plan = json.loads((ROOT / 'host_tests/fp32_custom/saved_p_backward_device_plan.json').read_text(encoding='utf-8-sig'))
+    frozen_p = (ROOT / 'build/fp32-double-qk/double-inputs.bin').read_bytes()
+    frozen_g = (ROOT / 'build/reports/g1-native-saved-p-backward-dsp/gradients.bin').read_bytes()
+    if (hashlib.sha256(frozen_p).hexdigest() != plan['protected_forward_identities']['double_fixture'] or
+            hashlib.sha256(frozen_g).hexdigest() != plan['gradient_sha256']):
+        raise ValueError('frozen operand identity changed')
 
     def update(target, field, result, key):
         if field not in target or result['maxAbs'] > target[field]['maxAbs']:
@@ -60,6 +102,13 @@ def assess(path, mode, limit):
     for key in sorted(expected):
         o, t, fi, gi, h = key
         record, raw = records[key], operands[key]
+        p_offset = 12 + fi * 122888 + 65544 + h * 4096
+        g_index = gi if fi < 44 else 25 + gi
+        g_offset = 16 + ((g_index * 2 + h) * 2 + (mode == 'standalone_dvalue')) * 4096
+        if (tuple(raw['P']) != struct.unpack_from('<1024I', frozen_p, p_offset) or
+                tuple(raw['gradient']) != struct.unpack_from('<1024I', frozen_g, g_offset) or
+                word_hash(raw['output']) != record['output_hash']):
+            raise ValueError('raw P/gradient/head/coordinate/hash does not match frozen record')
         p, grad, output = (floats(raw[name]) for name in ('P', 'gradient', 'output'))
         if any(len(v) != 1024 for v in (p, grad, output)):
             raise ValueError('raw matrix shape')
@@ -89,6 +138,9 @@ def assess(path, mode, limit):
         counts.setdefault(f'O{o}T{t}', {'core': 0, 'holdout': 0})[set_name] += 1
         if record['variant_word_mismatches'] or not record['pass']:
             failed += 1
+        accuracy_failures += result['maxAbs'] > gate
+        observer_pairs += record['variant_word_mismatches'] > 0
+        observer_words += record['variant_word_mismatches']
         canonical.append({k: record[k] for k in ('mode', 'observed', 'tap', 'forward', 'gradient', 'head', 'maxAbs',
                                                 'rms', 'coordinate', 'ordered_fp32_delta', 'variant_word_mismatches', 'output_hash', 'pass')})
         if fi in (16, 17, 20, 21, 22) and gi in (9, 12):
@@ -101,7 +153,10 @@ def assess(path, mode, limit):
         if terminal[field] != value:
             raise ValueError('invalid execution invariant ' + field)
     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
-    return {'mode': mode, 'classification': 'NUMERICAL_FAIL' if failed else 'PASS', 'required_failed_pairs': failed,
+    classification = 'NUMERICAL_FAIL' if accuracy_failures else 'OBSERVER_FAIL' if observer_pairs else 'PASS'
+    return {'mode': mode, 'classification': classification, 'required_failed_pairs': failed,
+            'accuracy_failed_pairs': accuracy_failures, 'observer_mismatch_pairs': observer_pairs,
+            'observer_mismatch_words': observer_words,
             'pairs': len(expected), 'coverage': counts, 'worst': all_worst, 'local_boundary_worst': local_worst,
             'independent_python_double_recheck': 'PASS', 'numerical_digest': digest,
             'execution_invariants': {k: terminal[k] for k in ('cpu_arithmetic_fallback', 'input_mutation', 'finite',

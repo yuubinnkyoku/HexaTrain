@@ -4,6 +4,10 @@
 #include <stdexcept>
 namespace savedp {
 using Words=std::vector<uint32_t>;
+FILE* rawEvidence=nullptr;
+void writeRaw(const unsigned* values,unsigned count) {
+  if(!rawEvidence||std::fwrite(values,4,count,rawEvidence)!=count)throw std::runtime_error("raw evidence write");
+}
 using Pair=std::array<std::array<std::vector<float>,2>,2>; // head, dp/dContext
 std::vector<Pair> loadGradients(const char* path) {
   FILE* f=std::fopen(path,"rb");if(!f)throw std::runtime_error("gradient file open");
@@ -22,7 +26,10 @@ template<class T> Error error(const std::vector<float>& x,const std::vector<T>& 
   }e.rms=std::sqrt(e.rms/x.size());return e;
 }
 void words(const char* field,unsigned h,const Words& v) {
-  std::printf("words,%s,%u",field,h);for(auto w:v)std::printf(",%08x",w);std::puts("");
+  unsigned code=!std::strcmp(field,"P")?1:!std::strcmp(field,"gradient")?2:!std::strcmp(field,"output")?3:
+    !std::strcmp(field,"product")?4:!std::strcmp(field,"dot")?5:!std::strcmp(field,"centered")?6:0;
+  if(!code)throw std::runtime_error("raw field identity");
+  unsigned header[]={code,h,unsigned(v.size())};writeRaw(header,3);writeRaw(v.data(),v.size());
 }
 } // namespace savedp
 #ifndef ONE_GRAPH_HOST_AUDIT
@@ -36,6 +43,10 @@ int main(int argc,char** argv) {
     else if(requested=="standalone_dvalue")mode=savedp::Mode::StandaloneDValue;
     else throw std::runtime_error("native execution requires a separately certified standalone permit");
     // Native graphs exist for host construction audit, but cannot bypass the standalone gate.
+    savedp::rawEvidence=std::fopen("saved-p-words.bin","wbx");
+    if(!savedp::rawEvidence)throw std::runtime_error("exclusive binary evidence creation");
+    unsigned header[]={0x53425002,1,mode==savedp::Mode::StandaloneSoftmax?0u:1u,limit};
+    savedp::writeRaw(header,4);
     initializeDoubleQk();unsigned failed=0,pairs=0,variantMismatch=0;
     std::map<std::string,savedp::Words> anchors;
     for(bool obs:{true,false})for(bool tap:{true,false}) {
@@ -60,6 +71,8 @@ int main(int argc,char** argv) {
             requested.c_str(),obs,tap,fi,gi,h,fi<44?"core":"holdout",ea.max,ea.rms,ea.coordinate,eb.max,mismatches,(unsigned long long)hashWords(value),gate,pass?"true":"false");
           // Private complete operand/result evidence. No receipt claim for standard primitives.
           std::printf("case,%s,%d,%d,%u,%u,%u\n",requested.c_str(),obs,tap,fi,gi,h);
+          unsigned rawKey[]={unsigned(obs),unsigned(tap),fi,gi,h,z.softmax&&tap?6u:3u};
+          savedp::writeRaw(rawKey,6);
           savedp::Words pw;for(float v:p)pw.push_back(word(v));savedp::words("P",h,pw);
           savedp::Words gw;for(float v:z.softmax?dp:dc)gw.push_back(word(v));savedp::words("gradient",h,gw);
           savedp::words("output",h,out.at(id));
@@ -77,6 +90,8 @@ int main(int argc,char** argv) {
         }
       }
     }
+    if(std::fclose(savedp::rawEvidence))throw std::runtime_error("raw evidence close");
+    savedp::rawEvidence=nullptr;
     closeProbe();
     std::printf("summary,saved_p_backward,mode=%s,required_failures=%u,pairs=%u,variant_word_mismatches=%u,cpu_arithmetic_fallback=0,input_mutation=0,finite=1,poison_remaining=0,canary=1,teardown=1,native_execution=0\n",requested.c_str(),failed,pairs,variantMismatch);
     return failed?4:0;

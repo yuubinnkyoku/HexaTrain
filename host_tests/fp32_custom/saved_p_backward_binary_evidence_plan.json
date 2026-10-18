@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "parent_plan": "saved_p_backward_device_plan.json",
+  "parent_plan_commit": "2d14efc59dfb15c50faf260c79d8efe83a431e5c",
+  "reason": "Preserve the incomplete ASCII pilot after TOP_RESUMED_UNKNOWN and owned-probe cancellation; reduce the duration of subsequent device arithmetic by storing raw words in an exclusive binary file.",
+  "mathematics_changed": false,
+  "graph_construction_changed": false,
+  "precision_configuration_changed": false,
+  "gates_changed": false,
+  "fixtures_changed": false,
+  "safety_relaxed": false,
+  "binary_format": {
+    "endian": "little",
+    "word_bits": 32,
+    "file_header": ["magic=0x53425002", "version=1", "mode=0 softmax or 1 dvalue", "forward_limit"],
+    "record_header": ["observed", "tap", "forward", "gradient", "head", "field_count"],
+    "field_header": ["field_id", "head", "word_count"],
+    "field_ids": {"P": 1, "gradient": 2, "output": 3, "product": 4, "dot": 5, "centered": 6},
+    "payload": "exact raw FP32 words; 1024 per matrix, 32 per row dot"
+  },
+  "validation": "Verify device SHA256 against pulled file; exact case/field coverage, frozen P/gradient/head words, final-output FNV hash, finite/guards/API/teardown, independent double and unchanged gradient gates. Never certify the interrupted ASCII process.",
+  "final_candidate": "One newly built immutable binary for both standalone consumers; native and three-process certification remain blocked unless standalone accuracy succeeds."
+}

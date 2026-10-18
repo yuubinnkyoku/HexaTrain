@@ -52,7 +52,9 @@ $files+="$QairtSdkRoot/lib/hexagon-v81/unsigned/libQnnHtpV81Skel.so"
 $files+="$NdkRoot/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 & "$PSScriptRoot/audit_qnn_apk.ps1" -ApkPath $approved -QairtSdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId -ReportPath "$out/apk-audit.txt" *> "$out/apk-console.txt"
 if((Get-Content "$out/apk-audit.txt" -Raw) -notmatch 'status=SUCCESS'){throw 'APK_AUDIT_FAILED'}
-$remote='/data/local/tmp/hexasbp-'+$build.probe_sha256.Substring(0,16)
+$leaf=Split-Path $out -Leaf
+if($leaf -notmatch '^[a-zA-Z0-9-]{1,64}$'){throw 'UNSAFE_REMOTE_EVIDENCE_NAME'}
+$remote='/data/local/tmp/hexasbp-'+$build.probe_sha256.Substring(0,16)+'-'+$leaf
 Adb @('shell','mkdir','-p',$remote)|Out-Null;$hashes=@{}
 foreach($file in $files) {
  $name=Split-Path $file -Leaf;$hash=(Get-FileHash $file).Hash.ToLowerInvariant()
@@ -99,7 +101,11 @@ try {
 }
 $after=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint
 $samples+=,$after;$samples|ConvertTo-Json -Depth 8|Out-File "$out/monitor-private.json" -Encoding utf8
+$binaryHash=(Adb @('shell','sha256sum',"$remote/saved-p-words.bin") -split '\s+')[0]
+Adb @('pull',"$remote/saved-p-words.bin","$out/saved-p-words.bin")|Out-Null
+if((Get-FileHash "$out/saved-p-words.bin").Hash.ToLowerInvariant() -ne $binaryHash){throw 'OUTPUT_EVIDENCE_HASH_MISMATCH'}
 @{source_sha=(git -C $root rev-parse HEAD);build=$build;hashes=$hashes;device_private=$d;mode=$Mode;forward_limit=$ForwardLimit;
+ raw_evidence_sha256=$binaryHash;
  exit_code=$process.ExitCode;focus_takeover_count=$takeovers;thermal_before=$before;thermal_after=$after;
  monitoring='USER_DIRECTED_RESEARCH';run_mode='BACKGROUND_CORRECTNESS';protected_identity='PASS';
  duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds}|ConvertTo-Json -Depth 18|Out-File "$out/identity-private.json" -Encoding utf8
