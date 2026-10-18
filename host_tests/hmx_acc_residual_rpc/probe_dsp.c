@@ -101,6 +101,9 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 8) {
     init_bias(bias0, 0, 0, 0);
     init_bias(bias1, 0, 0x4400, 0);        // set1 alone +4
+  } else if (mode == 9) {
+    init_bias(bias0, 0x5400, 0, 0);        // set0 original
+    init_bias(bias1, 0xd400, 0, 0);        // set1 negative scale -64
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -198,9 +201,6 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   metadata[6] = 0;  // mode B (combined) lock status
   metadata[7] = 0;  // HMX executed flag
   metadata[8] = 0;  // trial count
-  metadata[9] = PROBE_REVISION;
-  metadata[10] = q;
-  metadata[11] = mode;
 
   static int power_client = 0;
   HAP_power_request_t power_req;
