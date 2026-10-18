@@ -30,6 +30,68 @@ def keys(value, allowed):
         raise ValueError('missing or forbidden field')
 
 
+def verified_regressions(report, initial):
+    """Read fresh evidence directly; never accept a hand-written PASS ledger."""
+    from export_public_selective_ln1_device import regression_summary, headless_metrics
+    from export_public_double_qk import mixed_keys
+    status = {}
+    for name, log in (('Fast','fast-final.txt'),('Host','host-profile.txt'),('Qnn','qnn-profile.txt')):
+        text = (report / log).read_text(encoding='utf-8-sig')
+        if f'===== verify.ps1 -Profile {name} =====' not in text or not re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$', text):
+            raise ValueError('missing required profile ' + name)
+        status[name] = 'PASS'
+    host = read(report / 'host-closeout/identity-private.json')
+    if any(host[k]!='PASS' for k in ('reference_selftest','independent_oracle','graph_shape_ownership')) or host['gradient_processes']!=3 or host['device_calls']!=0:
+        raise ValueError('host reference/shape/frozen input evidence')
+    status['Saved_P_Host_reference_and_graph'] = 'PASS'
+    baseline = initial['bundles']['fp32-double-qk']['binary_hashes']
+    for variant in ('mixed_qkv','selective_ln1','double_qk','oneHvx','oneQkvHvx','oneQkScaleA','oneQkScaleB',
+                    'oneProbabilityScale','oneProbabilityMask','oneProbabilitySoftmax','oneProbabilityP'):
+        folder = report / 'regressions' / variant
+        ledger, pre = read(folder/'identity-private.json'), read(folder/'preflight/device-preflight-private.json')
+        text = (folder/'stdout.txt').read_text(encoding='utf-8-sig')
+        if pre['status']!='PASS' or ledger['focus_takeover_count'] or ledger['build']['binary_hashes']!=baseline:
+            raise ValueError('regression binary/preflight identity')
+        if re.search(r'^api,[^,]+,[1-9]\d*$',text,re.M) or any('api,'+name+',0' not in text for name in ('contextFree','deviceFree','backendFree')):
+            raise ValueError('regression API/teardown')
+        if variant in ('mixed_qkv','selective_ln1','double_qk'):
+            rows = [json.loads(line) for line in text.splitlines() if line.startswith('{')]
+            nums = [r for r in rows if r['kind']=='numerical']
+            expected_count = {'mixed_qkv':22632,'selective_ln1':2640,'double_qk':14356}[variant]
+            if ledger['exit_code']!=0 or len(nums)!=expected_count or any(not r['gate'] or r['word_mismatches'] or r['variant_mismatches'] for r in nums):
+                raise ValueError('regression numerical/coverage')
+            if variant=='mixed_qkv' and {tuple(r[k] for k in ('stage','mixed','observed','tap','case','field')) for r in nums}!=mixed_keys():
+                raise ValueError('mixed unique coverage')
+        else:
+            accepted, _, _ = regression_summary(variant, ledger['exit_code'], text)
+            if not accepted:
+                raise ValueError('unexpected regression failure ' + variant)
+        status['regression_'+variant] = 'PASS'
+    scale = (report/'regressions/oneProbabilityScale/stdout.txt').read_text(encoding='utf-8-sig')
+    rows = [line for line in scale.splitlines() if line.startswith('onemetric,forwardScaleStandard,')]
+    if len(rows)!=88 or sum(bool(re.search(r'(?:^|,)gate=0(?:,|$)',r)) for r in rows)!=1:
+        raise ValueError('old standard Scale negative control changed')
+    status['Expected_standard_Scale_FAIL_reproduced'] = 'PASS'
+    c0 = (report/'fresh-c0-correctcwd.txt').read_text(encoding='utf-8-sig')
+    if 'joint_failures=9,dsp_claim=0' not in c0:
+        raise ValueError('C0 nine FAIL missing')
+    status['Expected_C0_nine_FAIL_reproduced'] = 'PASS'
+    joint = [json.loads(line) for line in (report/'fresh-forward-p-joint.jsonl').read_text(encoding='utf-8-sig').splitlines() if line.startswith('{')]
+    final = [r for r in joint if r.get('kind')=='assessment_summary']
+    if len(final)!=1 or not final[0]['joint_pass'] or final[0]['required_failed_predicates'] or not final[0]['DSP_BACKWARD_NOT_EXECUTED']:
+        raise ValueError('fresh old Forward P joint evidence')
+    status['Frozen_Forward_P_joint_contract'] = 'PASS'
+    headless = read(report/'headless-regression-private.json')
+    for name, suite in (('smoke','device-probe'),('w8','hvx-muon-optimizer-benchmark')):
+        folder = (ROOT / headless[name]['report_relative_path']).resolve()
+        if not folder.is_relative_to((ROOT/'build/reports/qnn-headless').resolve()) or read(folder/'status.json')['status']!='PASSED':
+            raise ValueError('headless path/status')
+        headless_metrics(suite, (folder/'device-report.txt').read_text(encoding='utf-8-sig'))
+        status['Device_smoke' if name=='smoke' else 'Fresh_Muon_W8_114_of_114'] = 'PASS'
+    status['New_native_regression_and_formal_cohort'] = 'BLOCKED'
+    return status
+
+
 def validate(value, expected_probe):
     keys(value, 'schema source_commit candidate_source_commit branch base forward_base plan_sha256 probe_sha256 gradient_sha256 classifications standalone native coverage_complete cohort_processes performance regression training limitations')
     if value['schema'] != 1 or value['base'] != 'be4271efd1b8fb71f0c66f3ae7c35f04571aa78e' or value['training'] != 'NO-GO':
@@ -99,6 +161,16 @@ def make(report):
             raise ValueError('candidate source changed')
     if initial['base'] != 'be4271efd1b8fb71f0c66f3ae7c35f04571aa78e':
         raise ValueError('wrong research base')
+    for path, digest in initial['protected'].items():
+        if sha(ROOT/path)!=digest:
+            raise ValueError('protected state changed')
+    for name, bundle in initial['bundles'].items():
+        for path, digest in bundle['source_hashes'].items():
+            if sha(ROOT/path)!=digest:
+                raise ValueError('protected Forward source changed')
+        for path, digest in bundle['binary_hashes'].items():
+            if sha(ROOT/'build'/name/path)!=digest:
+                raise ValueError('protected Forward binary changed')
     output = {'schema': 1, 'source_commit': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
               'candidate_source_commit': build['source_sha'], 'branch': 'investigation/g1-native-saved-p-backward-dsp',
               'base': initial['base'], 'forward_base': 'e05f3539e2e0c0e461157a3abf1d9833d74b392b',
@@ -106,7 +178,7 @@ def make(report):
               'classifications': ['UNRESOLVED'], 'standalone': {},
               'native': {name: 'NOT_EXECUTED' for name in ('softmax', 'dvalue', 'dual', 'lifetime', 'observer_free', 'sensitivity')},
               'coverage_complete': True, 'cohort_processes': 0, 'performance': None,
-              'regression': read(report / 'regression-status-private.json'), 'training': 'NO-GO',
+              'regression': verified_regressions(report, initial), 'training': 'NO-GO',
               'limitations': ['Fixed G1 diagnostic geometry and reference-derived frozen gradients.', 'No native Saved-P or full Attention/layer/training certification.']}
     for name, mode in (('softmax', 'standalone_softmax'), ('dvalue', 'standalone_dvalue')):
         process = report / ('pilot-softmax-final' if name == 'softmax' else 'pilot-dvalue')
