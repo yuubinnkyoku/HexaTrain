@@ -107,7 +107,8 @@ $samples+=,$after;$samples|ConvertTo-Json -Depth 8|Out-File "$out/monitor-privat
 $binaryHash=((Adb @('shell','sha256sum',"$remote/saved-p-words.bin")) -split '\s+')[0]
 Adb @('shell',"toybox gzip -c $remote/saved-p-words.bin > $remote/saved-p-words.bin.gz")|Out-Null
 $compressedHash=((Adb @('shell','sha256sum',"$remote/saved-p-words.bin.gz")) -split '\s+')[0]
-Adb @('pull',"$remote/saved-p-words.bin.gz","$out/saved-p-words.bin.gz")|Out-Null
+$pull=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('pull',"$remote/saved-p-words.bin.gz","$out/saved-p-words.bin.gz") -TimeoutSeconds 180
+if($pull.ExitCode){throw 'COMPRESSED_EVIDENCE_TRANSFER_FAILED'}
 if((Get-FileHash "$out/saved-p-words.bin.gz").Hash.ToLowerInvariant() -ne $compressedHash){throw 'COMPRESSED_OUTPUT_EVIDENCE_HASH_MISMATCH'}
 & python -c "import gzip,sys,shutil; src=gzip.open(sys.argv[1],'rb'); dst=open(sys.argv[2],'xb'); shutil.copyfileobj(src,dst); dst.close(); src.close()" "$out/saved-p-words.bin.gz" "$out/saved-p-words.bin"
 if($LASTEXITCODE){throw 'LOSSLESS_EVIDENCE_DECODE_FAILED'}
