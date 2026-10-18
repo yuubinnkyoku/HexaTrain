@@ -154,9 +154,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   compute_res_attr_t attr;
   int status = HAP_compute_res_attr_init(&attr);
   if (status) return HMX_ERR_ALLOC;
-  status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
-  if (status) return HMX_ERR_ALLOC;
   status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
+  if (status) return HMX_ERR_ALLOC;
+  status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
   if (status) return HMX_ERR_ALLOC;
 
   int resource = HAP_compute_res_acquire(&attr, 10000);
@@ -167,25 +167,26 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     return HMX_ERR_VTCM;
   }
 
-  status = HAP_compute_res_hmx_lock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
-  if (status) {
-    HAP_compute_res_release(resource);
+  unsigned int *hmx_busy = NULL;
+  status = HAP_compute_res_hmx_lock4(resource, &hmx_busy, 10000);
+  metadata[4] = status;
+  if (status || !hmx_busy) {
+    (void)HAP_compute_res_release(resource);
     return HMX_ERR_LOCK;
   }
+  *hmx_busy = 1;
 
   const uint64_t start = HAP_perf_get_time_us();
   run_one(vtcm, 0, &results[0], &results[1]);
   run_one(vtcm, 1, &results[2], &results[3]);
   const uint64_t elapsed = HAP_perf_get_time_us() - start;
 
-  // These teardown APIs have version-dependent signatures; record that
-  // cleanup was attempted without claiming a checked return status.
-  (void)HAP_compute_res_hmx_unlock2(resource, HAP_COMPUTE_RES_HMX_SHARED);
-  (void)HAP_compute_res_release(resource);
+  // Teardown returns are recorded; not independently verified across SDK revisions.
   metadata[3] = elapsed > 0x7fffffffULL ? 0x7fffffff : (int)elapsed;
-  metadata[4] = -1; // teardown result not independently verified
-  metadata[5] = -1; // teardown result not independently verified
+  if (hmx_busy) *hmx_busy = 0;
+  metadata[5] = HAP_compute_res_hmx_unlock4(resource, hmx_busy);
   metadata[6] = 1;  // Direct HMX code executed (no CPU fallback path)
   metadata[7] = 2;  // Two convert-feedback configurations.
+  (void)HAP_compute_res_release(resource);
   return 0;
 }
