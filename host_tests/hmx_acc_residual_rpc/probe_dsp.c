@@ -104,6 +104,9 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 9) {
     init_bias(bias0, 0x5400, 0, 0);        // set0 original
     init_bias(bias1, 0xd400, 0, 0);        // set1 negative scale -64
+  } else if (mode == 10) {
+    init_bias(bias0, 0x5400, 0, 0);        // set0 original
+    init_bias(bias1, 0x5400, 0x7bff, 4);   // set1 feedback (spec order)
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -129,7 +132,9 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
       : "memory");
 
   asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
-  asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+  if (mode != 10) {
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+  }
 
   // First convert retains ACC; optionally keeps 4 extra feedback bits.
   uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
@@ -137,6 +142,10 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(first_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
+
+  if (mode == 10) {
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+  }
 
   if (mode == 7 || mode == 8) {
     *hi_bits = hi[0];
@@ -152,7 +161,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     second_rs = 0;  // bias set 0, no fb
   } else {
     second_rs = (1u << 12);  // bias set 1
-    if (mode == 0 || mode == 3) second_rs |= (1u << 2);  // fb_dest=1
+    if (mode == 0 || mode == 3 || mode == 10) second_rs |= (1u << 2);  // fb_dest=1
   }
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(second_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
