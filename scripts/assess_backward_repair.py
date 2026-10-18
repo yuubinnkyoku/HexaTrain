@@ -54,7 +54,9 @@ def assess(directory):
     require(identity['focus_takeover_count']==0 and identity['protected_identity']=='PASS','safety/protected')
     require(sha(directory/'saved-p-words.bin')==identity['raw_evidence_sha256'],'raw SHA')
     require(sha(directory/'saved-p-words.bin.gz')==identity['compressed_evidence_sha256'],'compressed SHA')
-    build=identity['build'];candidate=ROOT/'build/fp32-saved-p-backward-repair-v2'
+    build=identity['build']
+    require(build['bundle_leaf'].startswith('fp32-saved-p-backward-') and '/' not in build['bundle_leaf'] and '\\' not in build['bundle_leaf'],'bundle leaf')
+    candidate=ROOT/'build'/build['bundle_leaf']
     require(build['candidate']=='ordered-fp32-v1','candidate identity')
     for p,h in build['binary_hashes'].items():require(sha(candidate/p)==h,'binary identity')
     for p,h in build['source_hashes'].items():require(sha(ROOT/p)==h,'tested source changed')

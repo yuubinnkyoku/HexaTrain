@@ -3,7 +3,7 @@ param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$tr
  [Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,
  [ValidateSet('standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual','performance')][string]$Mode,
  [ValidateRange(1,60)][int]$ForwardLimit=60,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v2',[switch]$SelfTest)
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v3',[switch]$SelfTest)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')

@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v2')
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v3')
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot/qairt_version.ps1"
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
@@ -46,6 +46,6 @@ $prior=Get-Content "$root/build/fp32-saved-p-backward-final/build-identity.json"
 foreach($p in $prior.source_hashes.PSObject.Properties){$sources[$p.Name]=$p.Value}
 $binaries=@{};foreach($p in @('libHexaBackwardRepairHost.so','libHexaBackwardRepairDsp.so','saved_p_backward_probe')){$binaries[$p]=(Get-FileHash "$out/$p").Hash.ToLowerInvariant()}
 $evidence=@{};foreach($p in @('repair.s','repair.ll','repair.su','undefined-private.txt','disassembly-private.txt','contract.txt','prepare.txt','graph.txt')){$evidence[$p]=(Get-FileHash "$out/$p").Hash.ToLowerInvariant()}
-@{source_sha=(git -C $root rev-parse HEAD);source_hashes=$sources;binary_hashes=$binaries;codegen_host_hashes=$evidence;probe_sha256=$binaries.saved_p_backward_probe;gradient_sha256=$prior.gradient_sha256;
+@{source_sha=(git -C $root rev-parse HEAD);bundle_leaf=(Split-Path $out -Leaf);source_hashes=$sources;binary_hashes=$binaries;codegen_host_hashes=$evidence;probe_sha256=$binaries.saved_p_backward_probe;gradient_sha256=$prior.gradient_sha256;
  qairt_build_id=$ExpectedBuildId;host_compiler_sha256=$plan.toolchain.host_compiler_sha256;ndk_compiler_sha256=$old.ndk_compiler_sha256;hexagon_compiler_sha256=$old.hexagon_compiler_sha256;flags=$flags;new_DSP_kernel=$true;production_binding=$false;cpu_arithmetic='REJECTED';candidate='ordered-fp32-v1'}|ConvertTo-Json -Depth 10|Out-File "$out/build-identity.json" -Encoding utf8
 Write-Host 'backward_repair_build=PASS host_contract=PASS host_prepare_reject=PASS graph=PASS scalar_FP32_codegen=PASS runtime=UNMEASURED'

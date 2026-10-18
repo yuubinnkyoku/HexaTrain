@@ -1,7 +1,14 @@
-#define main unusedSavedGraphMain
-#include "saved_p_backward_graph_test.cpp"
+#define main unusedOneGraphMain
+#include "one_layer_graph_test.cpp"
 #undef main
 #include "backward_repair_graph.h"
+struct SavedEdge {std::string name,type,package;std::vector<unsigned> in,out;};
+std::vector<SavedEdge> savedEdges;
+Qnn_ErrorHandle_t savedNode(Qnn_GraphHandle_t graph,Qnn_OpConfig_t config){auto& c=config.v1;SavedEdge e{c.name,c.typeName,c.packageName,{},{}};
+ for(unsigned i=0;i<c.numOfInputs;++i)e.in.push_back(c.inputTensors[i].v1.id);
+ for(unsigned i=0;i<c.numOfOutputs;++i)e.out.push_back(c.outputTensors[i].v1.id);
+ savedEdges.push_back(e);return e.package=="qti.aisw"?node(graph,config):QNN_SUCCESS;
+}
 std::vector<std::string> topology(DiagnosticGraph& g,const std::vector<SavedEdge>& edges,unsigned count){
  auto name=[&](unsigned id){for(unsigned i=0;i<g.tensors.size();++i)if(g.tensors[i].v1.id==id)return g.names[i];throw std::runtime_error("unknown QNN id");};
  std::vector<std::string> out;for(unsigned i=0;i<count;++i){auto& e=edges.at(i);std::string s=e.name+":"+e.package+":"+e.type;for(auto id:e.in)s+="|in="+name(id);for(auto id:e.out)s+="|out="+name(id);out.push_back(s);}return out;
