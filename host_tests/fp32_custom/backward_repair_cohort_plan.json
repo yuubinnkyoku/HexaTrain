@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "supplement": "Evidence transport and process grouping only; arithmetic, gates, fixtures, observers unchanged.",
+  "candidate": "ordered-fp32-v1",
+  "cohort_processes": 3,
+  "roles_per_process": ["standalone_softmax","standalone_dvalue","native_softmax","native_dvalue","dual"],
+  "entry": "Same final probe/DSP/Host bytes. Both complete standalone pilot permits and complete single/dual pilot permits before cohort. Cohort does not select or tune arithmetic.",
+  "backend_lifetime": "One OS process per cohort. Each role creates/tears down its own QNN backend/device/context, retaining immutable packages and fixtures. Fresh safety preflight once before this OS process, then two-second foreground monitoring throughout all roles.",
+  "raw_container": "Little endian words header 0x42524301,version1,role_count5,forward_limit60. Each role: modecode,uint64 byte_count low/high words, then unchanged complete 0x42525001 evidence bytes. No lossy conversion. Device raw SHA, gzip SHA, pull SHA, decompressed SHA checked. Exclusive derived role files independently rehashed against verified container.",
+  "stdout": "cohort_begin,mode=... and cohort_end,mode=...,exit=0 delimit each role's own full API/numerical/teardown evidence. Overall process exit captured before raw readback. Any nonzero role stops cohort and forbids formal PASS.",
+  "digest": "Each role retains numerical identities and output-word digest, excluding timers/receipts/counters/process identity. Compare same role across three independent OS processes. All role coverage and final process completion required.",
+  "bounded_process_seconds": 1200,
+  "training": "NO-GO"
+}

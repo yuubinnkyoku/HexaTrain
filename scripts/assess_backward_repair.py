@@ -47,7 +47,7 @@ def fnv(words):
     return f'{h:016x}'
 
 
-def assess(directory):
+def assess(directory,role=None,role_raw=None,role_stdout=None):
     identity=read(directory/'identity-private.json')
     completion=read(directory/'execution-before-readback-private.json')
     require(identity['exit_code']==completion['exit_code'],'missing/mismatched captured completion')
@@ -60,7 +60,9 @@ def assess(directory):
     require(build['candidate']=='ordered-fp32-v1','candidate identity')
     for p,h in build['binary_hashes'].items():require(sha(candidate/p)==h,'binary identity')
     for p,h in build['source_hashes'].items():require(sha(ROOT/p)==h,'tested source changed')
-    mode=identity['mode'];modes=['standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual']
+    require(role is None or identity['mode']=='cohort','role requires a captured cohort process')
+    mode=identity['mode'] if role is None else role
+    modes=['standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual']
     require(mode in modes and mode!='forward','unsupported certification mode')
     native=mode.startswith('native') or mode=='dual'
     kinds=[0,1] if mode=='dual' else [int(mode.endswith('dvalue'))]
@@ -68,7 +70,8 @@ def assess(directory):
     expected={(o,t,fi,gi,h,v) for o in (1,0) for t in (1,0) for fi in range(60)
               for gi in range(25 if fi<44 else 8) for h in range(2) for v in kinds}
     rows={};apis=[];terminal=[];graphs=[]
-    for line in (directory/'stdout.txt').read_text(encoding='utf-8-sig').splitlines():
+    stdout=(directory/'stdout.txt').read_text(encoding='utf-8-sig') if role_stdout is None else role_stdout
+    for line in stdout.splitlines():
         if line.startswith('{'):
             r=json.loads(line)
             if r.get('kind')=='repair_pair':
@@ -98,7 +101,7 @@ def assess(directory):
     seen=set();outwords={};pwords={};digest=hashlib.sha256();failures=0;observer_words=0;word_failures=0
     def worst(name,value,key,index=0):
         if name not in result['metrics'] or value>result['metrics'][name]['maxAbs']:result['metrics'][name]=dict(maxAbs=float(value),case=list(key),coordinate=int(index))
-    with (directory/'saved-p-words.bin').open('rb') as f:
+    with (directory/'saved-p-words.bin' if role_raw is None else role_raw).open('rb') as f:
         require(tuple(words(f,4))==(0x42525001,1,modes.index(mode),60),'raw header')
         while f.peek(1):
             o,t,fi,gi,h,v,n=map(int,words(f,7));key=(o,t,fi,gi,h,v);require(key in expected and key not in seen,'raw identity/coverage');seen.add(key)
@@ -170,8 +173,44 @@ def assess(directory):
     return result
 
 
+def assess_cohort(directory):
+    identity=read(directory/'identity-private.json')
+    require(identity['mode']=='cohort' and identity['exit_code']==0,'cohort completion')
+    require(sha(directory/'saved-p-words.bin')==identity['raw_evidence_sha256'],'cohort raw SHA')
+    stdout=(directory/'stdout.txt').read_text(encoding='utf-8-sig')
+    require(stdout.count('summary,repair_cohort,roles=5,all_role_exits=0,independent_os_processes=1')==1,'cohort terminal')
+    modes={0:'standalone_softmax',1:'standalone_dvalue',3:'native_softmax',4:'native_dvalue',5:'dual'}
+    decoded=directory/'decoded-cohort';decoded.mkdir(exist_ok=True)
+    result={}
+    with (directory/'saved-p-words.bin').open('rb') as f:
+        require(tuple(words(f,4))==(0x42524301,1,5,60),'cohort container header')
+        for expected in modes:
+            code,lo,hi=map(int,words(f,3));require(code==expected,'cohort role identity/order')
+            size=lo+(hi<<32);require(16<size<1<<31,'cohort role length')
+            path=decoded/(modes[code]+'.bin');digest=hashlib.sha256();remaining=size
+            existing=path.open('rb') if path.exists() else None
+            target=None if existing else path.open('xb')
+            try:
+                while remaining:
+                    b=f.read(min(1<<20,remaining));require(bool(b),'truncated cohort role');remaining-=len(b);digest.update(b)
+                    if existing:require(existing.read(len(b))==b,'existing derived evidence differs')
+                    else:target.write(b)
+                if existing:require(existing.read(1)==b'','derived trailing bytes')
+            finally:
+                if existing:existing.close()
+                if target:target.close()
+            require(sha(path)==digest.hexdigest(),'derived role SHA')
+            start='cohort_begin,mode='+modes[code]+'\n';end='cohort_end,mode='+modes[code]+',exit=0'
+            require(stdout.count(start)==1 and stdout.count(end)==1,'cohort role begin/end/completion')
+            text=stdout.split(start,1)[1].split(end,1)[0]
+            result[modes[code]]=assess(directory,modes[code],path,text)
+        require(f.read(1)==b'','trailing cohort evidence')
+    return dict(classification='PASS' if all(r['classification']=='PASS' for r in result.values()) else 'NUMERICAL_OR_WORD_FAIL',
+                independent_os_processes=1,probe_sha256=identity['build']['probe_sha256'],roles=result)
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--report-root',type=pathlib.Path,required=True);p.add_argument('--output',type=pathlib.Path,required=True);a=p.parse_args()
-    result=assess(a.report_root)
+    result=assess_cohort(a.report_root) if read(a.report_root/'identity-private.json')['mode']=='cohort' else assess(a.report_root)
     with a.output.open('x',encoding='utf-8') as f:json.dump(result,f,indent=2,allow_nan=False)
-    print(json.dumps({k:result[k] for k in ('mode','pairs','classification','required_failed_pairs','numerical_digest')}))
+    print(json.dumps({k:result[k] for k in ('mode','pairs','classification','required_failed_pairs','numerical_digest','independent_os_processes') if k in result}))

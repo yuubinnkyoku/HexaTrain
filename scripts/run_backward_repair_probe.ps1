@@ -1,9 +1,9 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
  [Parameter(Mandatory=$true)][string]$ReportRoot,[Parameter(Mandatory=$true)][string]$QnnValidationLog,
- [ValidateSet('standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual','performance')][string]$Mode,
+ [ValidateSet('standalone_softmax','standalone_dvalue','forward','native_softmax','native_dvalue','dual','performance','cohort')][string]$Mode,
  [ValidateRange(1,60)][int]$ForwardLimit=60,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v3',[switch]$SelfTest)
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v4',[switch]$SelfTest)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'qairt_version.ps1')
 . (Join-Path $PSScriptRoot 'nicopedia_runner_common.ps1')
@@ -55,11 +55,11 @@ $files=@($probe,"$root/build/reports/g1-native-saved-p-backward-dsp/gradients.bi
 if($build.PSObject.Properties.Name -contains 'binary_hashes'){
  foreach($p in $build.binary_hashes.PSObject.Properties){if((Get-FileHash "$candidateDir/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'REPAIR_BINARY_CHANGED'};if($p.Name -like 'lib*.so'){$files+="$candidateDir/$($p.Name)"}}
 }
-if($Mode -in @('native_softmax','native_dvalue','dual','performance')){
+if($Mode -in @('native_softmax','native_dvalue','dual','performance','cohort')){
  $permit=Get-Content "$root/build/reports/g1-backward-primitive-precision-repair/native-permit-private.json" -Raw|ConvertFrom-Json
  if($permit.standalone_pass -ne $true -or $permit.four_observers_pass -ne $true -or $permit.forward_joint_pass -ne $true -or $permit.probe_sha256 -ne $build.probe_sha256){throw 'NATIVE_ENTRY_NOT_CERTIFIED'}
  if($Mode -eq 'dual' -and $permit.singles_pass -ne $true){throw 'SINGLES_REQUIRED_BEFORE_DUAL'}
- if($Mode -eq 'performance' -and $permit.dual_pass -ne $true){throw 'DUAL_ACCURACY_REQUIRED_BEFORE_PERFORMANCE'}
+ if($Mode -in @('performance','cohort') -and $permit.dual_pass -ne $true){throw 'DUAL_ACCURACY_REQUIRED_BEFORE_PERFORMANCE_OR_COHORT'}
  $files+="$root/build/reports/g1-backward-primitive-precision-repair/native-permit-private.json"
 }
 if((Get-FileHash $files[1]).Hash.ToLowerInvariant() -ne $build.gradient_sha256){throw 'FROZEN_GRADIENT_CHANGED'}
@@ -114,7 +114,7 @@ try {
    if((Resolve-MixedQkvMonitoringState $s) -like 'BLOCKED*'){Stop-Owned 'CRITICAL_DEVICE_PROTECTION'}
    if((Adb @('shell','dumpsys','power')) -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){Stop-Owned 'AWAKE_LOST'}
   }
-  if(([DateTime]::UtcNow-$started).TotalSeconds -ge 600){Stop-Owned 'OWNED_PROBE_TIMEOUT'}
+  if(([DateTime]::UtcNow-$started).TotalSeconds -ge 1200){Stop-Owned 'OWNED_PROBE_TIMEOUT'}
   $process.WaitForExit(2000)|Out-Null;$process.Refresh()
  }while(!$process.HasExited)
 }catch {

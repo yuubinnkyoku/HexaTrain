@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
  [Parameter(Mandatory=$true)][string]$HexagonSdkRoot,[Parameter(Mandatory=$true)][string]$NdkRoot,
- [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v3')
+ [ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='repair-v4')
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot/qairt_version.ps1"
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId

@@ -33,7 +33,7 @@ void performance(const std::vector<doubleqkfixture::Case>& cs,const std::vector<
  }
 }
 }
-int main(int argc,char** argv){if(argc!=7)return 1;try{
+int repairWorker(int argc,char** argv){if(argc!=7)return 1;try{
  using namespace repairprobe;auto cs=doubleqkfixture::load(argv[1]);auto ms=mixedfixture::load(argv[2]);auto ls=s2fixture::load(argv[3]);auto gs=savedp::loadGradients(argv[4]);std::string requested=argv[5];unsigned limit=std::stoul(argv[6]);
  std::vector<savedp::Mode> modes={savedp::Mode::StandaloneSoftmax,savedp::Mode::StandaloneDValue,savedp::Mode::Forward,savedp::Mode::NativeSoftmax,savedp::Mode::NativeDValue,savedp::Mode::Dual};unsigned modeCode=0;for(;modeCode<modes.size()&&requested!=savedp::label(modes[modeCode]);++modeCode){}
  demand(modeCode<6||requested=="performance");if(modeCode>=3){FILE* permit=std::fopen("native-permit-private.json","rb");demand(permit);std::fclose(permit);}
@@ -65,3 +65,21 @@ int main(int argc,char** argv){if(argc!=7)return 1;try{
  }
  std::fclose(savedp::rawEvidence);closeProbe();std::printf("summary,backward_repair,mode=%s,pairs=%u,required_failures=%u,input_mutation=0,finite=1,complete_writes=1,poison_remaining=0,canary=1,teardown=1,cpu_arithmetic_fallback=0\n",requested.c_str(),pairs,failures);return failures?4:0;
  }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 5;}}
+int main(int argc,char** argv){
+ if(argc!=7||std::strcmp(argv[5],"cohort"))return repairWorker(argc,argv);
+ try{
+  FILE* permit=std::fopen("native-permit-private.json","rb");repairprobe::demand(permit);std::fclose(permit);
+  const char* roles[]={"standalone_softmax","standalone_dvalue","native_softmax","native_dvalue","dual"};unsigned codes[]={0,1,3,4,5};
+  std::vector<std::string> files;
+  for(unsigned i=0;i<5;++i){std::printf("cohort_begin,mode=%s\n",roles[i]);std::fflush(stdout);char* args[7];for(unsigned j=0;j<7;++j)args[j]=argv[j];args[5]=const_cast<char*>(roles[i]);
+   int rc=repairWorker(7,args);std::printf("cohort_end,mode=%s,exit=%d\n",roles[i],rc);std::fflush(stdout);if(rc)return rc;
+   std::string path=std::string("cohort-")+roles[i]+".bin";FILE* existing=std::fopen(path.c_str(),"rb");if(existing){std::fclose(existing);throw std::runtime_error("cohort evidence exists");}
+   if(std::rename("saved-p-words.bin",path.c_str()))throw std::runtime_error("cohort exclusive rename");files.push_back(path);
+  }
+  FILE* out=std::fopen("saved-p-words.bin","wbx");repairprobe::demand(out);unsigned head[]={0x42524301,1,5,60};repairprobe::demand(std::fwrite(head,4,4,out)==4);
+  for(unsigned i=0;i<5;++i){FILE* in=std::fopen(files[i].c_str(),"rb");repairprobe::demand(in);repairprobe::demand(!std::fseek(in,0,SEEK_END));long size=std::ftell(in);repairprobe::demand(size>0);std::rewind(in);unsigned block[]={codes[i],unsigned(size),unsigned(uint64_t(size)>>32)};repairprobe::demand(std::fwrite(block,4,3,out)==3);
+   unsigned char buffer[65536];size_t n;while((n=std::fread(buffer,1,sizeof(buffer),in)))repairprobe::demand(std::fwrite(buffer,1,n,out)==n);repairprobe::demand(!std::ferror(in));std::fclose(in);
+  }
+  repairprobe::demand(!std::fclose(out));std::puts("summary,repair_cohort,roles=5,all_role_exits=0,independent_os_processes=1");return 0;
+ }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 5;}
+}
