@@ -107,6 +107,15 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 10) {
     init_bias(bias0, 0x5400, 0, 0);        // set0 original
     init_bias(bias1, 0x5400, 0x7bff, 4);   // set1 feedback (spec order)
+  } else if (mode == 11) {
+    init_bias(bias0, 0x5400, 0, 0);        // set0 +64
+    init_bias(bias1, 0x5400, 0, 0);        // set1 +64 (positive switch)
+  } else if (mode == 12) {
+    init_bias(bias0, 0xd400, 0, 0);        // set0 -64
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 13) {
+    init_bias(bias0, 0, 0xc400, 0);        // set0 output bias -4 (0xc400)
+    init_bias(bias1, 0, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -147,7 +156,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
   }
 
-  if (mode == 7 || mode == 8) {
+  if (mode == 7 || mode == 8 || mode == 12 || mode == 13) {
     *hi_bits = hi[0];
     *residual_bits = 0;
     return;
