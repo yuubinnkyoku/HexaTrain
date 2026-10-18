@@ -47,7 +47,7 @@ def validate(value, expected_probe):
     keys(value['standalone'], 'softmax dvalue')
     all_complete = True
     for name, entry in value['standalone'].items():
-        keys(entry, 'status maxAbs worst core_pairs_per_variant holdout_pairs_per_variant observer_variants failed_pairs accuracy_failed_pairs observer_mismatch_pairs numerical_digest actual_gradient_gate ordered_fp32_is_word_gate independent_python_double_recheck process_exit_evidence')
+        keys(entry, 'status maxAbs core_maxAbs holdout_maxAbs worst core_pairs_per_variant holdout_pairs_per_variant observer_variants failed_pairs accuracy_failed_pairs observer_mismatch_pairs numerical_digest actual_gradient_gate ordered_fp32_is_word_gate independent_python_double_recheck process_exit_evidence')
         if entry['status'] not in ('PASS', 'NUMERICAL_FAIL', 'OBSERVER_FAIL', 'UNRESOLVED'):
             raise ValueError('invalid status')
         if entry['process_exit_evidence'] not in ('CAPTURED', 'UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY') or (entry['status']=='PASS' and entry['process_exit_evidence']!='CAPTURED'):
@@ -59,6 +59,8 @@ def validate(value, expected_probe):
         if entry['ordered_fp32_is_word_gate'] is not False or entry['actual_gradient_gate'] != (.002 if name == 'softmax' else .01):
             raise ValueError('gate mutation')
         if entry['status'] != 'UNRESOLVED':
+            if any(not isinstance(entry[k], (int, float)) or not math.isfinite(entry[k]) for k in ('core_maxAbs','holdout_maxAbs')):
+                raise ValueError('missing core/holdout aggregate')
             if not isinstance(entry['maxAbs'], (int, float)) or not math.isfinite(entry['maxAbs']) or entry['independent_python_double_recheck'] != 'PASS':
                 raise ValueError('missing required numerical evidence')
             if entry['status'] == 'PASS' and (entry['maxAbs'] > entry['actual_gradient_gate'] or entry['failed_pairs']):
@@ -129,6 +131,7 @@ def make(report):
         o, t, fi, gi, h = worst['case']
         output['standalone'][name] = {
             'status': result['classification'], 'maxAbs': worst['maxAbs'],
+            'core_maxAbs': result['worst']['core']['maxAbs'], 'holdout_maxAbs': result['worst']['holdout']['maxAbs'],
             'worst': {'forward': fi, 'head': h, 'gradient': gi, 'coordinate': worst['coordinate'], 'observed': o, 'tap': t},
             'core_pairs_per_variant': 2200, 'holdout_pairs_per_variant': 256, 'observer_variants': 4,
             'failed_pairs': result['required_failed_pairs'], 'numerical_digest': result['numerical_digest'],
@@ -146,7 +149,7 @@ def make(report):
 
 def selftest():
     # Synthetic validator fixtures only, never device evidence.
-    entry = {'status': 'NUMERICAL_FAIL', 'maxAbs': .1, 'worst': dict(forward=0, head=0, gradient=0, coordinate=0, observed=1, tap=1),
+    entry = {'status': 'NUMERICAL_FAIL', 'maxAbs': .1, 'core_maxAbs': .1, 'holdout_maxAbs': .01, 'worst': dict(forward=0, head=0, gradient=0, coordinate=0, observed=1, tap=1),
              'core_pairs_per_variant': 2200, 'holdout_pairs_per_variant': 256, 'observer_variants': 4, 'failed_pairs': 1,
              'accuracy_failed_pairs': 1, 'observer_mismatch_pairs': 0,
              'process_exit_evidence': 'CAPTURED',
@@ -166,7 +169,8 @@ def selftest():
                  lambda x: x.update(raw_tensor=[1, 2]),
                  lambda x: x['native'].update(observer_free='ObservedOnly'),
                  lambda x: x['standalone']['softmax'].update(maxAbs=None),
-                 lambda x: x['limitations'].append('C:/private/tensor.bin')]
+                 lambda x: x['limitations'].append('C:/private/tensor.bin'),
+                 lambda x: x['standalone']['softmax'].update(status='PASS',maxAbs=0,failed_pairs=0,accuracy_failed_pairs=0,process_exit_evidence='UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY')]
     for mutate in mutations:
         invalid = copy.deepcopy(value); mutate(invalid)
         try:
@@ -175,7 +179,7 @@ def selftest():
             pass
         else:
             raise AssertionError('unsafe export accepted')
-    print('saved_p_backward_exporter_selftest=PASS rejections=9 device_calls=0')
+    print('saved_p_backward_exporter_selftest=PASS rejections=10 device_calls=0')
 
 
 if __name__ == '__main__':
