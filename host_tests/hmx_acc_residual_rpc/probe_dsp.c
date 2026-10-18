@@ -67,7 +67,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
 
   // a = 1 + 2^-q as exact FP16 (q in [6,10]).
   uint16_t a_bits;
-  if (mode == 21) {
+  if (mode == 21 || mode == 22) {
     a_bits = 0x3c00u;  // 1.0 for zero-residual control
   } else {
     a_bits = (uint16_t)(0x3c00u + (1u << (10 - q)));
@@ -152,6 +152,20 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 21) {
     init_bias(bias0, 0x5400, 0xd400, 0);   // zero-residual control: scale +64, bias -64
     init_bias(bias1, 0, 0, 0);
+  } else if (mode == 22) {
+    // zero residual 2-CVT: a=1.0, bias0 +64, bias1 +64/-64
+    init_bias(bias0, 0x5400, 0, 0);
+    init_bias(bias1, 0x5400, 0xd400, 0);
+  } else if (mode == 23) {
+    // single convert with known -hi bias
+    uint16_t hi_bits = 0x5402;
+    if (q == 6) hi_bits = 0x5420;
+    else if (q == 7) hi_bits = 0x5410;
+    else if (q == 8) hi_bits = 0x5408;
+    else if (q == 9) hi_bits = 0x5404;
+    else if (q == 10) hi_bits = 0x5402;
+    init_bias(bias0, 0x5400, hi_bits | 0x8000u, 0);
+    init_bias(bias1, 0, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -192,7 +206,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
   }
 
-  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21) {
+  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21 || mode == 23) {
     *hi_bits = hi[0];
     *residual_bits = 0;
     return;
