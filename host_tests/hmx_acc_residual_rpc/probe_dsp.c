@@ -134,6 +134,16 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 19) {
     init_bias(bias0, 0, 0xc400, 0);        // N: scale 0, bias -4
     init_bias(bias1, 0, 0, 0);
+  } else if (mode == 20) {
+    // R+ generalized: bias1 = -hi (negative hi) as output bias, scale +64.
+    uint16_t hi_bits = 0x5402;
+    if (q == 6) hi_bits = 0x5420;
+    else if (q == 7) hi_bits = 0x5410;
+    else if (q == 8) hi_bits = 0x5408;
+    else if (q == 9) hi_bits = 0x5404;
+    else if (q == 10) hi_bits = 0x5402;
+    init_bias(bias0, 0x5400, 0, 0);        // set0 original
+    init_bias(bias1, 0x5400, hi_bits | 0x8000u, 0);  // set1 scale +64, bias -hi
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
