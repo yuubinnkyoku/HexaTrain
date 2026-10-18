@@ -53,6 +53,23 @@ def validate(value,probe,protected=True):
     exact_keys(value['regression'],'status checks missing')
     require(value['regression']['status'] in ('PASS','BLOCKED'),'regression status')
     if value['regression']['status']=='PASS':require(not value['regression']['missing'] and all(s=='PASS' for s in value['regression']['checks'].values()),'regression false PASS')
+    if value['host_candidates']:
+        exact_keys(value['host_candidates'],'softmax_ordered_fp32 softmax_full_double dvalue_ordered_fp32 dvalue_full_double')
+        for candidate in value['host_candidates'].values():exact_keys(candidate,'core_maxAbs holdout_maxAbs core_pairs holdout_pairs gate accuracy_pass')
+    metric_fields='words word_matches bitwise_mismatches full_case_matches cases maxAbs rms ulp_bins_0_1_2to4_5to16_17to256_257to65536_above65536 signed_zero_mismatches actual_subnormal model_subnormal model_overflow model_underflow_to_zero nonfinite_actual'
+    for stage,models in value['precision']['models'].items():
+        require(bool(re.fullmatch('[A-Za-z0-9_]+',stage)),'unsafe model stage')
+        for name,stats in models.items():
+            require(bool(re.fullmatch('[a-z0-9_]+',name)),'unsafe model ID');exact_keys(stats,metric_fields)
+    if value['forward']:exact_keys(value['forward'],'p_maxAbs ds_bound dv_bound joint_pass required_failed_predicates variant_word_mismatches core_row_error holdout_row_error')
+    if value['performance'] is not None:
+        require(all(e['status'] in ('PILOT_PASS','PASS') for e in value['repair'].values()),'performance before accuracy')
+        expected={(kind,mode,o,t) for o in (1,0) for t in (1,0) for kind,mode in [('repair_performance',m) for m in MODES+['forward']]+[('standard_performance',m) for m in MODES[:2]]}
+        require(len(value['performance'])==32 and {(r['kind'],r['mode'],r['observed'],r['tap']) for r in value['performance']}==expected,'performance coverage')
+        for row in value['performance']:
+            exact_keys(row,'kind mode observed tap samples first_us median_us p10_us p90_us finalize_us nodes tensors arithmetic_us receipt_inclusive_us')
+            require(row['samples']==31,'performance samples')
+            if not row['observed']:require(row['arithmetic_us'] is None and row['receipt_inclusive_us'] is None,'invisible timing claim')
     # Nested numeric model/performance payloads are reconstructed from allow-list
     # fields below. Reject raw tensor/identity/path keys at every nesting level.
     forbidden={'raw_tensor','raw_tensors','device','device_id','endpoint','credentials','apk_hash','apk_sha256','checkpoint','corpus','private_log','absolute_path'}
@@ -90,11 +107,14 @@ def make(report):
     for name,mode,folder in [('softmax','standalone_softmax','baseline-softmax-retry'),('dvalue','standalone_dvalue','baseline-dvalue')]:
         from assess_saved_p_backward import assess as assess_standard
         ident=read(report/folder/'identity-private.json');require(ident['exit_code']==4 and ident['forward_limit']==60 and not ident['focus_takeover_count'],'fresh baseline process')
+        require(ident['build']['probe_sha256']==initial['bundles']['fp32-saved-p-backward-final']['probe_sha256'],'wrong baseline binary')
+        require(read(report/folder/'execution-before-readback-private.json')['exit_code']==4 and read(report/folder/'preflight/device-preflight-private.json')['status']=='PASS','baseline completion/preflight')
         require(sha(report/folder/'saved-p-words.bin')==ident['raw_evidence_sha256'],'fresh baseline raw SHA')
         result=assess_standard(report/folder/'stdout.txt',mode,60)
         baseline[name]=dict(status=result['classification'],core_maxAbs=result['worst']['core']['maxAbs'],holdout_maxAbs=result['worst']['holdout']['maxAbs'],gate=.002 if name=='softmax' else .01,
             observer_words=result['observer_mismatch_words'],numerical_digest=result['numerical_digest'],fresh=True)
-    attr=read(report/'attribution-expanded-private.json')
+    from analyze_backward_precision import analyze
+    attr=analyze()
     from assess_backward_primitives import assess as assess_primitives
     primitives=assess_primitives(report/'primitive-controls-complete')
     model_fields='words word_matches bitwise_mismatches full_case_matches cases maxAbs rms ulp_bins_0_1_2to4_5to16_17to256_257to65536_above65536 signed_zero_mismatches actual_subnormal model_subnormal model_overflow model_underflow_to_zero nonfinite_actual'.split()
@@ -151,8 +171,8 @@ def make(report):
         plan_sha256=sha(ROOT/'host_tests/fp32_custom/backward_primitive_precision_plan.json'),binary_sha256=dict(probe=build['probe_sha256'],DSP=build['binary_hashes']['libHexaBackwardRepairDsp.so'],Host=build['binary_hashes']['libHexaBackwardRepairHost.so']),
         fixture_sha256=dict(P=sha(ROOT/'build/fp32-double-qk/double-inputs.bin'),gradients=build['gradient_sha256']),standard_baseline=baseline,
         precision=dict(models=models,internal_precision='INTERNAL_PRECISION_UNRESOLVED',stage_local_maxAbs=local,primitive_controls=dict(cases=576,ranks=[2,4],layout_controls_pass=primitives['layout_controls_pass'],nonfinite_output_words=primitives['nonfinite_output_words']),observer_cause='Tap-dependent graph materialization characterized; first invisible NoTap internal boundary and proprietary lowering remain unresolved.'),
-        backend=dict(settings=settings,production_changed=False),host_candidates=attr['host_candidates'],repair=entries,cohort_processes=cohort_count,performance=performance,forward=forward,regression=regression,protected_state='PASS',classifications=classes,training='NO-GO',
-        limitations=['Fixed diagnostic G1 rank4 DSP geometry and frozen reference-derived gradients; rank2 custom compatibility is Host-only.', 'No full Attention, full layer, or training certification.', 'Old 35/40 Tap incident REPRODUCED / CAUSE UNRESOLVED; 6031 UNRESOLVED / DORMANT / WATCH.', 'NoReceipt/NoTap input P is not directly observed; its own final accuracy and observer words are checked.'])
+        backend=dict(settings=settings,production_changed=False),host_candidates={name:{k:c[k] for k in ('core_maxAbs','holdout_maxAbs','core_pairs','holdout_pairs','gate','accuracy_pass')} for name,c in attr['host_candidates'].items()},repair=entries,cohort_processes=cohort_count,performance=performance,forward=forward,regression=regression,protected_state='PASS',classifications=classes,training='NO-GO',
+        limitations=['Fixed diagnostic G1 rank4 DSP geometry and frozen reference-derived gradients; rank2 custom compatibility is Host-only.', 'No full Attention, full layer, or training certification.', 'Old 35/40 Tap incident REPRODUCED / CAUSE UNRESOLVED; legacy 6031 remains unresolved. A new standard FLOAT32 MatMul pilot returned API6031 and process139; causal attribution unresolved.', 'NoReceipt/NoTap input P is not directly observed; its own final accuracy and observer words are checked.'])
     validate(value,build['probe_sha256'])
     return value
 

@@ -86,10 +86,7 @@ def multiply_models(x,y):
         bf16_operands_fp32_result=bf(x)*bf(y))
 
 
-def main():
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--output',type=pathlib.Path,required=True)
-    args=parser.parse_args()
+def analyze():
     old=ROOT/'build/reports/g1-native-saved-p-backward-dsp'
     sr=old/'pilot-softmax-final/saved-p-words.bin'
     dr=old/'pilot-dvalue/saved-p-words.bin'
@@ -172,8 +169,14 @@ def main():
         ys=[anchor[k[2:]] for k,v in all_s if k[:2]==(o,t)]
         observer[f'O{o}T{t}']=metric(np.stack(xs),np.stack(ys))
     report['observer']=observer
+    return report
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);args=parser.parse_args()
+    report=analyze()
     with args.output.open('x',encoding='utf-8') as f:json.dump(report,f,indent=2,allow_nan=False)
-    print(json.dumps(dict(host_candidates=host,baseline='FAIL_PRESERVED',internal_precision='UNRESOLVED')))
+    print(json.dumps(dict(host_candidates=report['host_candidates'],baseline='FAIL_PRESERVED',internal_precision='UNRESOLVED')))
 
 
 if __name__=='__main__':main()
