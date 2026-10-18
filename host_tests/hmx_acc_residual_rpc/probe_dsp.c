@@ -55,7 +55,7 @@ static void init_bias(uint32_t *dst, uint16_t scale_bits,
   }
 }
 
-static void run_one(uint8_t *base, unsigned extra_four_bits, int q,
+static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
                     int *hi_bits, int *residual_bits) {
   uint16_t *act = (uint16_t *)(base + 0 * TILE_BYTES);
   uint16_t *wgt = (uint16_t *)(base + 1 * TILE_BYTES);
@@ -77,7 +77,21 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q,
   // 64.0 FP16 = 0x5400, +65504 FP16 = 0x7bff.
   // Bias set 0: 64*x. Bias set 1: -64*x + min(65504, feedback).
   init_bias(bias0, 0x5400, 0, 0);           // shape(x) = x
-  init_bias(bias1, 0x5400, 0x7bff, 4);     // shape(x) = -x
+  // bias1 configuration depends on mode.
+  if (mode == 0) {
+    init_bias(bias1, 0x5400, 0x7bff, 4);   // original feedback
+  } else if (mode == 1) {
+    init_bias(bias1, 0x5400, 0, 4);        // shape-only, no output bias
+  } else if (mode == 2) {
+    init_bias(bias1, 0, 0x4400, 0);        // output-bias-only: +4
+  } else if (mode == 3) {
+    init_bias(bias1, 0, 0x7bff, 0);        // feedback-only: 65504, shape 0
+  } else if (mode == 4) {
+    // constant bias subtraction: shape=-x, scale=64, output_bias=hi (0x5400+)
+    init_bias(bias1, 0x5400, 0x5400, 4);  // output_bias=64 (placeholder)
+  } else {
+    init_bias(bias1, 0x5400, 0x7bff, 4);
+  }
 
   // V81: bias load address must be 256B aligned; low two bits select set.
   const uintptr_t bias0_reg = (uintptr_t)bias0;
@@ -112,7 +126,8 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q,
   // Rs[3:2]=1 -> previous convert state used as output bias.
   // Rs[4]=0 -> min; Rs[0]=0 -> clear/swap after convert.
   // This is a *hypothesis test*, not proof that h-x survives rounding.
-  const uint32_t second_rs = (1u << 12) | (1u << 2);
+  uint32_t second_rs = (1u << 12);  // bias set 1
+  if (mode == 0 || mode == 3) second_rs |= (1u << 2);  // fb_dest=1
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(second_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)residual), "r"(wr_rt) : "memory");
@@ -231,8 +246,8 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
           metadata[6] = combined_lock_status;
           if (!combined_lock_status) {
             /* Execute HMX only if lock succeeded. */
-            run_one(vtcm, 0, (int)q, &results[0], &results[1]);
-            run_one(vtcm, 1, (int)q, &results[2], &results[3]);
+            run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
+            run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
             metadata[7] = 1;
             metadata[8] = 2;
             (void)HAP_compute_res_hmx_unlock2(

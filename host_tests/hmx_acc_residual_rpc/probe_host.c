@@ -25,8 +25,8 @@ int main(int argc, char **argv) {
   int mode = 0;
   if (argc >= 2) q = atoi(argv[1]);
   if (argc >= 3) mode = atoi(argv[2]);
-  if (q < 6 || q > 10) {
-    fprintf(stderr, "usage: %s [q=6..10] [mode]\n", argv[0]);
+  if (q < 6 || q > 10 || mode < 0 || mode > 4) {
+    fprintf(stderr, "usage: %s [q=6..10] [mode=0..4]\n", argv[0]);
     return 2;
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
@@ -73,6 +73,7 @@ int main(int argc, char **argv) {
   int pass = status == 0 && meta[0] == 0x484d5831 &&
               meta[1] == 81 && meta[4] == 0 && meta[6] == 0 &&
               meta[7] == 1 && meta[8] == 2;
+  // For non-zero modes, do not enforce a fixed residual expectation.
   for (int trial = 0; trial < 2; ++trial) {
     const uint16_t hi_bits = (uint16_t)result[2 * trial];
     const uint16_t residual_bits = (uint16_t)result[2 * trial + 1];
