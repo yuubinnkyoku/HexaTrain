@@ -116,6 +116,24 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 13) {
     init_bias(bias0, 0, 0xc400, 0);        // set0 output bias -4 (0xc400)
     init_bias(bias1, 0, 0, 0);
+  } else if (mode == 14) {
+    init_bias(bias0, 0x5400, 0, 0);        // P: +64, bias 0
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 15) {
+    init_bias(bias0, 0x5400, 0xc400, 0);   // NB: +64, bias -4
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 16) {
+    init_bias(bias0, 0xd400, 0x5800, 0);   // NS: -64, bias +128
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 17) {
+    init_bias(bias0, 0x5400, 0x5800, 4);   // SH: +64, shape=4, bias +128
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 18) {
+    init_bias(bias0, 0x5400, 0xd420, 0);   // R+: +64, bias -66
+    init_bias(bias1, 0, 0, 0);
+  } else if (mode == 19) {
+    init_bias(bias0, 0, 0xc400, 0);        // N: scale 0, bias -4
+    init_bias(bias1, 0, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -156,7 +174,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
   }
 
-  if (mode == 7 || mode == 8 || mode == 12 || mode == 13) {
+  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19) {
     *hi_bits = hi[0];
     *residual_bits = 0;
     return;
