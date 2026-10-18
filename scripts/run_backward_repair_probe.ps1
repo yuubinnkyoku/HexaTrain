@@ -56,11 +56,13 @@ if($build.PSObject.Properties.Name -contains 'binary_hashes'){
  foreach($p in $build.binary_hashes.PSObject.Properties){if((Get-FileHash "$candidateDir/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'REPAIR_BINARY_CHANGED'};if($p.Name -like 'lib*.so'){$files+="$candidateDir/$($p.Name)"}}
 }
 if($Mode -in @('native_softmax','native_dvalue','dual','performance','cohort')){
- $permit=Get-Content "$root/build/reports/g1-backward-primitive-precision-repair/native-permit-private.json" -Raw|ConvertFrom-Json
+ $permitStage=if($Mode -eq 'dual'){'singles'}elseif($Mode -in @('performance','cohort')){'dual'}else{'standalone'}
+ $permitFile="$root/build/reports/g1-backward-primitive-precision-repair/permits/$permitStage/native-permit-private.json"
+ $permit=Get-Content $permitFile -Raw|ConvertFrom-Json
  if($permit.standalone_pass -ne $true -or $permit.four_observers_pass -ne $true -or $permit.forward_joint_pass -ne $true -or $permit.probe_sha256 -ne $build.probe_sha256){throw 'NATIVE_ENTRY_NOT_CERTIFIED'}
  if($Mode -eq 'dual' -and $permit.singles_pass -ne $true){throw 'SINGLES_REQUIRED_BEFORE_DUAL'}
  if($Mode -in @('performance','cohort') -and $permit.dual_pass -ne $true){throw 'DUAL_ACCURACY_REQUIRED_BEFORE_PERFORMANCE_OR_COHORT'}
- $files+="$root/build/reports/g1-backward-primitive-precision-repair/native-permit-private.json"
+ $files+=$permitFile
 }
 if((Get-FileHash $files[1]).Hash.ToLowerInvariant() -ne $build.gradient_sha256){throw 'FROZEN_GRADIENT_CHANGED'}
 foreach($name in @('fp32-custom','fp32-selective-ln1','fp32-mixed-qkv','fp32-double-qk')) {
