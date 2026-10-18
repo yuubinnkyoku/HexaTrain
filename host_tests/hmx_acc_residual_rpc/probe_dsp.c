@@ -154,8 +154,8 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   compute_res_attr_t attr;
   int status = HAP_compute_res_attr_init(&attr);
   if (status) return HMX_ERR_ALLOC;
-  // Some SDK revisions declare this setter void; acquisition is the gate.
-  (void)HAP_compute_res_attr_set_hmx_param(&attr, 1);
+  status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
+  if (status) return HMX_ERR_ALLOC;
   status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
   if (status) return HMX_ERR_ALLOC;
 

@@ -21,13 +21,12 @@ include_directories(
 )
 
 if(OS_TYPE MATCHES "HLOS")
-  build_idl(hexatrain_hmx_acc_residual.idl hexatrain_hmx_acc_residual)
-
   add_library(hexatrain_hmx_acc_residual SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/hexatrain_hmx_acc_residual_stub.c
   )
   choose_dsprpc(${DSP_TYPE} dsprpc)
   link_custom_library(hexatrain_hmx_acc_residual ${dsprpc})
+  build_idl(hexatrain_hmx_acc_residual.idl hexatrain_hmx_acc_residual)
 
   add_executable(hexatrain_hmx_acc_residual_test probe_host.c)
   set_common_compile_and_link_options(hexatrain_hmx_acc_residual_test)
@@ -44,12 +43,11 @@ else()
   if(NOT HEXAGON_ARCH STREQUAL "v81")
     message(FATAL_ERROR "This experimental HMX kernel is V81-only (DSP_ARCH=v81).")
   endif()
-  build_idl(hexatrain_hmx_acc_residual.idl hexatrain_hmx_acc_residual)
-
   add_library(hexatrain_hmx_acc_residual_skel SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/hexatrain_hmx_acc_residual_skel.c
     probe_dsp.c
   )
+  build_idl(hexatrain_hmx_acc_residual.idl hexatrain_hmx_acc_residual_skel)
   target_compile_options(hexatrain_hmx_acc_residual_skel PRIVATE -mhmx)
   copy_binaries(hexatrain_hmx_acc_residual_skel)
 endif()
