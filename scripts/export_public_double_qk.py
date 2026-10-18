@@ -98,11 +98,17 @@ def export(repo,root,host_only=False):
     require(host['fixture_sha256']==build['binary_hashes']['double-inputs.bin'] and host['tests']['host_joint_exit']==0,'Host identity/joint contract')
     old=read(root/'legacy-host/identity-private.json');require(len(old['tests'])==24 and old['tests']['probability_reference_test']['exit_code']==4,'legacy Host battery')
     require(old['tests']['probability_attribution_test']['log_sha256']=='c3704eed535929d32c44ef78475f95e93cb6eb5a716d65144c6d23730cf48ff7','original nine failures changed')
+    require('joint_failures=9,dsp_claim=0' in (root/'legacy-host/probability_reference_test.txt').read_text(encoding='utf-8-sig'),'original contract failure count')
     profiles={}
     for name in ('fast','host','qnn'):
         p=root/('fast-final.txt' if name=='fast' and (root/'fast-final.txt').exists() else name+'-profile.txt')
         require(re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$',p.read_text(encoding='utf-8-sig')),'profile incomplete '+name);profiles[name]={'status':'PASS','log_sha256':sha(p)}
     result={'schema':1,'base':initial['base'],'branch':'investigation/g1-s2-double-qk-native-p-closure','build_source_commit':build['source_sha'],'binary_sha256':build['binary_hashes'],'compiler_sha256':{k:build[k+'_compiler_sha256'] for k in ('hexagon','ndk')},'host_compiler_sha256':host['compiler_sha256'],'sdk':{'qairt':'2.48.40.260702151143','qnn_api':'2.37.0','htp':'V81','hexagon_sdk':'6.6.0.0','tools':'19.0.07','ndk':'26.2.11394342'},'plan_sha256':sha(repo/'host_tests/fp32_custom/double_qk_native_p_plan.json'),'host_source_commit':host['source_sha'],'host_joint':assessment(root/'host-final/host-joint.jsonl',False),'host_fp32_shift':assessment(root/'host-final/host-shift-joint.jsonl',False),'original_C0_joint_contract':'FAIL_PRESERVED_9','profiles':profiles,'training_updates':0,'training':'NO-GO','dsp_backward':'NOT_EXECUTED','push':'NOT_AUTHORIZED_NOT_PERFORMED'}
+    identities=read(root/'frozen-stage-identities-private.json');require(len(identities['roles'])==39,'frozen role coverage')
+    require(identities['s2_to_mixed_Y_words']=='IDENTICAL_60' and identities['mixed_to_QK_heads_words']=='IDENTICAL_68','frozen reference operand continuity')
+    for name,value in identities['roles'].items():require(re.fullmatch('[A-Za-z0-9_]+',name) and set(value)=={'sha256','cases','bytes'} and re.fullmatch('[0-9a-f]{64}',value['sha256']) and value['cases'] in (60,68,76) and isinstance(value['bytes'],int),'frozen role allow-list')
+    for name,value in identities['generator_source_sha256'].items():require(sha(repo/'host_tests/fp32_custom'/name)==value,'reference generator changed')
+    result['frozen_reference_roles']={'roles':identities['roles'],'generator_source_sha256':identities['generator_source_sha256'],'reference_continuity_words':'S2 Y and Mixed heads identical','model_P_reference_cases':60,'arithmetic_only_cases':16,'role_hash_scope':'Exact field bytes with global ordinal and byte count; stress P aliases are arithmetic controls, never cumulative-P cases'}
     if host_only:
         result.update({'classifications':['BLOCKED_DEVICE_SAFETY','UNRESOLVED'],'device':'NOT_VERIFIED','full_native_p':'UNVERIFIED'});return result
     processes={str(i):process(root/'device'/('final-'+str(i)),build) for i in (1,2,3)}
