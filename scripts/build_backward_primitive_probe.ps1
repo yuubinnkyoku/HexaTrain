@@ -1,11 +1,11 @@
 param([Parameter(Mandatory=$true)][string]$QairtSdkRoot,[Parameter(Mandatory=$true)][string]$ExpectedBuildId,
- [Parameter(Mandatory=$true)][string]$NdkRoot)
+ [Parameter(Mandatory=$true)][string]$NdkRoot,[ValidatePattern('^[a-z0-9-]{1,32}$')][string]$Candidate='primitive-v2')
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot/qairt_version.ps1"
 Assert-PhoneLmQairtPinnedArguments -SdkRoot $QairtSdkRoot -ExpectedBuildId $ExpectedBuildId
 $root=Split-Path -Parent $PSScriptRoot
 if(git -C $root status --porcelain){throw 'COMMITTED_SOURCE_REQUIRED'}
-$out="$root/build/fp32-saved-p-backward-primitive"
+$out="$root/build/fp32-saved-p-backward-$Candidate"
 if(Test-Path $out){throw 'EXCLUSIVE_BUNDLE_REQUIRED'}
 [IO.Directory]::CreateDirectory($out)|Out-Null
 $old=Get-Content "$root/build/fp32-custom/build-identity.json" -Raw|ConvertFrom-Json

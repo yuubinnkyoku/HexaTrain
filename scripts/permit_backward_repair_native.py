@@ -6,7 +6,7 @@ from prepare_saved_p_backward import sha
 
 
 def make(report,stage):
-    build=read(ROOT/'build/fp32-saved-p-backward-repair-v4/build-identity.json')
+    build=read(ROOT/'build/fp32-saved-p-backward-repair-final/build-identity.json')
     results={}
     required=['pilot-softmax','pilot-dvalue']
     if stage in ('singles','dual'):required+=['pilot-native-softmax','pilot-native-dvalue']

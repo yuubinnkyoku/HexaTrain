@@ -25,7 +25,7 @@ def assess(directory):
                 code,count=map(int,words(f,2));require(code in (1,2,3) and code not in fields,'field identity')
                 require(count==(32 if (code==3 and s in (1,2)) or (code==2 and s==3) else 1024),'field shape')
                 fields[code]=words(f,count).view('<f4')
-            require(all(np.isfinite(a).all() for a in fields.values()),'nonfinite primitive')
+            require(all(np.isfinite(fields[i]).all() for i in fields if i!=3),'nonfinite control input')
             rows[key]=fields
     require(set(rows)==expected,'primitive incomplete coverage')
     text=(directory/'stdout.txt').read_text(encoding='utf-8-sig')
@@ -33,8 +33,12 @@ def assess(directory):
     require(all(a[1]=='0' for a in apis),'primitive API')
     names=[a[0] for a in apis]
     require(names.count('graphExecute')==576 and names.count('graphFinalize')==12 and 'contextFree' in names and 'backendFree' in names,'primitive execute/finalize/teardown')
-    require('summary,primitive_controls,cases=576,finite=1,input_mutation=0,poison_remaining=0,canary=1,teardown=1,cpu_arithmetic_fallback=0' in text,'primitive terminal')
-    result=dict(classification='RECEIVED_INPUT_CONTROLS_COMPLETE',controls=576,ranks=[2,4],stages={},structural_dvalue={})
+    terminal=[dict(x.split('=',1) for x in line.split(',')[2:]) for line in text.splitlines() if line.startswith('summary,primitive_controls,')]
+    require(len(terminal)==1 and terminal[0]['cases']=='576','primitive terminal')
+    nonfinite=sum(int(np.count_nonzero(~np.isfinite(v[3]))) for v in rows.values())
+    require(int(terminal[0]['nonfinite_words'])==nonfinite and int(terminal[0]['finite'])==int(nonfinite==0),'nonfinite FAIL masking')
+    for name,value in dict(input_mutation='0',poison_remaining='0',canary='1',teardown='1',cpu_arithmetic_fallback='0').items():require(terminal[0][name]==value,'primitive invariant')
+    result=dict(classification='NUMERICAL_FAIL_CONTROLS_COMPLETE' if nonfinite else 'RECEIVED_INPUT_CONTROLS_COMPLETE',nonfinite_output_words=nonfinite,controls=576,ranks=[2,4],stages={},structural_dvalue={})
     labels=['product','reduce_correct_product','product_reduce_native','subtract_known_dot','final_multiply','dvalue_TN32']
     for r in (2,4):
         for s in range(6):
@@ -57,8 +61,10 @@ def assess(directory):
                     models[name+'_input_fp32_sum']=ordered(terms).reshape(-1,1024)
                     models[name+'_product_fp32_sum']=ordered(q(terms)).reshape(-1,1024)
                     models[name+'_fp32_sum_half_output']=half(ordered(terms)).reshape(-1,1024)
-            errors=np.abs(y.astype(np.float64)-oracle.reshape(y.shape));idx=np.unravel_index(np.argmax(errors),errors.shape)
-            result['stages'][f'rank{r}_{labels[s]}']=dict(cases=48,received_double_maxAbs=float(errors[idx]),rms=float(np.sqrt(np.mean(errors**2))),worst=dict(case=int(idx[0]//2),head=int(idx[0]%2),coordinate=int(idx[1])),models={name:metric(y,m) for name,m in models.items()})
+            errors=np.abs(y.astype(np.float64)-oracle.reshape(y.shape));finite=np.isfinite(errors);idx=np.unravel_index(np.argmax(errors),errors.shape)
+            bad=int(np.count_nonzero(~np.isfinite(y)))
+            result['stages'][f'rank{r}_{labels[s]}']=dict(cases=48,status='NONFINITE_NUMERICAL_FAIL' if bad else 'FINITE',nonfinite_output_words=bad,
+                received_double_maxAbs=None if bad else float(errors.max()),finite_component_maxAbs=float(errors[finite].max()),rms=None if bad else float(np.sqrt(np.mean(errors**2))),worst=dict(case=int(idx[0]//2),head=int(idx[0]%2),coordinate=int(idx[1])),models={name:metric(y,m) for name,m in models.items()})
             if s==5:
                 # Structural layout proof is restricted to onehot/identity/
                 # permutation/head-asymmetric inputs with exact selection sums.
