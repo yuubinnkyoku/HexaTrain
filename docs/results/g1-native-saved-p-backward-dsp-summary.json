@@ -1,0 +1,108 @@
+{
+  "base": "be4271efd1b8fb71f0c66f3ae7c35f04571aa78e",
+  "branch": "investigation/g1-native-saved-p-backward-dsp",
+  "candidate_source_commit": "b81f3c964368dce33c7b87e2c7785bdfd01c187a",
+  "classifications": [
+    "UNRESOLVED",
+    "BLOCKED_SOFTMAX_BACKWARD_ACCURACY",
+    "BLOCKED_OBSERVER_INDEPENDENCE",
+    "BLOCKED_DVALUE_ACCURACY"
+  ],
+  "cohort_processes": 0,
+  "forward_base": "e05f3539e2e0c0e461157a3abf1d9833d74b392b",
+  "gradient_sha256": "c742bfa2ed410a5f1aa42cb51b9d4b0e9ae5e35b3813d52661283c8027ab969b",
+  "limitations": [
+    "Fixed G1 diagnostic geometry and reference-derived frozen gradients.",
+    "No native Saved-P or full Attention/layer/training certification."
+  ],
+  "native": {
+    "dual": "NOT_EXECUTED",
+    "dvalue": "NOT_EXECUTED",
+    "lifetime": "NOT_EXECUTED",
+    "observer_free": "NOT_EXECUTED",
+    "sensitivity": "NOT_EXECUTED",
+    "softmax": "NOT_EXECUTED"
+  },
+  "performance": null,
+  "plan_sha256": "8d1da188b38575ac372ca3704f75ab930f224d4e55b60f218d28d49122a935c7",
+  "probe_sha256": "d53e5dbd3bb919f1c3f5be33a27ae4ab3721c660db7392e76c1b4edc04885085",
+  "regression": {
+    "Device_smoke": "PASS",
+    "Expected_C0_nine_FAIL_reproduced": "PASS",
+    "Expected_standard_Scale_FAIL_reproduced": "PASS",
+    "Fast": "PASS",
+    "Fresh_Muon_W8_114_of_114": "PASS",
+    "Frozen_Forward_P_joint_contract": "PASS",
+    "Host": "PASS",
+    "New_native_regression_and_formal_cohort": "BLOCKED",
+    "Qnn": "PASS",
+    "Saved_P_Host_reference_and_graph": "PASS",
+    "regression_double_qk": "PASS",
+    "regression_mixed_qkv": "PASS",
+    "regression_oneHvx": "PASS",
+    "regression_oneProbabilityMask": "PASS",
+    "regression_oneProbabilityP": "PASS",
+    "regression_oneProbabilityScale": "PASS",
+    "regression_oneProbabilitySoftmax": "PASS",
+    "regression_oneQkScaleA": "PASS",
+    "regression_oneQkScaleB": "PASS",
+    "regression_oneQkvHvx": "PASS",
+    "regression_selective_ln1": "PASS"
+  },
+  "schema": 1,
+  "source_commit": "a72ef8681d154a774c43d88e985716d0ecfcdadb",
+  "standalone": {
+    "dvalue": {
+      "accuracy_failed_pairs": 328,
+      "actual_gradient_gate": 0.01,
+      "core_maxAbs": 0.035564650305797585,
+      "core_pairs_per_variant": 2200,
+      "failed_pairs": 328,
+      "holdout_maxAbs": 0.00388396910312494,
+      "holdout_pairs_per_variant": 256,
+      "independent_python_double_recheck": "PASS",
+      "maxAbs": 0.035564650305797585,
+      "numerical_digest": "b8a964ab4ef01f246fc6f83d1f0796d76cf317d43e9fea633b974ece6f5c8914",
+      "observer_mismatch_pairs": 0,
+      "observer_variants": 4,
+      "ordered_fp32_is_word_gate": false,
+      "process_exit_evidence": "CAPTURED",
+      "status": "NUMERICAL_FAIL",
+      "worst": {
+        "coordinate": 345,
+        "forward": 23,
+        "gradient": 9,
+        "head": 1,
+        "observed": 0,
+        "tap": 0
+      }
+    },
+    "softmax": {
+      "accuracy_failed_pairs": 3022,
+      "actual_gradient_gate": 0.002,
+      "core_maxAbs": 0.3044056503066239,
+      "core_pairs_per_variant": 2200,
+      "failed_pairs": 4390,
+      "holdout_maxAbs": 0.02663227731332496,
+      "holdout_pairs_per_variant": 256,
+      "independent_python_double_recheck": "PASS",
+      "maxAbs": 0.3044056503066239,
+      "numerical_digest": "b212e5f5ed75ac7a43611d13704118aeee2f2cc13c2587a236844cad51c4f460",
+      "observer_mismatch_pairs": 2036,
+      "observer_variants": 4,
+      "ordered_fp32_is_word_gate": false,
+      "process_exit_evidence": "CAPTURED",
+      "status": "NUMERICAL_FAIL",
+      "worst": {
+        "coordinate": 495,
+        "forward": 19,
+        "gradient": 9,
+        "head": 1,
+        "observed": 0,
+        "tap": 0
+      }
+    }
+  },
+  "standalone_coverage_complete": true,
+  "training": "NO-GO"
+}
