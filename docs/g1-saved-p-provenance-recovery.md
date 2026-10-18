@@ -64,7 +64,19 @@ Ancestry (research clone, `merge-base --is-ancestor`, exit 0 for each):
 Research-clone reflog records the full 2026-10-18 sequence
 (`b2ce127` checkout 16:44 → plan 16:45 → native-P implementation 16:56 → build fix 16:59 →
 evidence 17:04/17:10 → `e05f353` 17:57). The mission "missing" states were properties of
-the audit clone's object database only.
+## Final Answers (F1–F10)
+
+1. **Same physical path?** No. Session workspace `D:\ghq\github.com\yuubinnkyoku\PhoneLM` (audit clone) ≠ expected workspace `C:\Users\yuubi\PhoneLM-g1-long-linear-200k` (research clone). They are separate `.git` object stores in the same sandbox; confirmed by `git rev-parse --show-toplevel` / `--absolute-git-dir` in both.
+2. **Git root / common dir:** Session: `D:\ghq\github.com\yuubinnkyoku\PhoneLM`, `.git` is the common dir itself (single worktree). Research clone: `C:\Users\yuubi\PhoneLM-g1-long-linear-200k`, `.git` single worktree.
+3. **Same repository?** Same origin `https://github.com/yuubinnkyoku/HexaTrain.git`, but **separate clones/object stores**; the research chain lived only in the research clone. Not "the same repository working tree".
+4. **Worktree / separate clone / sandbox differences found?** Yes: exactly one additional worktree was added by this task (`C:\Users\yuubi\PhoneLM-g1-provenance-reconciliation`, branch `investigation/g1-saved-p-provenance-reconciliation`, base `e05f353`). Original worktrees untouched. No sandbox boundary crossed.
+5. **`024aaef` lineage:** Shared ancestor (2026-10-10 long-linear preflight docs). It is the audit-clone session base and **an ancestor of `e05f353`** (`merge-base --is-ancestor` exit 0), so both histories diverge from a common point rather than being unrelated.
+6. **`e075d8c` fully preserved?** Yes: audit-clone HEAD unchanged, tree clean, all four blobs verified by `git hash-object` and `git ls-tree`.
+7. **`984bea4` found?** Yes — `984bea42006c043111b3d5dec353a73b426b4192` in research clone (`investigation/g1-c7-selective-ln1-dsp-feasibility`).
+8. **`b2ce127` found?** Yes — `b2ce1272a9ab5575b06f5a422c7042063306560d`, both local branch (`investigation/g1-s2-mixed-qkv-df-hvx-v`) and `origin/...` remote head; read-only fetch obtained it in the audit clone (one new remote-tracking ref, no working-tree change).
+9. **`e05f353` found?** Yes — `e05f3539e2e0c0e461157a3abf1d9833d74b392b`, HEAD of research clone `investigation/g1-s2-double-qk-native-p-closure`, unpushed (expected).
+10. **`e05f353` full SHA and ancestry confirmed?** Yes — SHA `e05f3539e2e0c0e461157a3abf1d9833d74b392b`; `984bea4 → b2ce127 → e05f353` and `024aaef → e05f353` all verified by `merge-base --is-ancestor` (exit 0).
+
 
 ## Report C — Recovered source (arithmetic-level verification, at `e05f353`)
 
@@ -205,4 +217,18 @@ Verified by reading actual source, not file names:
   the research clone; (3) the recovered fixture cohort (44×2×25 + holdout) is ready — no
   fixture regeneration needed. **40k→60k / 200k training remains NO-GO.**
 
+
+## Final Answers (F21–F31)
+
+21. **Host self-test executed?** Yes — `BUILD_EXIT=0`, `RUN_EXIT=0`: `saved_p_backward_reference_selftest=PASS`, `softmax_fp32_vs_double=4.23e-09`, `dvalue_fp32_vs_double=5.14e-08`, `softmax_rowsum=1.23e-08` (`build/reports/g1-saved-p-provenance-recovery/selftest-run.txt`).
+22. **Numeric results?** All within bounds and far below gates (see F21).
+23. **If not run, what was missing?** N/A — ran successfully.
+24. **Past certification evidence recovered too, not just source?** Yes — source, fixtures, binary identities, numerical digests, private 3-process records, protected closeout all recovered as **separate verified states**; historical certification not re-executed.
+25. **Correct next research base / worktree:** Research clone `e05f3539e2e0c0e461157a3abf1d9833d74b392b` (`investigation/g1-s2-double-qk-native-p-closure`), continuing that branch or branching `investigation/g1-native-saved-p-backward-consumers` from it there. The isolated reconciliation branch `investigation/g1-saved-p-provenance-reconciliation` (`604324e`) holds this report + ported host reference + exporter.
+26. **Remaining blockers before DSP consumer verification:** (1) Tier-2 device preflight on the same physical device (identity, awake/top-resumed, no active run, pinned QAIRT 2.48.40.260702 / Build ID `2.48.40.260702151143`, QNN build + APK audit); (2) continue from `e05f353` in the research clone; (3) recovered fixture cohort is ready — no regeneration. DSP standalone / native single-consumer / dual fan-out / observer cohort / Cartesian/holdout coverage all pending.
+27. **Git history or protected artifacts changed?** No. Verified clean trees everywhere; additive commits only on the new reconciliation branch.
+28. **Proceed to DSP consumer verification?** Yes — preconditions now identifiable; not executed in this task (device_executed=false).
+29. **Revalidation stage if needed?** From the recovered `e05f353` source: standalone Softmax Backward / dValue on recovered fixtures → single-consumer native → dual fan-out → 4 observer conditions → 3-process cohort → full 44×2×25 + holdout; historical P contract gates reused unchanged; DSP certification cannot be transferred to a new binary.
+30. **40k→60k/200k decision?** **NO-GO** maintained (recorded in recovered closeout and this report).
+31. **Next step for Saved-P Backward research?** Continue on top of `e05f353` in the research clone with the recovered plan (`double_qk_native_p_plan.json` gates unchanged), host reference already ported (`saved_p_backward_reference_*`, self-test PASS), and DSP consumer verification as the next phase. `e075d8c` stays preserved in the audit clone as the host-audit record.
 
