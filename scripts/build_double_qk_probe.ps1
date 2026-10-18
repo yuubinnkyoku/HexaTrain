@@ -13,8 +13,11 @@ if($manifest.root.id.version -ne '6.6.0.0' -or $tool.Count -ne 1 -or $tool[0].bu
 $hexbin="$HexagonSdkRoot/tools/HEXAGON_Tools/19.0.07/Tools/bin";$hex="$hexbin/hexagon-clang++.exe";$arm="$NdkRoot/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
 $old=Get-Content "$root/build/fp32-custom/build-identity.json" -Raw|ConvertFrom-Json
 if((Get-FileHash $hex).Hash.ToLowerInvariant() -ne $old.hexagon_compiler_sha256 -or (Get-FileHash $arm).Hash.ToLowerInvariant() -ne $old.ndk_compiler_sha256){throw 'COMPILER_HASH_CHANGED'}
-$host=Get-Content "$root/build/reports/g1-s2-double-qk-native-p-closure/host-final/identity-private.json" -Raw|ConvertFrom-Json
-if($host.tests.host_joint_exit -ne 0 -or $host.source_sha -ne (git -C $root rev-parse HEAD)){throw 'HOST_SOURCE_OR_JOINT_GATE'}
+$hostSuite=Get-Content "$root/build/reports/g1-s2-double-qk-native-p-closure/host-final/identity-private.json" -Raw|ConvertFrom-Json
+if($hostSuite.tests.host_joint_exit -ne 0){throw 'HOST_JOINT_GATE'}
+git -C $root merge-base --is-ancestor $hostSuite.source_sha HEAD
+if($LASTEXITCODE){throw 'HOST_SOURCE_HISTORY_MISMATCH'}
+foreach($p in $hostSuite.source_hashes.PSObject.Properties){if((Get-FileHash "$root/$($p.Name)").Hash.ToLowerInvariant() -ne $p.Value){throw 'HOST_TESTED_SOURCE_CHANGED'}}
 $inc="$QairtSdkRoot/include/QNN";$src="$root/host_tests/fp32_custom";$flags=@('-std=c++17','-mv81','-O2','-G0','-fPIC','-fvisibility=hidden','-ffp-contract=off','-fno-fast-math','-fno-vectorize','-fno-slp-vectorize','-fno-unroll-loops','-DPREPARE_DISABLED',"-I$inc","-I$HexagonSdkRoot/incs","-I$HexagonSdkRoot/incs/stddef","-I$HexagonSdkRoot/rtos/qurt/computev81/include/qurt")
 & $hex @flags -fstack-usage -c "$src/double_qk_package.cpp" -o "$out/double.o";if($LASTEXITCODE){throw 'DSP_COMPILE'}
 & $hex @flags -S "$src/double_qk_package.cpp" -o "$out/double.s";if($LASTEXITCODE){throw 'DSP_ASM'}
