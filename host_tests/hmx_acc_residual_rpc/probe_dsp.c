@@ -87,8 +87,13 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   } else if (mode == 3) {
     init_bias(bias1, 0, 0x7bff, 0);        // feedback-only: 65504, shape 0
   } else if (mode == 4) {
-    // constant bias subtraction: shape=-x, scale=64, output_bias=hi (0x5400+)
-    init_bias(bias1, 0x5400, 0x5400, 4);  // output_bias=64 (placeholder)
+    init_bias(bias1, 0x5400, 0x5420, 4);  // constant bias: output_bias=66
+  } else if (mode == 5) {
+    init_bias(bias0, 0, 0x4400, 0);        // bias set0 also +4 for first
+    init_bias(bias1, 0, 0x4400, 0);        // bias set1 +4
+  } else if (mode == 6) {
+    init_bias(bias0, 0x5400, 0, 0);        // same set0 twice
+    init_bias(bias1, 0x5400, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -117,7 +122,8 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
 
   // First convert retains ACC; optionally keeps 4 extra feedback bits.
-  const uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
+  uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
+  if (mode == 5) first_rs |= (1u << 12);  // first convert uses bias set1
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(first_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
@@ -126,8 +132,13 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   // Rs[3:2]=1 -> previous convert state used as output bias.
   // Rs[4]=0 -> min; Rs[0]=0 -> clear/swap after convert.
   // This is a *hypothesis test*, not proof that h-x survives rounding.
-  uint32_t second_rs = (1u << 12);  // bias set 1
-  if (mode == 0 || mode == 3) second_rs |= (1u << 2);  // fb_dest=1
+  uint32_t second_rs;
+  if (mode == 6) {
+    second_rs = 0;  // bias set 0, no fb
+  } else {
+    second_rs = (1u << 12);  // bias set 1
+    if (mode == 0 || mode == 3) second_rs |= (1u << 2);  // fb_dest=1
+  }
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(second_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)residual), "r"(wr_rt) : "memory");

@@ -25,8 +25,8 @@ int main(int argc, char **argv) {
   int mode = 0;
   if (argc >= 2) q = atoi(argv[1]);
   if (argc >= 3) mode = atoi(argv[2]);
-  if (q < 6 || q > 10 || mode < 0 || mode > 4) {
-    fprintf(stderr, "usage: %s [q=6..10] [mode=0..4]\n", argv[0]);
+  if (q < 6 || q > 10 || mode < 0 || mode > 6) {
+    fprintf(stderr, "usage: %s [q=6..10] [mode=0..6]\n", argv[0]);
     return 2;
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
