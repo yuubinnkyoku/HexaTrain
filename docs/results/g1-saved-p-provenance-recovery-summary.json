@@ -1,0 +1,107 @@
+{
+  "schema": "g1-saved-p-provenance-recovery-v1",
+  "study": "g1-saved-p-provenance-recovery",
+  "commits": {
+    "024aaef": {
+      "status": "FOUND_LOCAL_AUDIT_CLONE",
+      "found": true,
+      "full_sha": "024aaef44784355e8e278ef642e2752ae79846bb"
+    },
+    "984bea4": {
+      "status": "FOUND_LOCAL_RESEARCH_CLONE",
+      "found": true,
+      "full_sha": "984bea42006c043111b3d5dec353a73b426b4192"
+    },
+    "b2ce127": {
+      "status": "FOUND_LOCAL_AND_REMOTE",
+      "found": true,
+      "full_sha": "b2ce1272a9ab5575b06f5a422c7042063306560d"
+    },
+    "e05f353": {
+      "status": "FOUND_LOCAL_RESEARCH_CLONE",
+      "found": true,
+      "full_sha": "e05f3539e2e0c0e461157a3abf1d9833d74b392b"
+    },
+    "e075d8c": {
+      "status": "FOUND_LOCAL_AUDIT_CLONE",
+      "found": true,
+      "full_sha": "e075d8c8df1bc09b3832a9225dae9e3df5bef964"
+    }
+  },
+  "ancestry": [
+    {
+      "ancestor": "984bea42006c043111b3d5dec353a73b426b4192",
+      "descendant": "b2ce1272a9ab5575b06f5a422c7042063306560d",
+      "is_ancestor": true
+    },
+    {
+      "ancestor": "b2ce1272a9ab5575b06f5a422c7042063306560d",
+      "descendant": "e05f3539e2e0c0e461157a3abf1d9833d74b392b",
+      "is_ancestor": true
+    },
+    {
+      "ancestor": "024aaef44784355e8e278ef642e2752ae79846bb",
+      "descendant": "e05f3539e2e0c0e461157a3abf1d9833d74b392b",
+      "is_ancestor": true
+    }
+  ],
+  "fixtures": {
+    "double_qk": {
+      "sha256": "f577f12b24a7ec21c3ffd6935f2683385725daa0c87ea039f71207e2791d1ed2",
+      "verified": true
+    },
+    "mixed_qkv": {
+      "sha256": "8ffbe05a7bc95900a07453588926a6368df0b496909d7a9cf314a603e5935eeb",
+      "verified": true
+    },
+    "one_layer_inputs": {
+      "sha256": "388f4d8b30b86997d2f03d732e5a3210f7e2b3015af883579e3f0659df9d9f4f",
+      "verified": true
+    },
+    "s2_ln1": {
+      "sha256": "492d82c6e6b28080c078f2fb3d1ab84abb4946dc2224af62702fa3a2773d6c02",
+      "verified": true
+    }
+  },
+  "artifact_hashes": {
+    "double_qk_probe": "911d66e8b0fc3ba56afd544b5c588f3ef4f0027ee08f92a96b809ee4d44b56f6",
+    "libHexaDoubleQkDsp.so": "962a98c6f30e4e8f610abba22f69cd2f08fb216d5ed111586b45d7c73f8991e7",
+    "libHexaDoubleQkHost.so": "e2df381e1682ab12e68784ee22ddc468fe553d5cf12c778a167c75990a83ea0a"
+  },
+  "numerical_evidence": {
+    "local_digest": "d8e507289b602c7cec0a5af898e23b0f5b98b3cbeb74d4bd97b07994dbf8edee",
+    "p_assessment_digest": "456ad468cb9cb68303261535420999408d2f1fe60443a0e78886473c19c432ae"
+  },
+  "host_reference_selftest": {
+    "status": "HOST_BACKWARD_REFERENCE_SELFTEST_PASS",
+    "softmax_fp32_vs_double": 4.23e-09,
+    "dvalue_fp32_vs_double": 5.14e-08,
+    "softmax_rowsum": 1.23e-08
+  },
+  "toolchain": {
+    "compiler": "g++ 15.2.0 MSYS2 ucrt64",
+    "on_session_path": false,
+    "resolution_issue": "PATH_DLL_RESOLUTION_0xC0000135",
+    "resolved_for_selftest": true
+  },
+  "fast_profile": {
+    "status": "PASS",
+    "prior_total_seconds": 95.8
+  },
+  "device_executed": false,
+  "protected_state": {
+    "all_preserved": true,
+    "training": "NO-GO",
+    "checkpoint_sha256_recorded": "89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d"
+  },
+  "classifications": [
+    "HOST_AUDIT_RECONCILED",
+    "HOST_BACKWARD_REFERENCE_SELFTEST_PASS",
+    "RESEARCH_EVIDENCE_RECOVERED",
+    "RESEARCH_FIXTURES_RECOVERED",
+    "RESEARCH_HISTORY_VERIFIED",
+    "RESEARCH_SOURCE_RECOVERED"
+  ],
+  "overall": "PROVENANCE_RECOVERED",
+  "summary_digest": "70db5343935b6ca2ab0bbc71b244f39bffec85d0e07752874d9672dbab93c2d0"
+}
