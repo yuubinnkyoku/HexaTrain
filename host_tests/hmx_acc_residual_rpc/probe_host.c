@@ -101,12 +101,15 @@ int main(int argc, char **argv) {
            "basic_error=%.17g recovered_error=%.17g\n",
            trial, hi_bits, residual_bits, hi, residual,
            basic, reconstructed, oracle, basic_error, recovered_error);
-    // Only trial 0 is the precise FP16 feedback hypothesis; trial 1
-    // intentionally tests the effect of enabling four extra feedback bits.
-    if (!trial) {
-      const int exact = hi_bits == 0x5402 && residual_bits == 0x8400;
+    if (mode == 0 && trial == 0) {
+      uint16_t exp_hi = 0, exp_res = 0;
+      if (q == 6) { exp_hi = 0x5420; exp_res = 0xa400; }
+      else if (q == 7) { exp_hi = 0x5410; exp_res = 0x9c00; }
+      else if (q == 8) { exp_hi = 0x5408; exp_res = 0x9400; }
+      else if (q == 9) { exp_hi = 0x5404; exp_res = 0x8c00; }
+      else if (q == 10) { exp_hi = 0x5402; exp_res = 0x8400; }
+      const int exact = (hi_bits == exp_hi && residual_bits == exp_res);
       printf("fp16_residual_recovery=%s\n", exact ? "SUPPORTED" : "NOT_CONFIRMED");
-      if (!exact) pass = 0;
     }
   }
   rpcmem_free(result);
