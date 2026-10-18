@@ -3,6 +3,7 @@ import hashlib
 import json
 import pathlib
 import subprocess
+import shutil
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/reports/g1-native-saved-p-backward-dsp"
@@ -21,6 +22,9 @@ def git(*args):
 
 
 def main():
+    compiler = shutil.which("g++")
+    if compiler is None or sha(pathlib.Path(compiler)) != "5fa84c1460fd741371f730788ba3f994cf1d682be866fe7d3ed799e81844670a":
+        raise RuntimeError("PINNED_HOST_COMPILER_NOT_ON_PROCESS_PATH")
     base = git("rev-parse", "be4271e")
     forward = git("rev-parse", "e05f353")
     assert base == "be4271efd1b8fb71f0c66f3ae7c35f04571aa78e"
@@ -75,7 +79,7 @@ def main():
         "negative_controls": ["C0 nine FAIL", "old device cumulative P 36 FAIL", "standard Scale known FAIL", "standard Mask 176 predicate FAIL", "standard Softmax 224 local FAIL", "35/40 Tap REPRODUCED/CAUSE UNRESOLVED", "6031 UNRESOLVED/DORMANT/WATCH"],
         "failure_classes": ["BLOCKED_SOFTMAX_BACKWARD_ACCURACY", "BLOCKED_DVALUE_ACCURACY", "BLOCKED_NATIVE_P_FANOUT", "BLOCKED_OBSERVER_INDEPENDENCE", "BLOCKED_DEVICE_SAFETY", "UNRESOLVED"],
         "safety": "Existing research monitoring; ordinary battery/temp/no external power recorded, critical/emergency protection retained. Fresh identity/awake/top/no-training/no-QNN/APK/SDK/storage/protected checks per process. No wake/unlock/install/force-stop/root/power changes.",
-        "toolchain": {"qairt": "2.48.40.260702151143", "api": "2.37.0", "hexagon_sdk": "6.6.0.0", "tools": "19.0.07", "arch": "V81", "ndk": "26.2.11394342", "host": "g++ 15.2.0", "host_compiler_sha256": sha(pathlib.Path("C:/msys64/ucrt64/bin/g++.exe"))},
+        "toolchain": {"qairt": "2.48.40.260702151143", "api": "2.37.0", "hexagon_sdk": "6.6.0.0", "tools": "19.0.07", "arch": "V81", "ndk": "26.2.11394342", "host": "g++ 15.2.0", "host_compiler_sha256": sha(pathlib.Path(compiler))},
         "training": "NO-GO", "full_attention_or_layer_certification": False,
     }
     # Compiler location is inspected locally, never exported as data.
@@ -83,7 +87,7 @@ def main():
     with path.open("x", encoding="utf-8", newline="\n") as f:
         json.dump(plan, f, indent=2, sort_keys=True); f.write("\n")
     private = {"root": str(ROOT), "base": base, "head": git("rev-parse", "HEAD"),
-               "git_dir": git("rev-parse", "--absolute-git-dir"), "bundles": bundles,
+               "git_dir": git("rev-parse", "--absolute-git-dir"), "compiler_absolute_path": str(pathlib.Path(compiler).resolve()), "bundles": bundles,
                "protected": prior["protected"], "refs": git("show-ref"),
                "plan_sha256": sha(path), "device_arithmetic_executed": False}
     with (OUT / "initial-private.json").open("x", encoding="utf-8") as f:

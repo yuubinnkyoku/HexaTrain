@@ -50,8 +50,8 @@ def validate(value, expected_probe):
         keys(entry, 'status maxAbs core_maxAbs holdout_maxAbs worst core_pairs_per_variant holdout_pairs_per_variant observer_variants failed_pairs accuracy_failed_pairs observer_mismatch_pairs numerical_digest actual_gradient_gate ordered_fp32_is_word_gate independent_python_double_recheck process_exit_evidence')
         if entry['status'] not in ('PASS', 'NUMERICAL_FAIL', 'OBSERVER_FAIL', 'UNRESOLVED'):
             raise ValueError('invalid status')
-        if entry['process_exit_evidence'] not in ('CAPTURED', 'UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY') or (entry['status']=='PASS' and entry['process_exit_evidence']!='CAPTURED'):
-            raise ValueError('missing process completion evidence for PASS')
+        if entry['process_exit_evidence'] != 'CAPTURED':
+            raise ValueError('missing measured process completion evidence')
         complete = entry['core_pairs_per_variant'] == 2200 and entry['holdout_pairs_per_variant'] == 256 and entry['observer_variants'] == 4
         all_complete &= complete
         if entry['status'] != 'UNRESOLVED' and not complete:
@@ -109,7 +109,7 @@ def make(report):
               'regression': read(report / 'regression-status-private.json'), 'training': 'NO-GO',
               'limitations': ['Fixed G1 diagnostic geometry and reference-derived frozen gradients.', 'No native Saved-P or full Attention/layer/training certification.']}
     for name, mode in (('softmax', 'standalone_softmax'), ('dvalue', 'standalone_dvalue')):
-        process = report / ('pilot-' + name)
+        process = report / ('pilot-softmax-final' if name == 'softmax' else 'pilot-dvalue')
         identity = read(process / 'identity-private.json')
         if identity['build']['probe_sha256'] != build['probe_sha256'] or identity['forward_limit'] != 60 or identity['focus_takeover_count']:
             raise ValueError('wrong binary, coverage, or unsafe process')
@@ -120,10 +120,7 @@ def make(report):
             raise ValueError('raw evidence identity mismatch')
         result = assess(process / 'stdout.txt', mode, 60)
         expected_exit = 4 if result['required_failed_pairs'] else 0
-        recovered_failure = (result['classification']=='NUMERICAL_FAIL' and identity['exit_code'] is None and
-                             identity.get('declared_probe_exit')==4 and identity.get('readback_recovered') is True and
-                             identity.get('exit_status')=='UNKNOWN_OUTER_ADB_COMMAND_FAILURE_AFTER_COMPLETE_PROBE_SUMMARY')
-        if identity['exit_code'] != expected_exit and not recovered_failure:
+        if identity['exit_code'] != expected_exit:
             raise ValueError('unexpected exit cannot be expected negative control')
         if any(c != {'core': 2200, 'holdout': 256} for c in result['coverage'].values()) or len(result['coverage']) != 4:
             raise ValueError('coverage incomplete')
@@ -137,7 +134,7 @@ def make(report):
             'failed_pairs': result['required_failed_pairs'], 'numerical_digest': result['numerical_digest'],
             'accuracy_failed_pairs': result['accuracy_failed_pairs'], 'observer_mismatch_pairs': result['observer_mismatch_pairs'],
             'actual_gradient_gate': .002 if name == 'softmax' else .01, 'ordered_fp32_is_word_gate': False,
-            'process_exit_evidence': 'UNKNOWN_AFTER_COMPLETE_FAILURE_SUMMARY' if recovered_failure else 'CAPTURED',
+            'process_exit_evidence': 'CAPTURED',
             'independent_python_double_recheck': result['independent_python_double_recheck']}
         if result['classification'] == 'NUMERICAL_FAIL':
             output['classifications'].append('BLOCKED_SOFTMAX_BACKWARD_ACCURACY' if name == 'softmax' else 'BLOCKED_DVALUE_ACCURACY')
