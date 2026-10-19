@@ -37,7 +37,8 @@ enum {
   HMX_ERR_LOCK = 14004,
   HMX_ERR_UNLOCK = 14005,
   HMX_ERR_POWER = 14006,
-  PROBE_REVISION = 2,
+  PROBE_REVISION = 3,
+  MODE_IDENTITY = 30,
 };
 
 typedef struct probe_context {
@@ -278,14 +279,31 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
                                    int *results, int resultsLen,
                                    int *metadata, int metadataLen,
                                    int q, int mode) {
-  (void)mode;
   probe_context_t *context = (probe_context_t *)(uintptr_t)handle;
   if (!context || context->tag != HMX_MAGIC ||
        !results || resultsLen < 4 || !metadata || metadataLen < 9) {
     return HMX_ERR_ARG;
   }
+  if (q < 6 || q > 10 || mode < 0 || mode > MODE_IDENTITY) {
+    return HMX_ERR_ARG;
+  }
   memset(results, 0, (size_t)resultsLen * sizeof(int));
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
+
+  /* Identity mode: no HMX execution, no resource acquisition.
+   * results[0..3] carry the DSP-side revision, q, mode and arch so the
+   * host can verify that the deployed skel matches this source. */
+  if (mode == MODE_IDENTITY) {
+    results[0] = PROBE_REVISION;
+    results[1] = q;
+    results[2] = mode;
+    results[3] = __HEXAGON_ARCH__;
+    metadata[0] = HMX_MAGIC;
+    metadata[1] = __HEXAGON_ARCH__;
+    metadata[7] = 0;  // HMX not executed
+    metadata[8] = 0;  // no trials
+    return 0;
+  }
   metadata[0] = HMX_MAGIC;
   metadata[1] = __HEXAGON_ARCH__;
   metadata[2] = VTCM_BYTES;
