@@ -287,6 +287,11 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if (q < 6 || q > 10 || mode < 0 || mode > MODE_IDENTITY) {
     return HMX_ERR_ARG;
   }
+  /* Some modes are bound to a specific q (fixed bias values). */
+  if ((mode == 24 || mode == 25 || mode == 26) && q != 6) return HMX_ERR_ARG;
+  if ((mode == 27 || mode == 28 || mode == 29) && q != 8) return HMX_ERR_ARG;
+  if (mode == 18 && q != 6) return HMX_ERR_ARG;
+  if (mode == 22 && q != 6) return HMX_ERR_ARG;
   memset(results, 0, (size_t)resultsLen * sizeof(int));
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
 
