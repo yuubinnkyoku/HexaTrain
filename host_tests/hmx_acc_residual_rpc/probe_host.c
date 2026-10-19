@@ -371,6 +371,10 @@ int main(int argc, char **argv) {
   int oracle_selfcheck = 0;          /* 1 = literal cross-check registered */
   int oracle_selfcheck_ok = 1;
   uint16_t oracle_selfcheck_literal = 0;
+  int oracle_selfcheck_compare = 0;  /* 0: pin expected_math[0] (modes 24..29,
+                                      * math-drift guard). 1: compare the
+                                      * hypothesis oracle expected[0] against
+                                      * the measured plateau literal (mode 31). */
   switch (mode) {
     case 0:
       // dynamic feedback: mathematically correct negative residual.
@@ -511,6 +515,7 @@ int main(int argc, char **argv) {
       math_source = "double_derived";
       if (mode == 31) {
         oracle_selfcheck = 1; oracle_selfcheck_literal = 0x1c00;
+        oracle_selfcheck_compare = 1;
       }
       break;
     case 37:
@@ -524,10 +529,20 @@ int main(int argc, char **argv) {
     default: break;
   }
   if (oracle_selfcheck) {
-    oracle_selfcheck_ok = (expected_math[0] == oracle_selfcheck_literal);
-    printf("oracle_selfcheck=%s literal_math_hi=0x%04x derived_math_hi=0x%04x\n",
+    /* Modes 24..29 pin the double-derived math so it cannot drift silently;
+     * mode 31 checks the hypothesis oracle against the independently
+     * measured mode-23 plateau literal. Battery 3 finding: comparing
+     * expected_math[0] (the math oracle, 0x1400) against the plateau
+     * literal (0x1c00) could never pass, because the research result is
+     * precisely that pure math does NOT derive the plateau. */
+    const uint16_t derived = oracle_selfcheck_compare ? expected[0]
+                                                      : expected_math[0];
+    oracle_selfcheck_ok = (derived == oracle_selfcheck_literal);
+    printf("oracle_selfcheck=%s compare=%s literal=0x%04x derived=0x%04x\n",
            oracle_selfcheck_ok ? "OK" : "MISMATCH",
-           oracle_selfcheck_literal, expected_math[0]);
+           oracle_selfcheck_compare ? "hypothesis_vs_measured_plateau"
+                                    : "double_derived_math",
+           oracle_selfcheck_literal, derived);
   }
 
   int pass = status == 0 && meta[0] == HMX_IDENTITY_MAGIC &&
