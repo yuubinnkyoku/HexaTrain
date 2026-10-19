@@ -11,66 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static double fp16_to_double(uint16_t bits) {
-  const int sign = (bits & 0x8000u) ? -1 : 1;
-  const int exp = (bits >> 10) & 31;
-  const int frac = bits & 1023;
-  if (exp == 31) return frac ? NAN : sign * INFINITY;
-  if (!exp) return sign * ldexp((double)frac, -24);
-  return sign * ldexp((double)(1024 + frac), exp - 25);
-}
-
-/* Round a double to the nearest FP16 value and return its raw bits. */
-static uint16_t double_to_fp16(double value) {
-  if (value == 0.0) return 0;
-  const double magnitude = fabs(value);
-  int exp = 0;
-  if (magnitude >= ldexp(1.0, -14)) {
-    exp = (int)floor(log2(magnitude)) + 1;
-  } else {
-    exp = -14;
-  }
-  int mantissa_bits = 10;
-  if (exp <= -14) mantissa_bits = 10 + (exp + 14);
-  if (mantissa_bits < 0) mantissa_bits = 0;
-  const double quantum = ldexp(1.0, exp - mantissa_bits);
-  double scaled = value / quantum;
-  double rounded = (scaled >= 0.0) ? floor(scaled + 0.5) : ceil(scaled - 0.5);
-  /* ties to even */
-  if (fabs(scaled - floor(scaled)) == 0.5) {
-    const double half = floor(scaled * 0.5);
-    rounded = 2.0 * half;
-  }
-  double result = rounded * quantum;
-  /* renormalize after rounding up */
-  if (fabs(result) >= ldexp(1.0, exp) && exp > -14) {
-    exp += 1;
-    mantissa_bits = 10;
-    const double q2 = ldexp(1.0, exp - mantissa_bits);
-    scaled = value / q2;
-    rounded = (scaled >= 0.0) ? floor(scaled + 0.5) : ceil(scaled - 0.5);
-    if (fabs(scaled - floor(scaled)) == 0.5) {
-      const double half = floor(scaled * 0.5);
-      rounded = 2.0 * half;
-    }
-    result = rounded * q2;
-  }
-  uint32_t bits = 0;
-  if (result < 0) bits |= 0x8000u;
-  double mag = fabs(result);
-  if (mag == 0.0) return (uint16_t)bits;
-  int e = (int)floor(log2(mag));
-  if (e < -14) {
-    const double sub = ldexp(1.0, -24);
-    const double m = mag / sub;
-    bits |= (uint32_t)(m + 0.5);
-    return (uint16_t)bits;
-  }
-  const double frac = (mag / ldexp(1.0, e)) - 1.0;
-  bits |= (uint32_t)((e + 15) << 10);
-  bits |= (uint32_t)(frac * 1024.0 + 0.5);
-  return (uint16_t)bits;
-}
+#include "fp16_util.h"
 
 int main(int argc, char **argv) {
   int q = 10;

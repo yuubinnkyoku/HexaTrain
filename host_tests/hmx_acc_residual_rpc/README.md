@@ -60,13 +60,27 @@ measured results.
 
 ## Host-only self test
 
-`probe_host_selftest.c` verifies the FP16 oracle (double -> FP16 rounding,
-expected hi, expected remainder, and the reconstruction) without a device:
+`probe_host_selftest.c` verifies the shared IEEE binary16 helpers
+(`fp16_util.h`) and the numeric oracle without a device:
 
 ```sh
-cc -std=c11 -O2 -o probe_host_selftest probe_host_selftest.c -lm
+cc -std=gnu11 -O2 -o probe_host_selftest probe_host_selftest.c -lm
 ./probe_host_selftest
 ```
+
+The self test covers:
+
+- known values (including the previously mis-rounded 64.0625, 64.1875 and
+  1.0009765625),
+- round-to-nearest-even tie behaviour for positive and negative values,
+- a round trip of **all 63488 finite binary16 values**,
+- a cross-check against the compiler's own `_Float16` conversion when the
+  toolchain provides it (63488 values compared),
+- the expected hi / remainder table for q=6..10 and the reconstruction
+  identity.
+
+`fp16_util.h` is shared by the host runner and the self test, so the
+oracle and its test cannot drift apart.
 
 ## Identity check
 
