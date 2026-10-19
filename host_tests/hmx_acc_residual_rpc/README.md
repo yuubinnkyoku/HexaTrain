@@ -85,17 +85,39 @@ The self test covers:
   value,
 - subnormal boundaries (smallest subnormal, transition to smallest normal,
   largest subnormal) and the overflow threshold around 65504,
-- a round trip of **all 63488 finite binary16 values**,
+- a round trip of **all 65536 binary16 bit patterns** (63488 finite
+  including signed zero, 2 inf, 2046 NaN),
 - an independent cross-check against the compiler's own `_Float16`
   conversion when the toolchain provides it: all 63488 exactly
-  representable values **plus** midpoints between adjacent values and
-  points just below/above them, and the overflow boundary (about 158722
-  comparisons),
-- the expected hi / remainder table for q=6..10 and the reconstruction
-  identity.
+  representable values, all 2048 specials, a non-representable sweep
+  (8 ULP fractions × 31743 adjacent pairs × both signs) and the overflow
+  boundary — **573452 `_Float16` conversions, 639073 comparisons total**,
+- the expected hi / remainder table for q=6..10 (positive *and* negative
+  remainders — the negative ones are what the device actually clamps,
+  see the battery results below) and the reconstruction identity.
 
 `fp16_util.h` is shared by the host runner and the self test, so the
 oracle and its test cannot drift apart.
+
+**Compiler matrix (2026-10-20; raw evidence under `build/hmx_evidence/`,
+gitignored):**
+
+| toolchain | target | result |
+| --- | --- | --- |
+| gcc 15.2.0 (MSYS2) | x86_64-w64-mingw32 | PASS — 573452 `_Float16` comparisons, 0 mismatches, `-Wall -Wextra -Werror` clean |
+| clang 22.1.8, vcvars64 env + `-rtlib=compiler-rt` | x86_64-pc-windows-msvc | PASS — identical counts |
+| clang 22.1.8, MSYS2 libgcc | x86_64-w64-windows-gnu | **FAIL — reported, not masked**: 573443/573452 `_Float16` comparisons mismatch |
+
+The failing clang triple is root-caused (llvm-objdump,
+`selftest_clang_x86_64-w64-windows-gnu.txt`): the call site reads the
+`_Float16` result from the Windows FP return register (`pextrw $0x0,
+%xmm0`) while MSYS2 `libgcc.a __truncdfhf2` returns it in `%eax`, so the
+conversion result is never observed; `-rtlib=compiler-rt` does not exist
+for that triple. The default clang target without a vcvars environment
+fails at `vcruntime.h`, and MSVC linking without `-rtlib=compiler-rt`
+fails on `__truncdfhf2` — both constraints are recorded in the MSVC
+evidence file. `scripts/run_hmx_selftest.ps1` encodes the working
+invocations and is wired into the Fast verification profile.
 
 ## Identity check
 
@@ -143,12 +165,16 @@ Modes without a registered expectation print `oracle=NO_ORACLE`.
 `reconstruction_valid=0` means the slot layout for that mode does not
 define a reconstruction, so `reconstructed` carries no meaning.
 
-If the first trial instead returns `residual_bits=0x0000`, or another
-value, then the hypothesis is **not confirmed** on that runtime.
-A single passing example does not establish universal FP32 or 37-bit
-recovery. Test negative results, underflow, cancellation, and random
-matrices before applying this to Muon. No downstream optimizer switches
-are included.
+If the first trial instead returns `residual_bits=0x0000` (or any other
+value), then the hypothesis is **not confirmed** on that runtime. This
+is no longer hypothetical: on the measured device the residual slot for
+the mode-0 feedback recipe *does* come back `0x0000` for these operands
+— see the battery results below — so `fp16_residual_recovery=NOT_CONFIRMED`
+is the measured status of the original recovery recipe. A single failing
+configuration does not prove universal impossibility either: the
+quantization laws section describes exactly which corrections the
+convert can and cannot represent. No downstream optimizer switches are
+included.
 
 ## Sources / caveats
 
@@ -191,6 +217,21 @@ The DSP build id travels through `metadata[HMX_IDENTITY_BUILD_ID_SLOT]`
 `-DHMX_PROBE_BUILD_ID=0xNNNNNNNN`. `hmx_identity.h` defines the macro to
 `0` when unset, so unstamped builds still compile and run.
 
+**Stale-skel incident (battery 2, 2026-10-20).** A device battery was
+run after a host-only rebuild without redeploying the skel: host stamp
+`0x19cc4c4f`, deployed skel still stamped `0x7dfcb259`. Every case
+failed closed exactly as designed — `build_id_status=MISMATCH`,
+`dsp_identity=MISMATCH` with the `BUILD_ID` identity flag printed, exit
+9 *before any numerical experiment* (transcript
+`build/hmx_evidence/b_battery2_20261020.txt`). The root cause was on the
+build side: the compiler response file path was constant, so CMake never
+reconfigured when the stamped id changed and the skel kept its old
+stamp. Fix: the response file name now embeds the build id
+(`b_build_id_<hex>.rsp`), forcing regeneration on every change. The
+follow-up full battery rebuilt at stamp `0x0c630195` and every case
+reported `build_id_status=MATCH`; the verdict-fix rerun at `0x539bf682`
+likewise matched.
+
 The identity self test (`probe_identity_selftest.c`) validates the
 shared header on the CPU without a device, including all adversarial
 payloads and the build-id-unavailable semantics:
@@ -230,7 +271,9 @@ stamps a build id, rebuilds both targets (Android AArch64 + Hexagon V81)
 through the SDK CMake toolchain using a response file for
 `-DHMX_PROBE_BUILD_ID` (the SDK `build_cmake`/`cmake_configure.bash`
 path corrupts values containing `=` and drops env `CFLAGS`, so a
-`@file` response is used instead), runs the identity self test, and
+`@file` response is used instead; the response file name embeds the
+build id itself — `b_build_id_<hex>.rsp` — so a changed stamp forces
+CMake reconfiguration), runs the identity self test, and
 records SHA-256 hashes of all three ship artifacts:
 
 ```powershell
@@ -323,5 +366,191 @@ a 256B-aligned VTCM scratch (`mxmem2(Rs32)=bias`, `Q6_mxmem2_bias_A`,
 the two vectors; they are not adjacent), `results[2]=results[3]=0`.
 
 CPU oracle test (no SDK/device): `gcc -std=c11 -O2 -Wall -Wextra -Werror -o probe_bias20_test probe_bias20_test.c -lm && ./probe_bias20_test`.
-Device runs (none executed for Phase D): `.\run_experiment.ps1 -Provenance`,
-then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-Mode 38`).
+Device runs: `.\run_experiment.ps1 -Provenance`,
+then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-Mode 38`). Executed results are in the battery section below.
+
+## Device battery results (2026-10-20)
+
+All numbers below are quoted from device transcripts
+(`build/hmx_evidence/b_battery_console_full.txt` for battery 1 and
+`b_battery3_20261020.txt` for battery 3; gitignored like all provenance —
+the numbers and build ids are what matter). Provenance for every run
+(commit, dirty state, artifact SHA-256 table) is in
+`build/hmx_evidence/b_provenance_*.txt`.
+
+Run provenance:
+
+- **Battery 1** (26 cases): built at commit `93738c5` with the Phase D
+  code still uncommitted in the working tree (stamped `0x7dfcb259`;
+  the tree was dirty — the Phase D probe changes were committed
+  afterwards as `3bad274` / `19cc4c4`). Host-side identity +
+  build-id fail-closed gate active from the start.
+- **Battery 2** (8 cases): demonstrated the stale-skel fail-closed
+  behaviour described above (every case exit 9, no experiment executed).
+- **Battery 3** (11 cases): fresh committed build from a clean HEAD
+  `0c63019` (stamped `0x0c630195`), every case `build_id_status=MATCH`.
+- **Verdict-fix rerun** (commit `539bf68`, stamp `0x539bf682`): single
+  case (q=8, mode 31) after the mode-31 selfcheck correction described
+  below.
+
+### Battery 1 — Phase C reproduction sweeps
+
+`OBS` / `MATH` = `OBSERVED_REGRESSION_MATCH` / `MATH_ORACLE_MATCH`
+(two separate facts; MATH is informational and does not change the exit
+code). The math column quotes the *double-derived* expectation.
+
+| mode | q (scale) | observed residual bits | value | OBS | MATH (math bits) |
+| --- | --- | --- | --- | --- | --- |
+| 30 | 8 | raw-convert control, no oracle | — | N/A | N/A |
+| 20 | 6 | 0x2400 | 2^-6 = 4 grid units | PASS | PASS (0x2400) |
+| 20 | 7 | 0x1c00 | 2^-8 = exactly 1 grid unit | PASS | PASS (0x1c00) |
+| 20 | 8 | 0x1c00 | 1 unit (target +1/4 unit) | PASS | FAIL (0x1400) |
+| 20 | 9 | 0x1c00 | 1 unit (target +1/16 unit) | PASS | FAIL (0x0c00) |
+| 20 | 10 | 0x1c00 | 1 unit (target +1/256 unit) | PASS | FAIL (0x0400) |
+| 23 | 6..10 | identical pattern to mode 20 | — | PASS | PASS at q=6,7; FAIL at q=8..10 |
+| 21 | 6 | 0x0000 | zero-residual control | PASS | PASS |
+| 22 | 6 | 0x5400, 0x0000 | zero-residual 2-CVT control | PASS | PASS |
+| 24 | 6 (32) | 0x2000 | 2^-7 = 4×2^-9 on-grid | PASS | PASS |
+| 25 | 6 (64) | 0x2400 | 2^-6 = 4×2^-8 on-grid | PASS | PASS |
+| 26 | 6 (128) | 0x2800 | 2^-5 = 4×2^-7 on-grid | PASS | PASS |
+| 27 | 8 (32) | 0x1800 | 2^-9 = 1 grid unit (target +1/4 unit) | PASS | FAIL (0x1000) |
+| 28 | 8 (64) | 0x1c00 | 1 unit (target +1/4 unit) | PASS | FAIL (0x1400) |
+| 29 | 8 (128) | 0x2000 | 1 unit (target +1/4 unit) | PASS | FAIL (0x1800) |
+| 37 | 8 | 0x0000 | exact-zero control | PASS | PASS |
+| 38 | 8 | readback lo=0xd4085400 hi=0x00000010 | configured payload echo | PASS | PASS (decode −64.50390625) |
+
+Reconstruction facts worth recording: mode 20 q=6 reconstructs the
+oracle **exactly** (`recovered_error=0`, residual on-grid); mode 20 q=8
+reconstruction error is 4.58e-05 — **3× worse** than the plain FP16
+baseline (1.53e-05) because the +1-unit ceiling overshoots the true
+residual.
+
+### Battery 3 — Phase D nibble sweep and the first mode-0 measurement
+
+| mode | n | out_bias | math target | observed | hypothesis (bias grid) | OBS | MATH |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 31 | 0 | −64.5 | +2^-10 = +1/4 unit | 0x1c00 (1 unit) | ceil | PASS | FAIL (0x1400) |
+| 32 | 1 | −64.50390625 | −0.0029296875 | 0x0000 | clamp | PASS | FAIL (0x9a00) |
+| 33 | 2 | −64.5078125 | −0.0068359375 | 0x0000 | clamp | PASS | FAIL (0x9f00) |
+| 34 | 8 | −64.53125 | −0.0302734375 | 0x0000 | clamp | PASS | FAIL (0xa7c0) |
+| 35 | 15 | −64.55859375 | −0.0576171875 | 0x0000 | clamp | PASS | FAIL (0xab60) |
+| 36 | 3 | −64.51171875 | −0.0107421875 | 0x0000 | clamp | PASS | FAIL (0xa180) |
+| 37 | 0 | −64.0 | 0 exactly | 0x0000 | 0 | PASS | PASS |
+| 38 | 1 | −64.50390625 | readback | lo=0xd4085400 hi=0x00000010 | payload echo | PASS | PASS |
+
+Battery 3 case exits: mode 30 → 0; (q6, mode 0) and (q8, mode 0) → 8;
+mode 31 → 8 (selfcheck defect, see below); modes 32–38 → 0. The MATH
+`FAIL` verdicts on modes 31–36 are **expected research facts**, not
+harness failures: the whole point is that pure math does not derive the
+observed values — the bias-grid model does.
+
+The observed bits are identical between battery 1 and battery 3 for
+every repeated case (two independent builds), e.g. battery 1 mode 31
+`hi_bits=0x1c00` (judged FAIL there only because the host did not yet
+carry the bias-grid expectation, added in `19cc4c4`).
+
+**Mode-31 selfcheck defect found by battery 3.** The registered selfcheck
+compared the *math* oracle (`expected_math[0]` = 0x1400) against the
+measured plateau literal 0x1c00 — a comparison that by construction can
+never pass, since the research result is precisely that math does not
+derive the plateau. Fix (commit `539bf68`): the mode-31 selfcheck now
+compares the hypothesis oracle `expected[0]` against the plateau
+literal (`oracle_selfcheck=OK compare=hypothesis_vs_measured_plateau
+literal=0x1c00 derived=0x1c00`), while modes 24–29 keep their original
+math-pinning semantics. Re-verified on device at `539bf68`: exit 0,
+`OBSERVED_REGRESSION_MATCH=PASS`, `MATH_ORACLE_MATCH=FAIL` (fact).
+
+### Mode 0: first full device measurement of dynamic feedback
+
+Mode 0 had never run against the hardened harness (battery 1 covered
+modes 20–30 and 31–38 only). Result for both q=6 and q=8: both trials
+return `residual_bits=0x0000`, so
+`fp16_residual_recovery=NOT_CONFIRMED` and the case exits 8 after all
+three deploy attempts — an honest failure, not masked. The residual
+target the math oracle wants is **negative** (q=6: 0xa400 = −2^-6;
+q=8: 0x9400 = −2^-10) because round-to-nearest places `hi` *below* the
+scaled operand — and the device clamps non-positive fine convert
+outputs to zero (the same law the controlled Phase D sweep established).
+The original recovery recipe therefore fails *for a measured,
+explainable reason*, not for a harness reason.
+`DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` remains the honest headline.
+
+### Argument gate (host-side, device-verified)
+
+`q` outside 6..10, `mode` outside 0..38, and phase-D modes with `q≠8`
+are rejected before any device state is touched. Device-verified with
+the same binary: arguments `5 0`, `11 31`, `8 39` each print the usage
+line and exit 2 with no capability query, no open, no HMX session
+(`build/hmx_evidence/b_arggate_20261020.txt`).
+
+## Observed quantization laws (device-derived hypothesis)
+
+These laws summarize every measured convert output on this runtime.
+They are a **model for the stored FP16**, double-checked per case above;
+they are not claims about FP32 accuracy or HMX internal precision.
+
+1. **FP16-only export.** The value stored to VTCM by a convert is FP16;
+   the fine (20-bit, extra4) bits stay internal to the convert state and
+   only feed the feedback path (PRM 80-N2040-62 AA, Ch.5 after Fig.25).
+   Device data agrees: mode 38 readback shows the *configured* bias
+   payload (including its extra4 nibble) is retained in the bias
+   registers, while convert outputs never show sub-FP16 information.
+2. **Output-bias fine grid.** The stored value lands on the fine grid of
+   the *output bias*: 1 nibble LSB = 2^(e_obias − 14), where e_obias is
+   the FP16 exponent field of the bias magnitude (−64/−64.5 → e=6 →
+   2^-8). The scale sweep confirms the dependence on the bias magnitude:
+   biases −32/−64/−128 give grids 2^-9/2^-8/2^-7, and the measured
+   remainders 2^-11/2^-10/2^-9 all ceil to exactly one unit (modes
+   27/28/29 → 0x1800/0x1c00/0x2000).
+3. **Positive targets: ceiling**, not round-to-nearest and not
+   round-half-up. A +1/4-unit target stores +1 unit (0x1c00 at e=6;
+   nearest would store 0 — modes 20/23/28/31 at q=8..10).
+4. **Non-positive targets: clamp to zero.** 0x0000 for all negative
+   fine targets (modes 32–36) and for the mode-0 feedback residual.
+5. **On-grid targets pass through exactly.** q=6 (residual 2^-6 = 4
+   units) reproduces math exactly, reconstruction error 0; the q=7
+   remainder is exactly 1 unit (boundary case, math matches); mode 37's
+   exact-zero target stores 0.
+6. **The extra4 feedback bit does not change the stored value.** Mode 20
+   trials 0/1 (Rs[8]=0/1) return identical bits at every measured q —
+   the internal fine bits do not leak into the FP16 store either way.
+7. **Reproducibility.** Every repeated case produced identical raw bits
+   across battery 1 (dirty-tree build), battery 3 (clean committed
+   build) and the `539bf68` rerun (three independent builds).
+
+## Phase E feasibility memo
+
+Where this leaves the original question (can two FP16 converts export an
+accumulator's low-order information?):
+
+- **Exact recovery is achievable only for corrections that are positive
+  bias-grid multiples.** Measured: mode 20 q=6 (correction +4 units)
+  reconstructs the oracle exactly (`recovered_error=0`). This is a real,
+  reproducible capability of the two-convert recipe.
+- **Sub-grid positives overshoot** (+1 unit; q=8..10 make reconstruction
+  strictly worse than the plain FP16 hi: 4.58e-05 vs 1.53e-05), and
+  **non-positive corrections vanish** (clamp to 0). Since round-to-
+  nearest `hi` often sits *below* the scaled operand, the negative case
+  is common — mode 0 hits it for both tested operands.
+- **The fine bits never leave the convert state** through either route:
+  not through the FP16 store (law 1), and not through the Rs[8] feedback
+  bit (law 6).
+- **Generalization blockers** for a real GEMM/optimizer path: the grid
+  varies with the per-tile bias magnitude (granularity is not uniform
+  across accumulation ranges); corrections must be ≥ 1 unit and
+  positive; the feedback recipe serializes converts (second convert
+  consumes the first's state), which conflicts with tile-parallel
+  accumulation; cancellation behaviour is untested by design
+  (single-nonzero-element construction); VTCM budget is 12 KiB for
+  32×32 croutons.
+- **Minimal next experiment (Phase E-1 candidate).** The current data
+  pins the ceiling law only for *sub-unit* targets and pass-through for
+  *integral* targets. One mode decides the scope: configure a bias base
+  of −64.25 (same e=6, grid 2^-8) so the convert target is
+  64.5009765625 − 64.25 = 0.2509765625 — i.e. **64.25 grid units**,
+  exactly representable in FP16 (0x3410 = 0.2509765625). If the stored
+  value comes back 0x3450 (0.25390625 = 65 units), the ceiling law is
+  global and the slot is a quantizer, not an encoder; if it comes back
+  0x3410, the stored output is a plain correctly-rounded FP16 for large
+  targets and the quantization is only a small-magnitude effect. One
+  build, one run, no ABI changes.
