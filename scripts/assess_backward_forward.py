@@ -8,6 +8,14 @@ from assess_backward_repair import ROOT, fnv, read, require, words
 from prepare_saved_p_backward import sha
 
 
+def preserve(path, data):
+    if path.exists():
+        require(path.read_bytes() == data, 'existing derived evidence differs')
+    else:
+        with path.open('xb') as target:
+            target.write(data)
+
+
 def assess(directory):
     identity = read(directory / 'identity-private.json')
     completion = read(directory / 'execution-before-readback-private.json')
@@ -38,7 +46,8 @@ def assess(directory):
     require(apis.count('graphFinalize') == 4 and apis.count('graphExecute') == 240, 'Forward graph coverage')
     require({'registerRepairHost', 'registerRepairDSP', 'registerOldDSP', 'registerS2DSP', 'registerMixedDSP', 'registerDoubleDSP', 'contextFree', 'deviceFree', 'backendFree'} <= set(apis), 'HTP/teardown APIs')
     derived = directory / 'derived-forward-p-words.txt'
-    with (directory / 'saved-p-words.bin').open('rb') as raw, derived.open('x', encoding='ascii') as target:
+    lines = []
+    with (directory / 'saved-p-words.bin').open('rb') as raw:
         require(tuple(words(raw, 4)) == (0x42525001, 1, 2, 60), 'Forward raw header')
         index = 0
         for observed in (1, 0):
@@ -51,16 +60,18 @@ def assess(directory):
                         value = words(raw, 1024)
                         require(fnv(value) == row['hash'], 'P stdout/raw words')
                         require(np.isfinite(value.view('<f4')).all(), 'P finite')
-                        target.write('p_words,' + ','.join(map(str, (observed, tap, case, head))) + ',' + ','.join(f'{int(v):08x}' for v in value) + '\n')
+                        lines.append('p_words,' + ','.join(map(str, (observed, tap, case, head))) + ',' + ','.join(f'{int(v):08x}' for v in value) + '\n')
                         index += 1
         require(raw.read(1) == b'', 'trailing raw')
+    if derived.exists():
+        require(derived.read_text(encoding='ascii') == ''.join(lines), 'existing derived P words differ')
+    else:
+        preserve(derived, ''.join(lines).encode('ascii'))
     executable = ROOT / 'build/reports/g1-s2-double-qk-native-p-closure/host-final/double_qk_assessment.exe'
     require(sha(executable) == '10eff7ddc5897848943a38ad664626e3be149323f345fcc9c4d54455622640ce', 'independent assessor SHA')
     result = subprocess.run([str(executable), str(ROOT / 'build/reports/g1-one-layer-fp32-backward/one-layer-inputs.bin'), str(ROOT / 'build/fp32-double-qk/double-inputs.bin'), str(derived)], capture_output=True, timeout=120)
-    with (directory / 'forward-joint.jsonl').open('xb') as target:
-        target.write(result.stdout)
-    with (directory / 'forward-joint-stderr.txt').open('xb') as target:
-        target.write(result.stderr)
+    preserve(directory / 'forward-joint.jsonl', result.stdout)
+    preserve(directory / 'forward-joint-stderr.txt', result.stderr)
     summaries = [json.loads(line) for line in result.stdout.decode().splitlines() if line.startswith('{') and json.loads(line).get('kind') == 'assessment_summary']
     require(result.returncode == 0 and len(summaries) == 1 and summaries[0]['joint_pass'], 'independent joint contract')
     require(summaries[0]['p_outputs'] == 480 and summaries[0]['required_failed_predicates'] == summaries[0]['variant_word_mismatches'] == 0, 'joint coverage/observer')
@@ -72,6 +83,9 @@ if __name__ == '__main__':
     parser.add_argument('--report-root', type=Path, required=True)
     args = parser.parse_args()
     result = assess(args.report_root)
-    with (args.report_root / 'joint-assessment-private.json').open('x', encoding='utf-8') as f:
-        json.dump(result, f, indent=2)
+    destination = args.report_root / 'joint-assessment-private.json'
+    if destination.exists():
+        require(read(destination) == result, 'existing joint assessment differs')
+    else:
+        preserve(destination, json.dumps(result, indent=2).encode('utf-8'))
     print(json.dumps(result))
