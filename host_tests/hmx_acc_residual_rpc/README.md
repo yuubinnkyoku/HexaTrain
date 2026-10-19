@@ -52,9 +52,29 @@ build_cmake hexagon DSP_ARCH=v81
 ```
 
 Both builds require the corresponding Android/Hexagon toolchains; DSP
-compilation explicitly enables `-mhmx`. This experiment was **not built
-or executed** in the authoring environment, so actual SDK compatibility
-and device resource acquisition remain to be checked.
+compilation explicitly enables `-mhmx`.
+
+**Status:** built and executed on a nubia NX741J (Hexagon V81, CDSP) with
+Hexagon SDK 6.6.0.0 / tools 19.0.07. See the PR #14 comments for the
+measured results.
+
+## Host-only self test
+
+`probe_host_selftest.c` verifies the FP16 oracle (double -> FP16 rounding,
+expected hi, expected remainder, and the reconstruction) without a device:
+
+```sh
+cc -std=c11 -O2 -o probe_host_selftest probe_host_selftest.c -lm
+./probe_host_selftest
+```
+
+## Identity check
+
+Every run first calls the DSP with `mode=30` (identity mode) on the same
+handle. The DSP echoes its own `PROBE_REVISION`, the received `q`, the
+received `mode` and the DSP architecture through `results[0..3]`. The host
+aborts with exit code 9 when the echo does not match this source, so a
+stale DSP skel can never be mistaken for a current one.
 
 Deploy the generated `libhexatrain_hmx_acc_residual.so` (AArch64 stub),
 `libhexatrain_hmx_acc_residual_skel.so` (V81 DSP skel) and
@@ -75,8 +95,21 @@ reference, reconstruction error and the ordinary FP16 output error.
 
 ```text
 extra4=0 hi_bits=0x5402 residual_bits=0x8400 ...
+observed_reproduced=REPRODUCED
+math_expected_hi=0x5402 math_expected_res=0x8400 math_match=MATCH
 fp16_residual_recovery=SUPPORTED
 ```
+
+Two verdicts are reported separately and must not be conflated:
+
+- `observed_reproduced=REPRODUCED` — the raw bits equal a previously
+  measured value. This says nothing about numerical correctness.
+- `math_match=MATCH|MISMATCH` — the raw bits equal the mathematically
+  correct value, derived from double arithmetic by the host.
+
+Modes without a registered expectation print `oracle=NO_ORACLE`.
+`reconstruction_valid=0` means the slot layout for that mode does not
+define a reconstruction, so `reconstructed` carries no meaning.
 
 If the first trial instead returns `residual_bits=0x0000`, or another
 value, then the hypothesis is **not confirmed** on that runtime.
