@@ -48,6 +48,10 @@ param(
   [string]$Q = '10',
   [string]$Mode = '0',
   [int]$DeployRetries = 3,
+  # Deterministic device endpoint (docs/agent/device-test-tiers.md: never rely
+  # on an implicit "the only device"; a physical phone can present several
+  # online adb endpoints, so the runner must address one explicitly).
+  [string]$DeviceSerial = '',
   [string]$DeviceDir = '/data/local/tmp/hmx_probe',
   [string]$DspLibraryPath = '/data/local/tmp/hmx_probe:/system/lib/rfsa/adsp:/vendor/lib/rfsa/adsp:/dsp'
 )
@@ -226,11 +230,14 @@ function Invoke-DeployAndRun($artifacts) {
   foreach ($row in $artifacts) {
     if (-not $row.Exists) { throw "ARTIFACT_MISSING: $($row.Path) (build first)" }
   }
-  $serial = (& adb get-serialno 2>&1 | ForEach-Object { "$_" })
+  $adbArgs = @()
+  if ($DeviceSerial) { $adbArgs += @('-s', $DeviceSerial) }
+  $serial = (& adb @adbArgs get-serialno 2>&1 | ForEach-Object { "$_" })
   if ($LASTEXITCODE -ne 0) { throw "ADB_SERIAL_FAILED: $serial" }
   Write-Log "device_serial=$serial"
+  Write-Log "device_endpoint=explicit ($DeviceSerial) via -DeviceSerial -s flag"
 
-  & adb shell mkdir -p $DeviceDir 2>&1 | Out-Null
+  & adb @adbArgs shell mkdir -p $DeviceDir 2>&1 | Out-Null
   $map = @{
     'libhexatrain_hmx_acc_residual.so'       = ($artifacts | Where-Object Name -eq 'stub_so').Path
     'libhexatrain_hmx_acc_residual_skel.so'  = ($artifacts | Where-Object Name -eq 'skel_so').Path
@@ -238,7 +245,7 @@ function Invoke-DeployAndRun($artifacts) {
   }
   foreach ($name in $map.Keys) {
     Write-Log "adb push $($map[$name]) -> ${DeviceDir}/$name"
-    & adb push $map[$name] "$DeviceDir/$name" 2>&1 | ForEach-Object { $script:LogLines.Add("  [adb] $_") }
+    & adb @adbArgs push $map[$name] "$DeviceDir/$name" 2>&1 | ForEach-Object { $script:LogLines.Add("  [adb] $_") }
     if ($LASTEXITCODE -ne 0) { throw "ADB_PUSH_FAILED: $name" }
   }
 
@@ -249,7 +256,7 @@ function Invoke-DeployAndRun($artifacts) {
   while ($attempt -lt $DeployRetries) {
     $attempt++
     Write-Log "device_run_attempt=$attempt/$DeployRetries cmd=$remoteCmd"
-    $runOutput = & adb shell $remoteCmd 2>&1 | ForEach-Object { "$_" }
+    $runOutput = & adb @adbArgs shell $remoteCmd 2>&1 | ForEach-Object { "$_" }
     $runExit = $LASTEXITCODE
     foreach ($line in $runOutput) { Write-Log "  [device] $line" }
     if ($runExit -eq 0) { break }
