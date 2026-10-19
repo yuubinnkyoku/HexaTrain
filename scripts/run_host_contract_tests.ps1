@@ -59,6 +59,10 @@ Invoke-PhoneLmHostCppCompile -Label "CPU host test" `
     -IncludeDirs @($CppInclude)
 Invoke-PhoneLmHostCppRun -Label "CPU host tests" -Executable $CpuExecutable
 
+# FP16 oracle independent self-test (gcc + clang native _Float16 cross-check).
+Invoke-PhoneLmHostPwshScript -Label "HMX FP16 oracle self-test" `
+    -ScriptPath (Join-Path $Root "scripts\run_hmx_selftest.ps1")
+
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
     # Remaining product contracts stay in Suite All (Host / Formal / PrGate).

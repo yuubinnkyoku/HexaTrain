@@ -43,9 +43,12 @@ static inline uint16_t double_to_fp16(double value) {
   if (magnitude > 65520.0) return (uint16_t)(sign | 0x7c00u); /* overflow */
 
   int binary_exponent = 0;
-  double fraction = frexp(magnitude, &binary_exponent);
   /* magnitude = fraction * 2^binary_exponent with 0.5 <= fraction < 1,
-   * so the unbiased exponent is binary_exponent - 1. */
+   * so the unbiased exponent is binary_exponent - 1. Only frexp's exponent
+   * output is needed; the call is kept without binding the fraction so that
+   * -Wall -Wextra -Werror builds stay clean (previously an unused-variable
+   * warning). Numerical behaviour is unchanged. */
+  (void)frexp(magnitude, &binary_exponent);
   const int exponent = binary_exponent - 1;
 
   if (exponent < -14) {
