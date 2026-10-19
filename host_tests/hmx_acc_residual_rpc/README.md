@@ -68,14 +68,29 @@ cc -std=gnu11 -O2 -o probe_host_selftest probe_host_selftest.c -lm
 ./probe_host_selftest
 ```
 
+Clang is also supported (its native `_Float16` is used as an independent
+reference when available):
+
+```sh
+clang -std=gnu11 -O2 -o probe_host_selftest probe_host_selftest.c -lm
+./probe_host_selftest
+```
+
 The self test covers:
 
 - known values (including the previously mis-rounded 64.0625, 64.1875 and
   1.0009765625),
 - round-to-nearest-even tie behaviour for positive and negative values,
+  including extra binades, subnormal boundaries and the largest finite
+  value,
+- subnormal boundaries (smallest subnormal, transition to smallest normal,
+  largest subnormal) and the overflow threshold around 65504,
 - a round trip of **all 63488 finite binary16 values**,
-- a cross-check against the compiler's own `_Float16` conversion when the
-  toolchain provides it (63488 values compared),
+- an independent cross-check against the compiler's own `_Float16`
+  conversion when the toolchain provides it: all 63488 exactly
+  representable values **plus** midpoints between adjacent values and
+  points just below/above them, and the overflow boundary (about 158722
+  comparisons),
 - the expected hi / remainder table for q=6..10 and the reconstruction
   identity.
 
@@ -86,9 +101,11 @@ oracle and its test cannot drift apart.
 
 Every run first calls the DSP with `mode=30` (identity mode) on the same
 handle. The DSP echoes its own `PROBE_REVISION`, the received `q`, the
-received `mode` and the DSP architecture through `results[0..3]`. The host
-aborts with exit code 9 when the echo does not match this source, so a
-stale DSP skel can never be mistaken for a current one.
+received `mode` and the DSP architecture through `results[0..3]`, and
+reports its metadata (`HMX_MAGIC`, architecture, HMX-executed flag and
+trial count) through the metadata buffer. The host aborts with exit code 9
+when either the echo or the identity metadata does not match this source,
+so a stale DSP skel can never be mistaken for a current one.
 
 Deploy the generated `libhexatrain_hmx_acc_residual.so` (AArch64 stub),
 `libhexatrain_hmx_acc_residual_skel.so` (V81 DSP skel) and
@@ -99,8 +116,9 @@ Run `hexatrain_hmx_acc_residual_test` without arguments.
 
 The host **rejects non-V81 CDSP** rather than silently emulating the
 operation on a CPU. The DSP requests HMX plus 12 KiB of VTCM, and errors
-out if allocation, 2-KiB alignment, or HMX locking fails. Teardown
-is attempted, but its return status is not verified across SDK revisions.
+out if allocation, 2-KiB alignment, or HMX locking fails. Teardown is
+attempted and the host verifies the handle close status; a non-zero close
+status fails the run.
 
 ## Interpreting the output
 
