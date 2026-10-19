@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "g1-backward-6031-same-boot-recheck-1",
+  "parent_plan": "backward_primitive_precision_plan.json",
+  "authorization": "The user explicitly requested one further attempt to check whether 6031 recurs, without requiring a manual reboot first.",
+  "purpose": "Bounded reproduction of the previous default standard MatMul runtime failure; not a new arithmetic candidate or accuracy certification.",
+  "baseline_attempt": "default-dvalue-health-control",
+  "candidate": "final",
+  "probe_sha256": "d53e5dbd3bb919f1c3f5be33a27ae4ab3721c660db7392e76c1b4edc04885085",
+  "mode": "standalone_dvalue",
+  "forward_limit": 1,
+  "observers": ["Observed+Tap", "Observed+NoTap", "NoReceipt+Tap", "NoReceipt+NoTap"],
+  "maximum_processes": 1,
+  "report_folder": "default-dvalue-recheck-1",
+  "configuration": "Unchanged default null graph config and original frozen P/gradient words; no new package or compiler changes.",
+  "safety": "Fresh existing strict per-process preflight, same physical device, Awake, known top-resumed, no active training/competing QNN, storage, fixed SDK/APK/packages/fixtures/protected identities. No safety waiver. BACKGROUND_CORRECTNESS, zero foreground takeovers.",
+  "stop": "Preflight failure means no arithmetic. One captured process only. Nonzero QNN API, transport loss, timeout or critical protection stops further device attempts. A completed exit4 numerical FAIL is distinct from API failure.",
+  "success_limit": "No reproduced 6031 in this bounded process does not certify full coverage, new Custom arithmetic, Native Saved-P, observer independence, or training readiness.",
+  "prohibited": ["automatic reboot", "wake/unlock", "force-stop", "APK replacement", "root", "clock/power changes", "training", "SDK changes", "fixture/gate changes"],
+  "training": "NO-GO"
+}

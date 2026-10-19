@@ -5,7 +5,8 @@
 ordered FP32候補を実装した。標準FLOAT32 MatMul診断でDMA abort / API6031が発生し、
 続くdefault標準MatMulと新Custom最初のexecuteも同じAPI6031 / process139で終了した。
 新Customの数値出力は得られていない。Standalone、Native、正式cohort、性能の成功を主張しない。
-実機の手動再起動とADB/Awake回復を依頼し、それまで実機再試行を止めている。
+前回停止後の再開確認では同一端末とAwakeを再確認したが、障害後の再起動は未実施だった。
+その後ユーザーから追加の再現確認指示があり、同一bootでの1プロセスに限定した別planを固定した。
 **40k→60k / 200k trainingはNO-GO。**
 
 ## A. Baseline / provenance
@@ -197,6 +198,23 @@ NoTap variantは未実行であり、NoTapの大きいstack frameがこの最初
 3独立processのdigestは**未測定・未認定**。Hostの小さい誤差をDSPの値として転記していない。
 旧6031の `UNRESOLVED / DORMANT / WATCH` 記録を残した上で、今回は新規再現を追加した。
 6031が現在もdormantだったとは報告しない。
+
+停止位置を保存stdoutと独立照合した。FLOAT32 MatMul診断は90 executesがAPI成功し、
+最後の完了pairはObserved+Tap / F3/G14の両headだった。loop順から次のF3/G15での停止が
+推定されるが、失敗executeのDSP受信wordsは得られておらず、特定operandが原因とはしない。
+続くdefault MatMulと新Customは成功executeが0、rawはともに0 bytesだった。
+共通のDMA abort / 6031というsignatureだけでは、同じ根本原因や新kernel本体の実行を証明できない。
+
+再開時の読み取り専用preflightは同一端末、Awake、active run不在等を再確認してPASSした。
+一方、uptimeと前回失敗evidenceの保存時刻から、障害後の再起動は未実施と確認した。
+この確認で数値probeは実行しておらず、runtimeの復帰や新DSP精度の認定には用いない。
+新しい確認とlog比較は別のprivate folderへ保存し、元の失敗evidenceを変更していない。
+
+ユーザーの明示指示による同一boot再現確認は
+[recheck plan](../host_tests/fp32_custom/backward_6031_same_boot_recheck_plan.json) に事前登録した。
+対象は前回失敗した既存default MatMul、同一probe、ForwardLimit=1、1 OS processのみ。
+fresh safety preflightを省略せず、API失敗の再発時は追加試行を止める。
+このbounded再確認は新Custom修復の認定や全件精度検査とは別である。
 
 ## H. Conditional Native / actual gradient
 
