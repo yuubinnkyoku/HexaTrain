@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hmx_identity.h"
+
 #if !defined(__HEXAGON_ARCH__) || __HEXAGON_ARCH__ != 81
 #error This probe must be built for the V81 DSP target.
 #endif
@@ -30,15 +32,18 @@ enum {
   TILE_BYTES = 2048,
   VTCM_BYTES = 12288,
   BIAS_BYTES = 256,
-  HMX_MAGIC = 0x484d5831,
+  HMX_MAGIC = HMX_IDENTITY_MAGIC,
   HMX_ERR_ARG = 14001,
   HMX_ERR_ALLOC = 14002,
   HMX_ERR_VTCM = 14003,
   HMX_ERR_LOCK = 14004,
-  HMX_ERR_UNLOCK = 14005,
-  HMX_ERR_POWER = 14006,
-  PROBE_REVISION = 3,
-  MODE_IDENTITY = 30,
+  HMX_ERR_UNLOCK = 14005,   /* legacy hmx_unlock (v1), unused by this probe */
+  HMX_ERR_POWER = 14006,    /* HAP_power_set power-up request failed */
+  HMX_ERR_UNLOCK2 = 14007,  /* cleanup stage (a): hmx_unlock2 failed */
+  HMX_ERR_RELEASE = 14008,  /* cleanup stage (b): compute_res_release failed */
+  HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
+  PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
+  MODE_IDENTITY = HMX_IDENTITY_MODE,
 };
 
 typedef struct probe_context {
@@ -297,7 +302,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
 
   /* Identity mode: no HMX execution, no resource acquisition.
    * results[0..3] carry the DSP-side revision, q, mode and arch so the
-   * host can verify that the deployed skel matches this source. */
+   * host can verify that the deployed skel matches this source.
+   * metadata[2] is unused in this mode (normal runs report VTCM bytes
+   * there), so it echoes the build id; 0 means "unknown / legacy build". */
   if (mode == MODE_IDENTITY) {
     results[0] = PROBE_REVISION;
     results[1] = q;
@@ -305,6 +312,7 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     results[3] = __HEXAGON_ARCH__;
     metadata[0] = HMX_MAGIC;
     metadata[1] = __HEXAGON_ARCH__;
+    metadata[HMX_IDENTITY_BUILD_ID_SLOT] = HMX_PROBE_BUILD_ID;
     metadata[7] = 0;  // HMX not executed
     metadata[8] = 0;  // no trials
     return 0;
@@ -329,6 +337,11 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   int power_status = HAP_power_set(&power_client, &power_req);
   metadata[4] = power_status;
   if (power_status) {
+    /* Early exit BEFORE anything was acquired: no compute_res resource and
+     * no VTCM reserve exist yet, so there is nothing to unlock or release
+     * here. The defensive power-down request below stays (it can only clear
+     * a partially granted vote), and the EARLIEST failing stage wins:
+     * HMX_ERR_POWER (14006) regardless of the defensive request's result. */
     HAP_power_request_t power_down;
     memset(&power_down, 0, sizeof(power_down));
     power_down.type = HAP_power_set_HMX_v2;
@@ -341,12 +354,20 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
 
   int combined_lock_status = 0;
   int hmx_only_lock_status = 0;
+  int hmx_only_unlock_status = 0;
+  int hmx_only_release_status = 0;
+  int combined_unlock_status = 0;
+  int combined_release_status = 0;
+  int power_down_status = 0;
   uint8_t *vtcm = NULL;
   int combined_resource = 0;
   int hmx_only_resource = 0;
   const uint64_t start = HAP_perf_get_time_us();
 
-  /* Mode A: HMX-only resource (htp-ops-lib style). */
+  /* Mode A: HMX-only resource (htp-ops-lib style).
+   * Cleanup stage (a)+(b) for this resource, executed exactly once:
+   * unlock2 only if lock2 returned 0, then release. A failed lock means
+   * there is no held lock, so unlock is skipped (never unlock un-locked). */
   {
     compute_res_attr_t attr;
     int status = HAP_compute_res_attr_init(&attr);
@@ -357,10 +378,11 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
         hmx_only_lock_status = HAP_compute_res_hmx_lock2(
             hmx_only_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
         if (!hmx_only_lock_status) {
-          (void)HAP_compute_res_hmx_unlock2(
+          hmx_only_unlock_status = HAP_compute_res_hmx_unlock2(
               hmx_only_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
         }
-        (void)HAP_compute_res_release(hmx_only_resource);
+        hmx_only_release_status =
+            HAP_compute_res_release(hmx_only_resource);
         hmx_only_resource = 0;
       } else {
         hmx_only_lock_status = -1;
@@ -371,7 +393,10 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   }
   metadata[5] = hmx_only_lock_status;
 
-  /* Mode B: combined VTCM + HMX resource (current style). */
+  /* Mode B: combined VTCM + HMX resource (current style).
+   * Same single-pass cleanup: unlock2 only after a lock2 success, then
+   * release. A VTCM reserve failure (HMX_ERR_VTCM) means the lock was
+   * never taken, so unlock is skipped and only release runs. */
   {
     compute_res_attr_t attr;
     int status = HAP_compute_res_attr_init(&attr);
@@ -393,11 +418,12 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
             run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
             metadata[7] = 1;
             metadata[8] = 2;
-            (void)HAP_compute_res_hmx_unlock2(
+            combined_unlock_status = HAP_compute_res_hmx_unlock2(
                 combined_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
           }
         }
-        (void)HAP_compute_res_release(combined_resource);
+        combined_release_status =
+            HAP_compute_res_release(combined_resource);
         combined_resource = 0;
       } else {
         combined_lock_status = -1;
@@ -412,7 +438,7 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   const uint64_t elapsed = HAP_perf_get_time_us() - start;
   metadata[3] = elapsed > 0x7fffffffULL ? 0x7fffffff : (int)elapsed;
 
-  /* Power down. */
+  /* Cleanup stage (c): power down after every acquired resource is gone. */
   {
     HAP_power_request_t power_down;
     memset(&power_down, 0, sizeof(power_down));
@@ -420,9 +446,47 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     power_down.hmx_v2.set_power = 1;
     power_down.hmx_v2.power_up = 0;
     power_down.hmx_v2.set_clock = 0;
-    (void)HAP_power_set(&power_client, &power_down);
+    power_down_status = HAP_power_set(&power_client, &power_down);
   }
 
+  /* Resource cleanup return codes (the metadata layout is ABI-fixed at 9
+   * slots, so cleanup failures are reported through the run() status only):
+   *
+   *   stage order (also the tie-break order when several stages fail):
+   *     (a-1) mode A hmx_unlock2  -> 14007 HMX_ERR_UNLOCK2
+   *     (a-2) mode A release      -> 14008 HMX_ERR_RELEASE
+   *     (b-1) mode B hmx_unlock2  -> 14007 HMX_ERR_UNLOCK2
+   *     (b-2) mode B release      -> 14008 HMX_ERR_RELEASE
+   *     (c)   HAP_power_set down  -> 14009 HMX_ERR_POWER_DOWN
+   *   The FIRST failing stage is returned; unlock2 is only ever called
+   *   after a lock2 success and release only after an acquire success, so
+   *   no stage is ever called twice or out of order.
+   *
+   * metadata stays truthful on every path: metadata[4] keeps the power-up
+   * status, metadata[5]/[6] keep the lock2 statuses, metadata[7]/[8] keep
+   * the execution status. A cleanup failure therefore does not overwrite
+   * any metadata slot. */
+  int cleanup_error = 0;
+  if (cleanup_error == 0 && hmx_only_unlock_status != 0) {
+    cleanup_error = HMX_ERR_UNLOCK2;
+  }
+  if (cleanup_error == 0 && hmx_only_release_status != 0) {
+    cleanup_error = HMX_ERR_RELEASE;
+  }
+  if (cleanup_error == 0 && combined_unlock_status != 0) {
+    cleanup_error = HMX_ERR_UNLOCK2;
+  }
+  if (cleanup_error == 0 && combined_release_status != 0) {
+    cleanup_error = HMX_ERR_RELEASE;
+  }
+  if (cleanup_error == 0 && power_down_status != 0) {
+    cleanup_error = HMX_ERR_POWER_DOWN;
+  }
+
+  /* A cleanup failure must be visible to the host on any path where
+   * resources were acquired, so it takes precedence; the execution state
+   * remains readable in metadata[7] (and the lock stages in [5]/[6]). */
+  if (cleanup_error != 0) return cleanup_error;
   if (metadata[7] == 1) return 0;
   return HMX_ERR_LOCK;
 }

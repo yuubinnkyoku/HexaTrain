@@ -160,3 +160,120 @@ are included.
   instruction specification; it does not incorporate htp-ops-lib source.
 - Do not infer FP32 output support or a valid high-precision GEMM from
   this experiment unless on-device tests support that conclusion.
+
+## Build id and identity fail-closed hardening
+
+The shared validator lives in `hmx_identity.h` (no dependencies, usable
+from both host and DSP). It turns the identity-mode echo into a
+fail-closed check with one flag per failure condition:
+
+| Flag | Failure meaning |
+| --- | --- |
+| `HMX_IDENTITY_FAILURE_MAGIC` | DSP metadata `HMX_MAGIC` mismatch |
+| `HMX_IDENTITY_FAILURE_ARCH` | DSP architecture is not V81 |
+| `HMX_IDENTITY_FAILURE_REVISION` | echoed `PROBE_REVISION` mismatch |
+| `HMX_IDENTITY_FAILURE_MODE` | echoed mode is not the identity mode (30) |
+| `HMX_IDENTITY_FAILURE_Q` | echoed `q` is not the requested `q` |
+| `HMX_IDENTITY_FAILURE_BUILD_ID` | nonzero DSP/host build id mismatch |
+| `HMX_IDENTITY_FAILURE_TRIAL_COUNT` | identity-mode trial count is not 0 |
+| `HMX_IDENTITY_FAILURE_HMX_FLAG` | identity metadata HMX flag is set |
+| `HMX_IDENTITY_FAILURE_CLOSE` | mode-30 handle close reported failure |
+
+A build id of `0` on either side is reported as `BUILD_ID=UNAVAILABLE`
+and is **not** a failure (`HMX_BUILD_ID_UNAVAILABLE`): it only means the
+binaries were not stamped. A mismatch between two *nonzero* build ids
+fails the run, so a stale DSP skel can never pair with a newer host
+runner.
+
+The DSP build id travels through `metadata[HMX_IDENTITY_BUILD_ID_SLOT]`
+(`metadata[2]`, unused by mode 30; IDL ABI shapes — `results[4]` and
+`metadata[9]` — are unchanged) and is stamped at compile time with
+`-DHMX_PROBE_BUILD_ID=0xNNNNNNNN`. `hmx_identity.h` defines the macro to
+`0` when unset, so unstamped builds still compile and run.
+
+The identity self test (`probe_identity_selftest.c`) validates the
+shared header on the CPU without a device, including all adversarial
+payloads and the build-id-unavailable semantics:
+
+```sh
+gcc -std=c11 -O2 -Wall -Wextra -o probe_identity_selftest probe_identity_selftest.c
+./probe_identity_selftest          # prints "all checks passed", exit 0
+```
+
+## DSP return codes
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| 14001 | `HMX_ERR_ARG` | invalid argument |
+| 14002 | `HMX_ERR_ALLOC` | rpcmem allocation failed |
+| 14003 | `HMX_ERR_VTCM` | VTCM allocation/alignment failed |
+| 14004 | `HMX_ERR_LOCK` | HMX power-up or lock failed |
+| 14005 | `HMX_ERR_UNLOCK` | legacy unlock status (unused) |
+| 14006 | `HMX_ERR_POWER_UP` | HMX power-up path failed |
+| 14007 | `HMX_ERR_UNLOCK2` | cleanup: second unlock stage failed |
+| 14008 | `HMX_ERR_RELEASE` | cleanup: HMX release stage failed |
+| 14009 | `HMX_ERR_POWER_DOWN` | cleanup: power-down stage failed |
+
+Cleanup precedence: after the compute path, teardown stages run in the
+order mode-A unlock2 → mode-A release → mode-B unlock2 → mode-B release
+→ power-down. The **first failing cleanup stage** wins and is returned
+*before* an execution failure from the compute path, so resource
+mis-management is never masked by a numeric error. Metadata is not
+touched by cleanup reporting. Code 14006 is unchanged: nothing is
+acquired yet on the power-up path, so the defensive power-down is kept
+but not reported as a cleanup failure.
+
+## `run_experiment.ps1` provenance
+
+`run_experiment.ps1` orchestrates a fully local provenance build. It
+stamps a build id, rebuilds both targets (Android AArch64 + Hexagon V81)
+through the SDK CMake toolchain using a response file for
+`-DHMX_PROBE_BUILD_ID` (the SDK `build_cmake`/`cmake_configure.bash`
+path corrupts values containing `=` and drops env `CFLAGS`, so a
+`@file` response is used instead), runs the identity self test, and
+records SHA-256 hashes of all three ship artifacts:
+
+```powershell
+cd host_tests/hmx_acc_residual_rpc
+pwsh -NoProfile -File .\run_experiment.ps1 -Provenance
+```
+
+The script prints a `SHA256` artifact table and writes a transcript to
+`build\hmx_evidence\b_provenance_<timestamp>.txt` (gitignored; never
+committed). Useful parameters: `-BuildId 0xNNNNNNNN` (default: random),
+`-SkipBuild`, `-DeployAndRun`, `-Q`, `-Mode`, `-DeployRetries`.
+
+## Judgment matrix and exit codes
+
+Every run ends with a judgment matrix so the verdicts cannot be
+conflated:
+
+```text
+RPC_OK=1 IDENTITY_OK=1 HMX_EXECUTED=1 RESOURCE_CLEANUP_OK=1
+OBSERVED_REGRESSION_MATCH=1 MATH_ORACLE_MATCH=N/A
+DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED
+exit_code=0 exit_code_description=...
+| legend: 0=ok; 9=identity; 8=close; 7=rpcmem; 6=open; 5=uri; 4=pd; 3=arch; 2=args
+```
+
+- `RPC_OK` — FastRPC call and handle close both succeeded.
+- `IDENTITY_OK` — every identity flag passed (see the table above;
+  failures are printed individually as `identity_fail=<FLAG>`).
+- `HMX_EXECUTED` — DSP metadata reports HMX execution.
+- `RESOURCE_CLEANUP_OK` — all cleanup stages returned success (no
+  14007/14008/14009).
+- `OBSERVED_REGRESSION_MATCH` — raw bits equal previously measured
+  literals (`observed_source_*`); independent of numeric correctness.
+- `MATH_ORACLE_MATCH` — raw bits equal the double-derived expectation
+  (`oracle_source=double_derived` for modes 24–29 with a literal
+  cross-check in `oracle_selfcheck=`; `oracle_source=literal` for modes
+  18/21/22). A math mismatch does **not** change the exit code; the
+  matrix reports it as a fact.
+- `DYNAMIC_FEEDBACK_CONFIRMED` — dynamic-feedback hypothesis status.
+
+Per-mode host reconstruction is defined only for modes {0, 2, 20, 23};
+other modes print `reconstruction=N/A recovered_error=N/A`. The printed
+`scale=` line gives the per-mode scale (32→{24,27}, 128→{26,29},
+otherwise 64). Single-CVT trials label the unused second-convert slot as
+`unused_slot2` / `unused_val` rather than implying a second convert.
+Modes 21/22 print a `zero_residual_control` note with the q binding.
