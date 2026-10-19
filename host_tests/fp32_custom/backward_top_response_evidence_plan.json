@@ -11,6 +11,8 @@
   "mode": "native_softmax",
   "forward_limit": 60,
   "maximum_diagnostic_processes": 1,
+  "validated_reuse": "The initial traced Native Softmax process completed all four observers/full coverage and passed independent raw/total-gradient assessment with the same frozen arithmetic binaries. Reuse this unchanged, source-hashed orchestration for the remaining originally preregistered Native dValue, dual, performance and three cohort processes; this introduces no new mathematics or safety exception.",
+  "remaining_role_protocol": "One full attempt per required role/process. A traced unknown response or other failure stops; inspect and preserve evidence before any further arithmetic, with no automatic retry of a failed traced process.",
   "report_folder": "pilot-native-softmax-trace1",
   "entry": "Measured permit requires both full standalone accuracy/word gates and the post-recovery Forward P joint gate; fresh strict per-process safety preflight remains mandatory.",
   "stop": "Any unknown foreground sample or other safety/transport/API failure stops the owned process. Preserve the failed response privately; no automatic recovery or repeated arithmetic retry.",

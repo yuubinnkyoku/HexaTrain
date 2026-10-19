@@ -247,7 +247,7 @@ top-resumed不明となり、所有を確認したprobeへSIGINTを送り停止�
 所有processの終了を読み取りで確認し、partial raw 140,369,920 bytesを端末/Host SHA一致で保存した。
 actual OS exitは未捕捉でありnull、coverage/teardownは未完了。API成功済みの一部pairを
 Native PASSへ数えない。Native dValue singleとsame-P dualは未実行。
-NATIVE Pの実lifetime、入力不変、observer-free accuracy、actual total gradientは未認定。
+この中断processではNATIVE Pのlifetime、入力不変、observer-free accuracy、actual total gradientを認定しない。
 Host再注入でNative認定を代用していない。
 
 後続の読み取り専用8 samplesはすべてAwake・top-resumed既知だったが、失敗瞬間のresponseは未保存だった。
@@ -257,6 +257,17 @@ Host再注入でNative認定を代用していない。
 Host self-testでは既知1 case、unknown2 casesを確認し、unknownは追加device callやretryなしで拒否した。
 parser、監視周期、安全判定、所有process停止、DSP/Host/probe bytesは変えない。
 trace実行時のorchestration SHAをprivate completionとidentityに保存し、独立assessorで照合する。
+
+最初のtrace Native Softmaxは全9,824 pairs / 全4条件を完走し、独立照合でもPASSした。
+total maxAbs=0.00010078856647055545、consumer-local=0.0000637084093888518、
+P-induced actual=0.00009955926756788358。旧P-only bound=0.0002459099714532658と別に判定した。
+observer / arithmetic word差はいずれも0、API / finite / 全面書き込み / teardownもPASS。
+digestは `edcaa214b0833b00c77d8c410d9e32894eef7e6aaecbce0cfb9307933bfaa16d`。
+これは1-process pilotであり、正式3-processへ数えない。
+
+続く元runnerのNative dValueはObserved+NoTap / F8/G19付近で同じ安全monitor停止となった。
+数値FAILとはせず、この中断も別evidenceとして保持する。trace runnerは元runnerと同じ判定を保ち、
+初回full実行の独立PASS後、残りの既登録roleにも同じsource hashで利用する。
 
 準備済みgraphはheadごとに旧Forward Softmax producerが作る1つのP IDを新consumerへ渡す。
 Native graphのinput mapにはPを追加せず、外部dP/dContextだけをAPP_WRITEとする。
@@ -397,9 +408,9 @@ TRAINING_READYを認定しない。protected checkpoint decode/write、training�
 | 24 | 旧標準Softmax 0.30440565 / dValue 0.03556465のFAILをfreshに保持。 |
 | 25 | codegen PASS。初回DMA abort / 6031 / exit139は保存。後続対照・両pilotは実行成功、初回原因は未確定。 |
 | 26 | dual total-gradient accuracy未認定のため実DSP cost未測定。静的stack/scratchのみ監査。 |
-| 27 | Softmax singleは安全monitorで中断し未認定。dValue singleは未実行。 |
+| 27 | Softmax singleはtrace pilotで全件PASS。dValue singleは安全monitor中断で未認定。 |
 | 28 | dual native未実行。 |
-| 29 | actual DSP total gradientは未認定。P-only bound PASSで代用していない。 |
+| 29 | Softmax single pilotのactual total maxAbs 0.00010078856647055545を旧gateでPASS。dValue/dual/正式cohortは未完了。 |
 | 30 | Fast/Host/Qnnとfresh Forward PASS。他のrequired fresh HVX/smoke/W8は未完了、以前の114/114は歴史的証拠。 |
 | 31 | 通常battery/temp/給電を停止条件にせず監視。critical保護とawake条件は維持。 |
 | 32 | 固定SDK、同一端末、protected状態、非破壊操作を維持。checkpoint/optimizer/trainingを変更しない。 |
