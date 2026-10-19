@@ -314,6 +314,7 @@ int main(int argc, char **argv) {
       phase_d ? -bias20_decode_out_bias(out_bias_fp16, (unsigned)bias_n)
               : 0.0;
   const double expected_residual = scaled - out_bias_mag;
+  double hypothesis_out = 0.0;
   if (phase_d) {
     printf("bias_n=%d out_bias_fp16_raw=0x%04x extra4_nibble=%d "
            "decoded_out_bias_magnitude=%.17g ",
@@ -325,6 +326,29 @@ int main(int argc, char **argv) {
     } else {
       printf("expected_fp16_raw=0x%04x expected_value=%.17g\n",
              double_to_fp16(expected_residual), expected_residual);
+      /* Device-2026-10-20 battery hypothesis oracle. Measured laws:
+       *  - The convert output snaps onto the fine grid of the OUTPUT BIAS
+       *    representation: 1 nibble LSB = 2^(e_obias-14) where e_obias is
+       *    the FP16 exponent of the out-bias magnitude (64.5 -> e=6 ->
+       *    2^-8; scale-32/128 sweep biases give 2^-9/2^-7, matching the
+       *    plateau scaling of modes 24..29).
+       *  - Positive targets round UP onto that grid (q=8 target +0.25
+       *    units -> +1 unit = 0x1c00; ceiling, not nearest, since nearest
+       *    would give 0 for 0.25).
+       *  - Non-positive fine targets clamp to zero (battery modes 32..36).
+       * This is a HYPOTHESIS gate for the regression verdict only; the
+       * math verdict below stays independently double-derived. */
+      int e_obias = -1;
+      double grid = 0.0;
+      e_obias = ((out_bias_fp16 >> 10) & 0x1f) - 15;
+      grid = ldexp(1.0, e_obias - 14);
+      hypothesis_out = (expected_residual > 0.0)
+                           ? ceil(expected_residual / grid) * grid
+                           : 0.0;
+      printf("hypothesis_model=bias_grid_ceil_nonneg e_obias=%d grid=%.17g "
+             "hypothesis_value=%.17g hypothesis_fp16_raw=0x%04x\n",
+             e_obias, grid, hypothesis_out,
+             double_to_fp16(hypothesis_out));
     }
     if (mode == 37) {
       /* Report the fallback fact: the intended n=1 alignment
@@ -474,13 +498,25 @@ int main(int argc, char **argv) {
       math_source = "double_derived";
       oracle_selfcheck = 1; oracle_selfcheck_literal = 0x1800;
       break;
-    case 31: case 32: case 33: case 34: case 35: case 36: case 37:
-      /* Phase D sweep (31..36) and exact-zero control (37): observed and
-       * math expectations are BOTH double-derived — no device run has
-       * measured these modes yet, so there is no regression literal.
-       * single-CVT: results[0] is the convert output, slot 2 is 0. */
-      expected[0] = double_to_fp16(expected_residual);
-      expected_math[0] = expected[0];
+    case 31: case 32: case 33: case 34: case 35: case 36:
+      /* Phase D sweep modes: regression expectation uses the battery-derived
+       * bias-grid hypothesis (positive ceiling / negative zero clamp),
+       * printed as hypothesis_* lines above; the math expectation stays
+       * double-derived. mode 31 additionally cross-checks the hypothesis
+       * against the previously measured mode-23 plateau literal. */
+      expected[0] = double_to_fp16(hypothesis_out);
+      expected_math[0] = double_to_fp16(expected_residual);
+      have_expected = 1; have_math = 1; single_convert = 1;
+      expected_src[0] = "hypothesis_bias_grid";
+      math_source = "double_derived";
+      if (mode == 31) {
+        oracle_selfcheck = 1; oracle_selfcheck_literal = 0x1c00;
+      }
+      break;
+    case 37:
+      /* Exact-zero control: target 0 exactly; math and hypothesis agree. */
+      expected[0] = 0x0000;
+      expected_math[0] = 0x0000;
       have_expected = 1; have_math = 1; single_convert = 1;
       expected_src[0] = "double_derived";
       math_source = "double_derived";
