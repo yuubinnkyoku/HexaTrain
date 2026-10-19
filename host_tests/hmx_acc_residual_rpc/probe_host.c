@@ -58,11 +58,15 @@ int main(int argc, char **argv) {
   int identity[4] = {0, 0, 0, 0};
   const int identity_status =
       hexatrain_hmx_acc_residual_run(handle, identity, 4, meta, 9, q, 30);
+  const int identity_meta_ok = (meta[0] == 0x484d5831 && meta[1] == 81 &&
+                                meta[7] == 0 && meta[8] == 0);
   const int identity_ok = (identity_status == 0 && identity[0] == 3 &&
-                           identity[1] == q && identity[2] == 30 &&
-                           identity[3] == 81);
+                            identity[1] == q && identity[2] == 30 &&
+                            identity[3] == 81 && identity_meta_ok);
   printf("identity_status=%d dsp_revision=%d dsp_q=%d dsp_mode=%d dsp_arch=%d\n",
          identity_status, identity[0], identity[1], identity[2], identity[3]);
+  printf("identity_meta=0x%x arch=%d hmx_executed=%d trials=%d\n",
+         meta[0], meta[1], meta[7], meta[8]);
   printf("dsp_identity=%s\n", identity_ok ? "MATCH" : "MISMATCH");
   if (!identity_ok) {
     rpcmem_free(result);
