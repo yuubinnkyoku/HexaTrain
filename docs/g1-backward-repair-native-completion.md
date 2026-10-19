@@ -2,7 +2,7 @@
 
 ## A. Starting evidence
 
-Status: **IN_PROGRESS**. Native dValue single and dual are independently verified as full one-process pilots. Formal cohort, performance and remaining device regressions are not yet certified. Training remains **NO-GO**.
+Status: **BLOCKED_FORMAL_COHORT** at the Awake hard gate. Native dValue single and dual are independently verified as full one-process pilots. Formal cohort, performance and remaining device regressions are not certified. Training remains **NO-GO**. Manual wake is pending; no additional device arithmetic is launched automatically.
 
 The starting commit is `c6c30c18713084e002ce5485b8f28d67d26faad2`, on the recovered research checkout, with a clean tree and no upstream. Work continues on `investigation/g1-backward-repair-native-completion`. The common Git directory and ancestry of `e05f3539e2e0c0e461157a3abf1d9833d74b392b`, `be4271efd1b8fb71f0c66f3ae7c35f04571aa78e`, and `49d91b67e1ca4b7b7ede66231e5b7abfe1220ec2` were checked. No other clone was explored.
 
@@ -51,7 +51,7 @@ The Host parser distinguishes command failure, empty response, valid response wi
 | Monitor / ADB load effect | Unresolved; no causal load experiment |
 | Command failure / truncation | Historical dump was nonempty and structurally valid; no unique command-failure attribution |
 
-The first new Forward preflight stopped at **DEVICE_NOT_AWAKE_OR_UNKNOWN**, before any DSP execute. After explicit manual wake by the user, a new unused report folder passed fresh preflight. The earlier stop was retained, not overwritten or promoted.
+The first new Forward preflight stopped at **DEVICE_NOT_AWAKE_OR_UNKNOWN**, before any DSP execute. After explicit manual wake by the user, a new unused report folder passed fresh preflight. The earlier stop was retained, not overwritten or promoted. Both this stop and the later cohort preflight contain actual `mWakefulness=Dozing`; neither collected activity evidence or started a probe. These new Dozing observations do not establish the cause of the historical Awake / missing-top-resumed incident.
 
 ## C. 6031 watch
 
@@ -107,7 +107,7 @@ The original plan requires five roles per OS process (`standalone_softmax`, `sta
 
 | Check | Current status |
 | --- | --- |
-| Fast | PASS; final source gate still required at closeout |
+| Fast | PASS, closeout94.2s |
 | Host profile | PASS, 373.0s |
 | Qnn profile | PASS, 530.7s; no install |
 | Frozen custom Host arithmetic | PASS, 29,472 calls |
@@ -118,17 +118,22 @@ The original plan requires five roles per OS process (`standalone_softmax`, `sta
 | Dual | Full one-process pilot PASS |
 | Formal cohort | NOT_EXECUTED |
 | Remaining old device variants / smoke / Muon W8 | NOT_EXECUTED |
-| Project Formal profile | NOT_EXECUTED |
+| Fresh C0 Host negative | Expected nine FAIL reproduced, actual exit4 |
+| Project Formal profile | BLOCKED_SCOPE / NOT_EXECUTED |
 
 Old negative controls remain unchanged: C0 nine FAIL, cumulative P36 FAIL, Scale1 FAIL, Mask176 required predicate FAIL, Softmax224 local FAIL, standard Backward Softmax core0.3044056503066239 FAIL, standard dValue core0.035564650305797585 FAIL. These historical results are not described as this mission's fresh regressions. The prior 35/40-node Tap incident remains REPRODUCED / CAUSE UNRESOLVED.
 
+The C0 negative was additionally rerun for this mission using hash-identical copies of the two required frozen LN fixture files in a new private working directory: nine expected failures, exit4, no checkpoint decode or fixture regeneration. The project Formal profile was inspected but not run: its Full implementation regenerates existing default private research reports and includes an unrelated CPU training probe. This mission forbids private evidence overwrite and training updates. No heavy step was skipped and relabeled Formal PASS; the separately preregistered DSP cohort remains a distinct, uncompleted requirement.
+
 ## J. Architecture and protected state
 
-No Production operator, Muon ABI, optimizer, LR, checkpoint codec, threshold, fixture, gradient scaling or training update is changed. The starting five protected artifact identities and all nonworking refs passed audit. Checkpoint material is hash-checked without decode/write. Prior private evidence is retained byte-for-byte. Normal battery/thermal/power observations remain monitoring-only; critical device protection and Awake/top-resumed remain hard gates.
+No Production operator, Muon ABI, optimizer, LR, checkpoint codec, threshold, fixture, gradient scaling or training update is changed. The five protected artifact identities and all nonworking refs passed starting and progress audits; all333 previous private evidence files remain byte-identical. Checkpoint material is hash-checked without decode/write. Normal battery/thermal/power observations remain monitoring-only; critical device protection and Awake/top-resumed remain hard gates.
 
 Even a complete Saved-P closure would still leave actual PV/Gate/Output generation of dP/dContext, dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation uncertified. Full Attention Backward, full Attention, full1-layer, full19-layer and TRAINING_READY are not granted. **40k→60k / 200k remains NO-GO**.
 
 Private evidence is under `build/reports/g1-backward-repair-native-completion/`; raw tensor/activity/endpoint/app/device data stays private. The public projection rejects missing exit/coverage/gradient, wrong binary, observer downgrade, false native/formal claims, private fields and unmeasured performance. Push/PR/merge/history rewriting are prohibited.
+
+Public aggregate: `docs/results/g1-backward-repair-native-completion-summary.json`. Exporter self-test rejects18 invalid evidence cases. Granted pilot classifications: **TOP_RESUMED_MONITOR_CHARACTERIZED**, **NATIVE_DVALUE_SINGLE_VERIFIED**, **SAVED_P_DUAL_NATIVE_VERIFIED**, **SAVED_P_LIFETIME_VERIFIED**, **SAVED_P_DUAL_OBSERVER_FREE_VERIFIED**. Formal status: **BLOCKED_FORMAL_COHORT**; root-cause / remaining-frontier status: **UNRESOLVED**. No alternative-monitor verification, formal-cohort verification or performance measurement classification is granted.
 
 ## Required answers (current evidence)
 
@@ -169,7 +174,7 @@ Private evidence is under `build/reports/g1-backward-repair-native-completion/`;
 | 33 | Backward additional execution cost not measured. |
 | 34 | Formal numerical cohort is required before performance; current first-cohort preflight stopped at Awake. |
 | 35 | Critical safety hard gates retained; ordinary battery/temperature/power monitored without new waivers. |
-| 36 | Starting protected files/refs PASS; final closeout integrity audit pending. No checkpoint decode/write. |
+| 36 | Protected files/refs PASS; all333 prior private evidence files also rehashed unchanged. No checkpoint decode/write. |
 | 37 | Actual PV/Gate/Output dP/dContext, then dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation. |
 | 38 | Neither full1-layer nor full19-layer is certified. |
 | 39 | 40k→60k /200k training remains NO-GO. |
