@@ -249,6 +249,11 @@ function Invoke-DeployAndRun($artifacts) {
     if ($LASTEXITCODE -ne 0) { throw "ADB_PUSH_FAILED: $name" }
   }
 
+  # adb push does not carry the execute bit; /data/local/tmp allows exec for
+  # shell user, and chmod is a plain non-root, non-sticky operation.
+  & adb @adbArgs shell chmod 755 $DeviceDir/hexatrain_hmx_acc_residual_test 2>&1 | ForEach-Object { $script:LogLines.Add("  [adb] $_") }
+  if ($LASTEXITCODE -ne 0) { throw 'ADB_CHMOD_FAILED: host test binary' }
+
   $remoteCmd = "cd $DeviceDir && export LD_LIBRARY_PATH=$DeviceDir && export DSP_LIBRARY_PATH=$DspLibraryPath && ./hexatrain_hmx_acc_residual_test $Q $Mode"
   $attempt = 0
   $runExit = -1
