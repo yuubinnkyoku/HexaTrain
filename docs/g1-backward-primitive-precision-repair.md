@@ -1,10 +1,12 @@
 # G1 Backward primitive precision attribution / selective repair
 
-**現状は実機runtimeでBLOCKED。新CustomのDSP精度は未認定。**
+**新Customの両Standaloneは実DSP pilot PASS。Nativeと3-process正式認定は未完了。**
 標準primitiveの受信tensor境界に対する局所誤差を分離し、独立Host参照で旧gateを満たす
 ordered FP32候補を実装した。標準FLOAT32 MatMul診断でDMA abort / API6031が発生し、
 続くdefault標準MatMulと新Custom最初のexecuteも同じAPI6031 / process139で終了した。
-新Customの数値出力は得られていない。Standalone、Native、正式cohort、性能の成功を主張しない。
+初回の新Custom数値出力は得られなかったが、その後のdefault対照は100 executesを完走した。
+同じfrozen binaryでSoftmaxとdValueを再開し、それぞれ全9,824 pairsを独立にPASSした。
+Native、正式cohort、性能の成功を主張しない。
 前回停止後の再開確認では同一端末とAwakeを再確認したが、障害後の再起動は未実施だった。
 その後ユーザーから追加の再現確認指示があり、同一bootでの1プロセスに限定した別planを固定した。
 **40k→60k / 200k trainingはNO-GO。**
@@ -185,19 +187,30 @@ compile sourceは `bb6aaceb42de505b29689a362ce8293687e7ab89`。
 v3/v4間のobject・assembly・IR・Host .soは一致したが、linked DSP ELF bytesは異なった。
 そのlink差を算術変更やruntime結果とは扱わず、最終v4 bytesを固定した。
 
-## G. Standalone DSP / runtime stop
+## G. Standalone DSP / runtime episode and recovery pilots
 
-最初の新Custom Observed+Tap graphはregister / create / finalizeまで成功したが、
+初回の新Custom Observed+Tap graphはregister / create / finalizeまで成功したが、
 最初のexecuteで約10秒後にAPI6031、stderrにDMA abort 6033、process exit139を記録した。
 数値pair出力はなく、full writes / finite / teardownの成功は確認できない。
 同じ現象が直前の標準FLOAT32 MatMulとdefault標準MatMulにもあった。
 共通runtime状態と新kernel固有の問題の因果は未確定。
 NoTap variantは未実行であり、NoTapの大きいstack frameがこの最初のTap失敗の原因とはしない。
 
-新Softmax maxAbs、新dValue maxAbs、DSP word identity、4 observer accuracy / final words、
-3独立processのdigestは**未測定・未認定**。Hostの小さい誤差をDSPの値として転記していない。
+その後、同一binaryで実機Standaloneを再実行し、rawを独立PC oracleで照合した。
+
+| Repaired DSP pilot | Core maxAbs | Holdout maxAbs | Gate | Arithmetic / observer word mismatches |
+|---|---:|---:|---:|---:|
+| Softmax / dMaskedLogits | 0.00006335392901668513 | 0.0000022067718461471486 | 0.002 | 0 / 0 |
+| dValue TN32 | 0.0000168030018699028 | 0.0000027630283376822717 | 0.01 | 0 / 0 |
+
+各consumerでCore 2,200 / Holdout 256を全4 observer条件で検証し、合計9,824 pairs、
+4 graphs / 4,912 executesを完走した。API成功、finite、入力不変、全面書き込み、
+poison/canary、DSP receipt、teardownを確認した。これは各1 OS processのpilotであり、
+3独立processの正式認定へ昇格させない。
+Softmax digestは `fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267`、
+dValueは `64248fcdfaf2534c37f40bc961987d0a627f6d4c457b3ba7cc553de2ac316e41`。
 旧6031の `UNRESOLVED / DORMANT / WATCH` 記録を残した上で、今回は新規再現を追加した。
-6031が現在もdormantだったとは報告しない。
+初回episodeを消さず、後続試験での非再現と区別する。根本原因は未確定のままWATCHを維持する。
 
 停止位置を保存stdoutと独立照合した。FLOAT32 MatMul診断は90 executesがAPI成功し、
 最後の完了pairはObserved+Tap / F3/G14の両headだった。loop順から次のF3/G15での停止が
@@ -216,9 +229,20 @@ NoTap variantは未実行であり、NoTapの大きいstack frameがこの最初
 fresh safety preflightを省略せず、API失敗の再発時は追加試行を止める。
 このbounded再確認は新Custom修復の認定や全件精度検査とは別である。
 
+このdefault対照は100 executes / 200 pairsを完走し、6031は再現しなかった。
+actual OS exit4は旧数学gateの8 accuracy FAILによるもので、API失敗ではない。
+finite / guards / teardown、observer word差0を独立に確認した。
+前後のuptimeから推定したboot時刻差は約0.54秒で、再起動なしと整合した。
+さらに旧Forward Pを14,356 numerical recordsで再確認し、独立合同gateはPASSした。
+これらの回復対照は新Standaloneの直接精度証拠と混同しない。
+
+dValueの最初の再開はsleep、続く2回は実行直前のtop-resumed不明で停止した。
+いずれも数値probe開始前であり、別folderに保存した。手動wakeと通常アプリの維持後に
+fresh preflightから再開し、4回目の再開folderで上記の全件pilotを得た。
+
 ## H. Conditional Native / actual gradient
 
-両Standaloneの実機gateが成立していないため、single Softmax、single dValue、same-P dualはNOT_EXECUTED。
+両Standaloneのpilot gateは成立した。single Softmax、single dValue、same-P dualは現在NOT_EXECUTED。
 NATIVE Pの実lifetime、入力不変、observer-free accuracy、actual total gradientは未認定。
 Host再注入でNative認定を代用していない。
 
@@ -250,7 +274,7 @@ NoReceiptの内部timerはnull。std QNN内部timerも取得したと主張し�
 | Fresh Double QK + custom Scale/Mask/Softmax + P | PASS、14,356 numerical records、joint failed predicates 0 |
 | Fresh old standard Backward | 両consumerの既知accuracy FAILを再現 |
 | Fresh C0 Host negative | expected exit4、9 FAILを再現 |
-| Other required fresh HVX / device smoke / Muon W8 | 現runtime障害下では未完了。過去114/114をfresh成功へ転用しない |
+| Other required fresh HVX / device smoke / Muon W8 | 未完了。Standalone再開後に順次検証する。過去114/114をfresh成功へ転用しない |
 
 fresh Forward合同値はP maxAbs=4.236482907815642e-7、row error core=2.2724270820617676e-7 /
 holdout=2.682209014892578e-7、P-induced dScores bound=0.0002459099714532658、
@@ -277,15 +301,16 @@ private evidenceは `build/reports/g1-backward-primitive-precision-repair/`、
 public aggregateは [summary](results/g1-backward-primitive-precision-repair-summary.json)。
 [allow-list exporter](../scripts/export_public_backward_precision.py) はraw/identity/coverageと独立数値を再検査する。
 false PASS、欠落process、wrong binary、old FAIL上書き、observer downgrade、wrong gate、数値欠落、
-raw field、protected mismatch等の10件拒否self-testをPASSした。
+raw field、protected mismatch、wrong role、未測定値の偽装、unsafe/duplicate pilot選択等の15件拒否self-testをPASSした。
 raw tensors、APK hash、device IDs、endpoint、private logs、絶対local path、SDK binariesはcommitしない。
 
 ## K. Decision / resumption
 
 最小の有望候補はfused ordered FP32 Softmax + ordered Scalar FP32 TN32 dValue。
-Host数学とcodegenは成立したが、実機修復成功は未証明。
-現在のblockerは繰り返したAPI6031 / exit139であり、新算術のaccuracy FAILとは分類しない。
-復帰に必要な外部条件は端末runtimeの回復、Awake、ADBの同一端末接続。
+Host数学、codegen、両Standaloneの実機pilotは成立した。
+初回のAPI6031 / exit139を保存した上で、同一bootのdefault対照と後続pilotでは非再現だった。
+根本原因は未確定であり、runtime恒久修復とはしない。現在はNativeと正式cohortが未完了である。
+継続にはAwake、既知のtop-resumed、同一端末接続等のfresh安全条件を維持する。
 再開時もfresh preflightから行い、既存evidenceは上書きしない。
 
 Host側の最終照合ではprotected 5 files、開始時の50 refs、frozen repairのbinaryと23 source hashesを
@@ -351,21 +376,21 @@ TRAINING_READYを認定しない。protected checkpoint decode/write、training�
 | 15 | 全4 primitiveの置換になるため、丸め境界を保つfused pathを選択。性能優位は未主張。 |
 | 16 | 別々のFP32 product / increasing-index sum / subtract / final product。TN32も別々のproduct/add、FMAなし。 |
 | 17 | 既存Scalar orderedアルゴリズムとindex契約を新TN32 bodyへ適用。旧body/ABIは変更していない。 |
-| 18 | 新DSP maxAbs未測定。Host core 6.3354e-5、holdout 2.2068e-6。 |
-| 19 | 新DSP maxAbs未測定。Host core 1.6803e-5、holdout 2.7630e-6。 |
-| 20 | Hostは全2,200/256 PASS。実DSP full coverageは未成立。 |
-| 21 | 新4 observer条件のaccuracyは未認定。 |
-| 22 | 新DSP observer mismatchは未測定であり、0とはしない。 |
-| 23 | 正式cohort 0 process、digest一致は未認定。 |
+| 18 | 新DSP pilot core 6.335392901668513e-5、holdout 2.2067718461471486e-6。 |
+| 19 | 新DSP pilot core 1.68030018699028e-5、holdout 2.7630283376822717e-6。 |
+| 20 | 両consumerの実DSP pilotで全2,200/256、全4条件をPASS。 |
+| 21 | 両consumerのpilotで4 observer条件のaccuracyをPASS。 |
+| 22 | 両consumerのpilotでfinal observer差0 words、算術契約差0 words。 |
+| 23 | 正式cohort 0 process。各Standaloneの1-process pilotを正式3-processへ数えない。 |
 | 24 | 旧標準Softmax 0.30440565 / dValue 0.03556465のFAILをfreshに保持。 |
-| 25 | codegen gate PASS。runtimeは同じDMA abort / API6031 / exit139で停止し、kernel固有原因は未確定。 |
-| 26 | accuracy未成立のため実DSP cost未測定。静的stack/scratchのみ監査。 |
+| 25 | codegen PASS。初回DMA abort / 6031 / exit139は保存。後続対照・両pilotは実行成功、初回原因は未確定。 |
+| 26 | dual total-gradient accuracy未認定のため実DSP cost未測定。静的stack/scratchのみ監査。 |
 | 27 | single native未実行。 |
 | 28 | dual native未実行。 |
 | 29 | actual DSP total gradientは未認定。P-only bound PASSで代用していない。 |
 | 30 | Fast/Host/Qnnとfresh Forward PASS。他のrequired fresh HVX/smoke/W8は未完了、以前の114/114は歴史的証拠。 |
 | 31 | 通常battery/temp/給電を停止条件にせず監視。critical保護とawake条件は維持。 |
 | 32 | 固定SDK、同一端末、protected状態、非破壊操作を維持。checkpoint/optimizer/trainingを変更しない。 |
-| 33 | fused ordered FP32 Softmax + Scalar ordered FP32 TN32がHost上の最小有望候補。DSP修復認定は未完了。 |
-| 34 | まずruntime回復とStandalone→Native。その後もPV/Gate/Output、dQ/dK、scatter、projection、LN1 aggregationが残る。 |
+| 33 | fused ordered FP32 Softmax + Scalar ordered FP32 TN32が実DSP Standalone pilotをPASS。Native/正式認定は未完了。 |
+| 34 | 次はStandalone→Nativeと正式cohort。その後もPV/Gate/Output、dQ/dK、scatter、projection、LN1 aggregationが残る。 |
 | 35 | 40k→60k / 200kはNO-GOを維持。 |

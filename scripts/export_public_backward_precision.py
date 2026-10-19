@@ -9,6 +9,7 @@ import subprocess
 from assess_backward_repair import assess,assess_cohort,require,read,ROOT
 from prepare_saved_p_backward import sha
 from export_public_saved_p_backward import verified_regressions
+from permit_backward_repair_native import pilot_selection
 
 MODES=['standalone_softmax','standalone_dvalue','native_softmax','native_dvalue','dual']
 
@@ -34,9 +35,13 @@ def validate(value,probe,protected=True):
     for mode,entry in value['repair'].items():
         exact_keys(entry,'status consumers core_pairs_per_variant holdout_pairs_per_variant observer_variants observer_word_mismatches arithmetic_word_mismatches numerical_digest processes')
         require(entry['status'] in ('NOT_EXECUTED','API_FAILURE','PILOT_PASS','PASS','NUMERICAL_OR_WORD_FAIL'),'repair status')
+        if entry['status'] in ('NOT_EXECUTED','API_FAILURE'):
+            require(entry['consumers']==[] and entry['core_pairs_per_variant']==entry['holdout_pairs_per_variant']==entry['observer_variants']==entry['processes']==0,'unmeasured coverage/metrics')
+            require(all(entry[k] is None for k in ('observer_word_mismatches','arithmetic_word_mismatches','numerical_digest')),'unmeasured word/digest claim')
         if entry['status'] not in ('NOT_EXECUTED','API_FAILURE'):
             require((entry['core_pairs_per_variant'],entry['holdout_pairs_per_variant'],entry['observer_variants'])==(2200,256,4),'incomplete coverage/observer downgrade')
             require(len(entry['consumers'])==(2 if mode=='dual' else 1),'missing consumer')
+            require({c['consumer'] for c in entry['consumers']}==({0,1} if mode=='dual' else {int(mode.endswith('dvalue'))}),'wrong consumer role')
             for c in entry['consumers']:
                 exact_keys(c,'consumer gate core_maxAbs holdout_maxAbs local_maxAbs total_maxAbs p_induced_actual_maxAbs worst')
                 require(c['consumer'] in (0,1) and c['gate']==(.002 if c['consumer']==0 else .01),'wrong gate')
@@ -96,7 +101,7 @@ def compact(result,processes):
         observer_word_mismatches=result['observer_mismatch_words'],arithmetic_word_mismatches=result['arithmetic_word_mismatches'],numerical_digest=result['numerical_digest'],processes=processes)
 
 
-def make(report):
+def make(report,pilot_suffix=None,pilot_directories=()):
     initial=read(report/'initial-private.json');build=read(ROOT/'build/fp32-saved-p-backward-repair-final/build-identity.json')
     require(initial['base']=='49d91b67e1ca4b7b7ede66231e5b7abfe1220ec2','wrong clone/base')
     for p,h in initial['protected'].items():require(sha(ROOT/p)==h,'protected mismatch')
@@ -126,17 +131,20 @@ def make(report):
             local[observer+'_'+stage]=entry['received_double_maxAbs']
     models['dvalue']={name:{k:m[k] for k in model_fields} for name,m in attr['attribution']['dvalue_models'].items()}
     entries={m:dict(status='NOT_EXECUTED',consumers=[],core_pairs_per_variant=0,holdout_pairs_per_variant=0,observer_variants=0,observer_word_mismatches=None,arithmetic_word_mismatches=None,numerical_digest=None,processes=0) for m in MODES}
-    suffix=''
-    for stage in ('dual','singles','standalone'):
-        path=report/'permits'/stage/'native-permit-private.json'
-        if path.exists():
-            permit=read(path);require(permit['probe_sha256']==build['probe_sha256'],'pilot selection binary')
-            suffix=permit.get('pilot_suffix','');require(bool(re.fullmatch('[a-z0-9-]{0,32}',suffix)),'unsafe selected pilot suffix');break
-    folders=[name+('-'+suffix if suffix else '') for name in ['pilot-softmax','pilot-dvalue','pilot-native-softmax','pilot-native-dvalue','pilot-dual']]
-    for mode,folder in zip(MODES,folders):
+    selected=None
+    if pilot_suffix is None and not pilot_directories:
+        for stage in ('dual','singles','standalone'):
+            path=report/'permits'/stage/'native-permit-private.json'
+            if path.exists():
+                permit=read(path);require(permit['probe_sha256']==build['probe_sha256'],'pilot selection binary')
+                selected=permit.get('pilot_folders',pilot_selection(permit.get('pilot_suffix','')))
+                exact_keys(selected,' '.join(MODES));selected=pilot_selection('',[m+'='+f for m,f in selected.items()]);break
+    if selected is None:selected=pilot_selection(pilot_suffix or '',pilot_directories)
+    for mode,folder in selected.items():
         if (report/folder/'identity-private.json').exists():
             identity=read(report/folder/'identity-private.json')
-            if identity['exit_code'] in (0,4):entries[mode]=compact(assess(report/folder),1)
+            if identity['exit_code'] in (0,4):
+                result=assess(report/folder);require(result['mode']==mode,'wrong selected role');entries[mode]=compact(result,1)
             else:
                 require(read(report/folder/'execution-before-readback-private.json')['exit_code']==identity['exit_code'],'runtime failure completion')
                 require(sha(report/folder/'saved-p-words.bin')==identity['raw_evidence_sha256'],'runtime raw SHA')
@@ -177,8 +185,8 @@ def make(report):
         classes+=['CUSTOM_SOFTMAX_BACKWARD_STANDALONE_VERIFIED','CUSTOM_DVALUE_STANDALONE_VERIFIED','BACKWARD_OBSERVER_INDEPENDENCE_VERIFIED','SAVED_P_SINGLE_NATIVE_VERIFIED','SAVED_P_DUAL_NATIVE_VERIFIED','SAVED_P_BACKWARD_TOTAL_GRADIENT_VERIFIED']
     else:classes+=['UNRESOLVED']
     if performance is not None:classes+=['BACKWARD_REPAIR_PERFORMANCE_MEASURED']
-    if entries['standalone_softmax']['status']=='API_FAILURE':classes+=['BLOCKED_SOFTMAX_BACKWARD_REPAIR']
-    if entries['standalone_dvalue']['status']=='API_FAILURE':classes+=['BLOCKED_DVALUE_REPAIR']
+    if entries['standalone_softmax']['status'] in ('API_FAILURE','NUMERICAL_OR_WORD_FAIL'):classes+=['BLOCKED_SOFTMAX_BACKWARD_REPAIR']
+    if entries['standalone_dvalue']['status'] in ('API_FAILURE','NUMERICAL_OR_WORD_FAIL'):classes+=['BLOCKED_DVALUE_REPAIR']
     if not any(entries[m]['status']!='NOT_EXECUTED' for m in MODES):classes+=['BLOCKED_DEVICE_SAFETY']
     value=dict(schema=1,base=initial['base'],source_commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
         compiled_source_commit=build['compiled_source_sha'],bundle_source_commit=build['bundle_source_sha'],branch='investigation/g1-backward-primitive-precision-repair',
@@ -204,13 +212,22 @@ def selftest():
         try:validate(bad,'a'*64)
         except (ValueError,KeyError):pass
         else:raise AssertionError('unsafe public aggregate accepted')
-    print('backward_precision_exporter_selftest=PASS rejections=10 device_calls=0')
+    for mutation in (lambda x:x['repair']['standalone_softmax'].update(status='API_FAILURE'),lambda x:x['repair']['standalone_softmax']['consumers'][0].update(consumer=1,gate=.01)):
+        bad=copy.deepcopy(value);mutation(bad)
+        try:validate(bad,'a'*64)
+        except ValueError:pass
+        else:raise AssertionError('wrong-role or unmeasured numerical claim accepted')
+    for overrides in (['standalone_dvalue=../pilot-dvalue'],['unknown=pilot-test'],['standalone_softmax=pilot-a','standalone_softmax=pilot-b']):
+        try:pilot_selection('recovery',overrides)
+        except ValueError:pass
+        else:raise AssertionError('unsafe pilot selection accepted')
+    print('backward_precision_exporter_selftest=PASS rejections=15 device_calls=0')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--self-test',action='store_true');p.add_argument('--report-root',type=pathlib.Path);p.add_argument('--output',type=pathlib.Path);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--self-test',action='store_true');p.add_argument('--report-root',type=pathlib.Path);p.add_argument('--output',type=pathlib.Path);p.add_argument('--pilot-suffix');p.add_argument('--pilot-directory',action='append',default=[]);a=p.parse_args()
     if a.self_test:selftest()
     else:
-        result=make(a.report_root)
+        result=make(a.report_root,a.pilot_suffix,a.pilot_directory)
         with a.output.open('x',encoding='utf-8',newline='\n') as f:json.dump(result,f,indent=2,sort_keys=True,allow_nan=False);f.write('\n')
         print('backward_precision_public_export=PASS cohort_processes='+str(result['cohort_processes']))
