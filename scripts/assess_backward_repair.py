@@ -51,6 +51,10 @@ def assess(directory,role=None,role_raw=None,role_stdout=None):
     identity=read(directory/'identity-private.json')
     completion=read(directory/'execution-before-readback-private.json')
     require(identity['exit_code']==completion['exit_code'],'missing/mismatched captured completion')
+    if 'orchestration_file' in identity:
+        require(identity['orchestration_file']=='scripts/run_backward_repair_trace_probe.ps1','unknown trace orchestration')
+        require(completion.get('orchestration_file')==identity['orchestration_file'] and completion.get('orchestration_sha256')==identity['orchestration_sha256'],'trace orchestration completion mismatch')
+        require(sha(ROOT/identity['orchestration_file'])==identity['orchestration_sha256'],'trace orchestration source changed')
     require(identity['focus_takeover_count']==0 and identity['protected_identity']=='PASS','safety/protected')
     require(sha(directory/'saved-p-words.bin')==identity['raw_evidence_sha256'],'raw SHA')
     require(sha(directory/'saved-p-words.bin.gz')==identity['compressed_evidence_sha256'],'compressed SHA')

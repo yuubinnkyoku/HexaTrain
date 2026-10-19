@@ -34,11 +34,11 @@ def validate(value,probe,protected=True):
     require(value['cohort_processes'] in (0,3),'missing process')
     for mode,entry in value['repair'].items():
         exact_keys(entry,'status consumers core_pairs_per_variant holdout_pairs_per_variant observer_variants observer_word_mismatches arithmetic_word_mismatches numerical_digest processes')
-        require(entry['status'] in ('NOT_EXECUTED','API_FAILURE','PILOT_PASS','PASS','NUMERICAL_OR_WORD_FAIL'),'repair status')
-        if entry['status'] in ('NOT_EXECUTED','API_FAILURE'):
+        require(entry['status'] in ('NOT_EXECUTED','API_FAILURE','INFRASTRUCTURE_FAILURE','PILOT_PASS','PASS','NUMERICAL_OR_WORD_FAIL'),'repair status')
+        if entry['status'] in ('NOT_EXECUTED','API_FAILURE','INFRASTRUCTURE_FAILURE'):
             require(entry['consumers']==[] and entry['core_pairs_per_variant']==entry['holdout_pairs_per_variant']==entry['observer_variants']==entry['processes']==0,'unmeasured coverage/metrics')
             require(all(entry[k] is None for k in ('observer_word_mismatches','arithmetic_word_mismatches','numerical_digest')),'unmeasured word/digest claim')
-        if entry['status'] not in ('NOT_EXECUTED','API_FAILURE'):
+        if entry['status'] not in ('NOT_EXECUTED','API_FAILURE','INFRASTRUCTURE_FAILURE'):
             require((entry['core_pairs_per_variant'],entry['holdout_pairs_per_variant'],entry['observer_variants'])==(2200,256,4),'incomplete coverage/observer downgrade')
             require(len(entry['consumers'])==(2 if mode=='dual' else 1),'missing consumer')
             require({c['consumer'] for c in entry['consumers']}==({0,1} if mode=='dual' else {int(mode.endswith('dvalue'))}),'wrong consumer role')
@@ -149,6 +149,10 @@ def make(report,pilot_suffix=None,pilot_directories=()):
                 require(read(report/folder/'execution-before-readback-private.json')['exit_code']==identity['exit_code'],'runtime failure completion')
                 require(sha(report/folder/'saved-p-words.bin')==identity['raw_evidence_sha256'],'runtime raw SHA')
                 entries[mode]['status']='API_FAILURE'
+        elif (report/folder/'stop-private.json').exists():
+            stopped=read(report/folder/'stop-private.json')
+            require(isinstance(stopped['owned_probe_cancelled'],bool) and isinstance(stopped['reason'],str),'malformed stopped process evidence')
+            entries[mode]['status']='INFRASTRUCTURE_FAILURE'
     cohort_count=0
     if all((report/f'cohort-{i}/identity-private.json').exists() for i in (1,2,3)):
         cohorts=[assess_cohort(report/f'cohort-{i}') for i in (1,2,3)]
@@ -187,6 +191,8 @@ def make(report,pilot_suffix=None,pilot_directories=()):
     if performance is not None:classes+=['BACKWARD_REPAIR_PERFORMANCE_MEASURED']
     if entries['standalone_softmax']['status'] in ('API_FAILURE','NUMERICAL_OR_WORD_FAIL'):classes+=['BLOCKED_SOFTMAX_BACKWARD_REPAIR']
     if entries['standalone_dvalue']['status'] in ('API_FAILURE','NUMERICAL_OR_WORD_FAIL'):classes+=['BLOCKED_DVALUE_REPAIR']
+    if any(e['status']=='INFRASTRUCTURE_FAILURE' for e in entries.values()):classes+=['BLOCKED_DEVICE_SAFETY']
+    if any(entries[m]['status']=='INFRASTRUCTURE_FAILURE' for m in ('native_softmax','native_dvalue','dual')):classes+=['BLOCKED_NATIVE_SAVED_P']
     if not any(entries[m]['status']!='NOT_EXECUTED' for m in MODES):classes+=['BLOCKED_DEVICE_SAFETY']
     value=dict(schema=1,base=initial['base'],source_commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
         compiled_source_commit=build['compiled_source_sha'],bundle_source_commit=build['bundle_source_sha'],branch='investigation/g1-backward-primitive-precision-repair',
@@ -212,7 +218,7 @@ def selftest():
         try:validate(bad,'a'*64)
         except (ValueError,KeyError):pass
         else:raise AssertionError('unsafe public aggregate accepted')
-    for mutation in (lambda x:x['repair']['standalone_softmax'].update(status='API_FAILURE'),lambda x:x['repair']['standalone_softmax']['consumers'][0].update(consumer=1,gate=.01)):
+    for mutation in (lambda x:x['repair']['standalone_softmax'].update(status='API_FAILURE'),lambda x:x['repair']['standalone_softmax'].update(status='INFRASTRUCTURE_FAILURE'),lambda x:x['repair']['standalone_softmax']['consumers'][0].update(consumer=1,gate=.01)):
         bad=copy.deepcopy(value);mutation(bad)
         try:validate(bad,'a'*64)
         except ValueError:pass
@@ -221,7 +227,7 @@ def selftest():
         try:pilot_selection('recovery',overrides)
         except ValueError:pass
         else:raise AssertionError('unsafe pilot selection accepted')
-    print('backward_precision_exporter_selftest=PASS rejections=15 device_calls=0')
+    print('backward_precision_exporter_selftest=PASS rejections=16 device_calls=0')
 
 
 if __name__=='__main__':

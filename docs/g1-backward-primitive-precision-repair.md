@@ -242,9 +242,21 @@ fresh preflightから再開し、4回目の再開folderで上記の全件pilot�
 
 ## H. Conditional Native / actual gradient
 
-両Standaloneのpilot gateは成立した。single Softmax、single dValue、same-P dualは現在NOT_EXECUTED。
+両Standaloneのpilot gateは成立した。Native Softmax singleは開始したが、Observed+NoTap / F18/G13付近で
+top-resumed不明となり、所有を確認したprobeへSIGINTを送り停止した。6031は観測していない。
+所有processの終了を読み取りで確認し、partial raw 140,369,920 bytesを端末/Host SHA一致で保存した。
+actual OS exitは未捕捉でありnull、coverage/teardownは未完了。API成功済みの一部pairを
+Native PASSへ数えない。Native dValue singleとsame-P dualは未実行。
 NATIVE Pの実lifetime、入力不変、observer-free accuracy、actual total gradientは未認定。
 Host再注入でNative認定を代用していない。
+
+後続の読み取り専用8 samplesはすべてAwake・top-resumed既知だったが、失敗瞬間のresponseは未保存だった。
+[限定diagnostic plan](../host_tests/fp32_custom/backward_top_response_evidence_plan.json) と
+[trace runner](../scripts/run_backward_repair_trace_probe.ps1) を追加し、失敗responseの記録だけを増やす。
+元runnerはfrozenのまま残し、source比較で差分をfailure evidenceとorchestration identityに限定した。
+Host self-testでは既知1 case、unknown2 casesを確認し、unknownは追加device callやretryなしで拒否した。
+parser、監視周期、安全判定、所有process停止、DSP/Host/probe bytesは変えない。
+trace実行時のorchestration SHAをprivate completionとidentityに保存し、独立assessorで照合する。
 
 準備済みgraphはheadごとに旧Forward Softmax producerが作る1つのP IDを新consumerへ渡す。
 Native graphのinput mapにはPを追加せず、外部dP/dContextだけをAPP_WRITEとする。
@@ -301,7 +313,7 @@ private evidenceは `build/reports/g1-backward-primitive-precision-repair/`、
 public aggregateは [summary](results/g1-backward-primitive-precision-repair-summary.json)。
 [allow-list exporter](../scripts/export_public_backward_precision.py) はraw/identity/coverageと独立数値を再検査する。
 false PASS、欠落process、wrong binary、old FAIL上書き、observer downgrade、wrong gate、数値欠落、
-raw field、protected mismatch、wrong role、未測定値の偽装、unsafe/duplicate pilot選択等の15件拒否self-testをPASSした。
+raw field、protected mismatch、wrong role、未測定値の偽装、unsafe/duplicate pilot選択等の16件拒否self-testをPASSした。
 raw tensors、APK hash、device IDs、endpoint、private logs、絶対local path、SDK binariesはcommitしない。
 
 ## K. Decision / resumption
@@ -385,7 +397,7 @@ TRAINING_READYを認定しない。protected checkpoint decode/write、training�
 | 24 | 旧標準Softmax 0.30440565 / dValue 0.03556465のFAILをfreshに保持。 |
 | 25 | codegen PASS。初回DMA abort / 6031 / exit139は保存。後続対照・両pilotは実行成功、初回原因は未確定。 |
 | 26 | dual total-gradient accuracy未認定のため実DSP cost未測定。静的stack/scratchのみ監査。 |
-| 27 | single native未実行。 |
+| 27 | Softmax singleは安全monitorで中断し未認定。dValue singleは未実行。 |
 | 28 | dual native未実行。 |
 | 29 | actual DSP total gradientは未認定。P-only bound PASSで代用していない。 |
 | 30 | Fast/Host/Qnnとfresh Forward PASS。他のrequired fresh HVX/smoke/W8は未完了、以前の114/114は歴史的証拠。 |

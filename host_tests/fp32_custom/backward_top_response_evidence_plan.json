@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "g1-backward-top-response-evidence-1",
+  "parent_plan": "backward_primitive_precision_plan.json",
+  "trigger": "Two pre-execute TOP_RESUMED_UNKNOWN stops and one in-run Native Softmax stop; later read-only samples were known and Awake, leaving the actual failed response unavailable.",
+  "purpose": "Capture the exact response rejected by the existing safety parser. Do not retry, reinterpret or waive an unknown top-resumed state.",
+  "runner": "scripts/run_backward_repair_trace_probe.ps1",
+  "parity": "An exact source comparison permits only Top failure-response evidence and explicit orchestration identity fields relative to the immutable original runner. Same parser, preflight, monitoring intervals, safety decisions and owned-process cancellation.",
+  "candidate": "repair-final",
+  "probe_sha256": "23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05",
+  "mode": "native_softmax",
+  "forward_limit": 60,
+  "maximum_diagnostic_processes": 1,
+  "report_folder": "pilot-native-softmax-trace1",
+  "entry": "Measured permit requires both full standalone accuracy/word gates and the post-recovery Forward P joint gate; fresh strict per-process safety preflight remains mandatory.",
+  "stop": "Any unknown foreground sample or other safety/transport/API failure stops the owned process. Preserve the failed response privately; no automatic recovery or repeated arithmetic retry.",
+  "evidence": "Private exact activity response/type/time, original incomplete attempt and partial raw hashes, actual new process completion if available, unchanged binary/source identities. An incomplete process cannot certify Native accuracy.",
+  "training": "NO-GO",
+  "arithmetic_changes": false,
+  "safety_policy_changes": false
+}
