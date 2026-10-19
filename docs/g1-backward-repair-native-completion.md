@@ -95,7 +95,9 @@ Dual NoReceipt/NoTap itself passes both actual total-gradient gates, and final o
 
 ## G. Formal cohort
 
-**NOT_EXECUTED**. The original plan requires five roles per OS process (`standalone_softmax`, `standalone_dvalue`, `native_softmax`, `native_dvalue`, `dual`), three independent OS processes, unchanged binary/fixtures, full coverage and matching per-role numerical digests. Pilots and incomplete attempts are excluded. No role or threshold is changed.
+**NOT_EXECUTED**. The first cohort preflight stopped at DEVICE_NOT_AWAKE_OR_UNKNOWN before an owned probe process or stdout existed. It contributes zero OS processes and zero arithmetic executes. Its original directory is retained. A separately preregistered unused `cohort-1-awake` folder may occupy the first actual process slot only after manual wake and another fresh preflight; this is not an automatic arithmetic retry.
+
+The original plan requires five roles per OS process (`standalone_softmax`, `standalone_dvalue`, `native_softmax`, `native_dvalue`, `dual`), three independent OS processes, unchanged binary/fixtures, full coverage and matching per-role numerical digests. Pilots and incomplete attempts are excluded. No role or threshold is changed. A supplemental role-contract digest directly includes actual output words, role, numerical ordering and measured contract outcomes; legacy numerical digests are preserved unchanged. Synthetic Host controls confirm that receipt/timing changes are excluded, while role, case, output or contract changes alter this supplemental digest.
 
 ## H. Performance
 
@@ -127,3 +129,47 @@ No Production operator, Muon ABI, optimizer, LR, checkpoint codec, threshold, fi
 Even a complete Saved-P closure would still leave actual PV/Gate/Output generation of dP/dContext, dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation uncertified. Full Attention Backward, full Attention, full1-layer, full19-layer and TRAINING_READY are not granted. **40k→60k / 200k remains NO-GO**.
 
 Private evidence is under `build/reports/g1-backward-repair-native-completion/`; raw tensor/activity/endpoint/app/device data stays private. The public projection rejects missing exit/coverage/gradient, wrong binary, observer downgrade, false native/formal claims, private fields and unmeasured performance. Push/PR/merge/history rewriting are prohibited.
+
+## Required answers (current evidence)
+
+| # | Answer |
+| --- | --- |
+| 1 | Yes: recovered research checkout, exact c6c30c18713084e002ce5485b8f28d67d26faad2. |
+| 2 | DSP/Host/probe and arithmetic source are unchanged; hashes are in A. |
+| 3 | Both previous standalone pilots retained and independently reassessed PASS. |
+| 4 | Previous complete Native Softmax retained and independently reassessed PASS. |
+| 5 | The actual nonempty ActivityManager response omitted both authoritative resumed fields. |
+| 6 | VALID_RESPONSE_NO_FIELD; actual lifecycle change and causal mechanism unresolved. |
+| 7 | Full activity dump agreed3/3; listed activity_task returned exit0 with empty response3/3. |
+| 8 | Existing control verified at observation times and throughout complete new pilots; no equivalent alternative adopted or certified. |
+| 9 | Yes; unknown remains unsafe. Missing information was not inferred from focus or Awake. |
+| 10 | No weakening: original trace runner, intervals, preflight and stop semantics unchanged. |
+| 11 | No new API6031 in the completed Forward, Native dValue or dual pilots. |
+| 12 | Root cause unresolved; UNRESOLVED / DORMANT / WATCH. |
+| 13 | Yes: Native dValue full9,824 pairs, four observers, actual exit0. |
+| 14 | Native dValue actual total maxAbs1.3850631340517339e-5. |
+| 15 | P-induced actual1.2432777690918329e-5, bound2.7855243723208197e-5, consumer-local1.637746467508805e-5; signed coordinate decomposition in D. |
+| 16 | All four Native dValue observer conditions PASS. |
+| 17 | Yes: dual full19,648 consumer pairs, actual exit0 and complete teardown. |
+| 18 | Same per-head P ID, one upstream producer, both consumers; Host construction plus actual received-input and output evidence. |
+| 19 | No Host P reinjection. Tap is a diagnostic APP_READ exposure; NoTap uses NATIVE P. |
+| 20 | Tested full dual pilot lifetime/immutability verified; no direct observation of invisible NoReceipt/NoTap P storage is claimed. |
+| 21 | Dual dMaskedLogits total1.0078856647055545e-4; dValue total1.3850631340517339e-5. |
+| 22 | Both pass original gates0.002 /0.01. |
+| 23 | Yes, dual NoReceipt/NoTap itself passes both total-gradient accuracy gates. |
+| 24 | Zero observer / arithmetic word mismatches; single-vs-dual output words also match for both consumers. |
+| 25 | Full Core2,200/Holdout256 per observer and consumer, all four conditions. |
+| 26 | Formal five-role cohort not executed yet; first preflight stopped before any probe OS process. |
+| 27 | Three-process digest agreement not yet measured. |
+| 28 | Yes: pilots and preflight-only stopped attempts are excluded from formal counts. |
+| 29 | Fresh actual Forward P joint contract PASS, all480 P outputs. |
+| 30 | Fresh HVX FFN2/QKV device regressions not executed yet. |
+| 31 | Fresh Device smoke not executed yet. |
+| 32 | Fresh Muon W8 114/114 not executed yet. |
+| 33 | Backward additional execution cost not measured. |
+| 34 | Formal numerical cohort is required before performance; current first-cohort preflight stopped at Awake. |
+| 35 | Critical safety hard gates retained; ordinary battery/temperature/power monitored without new waivers. |
+| 36 | Starting protected files/refs PASS; final closeout integrity audit pending. No checkpoint decode/write. |
+| 37 | Actual PV/Gate/Output dP/dContext, then dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation. |
+| 38 | Neither full1-layer nor full19-layer is certified. |
+| 39 | 40k→60k /200k training remains NO-GO. |

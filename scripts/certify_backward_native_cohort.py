@@ -29,7 +29,7 @@ def role_digest(path, role, result):
 
 
 def certify(directory, previous=()):
-    require(directory.resolve().parent == REPORT.resolve() and re.fullmatch('cohort-[123]',directory.name),'actual new cohort directory required')
+    require(directory.resolve().parent == REPORT.resolve() and re.fullmatch('cohort-(?:1(?:-awake)?|[23])',directory.name),'actual new cohort directory required')
     identity=read(directory/'identity-private.json');completion=read(directory/'execution-before-readback-private.json')
     require(identity['mode']=='cohort' and identity['exit_code']==completion['exit_code']==0,'actual cohort completion')
     require(read(directory/'preflight/device-preflight-private.json')['status']=='PASS','fresh preflight')

@@ -4,6 +4,7 @@
   "scope": "Additional evidence binding only; no role, process, arithmetic, fixture, gate, observer or runner change.",
   "roles": ["standalone_softmax", "standalone_dvalue", "native_softmax", "native_dvalue", "dual"],
   "processes": 3,
+  "preflight_only_recovery": "The initial cohort-1 preflight found the device not Awake before any owned OS probe process existed. Preserve that folder. After explicit manual wake and a newly committed Host-only directory-selection fix, use unused cohort-1-awake for the first actual process, then cohort-2 and cohort-3. Preflight failures are recorded but never counted as completed or attempted DSP OS processes. No automatic wake or arithmetic retry; same source commit still required for all actual cohort processes.",
   "entry": "Both full standalone pilots, both full native singles, full dual and fresh Forward joint contract must pass. Unchanged compiled DSP/Host/probe. Commit this supplemental analysis before the first cohort.",
   "execution": "One unchanged trace-runner cohort invocation at a time, fresh strict preflight, maximum1200 seconds. Independent full assessment and comparison before the next process. Any unknown, transport/API failure, numerical failure or digest mismatch stops automatic arithmetic; no retry of that process.",
   "legacy_digest": "Retain and compare the existing assessor's per-role numerical digest unchanged. Earlier pilots remain pilots and are excluded.",
