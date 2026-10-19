@@ -15,6 +15,20 @@
 
 #include "fp16_util.h"
 
+/* Whether the toolchain exposes a native _Float16 type that can serve as an
+ * independent reference implementation for the shared converter. Clang
+ * supports _Float16 as an extension on most targets, so it must be included
+ * here; otherwise a clang build silently skips the cross-check. */
+#if defined(__clang__)
+#define HMX_HAS_NATIVE_FLOAT16 1
+#elif defined(__GNUC__) && (__GNUC__ >= 13)
+#define HMX_HAS_NATIVE_FLOAT16 1
+#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+#define HMX_HAS_NATIVE_FLOAT16 1
+#else
+#define HMX_HAS_NATIVE_FLOAT16 0
+#endif
+
 static int failures = 0;
 
 static void expect_bits(const char *name, uint16_t actual, uint16_t want) {
@@ -147,12 +161,12 @@ static void test_oracle(void) {
  * toolchain provides _Float16. This is an independent implementation, so
  * a shared bug in our converter would still be caught. */
 static void test_against_native_float16(void) {
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L) || \
-    (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13)
+#if HMX_HAS_NATIVE_FLOAT16
   int compared = 0;
   int mismatches = 0;
   uint16_t first_bad = 0;
   double first_bad_value = 0.0;
+  /* Exactly representable inputs: round trip must agree. */
   for (uint32_t bits = 0; bits < 0x10000u; ++bits) {
     const uint16_t pattern = (uint16_t)bits;
     const int exponent = (pattern >> 10) & 31;
@@ -171,21 +185,129 @@ static void test_against_native_float16(void) {
       mismatches++;
     }
   }
+  /* Non-representable inputs: midpoints between adjacent FP16 values and
+   * points just below / above them, plus the overflow boundary. This is
+   * what exercises the rounding (ties-to-even) logic rather than the
+   * trivial identity path. */
+  double prev_value = 0.0;
+  for (uint32_t bits = 1; bits <= 0x7bffu; ++bits) {
+    const uint16_t pattern = (uint16_t)bits;
+    const int exponent = (pattern >> 10) & 31;
+    if (exponent == 31) continue;
+    const double value = fp16_to_double(pattern);
+    if (value <= prev_value) continue;
+    const double ulp = value - prev_value;
+    /* midpoint (exact tie) */
+    const double mid = (prev_value + value) * 0.5;
+    /* point just below and just above the midpoint */
+    const double below = mid - ulp * 0.25;
+    const double above = mid + ulp * 0.25;
+    const double probes[3] = {below, mid, above};
+    for (int p = 0; p < 3; ++p) {
+      const _Float16 native_value = (_Float16)probes[p];
+      uint16_t native_bits = 0;
+      memcpy(&native_bits, &native_value, sizeof(native_bits));
+      const uint16_t ours = double_to_fp16(probes[p]);
+      compared++;
+      if (ours != native_bits) {
+        if (!mismatches) {
+          first_bad = pattern;
+          first_bad_value = probes[p];
+        }
+        mismatches++;
+      }
+    }
+    prev_value = value;
+  }
+  /* Overflow boundary region. */
+  {
+    const double probes[] = {65504.0, 65519.0, 65520.0, 65521.0, 65536.0};
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); ++i) {
+      const _Float16 native_value = (_Float16)probes[i];
+      uint16_t native_bits = 0;
+      memcpy(&native_bits, &native_value, sizeof(native_bits));
+      const uint16_t ours = double_to_fp16(probes[i]);
+      compared++;
+      if (ours != native_bits) {
+        if (!mismatches) {
+          first_bad_value = probes[i];
+        }
+        mismatches++;
+      }
+    }
+  }
   if (mismatches) {
-    printf("FAIL native _Float16: %d/%d mismatches (first bad 0x%04x = %.17g)\n",
+    printf("FAIL native _Float16: %d/%d mismatches (first bad pattern 0x%04x = %.17g)\n",
            mismatches, compared, first_bad, first_bad_value);
     failures++;
   } else {
-    printf("ok   native _Float16: %d values agree\n", compared);
+    printf("ok   native _Float16: %d values agree (incl. midpoints/overflow)\n",
+           compared);
   }
 #else
   printf("skip native _Float16 cross-check: not supported by this toolchain\n");
 #endif
 }
 
+/* Subnormal boundaries and the transition to the smallest normal. */
+static void test_subnormal_boundaries(void) {
+  /* Smallest subnormal and its neighbours. */
+  expect_bits("fp16(2^-24)", double_to_fp16(ldexp(1.0, -24)), 0x0001);
+  /* Half of the smallest subnormal quantum rounds to zero (tie -> even). */
+  expect_bits("fp16(2^-25)", double_to_fp16(ldexp(1.0, -25)), 0x0000);
+  /* 1.5 quanta rounds up to 2 quanta. */
+  expect_bits("fp16(3*2^-25)", double_to_fp16(3.0 * ldexp(1.0, -25)), 0x0002);
+  /* Largest subnormal. */
+  expect_bits("fp16(largest subnormal)", double_to_fp16(1023.0 * ldexp(1.0, -24)),
+              0x03ff);
+  /* Midpoint between largest subnormal and smallest normal rounds to the
+   * smallest normal (even neighbour). */
+  expect_bits("fp16(mid subnormal->normal)",
+              double_to_fp16(1023.5 * ldexp(1.0, -24)), 0x0400);
+  /* Smallest normal. */
+  expect_bits("fp16(2^-14)", double_to_fp16(ldexp(1.0, -14)), 0x0400);
+  /* Just below smallest normal rounds to largest subnormal. */
+  expect_bits("fp16(2^-14 - 2^-24)", double_to_fp16(ldexp(1.0, -14) - ldexp(1.0, -24)),
+              0x03ff);
+}
+
+/* Values around the largest finite FP16 and the overflow threshold. */
+static void test_near_max_finite(void) {
+  expect_bits("fp16(65504)", double_to_fp16(65504.0), 0x7bff);
+  expect_bits("fp16(65472)", double_to_fp16(65472.0), 0x7bfe);
+  /* 65519 rounds down to max finite. */
+  expect_bits("fp16(65519)", double_to_fp16(65519.0), 0x7bff);
+  /* 65520 is the midpoint and rounds up to infinity. */
+  expect_bits("fp16(65520)", double_to_fp16(65520.0), 0x7c00);
+  /* Anything strictly beyond the threshold is infinity. */
+  expect_bits("fp16(65521)", double_to_fp16(65521.0), 0x7c00);
+  expect_bits("fp16(1e9)", double_to_fp16(1e9), 0x7c00);
+  /* Negative side. */
+  expect_bits("fp16(-65520)", double_to_fp16(-65520.0), 0xfc00);
+  expect_bits("fp16(-65504)", double_to_fp16(-65504.0), 0xfbff);
+}
+
+/* Midpoint (tie) rounding across several binades, including negative. */
+static void test_midpoint_rounding_extra(void) {
+  /* binade around 2: ULP 2^-9; midpoint between 2.0 and 2.001953125. */
+  expect_bits("tie 2.0 binade -> 2.0",
+              double_to_fp16(2.0 + ldexp(1.0, -10)), 0x4000);
+  expect_bits("tie 2.0 binade -> 2.001953125",
+              double_to_fp16(2.0 + 3.0 * ldexp(1.0, -10)), 0x4002);
+  /* binade around 16: ULP 2^-6. */
+  expect_bits("tie 16 binade low", double_to_fp16(16.0 + ldexp(1.0, -7)),
+              0x4c00);
+  /* Negative midpoint. */
+  expect_bits("negative tie 2.0 binade",
+              double_to_fp16(-(2.0 + ldexp(1.0, -10))), 0xc000);
+}
+
 int main(void) {
   test_known_values();
   test_ties_to_even();
+  test_midpoint_rounding_extra();
+  test_subnormal_boundaries();
+  test_near_max_finite();
   test_roundtrip_all_finite();
   test_against_native_float16();
   test_oracle();
