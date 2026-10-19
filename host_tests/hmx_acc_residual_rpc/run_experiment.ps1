@@ -159,7 +159,13 @@ function Invoke-ProjectBuild([string]$BuildIdDefine) {
   # response file carries the '=' safely and both NDK clang and
   # hexagon-clang expand @file at compile time. The same file is passed to
   # BOTH builds so the host and the DSP agree on the build id.
-  $rspPath = Join-Path $script:EvidenceDir 'b_build_id.rsp'
+  # The FILE NAME itself carries the build id: a constant path would leave
+  # the cmake cache unaware that the flags changed, and stale objects (from
+  # a previous HEAD) would keep the old-id stamp while other sources got
+  # rebuilt with the new id — a mismatch the device-side identity check
+  # then correctly rejects (observed 2026-10-20, battery2 first pass).
+  $idHex = ($BuildIdDefine -replace '^-DHMX_PROBE_BUILD_ID=', '')
+  $rspPath = Join-Path $script:EvidenceDir "b_build_id_$idHex.rsp"
   Set-Content -LiteralPath $rspPath -Value $BuildIdDefine -NoNewline
   $rspUri = ($rspPath -replace '\\', '/')
 
