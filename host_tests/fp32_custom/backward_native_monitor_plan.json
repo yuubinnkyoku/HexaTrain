@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "base": "c6c30c18713084e002ce5485b8f28d67d26faad2",
+  "branch": "investigation/g1-backward-repair-native-completion",
+  "purpose": "Read-only characterization before any new DSP process; existing monitor remains authoritative and fail-closed.",
+  "diagnostic_rounds": 3,
+  "maximum_adb_commands": 35,
+  "maximum_seconds": 240,
+  "command_timeout_seconds": 15,
+  "control": "dumpsys activity activities",
+  "discovery": ["dumpsys -l", "dumpsys activity -h"],
+  "comparisons": "Full activity service dump only when listed; activity_task service dump only if actually listed. No invented service/field names. Sequential samples are not simultaneous equivalence proof.",
+  "identity": "Group online endpoints by nonempty ro.serialno and matching ro.boot.serialno; require same original physical device and non-emulator.",
+  "evidence": "Exclusive private files: actual command, exit, duration, stdout/stderr, UTC time, Android build, boot ID/uptime, direct top-resumed field identity, Awake, parser outcome, and separate safety decision.",
+  "unknown": "No arithmetic on unknown. Fixed read-only diagnostic rounds characterize failure, never retry an arithmetic process or promote a later sample over an earlier unknown.",
+  "alternative_adoption": "None preregistered. Any alternative needs build-specific field meaning, independent positive/negative/switch evidence and a separately committed plan before DSP use.",
+  "resume": "Original monitor may be retained only with all diagnostic controls verified, no contradictory observations, and fresh full preflight immediately before each process. One new Native dValue attempt authorized by this mission after safe conditions reestablished. Any unknown or 6031 stops further automatic arithmetic.",
+  "arithmetic": "Frozen DSP/Host/probe bytes unchanged; existing five-role three-process plan and numerical gates unchanged. Dual requires full single PASS; cohort requires full dual PASS; performance requires formal numerical certification.",
+  "training": "NO-GO",
+  "device_mutations": false,
+  "safety_waivers": false
+}
