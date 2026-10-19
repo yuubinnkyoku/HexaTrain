@@ -34,7 +34,8 @@
     "STANDARD_BACKWARD_PRECISION_ATTRIBUTED",
     "STANDARD_BACKWARD_PRECISION_MODEL_SUPPORTED",
     "UNRESOLVED",
-    "BLOCKED_SOFTMAX_BACKWARD_REPAIR"
+    "BLOCKED_DEVICE_SAFETY",
+    "BLOCKED_NATIVE_SAVED_P"
   ],
   "cohort_processes": 0,
   "compiled_source_commit": "bb6aaceb42de505b29689a362ce8293687e7ab89",
@@ -1808,44 +1809,101 @@
       "observer_variants": 0,
       "observer_word_mismatches": null,
       "processes": 0,
-      "status": "NOT_EXECUTED"
+      "status": "INFRASTRUCTURE_FAILURE"
     },
     "native_softmax": {
-      "arithmetic_word_mismatches": null,
-      "consumers": [],
-      "core_pairs_per_variant": 0,
-      "holdout_pairs_per_variant": 0,
-      "numerical_digest": null,
-      "observer_variants": 0,
-      "observer_word_mismatches": null,
-      "processes": 0,
-      "status": "NOT_EXECUTED"
+      "arithmetic_word_mismatches": 0,
+      "consumers": [
+        {
+          "consumer": 0,
+          "core_maxAbs": 0.00010078856647055545,
+          "gate": 0.002,
+          "holdout_maxAbs": 4.047485298031006e-06,
+          "local_maxAbs": 6.37084093888518e-05,
+          "p_induced_actual_maxAbs": 9.955926756788358e-05,
+          "total_maxAbs": 0.00010078856647055545,
+          "worst": [
+            1,
+            1,
+            23,
+            9,
+            0,
+            0,
+            515
+          ]
+        }
+      ],
+      "core_pairs_per_variant": 2200,
+      "holdout_pairs_per_variant": 256,
+      "numerical_digest": "edcaa214b0833b00c77d8c410d9e32894eef7e6aaecbce0cfb9307933bfaa16d",
+      "observer_variants": 4,
+      "observer_word_mismatches": 0,
+      "processes": 1,
+      "status": "PILOT_PASS"
     },
     "standalone_dvalue": {
-      "arithmetic_word_mismatches": null,
-      "consumers": [],
-      "core_pairs_per_variant": 0,
-      "holdout_pairs_per_variant": 0,
-      "numerical_digest": null,
-      "observer_variants": 0,
-      "observer_word_mismatches": null,
-      "processes": 0,
-      "status": "NOT_EXECUTED"
+      "arithmetic_word_mismatches": 0,
+      "consumers": [
+        {
+          "consumer": 1,
+          "core_maxAbs": 1.68030018699028e-05,
+          "gate": 0.01,
+          "holdout_maxAbs": 2.7630283376822717e-06,
+          "local_maxAbs": 1.68030018699028e-05,
+          "p_induced_actual_maxAbs": 0.0,
+          "total_maxAbs": 1.68030018699028e-05,
+          "worst": [
+            1,
+            1,
+            20,
+            11,
+            0,
+            1,
+            200
+          ]
+        }
+      ],
+      "core_pairs_per_variant": 2200,
+      "holdout_pairs_per_variant": 256,
+      "numerical_digest": "64248fcdfaf2534c37f40bc961987d0a627f6d4c457b3ba7cc553de2ac316e41",
+      "observer_variants": 4,
+      "observer_word_mismatches": 0,
+      "processes": 1,
+      "status": "PILOT_PASS"
     },
     "standalone_softmax": {
-      "arithmetic_word_mismatches": null,
-      "consumers": [],
-      "core_pairs_per_variant": 0,
-      "holdout_pairs_per_variant": 0,
-      "numerical_digest": null,
-      "observer_variants": 0,
-      "observer_word_mismatches": null,
-      "processes": 0,
-      "status": "API_FAILURE"
+      "arithmetic_word_mismatches": 0,
+      "consumers": [
+        {
+          "consumer": 0,
+          "core_maxAbs": 6.335392901668513e-05,
+          "gate": 0.002,
+          "holdout_maxAbs": 2.2067718461471486e-06,
+          "local_maxAbs": 6.335392901668513e-05,
+          "p_induced_actual_maxAbs": 0.0,
+          "total_maxAbs": 6.335392901668513e-05,
+          "worst": [
+            1,
+            1,
+            20,
+            9,
+            0,
+            0,
+            966
+          ]
+        }
+      ],
+      "core_pairs_per_variant": 2200,
+      "holdout_pairs_per_variant": 256,
+      "numerical_digest": "fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267",
+      "observer_variants": 4,
+      "observer_word_mismatches": 0,
+      "processes": 1,
+      "status": "PILOT_PASS"
     }
   },
   "schema": 1,
-  "source_commit": "d60a2fe21b7c473be4235709f3e11890e57d6da6",
+  "source_commit": "cc8f95daf4d148f9c380a5c6f24cc1d3ca817961",
   "standard_baseline": {
     "dvalue": {
       "core_maxAbs": 0.035564650305797585,

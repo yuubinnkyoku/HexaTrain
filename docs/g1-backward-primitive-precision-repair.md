@@ -1,6 +1,7 @@
 # G1 Backward primitive precision attribution / selective repair
 
 **新Customの両Standaloneは実DSP pilot PASS。Nativeと3-process正式認定は未完了。**
+現在のblockerはtop-resumed情報の欠落であり、Native dValueを安全停止している。
 標準primitiveの受信tensor境界に対する局所誤差を分離し、独立Host参照で旧gateを満たす
 ordered FP32候補を実装した。標準FLOAT32 MatMul診断でDMA abort / API6031が発生し、
 続くdefault標準MatMulと新Custom最初のexecuteも同じAPI6031 / process139で終了した。
@@ -209,7 +210,7 @@ poison/canary、DSP receipt、teardownを確認した。これは各1 OS process
 3独立processの正式認定へ昇格させない。
 Softmax digestは `fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267`、
 dValueは `64248fcdfaf2534c37f40bc961987d0a627f6d4c457b3ba7cc553de2ac316e41`。
-旧6031の `UNRESOLVED / DORMANT / WATCH` 記録を残した上で、今回は新規再現を追加した。
+旧6031の `UNRESOLVED / DORMANT / WATCH` 記録を残した上で、本研究初回episodeの新規再現を追加した。
 初回episodeを消さず、後続試験での非再現と区別する。根本原因は未確定のままWATCHを維持する。
 
 停止位置を保存stdoutと独立照合した。FLOAT32 MatMul診断は90 executesがAPI成功し、
@@ -246,7 +247,7 @@ fresh preflightから再開し、4回目の再開folderで上記の全件pilot�
 top-resumed不明となり、所有を確認したprobeへSIGINTを送り停止した。6031は観測していない。
 所有processの終了を読み取りで確認し、partial raw 140,369,920 bytesを端末/Host SHA一致で保存した。
 actual OS exitは未捕捉でありnull、coverage/teardownは未完了。API成功済みの一部pairを
-Native PASSへ数えない。Native dValue singleとsame-P dualは未実行。
+Native PASSへ数えない。この時点ではNative dValue singleとsame-P dualは未実行であり、後続試験を以下に分ける。
 この中断processではNATIVE Pのlifetime、入力不変、observer-free accuracy、actual total gradientを認定しない。
 Host再注入でNative認定を代用していない。
 
@@ -269,6 +270,13 @@ digestは `edcaa214b0833b00c77d8c410d9e32894eef7e6aaecbce0cfb9307933bfaa16d`。
 数値FAILとはせず、この中断も別evidenceとして保持する。trace runnerは元runnerと同じ判定を保ち、
 初回full実行の独立PASS後、残りの既登録roleにも同じsource hashで利用する。
 
+Native dValueのtrace実行もObserved+Tap / F40/G1付近で同じ安全停止となり、追加の算術再試行は止めた。
+失敗瞬間の応答はSystem.String / 153,912 charactersの有効なActivityManager dumpだったが、
+`topResumedActivity` と `mResumedActivity` がともに0行だった。単なる空応答やregex表記不一致とはしない。
+別のfocus情報で既知のtop-resumedを代用せず、unknown判定と所有process停止を維持した。
+所有processの終了を確認し、partial raw 49,704,960 bytesを端末/Host SHA一致で保存した。
+actual OS exitはnull、全件Native dValue精度・teardownは未認定。原因は端末の前面状態報告として未解決である。
+
 準備済みgraphはheadごとに旧Forward Softmax producerが作る1つのP IDを新consumerへ渡す。
 Native graphのinput mapにはPを追加せず、外部dP/dContextだけをAPP_WRITEとする。
 NoReceipt/NoTapではPを直接観測したとせず、observed anchorを評価上の条件付けに使うことを明示する。
@@ -278,7 +286,8 @@ NoReceipt/NoTapではPを直接観測したとせず、observed anchorを評価�
 
 ## I. Performance
 
-accuracy-first規則により実機costは未測定。31 samples、first execute、median/p10/p90、finalize、
+dual total-gradient accuracy gateが未成立のため、accuracy-first規則で実機costは未測定。
+31 samples、first execute、median/p10/p90、finalize、
 consumer arithmetic / receipt-inclusive / execute wall、node/tensor/memory inventoryの保存経路を準備した。
 NoReceiptの内部timerはnull。std QNN内部timerも取得したと主張しない。
 異なるobserver graphのwallを純粋な算術速度と呼ばず、Forward共通LN local backward controlを揃える。
@@ -297,7 +306,8 @@ NoReceiptの内部timerはnull。std QNN内部timerも取得したと主張し�
 | Fresh Double QK + custom Scale/Mask/Softmax + P | PASS、14,356 numerical records、joint failed predicates 0 |
 | Fresh old standard Backward | 両consumerの既知accuracy FAILを再現 |
 | Fresh C0 Host negative | expected exit4、9 FAILを再現 |
-| Other required fresh HVX / device smoke / Muon W8 | 未完了。Standalone再開後に順次検証する。過去114/114をfresh成功へ転用しない |
+| Other required fresh HVX / device smoke / Muon W8 | top-resumed安全停止のため未完了。過去114/114をfresh成功へ転用しない |
+| Formal profile / three-process cohort | 未実行。この保存は進捗とBLOCKEDの記録であり、正式結果の確定ではない |
 
 fresh Forward合同値はP maxAbs=4.236482907815642e-7、row error core=2.2724270820617676e-7 /
 holdout=2.682209014892578e-7、P-induced dScores bound=0.0002459099714532658、
@@ -332,8 +342,9 @@ raw tensors、APK hash、device IDs、endpoint、private logs、絶対local path
 最小の有望候補はfused ordered FP32 Softmax + ordered Scalar FP32 TN32 dValue。
 Host数学、codegen、両Standaloneの実機pilotは成立した。
 初回のAPI6031 / exit139を保存した上で、同一bootのdefault対照と後続pilotでは非再現だった。
-根本原因は未確定であり、runtime恒久修復とはしない。現在はNativeと正式cohortが未完了である。
-継続にはAwake、既知のtop-resumed、同一端末接続等のfresh安全条件を維持する。
+根本原因は未確定であり、runtime恒久修復とはしない。現在はNative dValueがtop-resumed情報欠落でBLOCKED、
+dual / 正式cohort / performanceは未実行である。継続にはAndroidがtop-resumedを継続報告する状態を確認し、
+Awake、同一端末接続等のfresh安全条件を維持する。
 再開時もfresh preflightから行い、既存evidenceは上書きしない。
 
 Host側の最終照合ではprotected 5 files、開始時の50 refs、frozen repairのbinaryと23 source hashesを
