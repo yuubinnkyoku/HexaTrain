@@ -12,22 +12,32 @@
 #include <string.h>
 
 #include "fp16_util.h"
+#include "bias20.h"
 #include "hmx_identity.h"
 
+/* Phase D mode range (extra4 nibble sweep + bias readback); must mirror
+ * MODE_MAX in probe_dsp.c. */
+enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 38 };
+
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
- * zero-residual controls (21/22) run a = b = 1.0, the q=8 variants
- * (27/28/29) run a = b = 1 + 2^-8 regardless of the requested q, every
+ * zero-residual controls (21/22) and the mode-37 exact-zero control run
+ * a = b = 1.0, the q=8 variants (27/28/29) and the Phase D sweep modes
+ * (31..36, 38) run a = b = 1 + 2^-8 regardless of the requested q, every
  * other mode runs a = b = 1 + 2^-q. The printed oracle derives from this,
  * so the zero-control and q=8 modes cannot show a stale q-based product. */
 static double mode_operand_a(int q, int mode) {
-  if (mode == 21 || mode == 22) return 1.0;
+  if (mode == 21 || mode == 22 || mode == 37) return 1.0;
   if (mode >= 27 && mode <= 29) return 1.0 + ldexp(1.0, -8);
+  if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= 36) || mode == 38) {
+    return 1.0 + ldexp(1.0, -8);
+  }
   return 1.0 + ldexp(1.0, -q);
 }
 
 /* Per-mode convert scale. Must mirror the bias tables in probe_dsp.c:
  * mode 24/27 use scale 32, mode 26/29 use scale 128, every other mode in
- * this experiment converts with scale 64 (including 20, 23, 25 and 28). */
+ * this experiment converts with scale 64 (including 20, 23, 25, 28 and
+ * all Phase D modes 31..38: bias cell scale FP16 0x5400). */
 static int mode_scale(int mode) {
   switch (mode) {
     case 24:
@@ -38,6 +48,22 @@ static int mode_scale(int mode) {
       return 128;
     default:
       return 64;
+  }
+}
+
+/* Phase D research-note per mode; the tokens are defined verbatim in the
+ * README "Phase D" mode table (printed as hypothesis_note=<token>). */
+static const char *mode_hypothesis_note(int mode) {
+  switch (mode) {
+    case 31: return "extra4_sweep_n0_baseline";
+    case 32: return "extra4_sweep_n1";
+    case 33: return "extra4_sweep_n2";
+    case 34: return "extra4_sweep_n8";
+    case 35: return "extra4_sweep_n15";
+    case 36: return "border_control_n3_between_2_and_8";
+    case 37: return "exact_zero_control_fallback";
+    case 38: return "bias_readback_probe";
+    default: return NULL;
   }
 }
 
@@ -127,8 +153,15 @@ int main(int argc, char **argv) {
   int mode = 0;
   if (argc >= 2) q = atoi(argv[1]);
   if (argc >= 3) mode = atoi(argv[2]);
-  if (q < 6 || q > 10 || mode < 0 || mode > HMX_IDENTITY_MODE) {
-    fprintf(stderr, "usage: %s [q=6..10] [mode=0..30]\n", argv[0]);
+  if (q < 6 || q > 10 || mode < 0 || mode > HMX_PHASE_D_MODE_MAX) {
+    fprintf(stderr, "usage: %s [q=6..10] [mode=0..38]\n", argv[0]);
+    return exit_with(2);
+  }
+  /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
+   * mirror that gate host-side before touching any device state. */
+  if (mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
+      q != 8) {
+    fprintf(stderr, "phase D modes 31..38 require q=8 (got q=%d)\n", q);
     return exit_with(2);
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
@@ -261,6 +294,49 @@ int main(int argc, char **argv) {
   /* The main value is the FP16 rounding of the scaled product. */
   const double hi_value = fp16_to_double(double_to_fp16(scaled));
   const double remainder = scaled - hi_value;  /* exact positive remainder */
+
+  /* Phase D payload provenance (modes 31..38). Every expectation below
+   * is double arithmetic from the README "Phase D" formula:
+   *   out_bias  = -(base + n * 2^-8)   (base 64.5 = 0xD408, mode 37: 64.0)
+   *   residual  = scale * a^2 + out_bias = scaled - |out_bias|
+   *   observed  = fp16_round(residual)  — the rounding to 16 output bits
+   *     is part of the expected math: PRM 80-N2040-62 AA §2.4 says the
+   *     write-convert-state instruction stores the FP16 data to VTCM, and
+   *     Ch.5 (after Fig.25) says "HMX only stores FP16 to VTCM, the extra
+   *     four bits are internal to the convert state and only used for
+   *     feedback" — so a correct extra4 payload still lands as FP16. */
+  const int phase_d = (mode >= HMX_PHASE_D_MODE_MIN &&
+                       mode <= HMX_PHASE_D_MODE_MAX);
+  const int bias_n = phase_d ? phase_d_extra4_nibble(mode) : -1;
+  const uint16_t out_bias_fp16 =
+      phase_d ? phase_d_out_bias_fp16(mode) : (uint16_t)0;
+  const double out_bias_mag =
+      phase_d ? -bias20_decode_out_bias(out_bias_fp16, (unsigned)bias_n)
+              : 0.0;
+  const double expected_residual = scaled - out_bias_mag;
+  if (phase_d) {
+    printf("bias_n=%d out_bias_fp16_raw=0x%04x extra4_nibble=%d "
+           "decoded_out_bias_magnitude=%.17g ",
+           bias_n, (unsigned)out_bias_fp16, bias_n, out_bias_mag);
+    if (mode == HMX_PHASE_D_MODE_MAX) {
+      /* Mode 38 returns the stored bias cells, not a convert output. */
+      printf("expected_fp16_raw=N/A expected_value=N/A "
+             "expected_returned=bias_readback_cells\n");
+    } else {
+      printf("expected_fp16_raw=0x%04x expected_value=%.17g\n",
+             double_to_fp16(expected_residual), expected_residual);
+    }
+    if (mode == 37) {
+      /* Report the fallback fact: the intended n=1 alignment
+       * (64.5 + 2^-10) is off the 20-bit grid (0.25 nibble steps), so
+       * a=b=1.0 with out_bias=-64.0 gives an exact-zero target instead.
+       * probe_bias20_test.c proves unreachability exhaustively. */
+      printf("mode37_encoding=fallback_exact_zero n1_alignment=unreachable "
+             "encoding=a_eq_b_eq_1.0_out_bias_eq_neg64.0 target=0\n");
+    }
+    const char *note = mode_hypothesis_note(mode);
+    if (note) printf("hypothesis_note=%s\n", note);
+  }
   uint16_t expected[2] = {0, 0};              /* previously observed values */
   uint16_t expected_math[2] = {0, 0};         /* mathematically correct values */
   int have_expected = 0;
@@ -398,6 +474,17 @@ int main(int argc, char **argv) {
       math_source = "double_derived";
       oracle_selfcheck = 1; oracle_selfcheck_literal = 0x1800;
       break;
+    case 31: case 32: case 33: case 34: case 35: case 36: case 37:
+      /* Phase D sweep (31..36) and exact-zero control (37): observed and
+       * math expectations are BOTH double-derived — no device run has
+       * measured these modes yet, so there is no regression literal.
+       * single-CVT: results[0] is the convert output, slot 2 is 0. */
+      expected[0] = double_to_fp16(expected_residual);
+      expected_math[0] = expected[0];
+      have_expected = 1; have_math = 1; single_convert = 1;
+      expected_src[0] = "double_derived";
+      math_source = "double_derived";
+      break;
     default: break;
   }
   if (oracle_selfcheck) {
@@ -417,11 +504,56 @@ int main(int argc, char **argv) {
      * the DSP; it is not a residual and is labelled accordingly. */
     printf("slot2_label=unused_slot2 meaning=unused_dsp_forces_0\n");
   }
+  if (mode == HMX_PHASE_D_MODE_MAX) {
+    printf("slot2_label=zeroed_by_contract meaning=mode38_readback_in_results_0_1\n");
+  }
 
   int observed_any = 0;
   int observed_all = 1;
   int math_any = 0;
   int math_all = 1;
+  if (mode == HMX_PHASE_D_MODE_MAX) {
+    /* Mode 38 returns the stored bias cells, not FP16 convert outputs:
+     * results[0] = lo(0) (bytes 0..3 of the row), results[1] = hi(0)
+     * (bytes 128..131, PRM Fig.13), results[2..3] = 0 by contract. The
+     * observed verdict compares the echo against the CONFIGURED payload;
+     * the math verdict re-decodes the echo through bias20.h and checks
+     * it against an independent double formula. */
+    const uint32_t lo_cell = (uint32_t)result[0];
+    const uint32_t hi_cell = (uint32_t)result[1];
+    const uint32_t exp_lo = bias20_lo_cell(0x5400u, 0xD408u);
+    const uint32_t exp_hi = bias20_hi_cell(0u, (unsigned)bias_n, 0u);
+    const int readback_ok = (lo_cell == exp_lo && hi_cell == exp_hi);
+    const uint16_t rb_fp16 = (uint16_t)(lo_cell >> 16);
+    const unsigned rb_nibble = (unsigned)((hi_cell >> 4) & 0xFu);
+    const uint16_t rb_scale = (uint16_t)(lo_cell & 0xFFFFu);
+    const unsigned rb_shape = (unsigned)((hi_cell >> 8) & 7u);
+    const double rb_out = bias20_decode_out_bias(rb_fp16, rb_nibble);
+    const double rb_scale_value = fp16_to_double(rb_scale);
+    /* Independent double expectation: -(64.5 + 1*2^-8), scale 64.0,
+     * shape 0 — derived from the spec formula, not from bias20.h. */
+    const double exp_out = -(64.5 + ldexp(1.0, -8));
+    const int math_ok_readback =
+        (rb_out == exp_out && rb_scale_value == 64.0 && rb_shape == 0 &&
+         (hi_cell & 0xFu) == 0u);
+    printf("readback_lo=0x%08x readback_hi=0x%08x "
+           "expected_readback_lo=0x%08x expected_readback_hi=0x%08x "
+           "readback_match=%s observed_source=configured_payload\n",
+           (unsigned)lo_cell, (unsigned)hi_cell, (unsigned)exp_lo,
+           (unsigned)exp_hi, readback_ok ? "MATCH" : "MISMATCH");
+    printf("readback_decode_out_bias=%.17g readback_decode_scale=%.17g "
+           "readback_extra4_nibble=%u readback_shape=%u "
+           "math_match=%s oracle_source=double_derived\n",
+           rb_out, rb_scale_value, rb_nibble, rb_shape,
+           math_ok_readback ? "MATCH" : "MISMATCH");
+    observed_any = 1;
+    math_any = 1;
+    if (!readback_ok) {
+      observed_all = 0;
+      pass = 0;
+    }
+    if (!math_ok_readback) math_all = 0;
+  } else {
   for (int trial = 0; trial < 2; ++trial) {
     const uint16_t hi_bits = (uint16_t)result[2 * trial];
     const uint16_t slot2_bits = (uint16_t)result[2 * trial + 1];
@@ -468,9 +600,13 @@ int main(int argc, char **argv) {
         : 0;
     const char *slot2_key = single_convert ? "unused_slot2" : "residual_bits";
     const char *slot2_value_key = single_convert ? "unused_val" : "residual";
-    printf("extra4=%d hi_bits=0x%04x %s=0x%04x hi=%.17g %s=%.17g "
+    /* "extra4" here is the Rs[8] rnd/feedback-round bit of the convert;
+     * Phase D modes force it to 0 in both trials (feedback disabled), so
+     * print the actual bit and keep the trial index as a separate field. */
+    const int rnd_bit = phase_d ? 0 : trial;
+    printf("extra4=%d trial=%d hi_bits=0x%04x %s=0x%04x hi=%.17g %s=%.17g "
            "basic=%.17g scale=%d ",
-           trial, hi_bits, slot2_key, slot2_bits, hi, slot2_value_key,
+           rnd_bit, trial, hi_bits, slot2_key, slot2_bits, hi, slot2_value_key,
            slot2_value, basic, scale);
     if (reconstruction_valid) {
       printf("reconstruction=%.17g reconstruction_valid=1 "
@@ -507,6 +643,7 @@ int main(int argc, char **argv) {
       printf("fp16_residual_recovery=%s\n", exact ? "SUPPORTED" : "NOT_CONFIRMED");
     }
   }
+  } /* end generic trial loop (mode != 38) */
   const char *observed_verdict =
       !observed_any ? "NO_ORACLE" : (observed_all ? "PASS" : "FAIL");
   const char *math_verdict =

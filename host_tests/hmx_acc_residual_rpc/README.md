@@ -277,3 +277,51 @@ other modes print `reconstruction=N/A recovered_error=N/A`. The printed
 otherwise 64). Single-CVT trials label the unused second-convert slot as
 `unused_slot2` / `unused_val` rather than implying a second convert.
 Modes 21/22 print a `zero_residual_control` note with the q binding.
+
+## Phase D: extra4 nibble sweep (modes 31..38)
+
+**Question.** For q=8 the double-exact residual is
+`(1+2^-8)^2*64 - 64.5 = 2^-10` — **1/4** of the output-bias fine quantum
+`2^-8` (2^6/16384, the 20-bit mantissa step at that binade) — yet mode 28
+stored `0x1c00` = `2^-8`, i.e. **+1 fine ULP**. Does the stored convert
+output track the bias's extra4 nibble one fine quantum per step
+(bias-side), or does it stay put (convert-side rounding)?
+
+**Encoding** (PRM 80-N2040-62 AA §2.3.1: Fig.13 p.13 — the 256-byte row
+is 32 low words at bytes 0..127 then 32 high words at bytes 128..255;
+Fig.15 / Table 4 p.14): `lo32 = {out_bias FP16 [31:16], scale FP16
+[15:0]}`, `hi32 = {shape [10:8], out_bias extra4 [7:4], scale extra4
+[3:0]}`; value = `(-1)^s * 2^(e-15) * (1 + frac10/1024 + n/16384)`, so on
+the negative `-64.5` base (`0xD408`) nibble n gives
+`out_bias = -(64.5 + n*2^-8)`. Worked example **n=8**:
+`out_bias = -(64.5 + 8/256) = -64.53125`, lo cell `0xD4085400`,
+hi cell `0x00000080`.
+
+| mode | nibble | payload / purpose (`hypothesis_note=`) |
+| --- | --- | --- |
+| 31 | 0 | `extra4_sweep_n0_baseline` (mode-28 payload, Rs[8] forced 0) |
+| 32 | 1 | `extra4_sweep_n1` |
+| 33 | 2 | `extra4_sweep_n2` |
+| 34 | 8 | `extra4_sweep_n8` |
+| 35 | 15 | `extra4_sweep_n15` |
+| 36 | 3 | `border_control_n3_between_2_and_8` |
+| 37 | 0 | `exact_zero_control_fallback`: n=1 exact-zero alignment is off the 20-bit grid (0.25 nibble steps), so a=b=1.0 + out_bias=-64.0 gives target 0 exactly (proved exhaustively by `probe_bias20_test.c`) |
+| 38 | 1 | `bias_readback_probe` (see below) |
+
+All D modes: q=8 mandatory (DSP returns 14001, host exits 2 otherwise),
+feedback disabled (single-CVT, Rs=1 only, §2.3.3 Table 6 no-feedback
+recipe), scale 64 (`0x5400`), a=b=`0x3c04` (mode 37: `0x3c00`). Expected
+observed bits = `fp16_round(scale*a^2 - (64.5 + n*2^-8))` — the FP16
+rounding is part of the math: §2.4 stores the FP16 convert state to
+VTCM and Ch.5 says the extra four bits are internal to the convert state,
+used only for feedback.
+
+**Mode 38 readback.** After the convert the DSP stores bias set 0 back to
+a 256B-aligned VTCM scratch (`mxmem2(Rs32)=bias`, `Q6_mxmem2_bias_A`,
+§2.3.1 p.15) and returns `results[0]=lo(0)` (bytes 0..3),
+`results[1]=hi(0)` (bytes 128..131 — Fig.13 splits the two halves into
+the two vectors; they are not adjacent), `results[2]=results[3]=0`.
+
+CPU oracle test (no SDK/device): `gcc -std=c11 -O2 -Wall -Wextra -Werror -o probe_bias20_test probe_bias20_test.c -lm && ./probe_bias20_test`.
+Device runs (none executed for Phase D): `.\run_experiment.ps1 -Provenance`,
+then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-Mode 38`).

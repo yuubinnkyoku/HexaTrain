@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "hmx_identity.h"
+#include "bias20.h"
 
 #if !defined(__HEXAGON_ARCH__) || __HEXAGON_ARCH__ != 81
 #error This probe must be built for the V81 DSP target.
@@ -44,22 +45,31 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
+  MODE_MAX = 38,  /* Phase D highest mode; must mirror probe_host.c */
 };
 
 typedef struct probe_context {
   uint32_t tag;
 } probe_context_t;
 
-static void init_bias(uint32_t *dst, uint16_t scale_bits,
-                      uint16_t output_bias_bits, unsigned shape) {
+static void init_bias20(uint32_t *dst, uint16_t scale_bits,
+                        uint16_t output_bias_bits, unsigned extra4,
+                        unsigned shape) {
   // V81 Table 4: 32 low words then 32 high words, not interleaved uint64.
   // Low[15:0] scale (FP16), low[31:16] output bias (FP16);
-  // high[10:8] shape, all optional extra bits/input bias left at zero.
+  // high[10:8] shape, high[7:4] output-bias extra4 nibble,
+  // high[3:0] scale extra4 (left 0). The cell packing lives in bias20.h
+  // so the host oracle and the CPU spec test use the same encoding.
   memset(dst, 0, BIAS_BYTES);
   for (int ch = 0; ch < 32; ++ch) {
-    dst[ch] = (uint32_t)scale_bits | ((uint32_t)output_bias_bits << 16);
-    dst[32 + ch] = (shape & 7u) << 8;
+    dst[ch] = bias20_lo_cell(scale_bits, output_bias_bits);
+    dst[32 + ch] = bias20_hi_cell(shape, extra4, 0);
   }
+}
+
+static void init_bias(uint32_t *dst, uint16_t scale_bits,
+                      uint16_t output_bias_bits, unsigned shape) {
+  init_bias20(dst, scale_bits, output_bias_bits, 0, shape);
 }
 
 static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
@@ -73,10 +83,11 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
 
   // a = 1 + 2^-q as exact FP16 (q in [6,10]).
   uint16_t a_bits;
-  if (mode == 21 || mode == 22) {
-    a_bits = 0x3c00u;  // 1.0 for zero-residual control
-  } else if (mode >= 27 && mode <= 29) {
-    a_bits = 0x3c04u;  // 1+2^-8
+  if (mode == 21 || mode == 22 || mode == 37) {
+    a_bits = 0x3c00u;  // 1.0 for zero-residual / exact-zero controls
+  } else if ((mode >= 27 && mode <= 29) ||
+             (mode >= 31 && mode <= 36) || mode == 38) {
+    a_bits = 0x3c04u;  // 1+2^-8 (Phase D: q bound to 8, forced explicitly)
   } else {
     a_bits = (uint16_t)(0x3c00u + (1u << (10 - q)));
   }
@@ -198,6 +209,18 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     // q=8 scale=128: hi=129 (0x5808), bias=-129
     init_bias(bias0, 0x5800, 0x5808 | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
+  } else if (mode >= 31 && mode <= 38) {
+    /* Phase D (extra4 nibble sweep, README "Phase D"):
+     * feedback disabled, single-CVT (bias set 0 only), q bound to 8,
+     * scale 64 (0x5400), a=b=0x3c04 except the mode-37 fallback.
+     * The 20-bit output-bias value = -(64.5 + n*2^-8) with the FP16 half
+     * 0xD408 and the extra4 nibble n = phase_d_extra4_nibble(mode);
+     * mode 37 uses the exact-zero fallback encoding (-64.0, nibble 0,
+     * a=b=1.0) because 64.5 + 2^-10 is off the 20-bit grid. */
+    const int n = phase_d_extra4_nibble(mode);
+    init_bias20(bias0, 0x5400, phase_d_out_bias_fp16(mode),
+                (unsigned)n, 0);
+    init_bias(bias1, 0, 0, 0);
   } else {
     init_bias(bias1, 0x5400, 0x7bff, 4);
   }
@@ -230,6 +253,15 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   // First convert retains ACC; optionally keeps 4 extra feedback bits.
   uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
   if (mode == 5 || mode == 8) first_rs |= (1u << 12);  // first convert uses bias set1
+  if (mode >= 31 && mode <= 38) {
+    /* Phase D: feedback disabled. PRM 80-N2040-62 AA §2.3.3 Table 6
+     * (p.15): "For convert transfer instruction without feedback, set
+     * Rs[bias_sel] ... Set the rest of the register to 0" — so Rs[8]
+     * (Rnd, polynomial-feedback rounding) stays 0 in BOTH trials and
+     * only Rs[0]=1 (retain ACC) remains, matching every other
+     * single-CVT mode in this probe. */
+    first_rs = 1u;
+  }
   asm volatile("cvt.hf = acc(%0)\n" : : "r"(first_rs) : "memory");
   asm volatile("mxmem(%0, %1) = cvt\n"
                : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
@@ -238,7 +270,30 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
   }
 
-  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21 || mode == 23 || mode == 24 || mode == 25 || mode == 26 || mode == 27 || mode == 28 || mode == 29) {
+  if (mode == 38) {
+    /* Phase D readback probe. PRM §2.3.1 "Bias store instruction"
+     * (p.15, hmx_hexagon_protos.h Q6_mxmem2_bias_A):
+     *   void Q6_mxmem2_bias_A(void* A);   asm: mxmem2(Rs32)=bias
+     * stores the bias register used by the convert transfer above back
+     * to VTCM — 64 bits per output channel, address 256B aligned, the
+     * register field is the same as the bias load (Fig.14: [31:8]
+     * address, [1:0] set index), so Rs = scratch|0 stores set 0 (the
+     * set that was loaded into and converted with). The scratch row is
+     * 2048-aligned (hence 256B-aligned) at base+5*TILE_BYTES, inside
+     * the 12 KiB reserve. Cells follow the Fig.13 layout: lo(0) at
+     * bytes 0..3, hi(0) at bytes 128..131 — NOT bytes 4..7, the two
+     * 32-bit halves of channel 0 live in the two 128-byte vectors. */
+    uint8_t *scratch = base + 5 * TILE_BYTES;
+    memset(scratch, 0xa5, BIAS_BYTES);  /* a skipped store stays visible */
+    const uintptr_t scratch_reg = (uintptr_t)scratch;  /* set index 0 */
+    asm volatile("mxmem2(%0) = bias\n" : : "r"(scratch_reg) : "memory");
+    const uint32_t *cells = (const uint32_t *)scratch;
+    *hi_bits = (int)(cells[0]);    /* lo(0): scale|obias fp16 pair */
+    *residual_bits = (int)(cells[32]); /* hi(0): extra4|shape nibbles */
+    return;
+  }
+
+  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21 || mode == 23 || mode == 24 || mode == 25 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || (mode >= 31 && mode <= 37)) {
     *hi_bits = hi[0];
     *residual_bits = 0;
     return;
@@ -289,7 +344,7 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
        !results || resultsLen < 4 || !metadata || metadataLen < 9) {
     return HMX_ERR_ARG;
   }
-  if (q < 6 || q > 10 || mode < 0 || mode > MODE_IDENTITY) {
+  if (q < 6 || q > 10 || mode < 0 || mode > MODE_MAX) {
     return HMX_ERR_ARG;
   }
   /* Some modes are bound to a specific q (fixed bias values). */
@@ -297,6 +352,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if ((mode == 27 || mode == 28 || mode == 29) && q != 8) return HMX_ERR_ARG;
   if (mode == 18 && q != 6) return HMX_ERR_ARG;
   if (mode == 22 && q != 6) return HMX_ERR_ARG;
+  /* Phase D modes 31..38 are hard-bound to q=8 (fixed -64.5/-64.0
+   * payload and 1+2^-8 operand); the host mirrors this gate. */
+  if (mode >= 31 && mode <= 38 && q != 8) return HMX_ERR_ARG;
   memset(results, 0, (size_t)resultsLen * sizeof(int));
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
 
@@ -416,6 +474,13 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
             /* Execute HMX only if lock succeeded. */
             run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
             run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
+            if (mode == 38) {
+              /* Mode 38 contract: the bias readback payload lives in
+               * results[0..1] only (lo(0), hi(0)); slots 2/3 are zeroed.
+               * Both trials still execute, so metadata[8]=2 stays true. */
+              results[2] = 0;
+              results[3] = 0;
+            }
             metadata[7] = 1;
             metadata[8] = 2;
             combined_unlock_status = HAP_compute_res_hmx_unlock2(
