@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "parent": "backward_repair_cohort_plan.json",
+  "scope": "Additional evidence binding only; no role, process, arithmetic, fixture, gate, observer or runner change.",
+  "roles": ["standalone_softmax", "standalone_dvalue", "native_softmax", "native_dvalue", "dual"],
+  "processes": 3,
+  "entry": "Both full standalone pilots, both full native singles, full dual and fresh Forward joint contract must pass. Unchanged compiled DSP/Host/probe. Commit this supplemental analysis before the first cohort.",
+  "execution": "One unchanged trace-runner cohort invocation at a time, fresh strict preflight, maximum1200 seconds. Independent full assessment and comparison before the next process. Any unknown, transport/API failure, numerical failure or digest mismatch stops automatic arithmetic; no retry of that process.",
+  "legacy_digest": "Retain and compare the existing assessor's per-role numerical digest unchanged. Earlier pilots remain pilots and are excluded.",
+  "role_contract_digest": "Additional SHA256: ASCII G1_NATIVE_COMPLETION_ROLE_V1 followed by NUL, ASCII role followed by NUL; for each already validated raw numerical record in canonical order, six little-endian uint32 identity words, uint32 output word count, actual canonical output uint32 words; then NUL contracts NUL and sorted compact JSON of measured role/coverage/API/invariant/word/Forward contract fields. Exclude timers, receipts, timestamps, IDs and transport metadata. Compare both legacy and additional per-role digests across all3 processes.",
+  "process_evidence": "Require cohort mode, actual exit0, completion match, full five-role begin/end markers, distinct announced owned PID, identical source commit/orchestration/binaries/toolchain/fixtures and fresh PASS preflight. Never accept imported pilot directories.",
+  "performance": "Only after three complete independently assessed cohort processes match. Use same frozen binary and original performance mode; NoReceipt internal timers remain null. Preserve graph logical memory separately from opaque backend allocation.",
+  "training": "NO-GO"
+}
