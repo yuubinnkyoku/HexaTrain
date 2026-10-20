@@ -28,7 +28,13 @@
 //   G2  hard-case table rows (README citation), including the reviewer
 //       example x = 1 + 2^-11 - 2^-23 under BOTH split variants.
 //   G3  same recovery with the x-hi subtraction carried out in float
-//       (single) precision instead of double.
+//       (single) precision instead of double. The float-variant error
+//       is DECOMPOSED per case: e0 = |x - (double)(float)x| (double->
+//       float input conversion, relative bound 2^-24 vs |x|), e1 =
+//       float-subtraction rounding (relative bound 2^-24 vs |sub|),
+//       and the final |x - recover| of the float split. All G3 numbers
+//       are REPORT-ONLY (never FAIL); every comparison is
+//       relative-vs-relative or absolute-vs-absolute.
 //   G4  subnormal/underflow sweep, magnitudes 2^-20..2^-15.
 //   G5  GEMM synthesis: plain FP16 vs Path-B 3/4-GEMM split variants
 //       (both operands split; W-only split where activations are
@@ -40,10 +46,13 @@
 // mathematically proven G1 invariants (when lo is a normal FP16,
 // |recover-x| <= 2^-23*|x|; when lo is subnormal/zero, |recover-x| <=
 // 2^-25 absolute) and the G5 assertion that both-operands-split beats
-// plain FP16. The README's unconditional 2^-23 bound is reported as the
-// finding `split_normal_ok=0 ... bound_cases_exceeded=k` (every
-// violation is classified; violations with a normal lo would be a FAIL,
-// they are proven impossible above).
+// plain FP16. Everything else — the README's unconditional 2^-23 bound
+// and ALL G3 float-variant numbers — is REPORT-ONLY (see the
+// asserted-vs-reported comment inside g1_g3_recovery). The README's
+// unconditional 2^-23 bound is reported as the finding
+// `split_normal_ok=0 ... bound_cases_exceeded=k` (every violation is
+// classified; violations with a normal lo would be a FAIL, they are
+// proven impossible above).
 //
 // Build (scripts/run_fp16x2_split_sim.ps1 wires gcc + optional clang):
 //   gcc -std=gnu11 -O2 -Wall -Wextra -Werror -o hmx_fp16x2_split_sim hmx_fp16x2_split_sim.c -lm
@@ -103,14 +112,40 @@ static fp16_pair split_double(double x) {
  * carried out in float precision, lo = RN16((float)x - (float)hi).
  * Operand order matches the double variant so the two are comparable;
  * only the precision of the subtraction differs. (float)x first rounds
- * x to 24-bit mantissa, which is the dominant extra error. */
-static fp16_pair split_float(double x) {
+ * x to 24-bit mantissa, which is the dominant extra error.
+ *
+ * The per-case error budget is decomposed so the two float-rounding
+ * sources are not conflated:
+ *   e0      = |x - (double)(float)x|          input conversion, <= 2^-24*|x|
+ *   sub     = (float)((float)x - (float)hi)   the float subtraction result
+ *   exact   = (double)(float)x - f16d(hi)     exact residual of the float
+ *                                             operands (exact in double
+ *                                             for this test range)
+ *   e1      = |(double)sub - exact|           float-subtraction rounding,
+ *                                             <= ulp_f(|sub|)/2 (i.e.
+ *                                             <= 2^-24*|sub|, sub normal)
+ * e0/e1 are report-only; the recovery itself is unchanged:
+ * lo = RN16(sub). */
+static fp16_pair split_float_parts(double x, double *e0, double *e1,
+                                   double *sub_abs) {
   fp16_pair p;
-  float d;
+  float xf, hf, sub;
+  double exact;
   p.hi = double_to_fp16(x);
-  d = (float)x - (float)fp16_to_double(p.hi);
-  p.lo = double_to_fp16((double)d);
+  xf = (float)x;
+  hf = (float)fp16_to_double(p.hi);
+  sub = xf - hf;
+  exact = (double)xf - fp16_to_double(p.hi);
+  p.lo = double_to_fp16((double)sub);
+  *e0 = fabs(x - (double)xf);
+  *e1 = fabs((double)sub - exact);
+  *sub_abs = fabs((double)sub);
   return p;
+}
+
+static fp16_pair split_float(double x) {
+  double e0, e1, sub_abs;
+  return split_float_parts(x, &e0, &e1, &sub_abs);
 }
 
 static double pair_recover(fp16_pair p) {
@@ -202,6 +237,17 @@ static double g3_sum_abs = 0.0;
 static long g3_viol = 0;
 static long g3_viol_lo_normal = 0;
 static long g3_viol_lo_subnormal = 0;
+/* e0: double->float input conversion, ratio e0/|x| vs the RN bound 2^-24. */
+static double g3_e0_max_ratio = 0.0;
+static double g3_e0_sum_ratio = 0.0;
+static long g3_e0_viol = 0;
+/* e1: float-subtraction rounding, ratio e1/|sub| vs the RN bound 2^-24
+ * (relative stats only over sub != 0; exact cancellations counted). */
+static double g3_e1_max_ratio = 0.0;
+static double g3_e1_sum_ratio = 0.0;
+static long g3_e1_viol = 0;
+static long g3_e1_nonzero = 0;
+static long g3_e1_zero = 0;
 
 static void g1_g3_recovery(void) {
   const long total = 100000 + G1_HARD_COUNT;
@@ -233,13 +279,18 @@ static void g1_g3_recovery(void) {
 
     {
       fp16_pair pd = split_double(x);
-      fp16_pair pf = split_float(x);
+      double e0, e1, sub_abs;
+      fp16_pair pf = split_float_parts(x, &e0, &e1, &sub_abs);
       double recd = pair_recover(pd);
       double errd = fabs(recd - x);
       double ratiod = errd / fabs(x);
       double errf = fabs(pair_recover(pf) - x);
       double ratiof = errf / fabs(x);
       int lown = lo_is_normal(pd.lo);
+      /* G3 classifies by the FLOAT variant's own lo (pf.lo), which is
+       * the lo actually used in the float recovery; it can differ from
+       * the double variant's pd.lo. */
+      int lownf = lo_is_normal(pf.lo);
       double bound;
 
       ++n;
@@ -252,13 +303,36 @@ static void g1_g3_recovery(void) {
         worst_rec = recd;
       }
       if (ratiof > g3_max_ratio) g3_max_ratio = ratiof;
-      if (lown && ratiof > g3_max_ratio_lo_normal) {
+      if (lownf && ratiof > g3_max_ratio_lo_normal) {
         g3_max_ratio_lo_normal = ratiof;
       }
       if (lown && ratiod > max_ratio_lo_normal) max_ratio_lo_normal = ratiod;
       if (!lown && errd > sub_abs_max) sub_abs_max = errd;
 
-      /* README's claimed bound: |recover-x| <= 2^-23*|x|. */
+      /* e0: double->float input conversion error, RELATIVE to |x|
+       * (like-for-like against the RN bound 2^-24). */
+      {
+        double r0 = e0 / fabs(x);
+        g3_e0_sum_ratio += r0;
+        if (r0 > g3_e0_max_ratio) g3_e0_max_ratio = r0;
+        if (r0 > ldexp(1.0, -24)) ++g3_e0_viol;
+      }
+      /* e1: pure float-subtraction rounding, RELATIVE to |sub| (the
+       * exact result of the float subtraction). sub == 0 is an exact
+       * cancellation (then e1 == 0 too); it has no relative scale and
+       * is counted separately. */
+      if (sub_abs == 0.0) {
+        ++g3_e1_zero;
+      } else {
+        double r1 = e1 / sub_abs;
+        ++g3_e1_nonzero;
+        g3_e1_sum_ratio += r1;
+        if (r1 > g3_e1_max_ratio) g3_e1_max_ratio = r1;
+        if (r1 > ldexp(1.0, -24)) ++g3_e1_viol;
+      }
+
+      /* README's claimed bound for the DOUBLE variant (absolute vs
+       * absolute): |recover-x| <= 2^-23*|x|. */
       bound = ldexp(fabs(x), -23);
       if (errd > bound) {
         ++viol;
@@ -268,17 +342,31 @@ static void g1_g3_recovery(void) {
           ++viol_lo_sub;
         }
       }
-      if (ratiof > bound) {
+      /* Same claim applied to the FLOAT variant, in RELATIVE form:
+       * ratiof vs 2^-23 (relative vs relative -- units match). This was
+       * the G3 defect: it used to compare the dimensionless ratiof
+       * against the ABSOLUTE bound 2^-23*|x|. REPORT-ONLY. */
+      if (ratiof > ldexp(1.0, -23)) {
         ++g3_viol;
-        if (lown) {
+        if (lownf) {
           ++g3_viol_lo_normal;
         } else {
           ++g3_viol_lo_subnormal;
         }
       }
 
-      /* Proven invariants (FAIL-worthy: a break means the simulator or
-       * the shared oracle is wrong). */
+      /* ASSERTED (a break FAILs the run): the proven G1 double-arith
+       * invariants only, absolute-vs-absolute —
+       *   lo normal     => |recover-x| <= 2^-23*|x|
+       *   lo subnormal  => |recover-x| <= 2^-25 absolute
+       *   recovery finite
+       * (plus the G5 synthesis assertion elsewhere).
+       * REPORT-ONLY (never FAIL): the README's unconditional bound for
+       * the double variant (split_normal_* lines) and ALL G3
+       * float-variant numbers — the float path adds e0 and e1, whose
+       * per-case total constant is not provable a priori, so G3 is
+       * reported as the e0/e1 component bounds plus the final-recovery
+       * ratio, each compared like-for-like. */
       ++g_checks;
       if (lown) {
         if (errd > bound) {
@@ -315,12 +403,26 @@ static void g1_g3_recovery(void) {
          "worst_x=%.17g worst_recover=%.17g\n",
          max_abs, n > 0 ? sum_abs / (double)n : 0.0, max_ratio_lo_normal,
          sub_abs_max, worst_x, worst_rec);
+  /* G3 float-variant decomposition (all report-only):
+   * conv  = e0/|x| vs the double->float RN bound 2^-24,
+   * e1    = e1/|sub| vs the float-subtraction RN bound 2^-24,
+   * sub   = final |x-recover|/|x| vs the README bound 2^-23. */
+  printf("split_fp16arith_conv=count=%ld max_ratio=%.6e mean_ratio=%.6e "
+         "bound=%.6e bound_cases_exceeded=%ld\n",
+         n, g3_e0_max_ratio,
+         n > 0 ? g3_e0_sum_ratio / (double)n : 0.0, ldexp(1.0, -24),
+         g3_e0_viol);
+  printf("split_fp16arith_e1=count=%ld zero_sub=%ld max_ratio=%.6e "
+         "mean_ratio=%.6e bound=%.6e bound_cases_exceeded=%ld\n",
+         n, g3_e1_zero, g3_e1_max_ratio,
+         g3_e1_nonzero > 0 ? g3_e1_sum_ratio / (double)g3_e1_nonzero : 0.0,
+         ldexp(1.0, -24), g3_e1_viol);
   printf("split_fp16arith_sub=count=%ld max_ratio=%.6e mean_abs=%.6e "
-         "max_ratio_double=%.6e bound_cases_exceeded=%ld "
+         "max_ratio_double=%.6e bound=%.6e bound_cases_exceeded=%ld "
          "viol_lo_normal=%ld viol_lo_subnormal=%ld "
          "lo_normal_max_ratio=%.6e\n",
          n, g3_max_ratio, n > 0 ? g3_sum_abs / (double)n : 0.0, max_ratio,
-         g3_viol, g3_viol_lo_normal, g3_viol_lo_subnormal,
+         ldexp(1.0, -23), g3_viol, g3_viol_lo_normal, g3_viol_lo_subnormal,
          g3_max_ratio_lo_normal);
 }
 
