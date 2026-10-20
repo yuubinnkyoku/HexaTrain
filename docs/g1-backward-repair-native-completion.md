@@ -285,3 +285,15 @@ No formal Saved-P, lifetime, observer-free, total-gradient, performance or regre
 | 39 | Actual PV/Gate/Output dP/dContext, then dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation remain uncertified. |
 | 40 | Neither Full1-layer nor Full19-layer is certified; Full Attention Backward/Attention and TRAINING_READY also withheld. |
 | 41 | 40k→60k and200k training remain NO-GO. |
+
+## 2026-10-20 — User-directed fresh safety recheck after fbf9a78
+
+After the user's instruction to continue, work resumed clean on the same branch at `fbf9a7833cc4627463455ff08f50cae2e170b6f3`. The fixed five bundle source/binary identities, five protected files,333 earlier ledger files, all existing mission evidence (including the preceding closeout) and all nonworking refs were rehashed unchanged before device access. No candidate or orchestration changes were made.
+
+One new read-only preflight used a new exclusive private directory and the original pinned arguments/research monitoring policy. It again stopped with actual exit2, **DEVICE_NOT_AWAKE_OR_UNKNOWN**, and actual `mWakefulness=Dozing`. Same physical device and active-run absence passed. The authoritative Awake/top-resumed entry conditions did not both pass; top-resumed and subsequent device gates were not reached. This does not certify full device readiness or demonstrate a new missing-top-field incident.
+
+No new probe process, staging or DSP arithmetic started; actual probe exit/raw hash are null and teardown is not applicable. Device operations after the stop were0. No automatic wake, unlock, foreground takeover, retry or additional state polling occurred. The unused `cohort-1-awake` slot and all previous stopped folders remain untouched. Formal count stays **0/3**; pilots remain pilots. Performance, fresh device regressions and fresh Host/Qnn profiles remain NOT_EXECUTED, and Project Formal remains BLOCKED_SCOPE / NOT_EXECUTED. No new6031 conclusion is available because runtime arithmetic was not exercised.
+
+The public aggregate's existing **BLOCKED_FORMAL_COHORT** projection is retained unchanged: this recheck adds no new numerical result, process, performance value or certification. The41 answers in the preceding closeout retain their numerical/scope conclusions. Exact invocation, actual exit, raw power response and identity/hash audits for this recheck are preserved only in the new private evidence directory. Manual wake and another new complete PASS preflight are required for continuation. Training remains **NO-GO**.
+
+The documentation-only recheck closeout passed fresh **Fast**, actual exit0/107.0s (outer PASS1/FAIL0/SKIP0). Host/Qnn/device/Formal results were not substituted by this Fast result.
