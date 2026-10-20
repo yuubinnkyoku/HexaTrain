@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "base": "c6c30c18713084e002ce5485b8f28d67d26faad2",
-  "source_commit": "dffbc50efaec04f59d16bf126f0631d355f99ae7",
+  "source_commit": "9d8de7c169efa28777b078fb3b36714f13402a46",
   "branch": "investigation/g1-backward-repair-native-completion",
   "binary_sha256": {
     "DSP": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
@@ -224,7 +224,13 @@
     "activity_task_empty": 3,
     "alternative_verified": false,
     "historical_response_classification": "VALID_RESPONSE_NO_FIELD",
-    "new_unknown_responses": [],
+    "new_unknown_responses": [
+      {
+        "classification": "VALID_RESPONSE_NO_FIELD",
+        "response_characters": 142962,
+        "top_field_count": 0
+      }
+    ],
     "safety_waived": false
   },
   "runtime_6031": {
@@ -257,6 +263,7 @@
   "protected_state": "PASS",
   "classifications": [
     "TOP_RESUMED_MONITOR_CHARACTERIZED",
+    "BLOCKED_TOP_RESUMED_STATE",
     "BLOCKED_FORMAL_COHORT",
     "UNRESOLVED",
     "NATIVE_DVALUE_SINGLE_VERIFIED",
