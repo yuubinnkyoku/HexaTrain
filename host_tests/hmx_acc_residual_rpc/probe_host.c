@@ -15,9 +15,10 @@
 #include "bias20.h"
 #include "hmx_identity.h"
 
-/* Phase D mode range (extra4 nibble sweep + bias readback); must mirror
- * MODE_MAX in probe_dsp.c. */
-enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39 };
+/* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
+ * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c (40 = B-1). */
+enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
+       HMX_PROBE_MODE_MAX = 40 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -171,23 +172,28 @@ int main(int argc, char **argv) {
       mode = atoi(argv[arg_index]);
     } else {
       fprintf(stderr,
-              "usage: %s [q=6..10] [mode=0..39] [-strict-build-id]\n",
+              "usage: %s [q=6..10] [mode=0..40] [-strict-build-id]\n",
               argv[0]);
       return exit_with(2);
     }
     positional++;
   }
-  if (q < 6 || q > 10 || mode < 0 || mode > HMX_PHASE_D_MODE_MAX) {
+  if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..39] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..40] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
-   * mirror that gate host-side before touching any device state. */
-  if (mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
-      q != 8) {
-    fprintf(stderr, "phase D modes 31..38 require q=8 (got q=%d)\n", q);
+   * mirror that gate host-side before touching any device state.
+   * B-1 (mode 40) is bound to q=6 like modes 18/22 (fixed operands). */
+  if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
+       q != 8) ||
+      (mode == 40 && q != 6)) {
+    fprintf(stderr,
+            "phase D modes 31..38 require q=8 and mode 40 requires q=6 "
+            "(got q=%d mode=%d)\n",
+            q, mode);
     return exit_with(2);
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
@@ -318,8 +324,17 @@ int main(int argc, char **argv) {
   const double a = mode_operand_a(q, mode);
   const int scale = mode_scale(mode);
   const double oracle = a * a;
-  printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
-         oracle);
+  if (mode == 40) {
+    /* B-1: the a=a oracle line would be misleading (operands are fixed
+     * trial scalars, not 1+2^-q), so print the B-1 header instead. */
+    printf("q=%d mode=%d b1_two_mma_one_cvt=1 operands_trial0=(+1,+2) "
+           "operands_trial1=(+2,-1) scale=64 convert=bias0_plain_rn_fp16 "
+           "oracle=na_scalar_sum_model\n",
+           q, mode);
+  } else {
+    printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
+           oracle);
+  }
   if (mode == 21 || mode == 22) {
     /* Zero-residual controls: the DSP forces a = b = 1.0, so the operand
      * is independent of q; mode 22 additionally requires q == 6 (fixed
@@ -590,6 +605,13 @@ int main(int argc, char **argv) {
       oracle_selfcheck_compare = 1;
       oracle_selfcheck_math_pin = 0x3404;
       break;
+    case 40:
+      /* B-1 (two MMAs into one ACC, single final convert): no expected/
+       * math oracle on the first run — the pre-registered classification
+       * lives in the B-1 block below; no literal from a previous run
+       * exists, so have_expected/have_math stay 0. */
+      single_convert = 1;
+      break;
     case 37:
       /* Exact-zero control: target 0 exactly; math and hypothesis agree. */
       expected[0] = 0x0000;
@@ -736,9 +758,11 @@ int main(int argc, char **argv) {
     const char *slot2_key = single_convert ? "unused_slot2" : "residual_bits";
     const char *slot2_value_key = single_convert ? "unused_val" : "residual";
     /* "extra4" here is the Rs[8] rnd/feedback-round bit of the convert;
-     * Phase D modes force it to 0 in both trials (feedback disabled), so
-     * print the actual bit and keep the trial index as a separate field. */
-    const int rnd_bit = phase_d ? 0 : trial;
+     * Phase D modes force it to 0 in both trials (feedback disabled), and
+     * mode 40 also forces it to 0 (plain RN convert in both trials) — the
+     * trial index is the operand variant, not the rnd bit. Print the
+     * actual bit and keep the trial index as a separate field. */
+    const int rnd_bit = (phase_d || mode == 40) ? 0 : trial;
     printf("extra4=%d trial=%d hi_bits=0x%04x %s=0x%04x hi=%.17g %s=%.17g "
            "basic=%.17g scale=%d ",
            rnd_bit, trial, hi_bits, slot2_key, slot2_bits, hi, slot2_value_key,
@@ -779,6 +803,36 @@ int main(int argc, char **argv) {
     }
   }
   } /* end generic trial loop (mode != 38) */
+
+  if (mode == 40) {
+    /* B-1 classification (pre-registered user table, PR #14): primary
+     * grounds = trial 0 (positive operands only); trial 1 is the
+     * negative/cancel contrast. Compute side note: 192=0x5a00, 128=0x5800,
+     * 64=0x5400, -64=0xd400. */
+    const uint16_t t0 = (uint16_t)result[0];
+    const uint16_t t1 = (uint16_t)result[2];
+    const int c0_accum = (t0 == 0x5a00u);
+    const int c0_overw = (t0 == 0x5800u);
+    const int c1_accum = (t1 == 0x5400u);
+    const int c1_overw = (t1 == 0xd400u || t1 == 0x0000u);
+    const char *c0 = c0_accum ? "ACCUMULATE" : (c0_overw ? "OVERWRITE" : "UNEXPECTED");
+    const char *c1 = c1_accum ? "ACCUMULATE" : (c1_overw ? "OVERWRITE_CONSISTENT" : "UNEXPECTED");
+    const char *b1 = (c0_accum && c1_accum)
+        ? "TWO_MMA_ACCUMULATE_CONSISTENT"
+        : (c0_overw && c1_overw)
+            ? "TWO_MMA_OVERWRITE_CONSISTENT"
+            : "INSUFFICIENT_EVIDENCE_UNEXPECTED_PATTERN";
+    printf("b1_trial0_bits=0x%04x b1_trial0_class=%s\n", t0, c0);
+    printf("b1_trial1_bits=0x%04x b1_trial1_class=%s\n", t1, c1);
+    printf("b1_verdict=%s grounds=trial0_primary trial1=contrast\n", b1);
+    /* Exit-code semantics: a clean run with an interpretable pattern
+     * passes even if the device answer is OVERWRITE (that is a valid
+     * B-1 NO result, not a harness failure). Only contradictory or
+     * unclassifiable stored bits mark pass=0 for manual analysis. */
+    if ((!c0_accum && !c0_overw) || (!c1_accum && !c1_overw)) pass = 0;
+    if (c0_accum && c1_overw) pass = 0;  /* contradictory accumulate/overwrite */
+  }
+
   const char *observed_verdict =
       !observed_any ? "NO_ORACLE" : (observed_all ? "PASS" : "FAIL");
   const char *math_verdict =

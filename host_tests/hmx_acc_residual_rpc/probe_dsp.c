@@ -45,7 +45,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 39,  /* Phase D highest mode; must mirror probe_host.c */
+  MODE_MAX = 40, /* B-1 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
 };
 
 typedef struct probe_context {
@@ -80,6 +80,79 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   uint16_t *residual = (uint16_t *)(base + 3 * TILE_BYTES);
   uint32_t *bias0 = (uint32_t *)(base + 4 * TILE_BYTES);
   uint32_t *bias1 = (uint32_t *)((uint8_t *)bias0 + BIAS_BYTES);
+
+  if (mode == 40) {
+    /* B-1 experiment (PR #14, user-approved): TWO MMA packets accumulate
+     * into the SAME ACC with NO convert and NO FP16 store between them;
+     * a single bias-0 convert (plain RN-FP16, scale 64) reads the ACC at
+     * the very end. mxclracc runs exactly once per trial, at the start.
+     * The weight row is exact 1.0 (0x3c00), so each MMA contributes just
+     * its activation scalar (product act[0][0]*wgt[0][0], rest zero).
+     *   trial 0 (extra_four_bits==0): (+1)+(+2) accumulate 3*64=192
+     *     =0x5a00; overwrite 2*64=128=0x5800.
+     *   trial 1 (extra_four_bits==1): (+2)+(-1) accumulate 1*64=64
+     *     =0x5400; overwrite -64 -> 0xd400 or a clamp to 0x0000
+     *     (negative bias-0 convert is unmeasured; both overwrite-
+     *     consistent, contrast only, per the user's B-1 table). */
+    uint16_t s1;
+    uint16_t s2;
+    uint16_t *act2 = (uint16_t *)(base + 5 * TILE_BYTES);
+    if (extra_four_bits) {
+      s1 = 0x4000u;  /* +2.0 */
+      s2 = 0xbc00u;  /* -1.0 */
+    } else {
+      s1 = 0x3c00u;  /* +1.0 */
+      s2 = 0x4000u;  /* +2.0 */
+    }
+    memset(act, 0, TILE_BYTES);
+    memset(wgt, 0, TILE_BYTES);
+    memset(act2, 0, TILE_BYTES);
+    memset(hi, 0xa5, TILE_BYTES);
+    memset(residual, 0xa5, TILE_BYTES);
+    act[0] = s1;
+    wgt[0] = 0x3c00u;  /* multiplier exactly 1.0 */
+    act2[0] = s2;
+    init_bias(bias0, 0x5400, 0, 0);
+    init_bias(bias1, 0, 0, 0);
+    {
+      const uintptr_t bias0_reg = (uintptr_t)bias0;
+      const uintptr_t bias1_reg = ((uintptr_t)bias1) | 1u;
+      const uintptr_t act1_reg = (uintptr_t)act;
+      const uintptr_t act2_reg = (uintptr_t)act2;
+      const uintptr_t wgt_reg = (uintptr_t)wgt;
+      const uint32_t spatial_mask = (14u << 7);
+      const uint32_t act_rt = spatial_mask | (31u << 2);
+      const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+      const uint32_t wr_rt = spatial_mask;
+
+      asm volatile("mxclracc.hf\n" ::: "memory");
+      asm volatile(
+          "{ activation.hf = mxmem(%0, %1)\n"
+          "  weight.hf = mxmem(%2, %3) }\n"
+          : : "r"(act1_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+          : "memory");
+      /* Second MMA packet issued immediately: between the two packets
+       * there is NO convert, NO FP16 store and NO clear — the packet
+       * pair above is the only thing scheduled between the MMAs. */
+      asm volatile(
+          "{ activation.hf = mxmem(%0, %1)\n"
+          "  weight.hf = mxmem(%2, %3) }\n"
+          : : "r"(act2_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+          : "memory");
+
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
+      /* Single final convert: bias set 0, retain ACC, no feedback
+       * rounding (Phase-D style Rs = 1: Rs[0]=1 only). */
+      asm volatile("cvt.hf = acc(%0)\n" : : "r"(1u) : "memory");
+      asm volatile("mxmem(%0, %1) = cvt\n"
+                   : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
+    }
+    *hi_bits = (int)hi[0];
+    *residual_bits = 0;
+    return;
+  }
 
   // a = 1 + 2^-q as exact FP16 (q in [6,10]).
   uint16_t a_bits;
@@ -355,6 +428,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if ((mode == 27 || mode == 28 || mode == 29) && q != 8) return HMX_ERR_ARG;
   if (mode == 18 && q != 6) return HMX_ERR_ARG;
   if (mode == 22 && q != 6) return HMX_ERR_ARG;
+  /* B-1 (mode 40) uses fixed operands independent of q; the host mirrors
+   * q=6 like modes 18/22. */
+  if (mode == 40 && q != 6) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;
