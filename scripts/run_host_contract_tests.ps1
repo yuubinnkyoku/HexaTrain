@@ -63,6 +63,13 @@ Invoke-PhoneLmHostCppRun -Label "CPU host tests" -Executable $CpuExecutable
 Invoke-PhoneLmHostPwshScript -Label "HMX FP16 oracle self-test" `
     -ScriptPath (Join-Path $Root "scripts\run_hmx_selftest.ps1")
 
+# CPU-only self-test for the run_experiment.ps1 -DeployAndRun build-id
+# provenance gate (pure PowerShell; no SDK, no adb, no device). Asserts the
+# fail-closed identity parsing (MATCH+nonzero+equal required; UNAVAILABLE,
+# zero ids, non-MATCH tokens, missing lines all fail).
+Invoke-PhoneLmHostPwshScript -Label "HMX experiment identity gate self-test" `
+    -ScriptPath (Join-Path $Root "scripts\run_experiment_identity_selftest.ps1")
+
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
     # Remaining product contracts stay in Suite All (Host / Formal / PrGate).

@@ -58,6 +58,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Pure build-id provenance gate (fail-closed orchestrator-level identity
+# check; device-harness semantics in hmx_identity.h stay UNAVAILABLE-tolerant).
+. (Join-Path $PSScriptRoot 'hmx_provenance_gate.ps1')
+
 $script:ProjectDir = $PSScriptRoot
 $script:RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel 2>$null)
 if (-not $script:RepoRoot) { throw 'GIT_NOT_A_REPO: cannot resolve repository root' }
@@ -272,6 +276,22 @@ function Invoke-DeployAndRun($artifacts) {
     foreach ($line in $runOutput) { Write-Log "  [device] $line" }
     if ($runExit -eq 0) { break }
   }
+  # Fail-closed build-id identity gate: a probe exit 0 with BUILD_ID=UNAVAILABLE
+  # (dsp build id 0 does NOT fail identity inside the device harness) or any
+  # unparsed/mismatched identity must not count as a successful provenance run.
+  # Runs regardless of $runExit and AFTER the [device] lines above were logged,
+  # so the evidence stays on the console. A throw here aborts before
+  # Write-ProvenanceFile, exactly like the ADB_* throws above.
+  $gate = Test-HmxBuildIdGate -Lines $runOutput
+  if (-not $gate.Good) {
+    $observed = if ($gate.MatchedLine) {
+      "line=[$($gate.MatchedLine)] host=0x$($gate.HostBuildId.ToString('x8')) dsp=0x$($gate.DspBuildId.ToString('x8'))"
+    } else {
+      'line=<none> (no identity line in device output)'
+    }
+    throw "BUILD_ID_GATE_FAILED: reason=$($gate.Reason) expected=build_id_status=MATCH with nonzero equal ids; observed $observed"
+  }
+  Write-Log ("build_id_gate=PASS host=0x{0:x8} dsp=0x{1:x8}" -f $gate.HostBuildId, $gate.DspBuildId)
   [pscustomobject]@{ Exit = $runExit; Attempts = $attempt; Output = $runOutput }
 }
 
