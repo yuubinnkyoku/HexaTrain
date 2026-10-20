@@ -325,3 +325,67 @@ The earlier `cohort-1-awake` directory is retained as failed prelaunch evidence.
 This is a Host directory-selection change only, outside every frozen compiled-source manifest. The exact source diff/hashes and the three intended unique directories are recorded privately before any arithmetic. DSP/Host/probe bytes, fixtures, old gates, five-role ordering, three independent process requirement, legacy/supplemental digest definitions and the trace runner remain unchanged. Fresh runner preflight is still required immediately before each process. This preregistration grants no numerical/formal, performance or regression certification and does not resolve the missing-top-field incident. Training remains NO-GO.
 
 Directory-selection gate: fresh **Fast PASS**, actual exit0/119.3s (outer PASS1/FAIL0/SKIP0), before committing the Host change and attempting a fresh runner entry.
+
+## 2026-10-20 — First actual cohort process: exit139 closeout
+
+The directory-only recovery was committed as `0e75d40ac48bcc0c0f37286c23457a8d96b6c392`. A new exclusive cohort directory was preregistered privately. The original trace runner passed another complete fresh preflight, including Awake/top-resumed, immediately before this actual attempt. The frozen compiled source remains `bb6aaceb42de505b29689a362ce8293687e7ab89`; all DSP/Host/probe/Forward bytes, fixtures and gates remain unchanged. No further device arithmetic is authorized automatically by this failed attempt.
+
+**One actual OS process started; zero formal processes completed.** Its owned PID and exact identity remain private. `standalone_softmax` completed four observers, Core2,200/Holdout256 per observer,9,824 gradient pairs and4,912 successful graphExecute calls. Its role exit was0 and its own teardown summary succeeded. Runtime-reported maxAbs was `6.335392901668513e-5`, arithmetic/observer word mismatches0 and failed pairs0, with finite/complete-write/input-immutability/canary checks reported successful. These are partial-process runtime results, not a new independent numerical certification or a replacement pilot.
+
+The next role, `standalone_dvalue`, began and reached graph construction. It produced **zero gradient pairs**, with no graphFinalize or graphExecute call recorded for that role. The final returning API was graphAddNode with code0, followed by **Segmentation fault / actual process exit139**. The separate completion record, final identity and runner exit all agree on139. Remaining roles `native_softmax`, `native_dvalue` and `dual` did not start. Whole-process teardown is incomplete; the completed first-role teardown does not establish successful teardown of the failed process.
+
+The current partial raw file is0 bytes, with its actual empty-file hash retained privately. The earlier completed Softmax role had already been closed and renamed by the frozen cohort program. Its284,827,248-byte raw file was recovered using read-only identity/hash/pull operations: stable device identity verified, remote pre/post hashes and Host hash equal, pull exit0. All stdout/stderr, completion, identity, monitoring and compressed/partial raw evidence are preserved. There was no second arithmetic attempt, no wake/unlock, reboot, force-stop, package change, cleanup or threshold relaxation. Evidence readback added zero DSP executes.
+
+No API6031 or6033 token occurs in the captured stdout/stderr. This is a new **PROCESS_EXIT_139 / UNRESOLVED** episode, not established recurrence of6031 or its cause. The existing6031 classification stays **UNRESOLVED / DORMANT / WATCH**. Focus takeover count was0 and no safety-monitor stop was recorded; this attempt is not classified as Dozing or missing-top-field failure. Prior Dozing and VALID_RESPONSE_NO_FIELD episodes remain historical and unresolved.
+
+The failed process is excluded from all formal process/role counts. No legacy or supplemental three-process digest set exists; no numerical-reproducibility or accuracy-failure classification is inferred from the crash. The same five-role/three-process plan remains unmet. Processes2/3, performance and fresh device regressions were not launched. All earlier five-role pilots and Forward joint-contract evidence remain unchanged, but they do not fill the missing formal coverage.
+
+The allow-list exporter now has an explicit **FAILED_PARTIAL** projection for this actual exit139 episode. It verifies captured process/runner completion, source/binary/trace identity, fresh PASS preflight, exact completed-role coverage, returned API accounting, partial raw hashes and the completed-role readback receipt. It requires one attempted process, zero completed processes, incomplete teardown and `formal_eligible=false`; any additional unaccounted process or successful cohort requires a different complete projection. Original18 and blocked-closeout14 rejection tests are retained, with17 new failed-process rejection tests, including missing prerequisite roles and false three-process PASS attached to individual native/dual roles without a complete cohort. The earlier `formal_closeout` object remains the historical dffbc50 Dozing record, while the current `cohort` object records this actual failed attempt. Public output contains no PID, device/app identity, raw tensor, endpoint or private path.
+
+Overall classification is **BLOCKED_FORMAL_COHORT / UNRESOLVED**. Historical BLOCKED_TOP_RESUMED_STATE is retained as unresolved history, not the cause of this crash. No formal Saved-P/lifetime/observer-free/total-gradient, performance, regression-closure, Full Attention, Full1-layer, Full19-layer or TRAINING_READY certification is granted. Project Formal remains **BLOCKED_SCOPE / NOT_EXECUTED**. The mathematical frontier still includes actual PV/Gate/Output dP/dContext, dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation; the immediate operational blocker is the failed multi-role cohort process. Training40k→60k/200k remains **NO-GO**.
+
+| # | Current answer after the actual failed process |
+| --- | --- |
+| 1 | Yes; original dffbc50 research-clone start retained; this retry started at ec6428e and executed committed directory-only recovery0e75d40. |
+| 2 | Yes; all specified frozen binaries, compiled source and fixtures are unchanged; no rebuild. |
+| 3 | Starting Forward P identity and independently checked historical contract are retained; no fresh native Forward role completed in this attempt. |
+| 4 | Yes at initial and runner preflights; the unchanged runtime monitor did not request a safety stop. |
+| 5 | Yes; all old Dozing/prelaunch-only attempts contribute0 formal OS processes. |
+| 6 | Yes; one actual cohort OS process started and later exited139. |
+| 7 | No; only standalone Softmax completed. dValue began but produced0 pairs; three native roles did not start. |
+| 8 | Only standalone Softmax completed Core2,200/Holdout256 across four observers; overall coverage incomplete. |
+| 9 | Formal null; partial-process Softmax runtime maxAbs6.335392901668513e-5 is not formal certification. |
+| 10 | Formal null; current dValue produced0 pairs. Retained pilot1.68030018699028e-5. |
+| 11 | Formal null; retained Native Softmax pilot1.0078856647055545e-4. |
+| 12 | Formal null; retained Native dValue pilot1.3850631340517339e-5. |
+| 13 | Formal null; retained dual Softmax pilot1.0078856647055545e-4. |
+| 14 | Formal null; retained dual dValue pilot1.3850631340517339e-5. |
+| 15 | Completed Softmax runtime reported0 arithmetic mismatches; other new roles unmeasured, full formal contract unavailable. |
+| 16 | Completed Softmax runtime reported0 observer mismatches; other new roles unmeasured, full formal contract unavailable. |
+| 17 | Retained dual pilot shares the same per-head NATIVE P ID; no new dual role ran. |
+| 18 | Retained pilot lifetime/immutability verified; no new formal native lifetime result. |
+| 19 | Native pilot graph has no Host P reinjection; this failed process did not reach native roles. |
+| 20 | Retained dual NoReceipt/NoTap pilot passes both gradients; no new formal measurement. |
+| 21 | No;1 attempted/failed OS process,0/3 completed formal processes. |
+| 22 | Actual process/runner exit139; whole-process teardown incomplete. First-role exit0/teardown success is separate. |
+| 23 | No; no three-process numerical digest agreement is available. |
+| 24 | Historical legacy digests retained; both formal legacy/supplemental agreement remain NOT_MEASURED. |
+| 25 | No6031/6033 observed in captured logs; new exit139 cause unresolved and not attributed to6031. |
+| 26 | No new Dozing/top-missing stop in this actual attempt; historical episodes remain preserved/unresolved. |
+| 27 | Yes; this exit139 process is explicitly FAILED_PARTIAL and formally ineligible. |
+| 28 | No; formal numerical entry gate unmet. |
+| 29 | Forward/single/dual median and p10/p90 remain null. |
+| 30 | No new timing comparison; no pilot time relabeled as formal cost. |
+| 31 | Fresh HVX FFN2/QKV NOT_EXECUTED. |
+| 32 | Fresh device smoke NOT_EXECUTED. |
+| 33 | Fresh W8 114/114 NOT_EXECUTED; historical PASS not reused as fresh. |
+| 34 | Yes; all old negatives preserved, none rerun here or used to excuse the crash. |
+| 35 | Pre-execution Fast PASS119.3s and final closeout Fast PASS85.4s; Host/Qnn profiles not rerun, historical PASS retained. |
+| 36 | Yes; Project Formal BLOCKED_SCOPE / NOT_EXECUTED. |
+| 37 | Protected checkpoint/ref/ledger identities retained; final hash audit recorded privately, no protected checkpoint decode/write. |
+| 38 | BLOCKED_FORMAL_COHORT / UNRESOLVED; no formal Saved-P closure. |
+| 39 | First restore bounded multi-role runtime execution; mathematical frontier remains actual dP/dContext, dQ/dK, scatter/projection/LN1 aggregation. |
+| 40 | Full1-layer/Full19-layer and higher Attention/training classifications remain unverified. |
+| 41 | 40k→60k and200k training remain NO-GO. |
+
+Final closeout gate: fresh **Fast PASS**, actual exit0/85.4s (outer PASS1/FAIL0/SKIP0), on the final exporter guards. Original18 + blocked-closeout14 + failed-process17 rejection tests passed (49 total, zero device calls). A prior90.3s Fast run is also retained as intermediate evidence; it is not substituted for this final guard check. Protected/frozen identity, previous-evidence preservation, public/exporter equality and final clean-tree audits are retained privately. Only the completed Softmax role's runtime checks are reported; no independent five-role numerical assessment or formal digest agreement is claimed for the failed process.

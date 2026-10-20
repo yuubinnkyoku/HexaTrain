@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import struct
 from assess_backward_repair import ROOT, assess, assess_cohort, read, require
 from diagnose_backward_top_state import classify
 from export_public_backward_precision import compact, exact_keys
@@ -99,6 +100,83 @@ def measured(directory, mode):
     return entry
 
 
+def validate_cohort(value):
+    if value.get('status') == 'NOT_EXECUTED':
+        exact_keys(value, 'status complete_processes digests')
+        require(value == dict(status='NOT_EXECUTED', complete_processes=0, digests={}), 'unverified formal claim')
+        return
+    exact_keys(value, 'status complete_processes digests attempted_processes failed_processes')
+    require(value['status'] == 'FAILED_PARTIAL' and value['complete_processes'] == 0 and value['digests'] == {}, 'failed cohort promoted')
+    require(value['attempted_processes'] == 1 and len(value['failed_processes']) == 1, 'failed process accounting')
+    failed = value['failed_processes'][0]
+    exact_keys(failed, 'source_commit actual_exit preflight focus_takeover_count completed_roles completed_gradient_pairs incomplete_role incomplete_gradient_pairs graph_execute_successes process_teardown partial_raw_bytes completed_role_raw_preserved api_6031_occurrences formal_eligible')
+    require(re.fullmatch('[0-9a-f]{40}', failed['source_commit']) is not None, 'failed source commit')
+    expected = dict(actual_exit=139, preflight='PASS', focus_takeover_count=0,
+        completed_roles=['standalone_softmax'], completed_gradient_pairs=9824,
+        incomplete_role='standalone_dvalue', incomplete_gradient_pairs=0, graph_execute_successes=4912,
+        process_teardown='INCOMPLETE', partial_raw_bytes=0, completed_role_raw_preserved=True,
+        api_6031_occurrences=0, formal_eligible=False)
+    require(all(failed[k] == v for k, v in expected.items()), 'unverified failed process claim')
+
+
+def failed_cohort(attempt_root):
+    """Project this measured exit139 episode; never grant numerical certification."""
+    attempt_root = attempt_root.resolve()
+    require(attempt_root.parent == REPORT.resolve(), 'failed attempt must be private')
+    entry = read(attempt_root / 'cohort-execution-entry-private.json')
+    directory = REPORT / entry['planned_cohort_directories'][0]
+    require(directory.resolve().parent == REPORT.resolve(), 'failed cohort path containment')
+    identity = read(directory / 'identity-private.json')
+    completion = read(directory / 'execution-before-readback-private.json')
+    runner = read(attempt_root / 'cohort-1-runner-exit-private.json')
+    require(identity['mode'] == 'cohort' and identity['forward_limit'] == 60, 'failed cohort mode/coverage plan')
+    require(identity['exit_code'] == completion['exit_code'] == runner['runner_actual_exit'] == 139, 'actual failed exit missing')
+    require(identity['source_sha'] == entry['source_commit'] == runner['source_commit'], 'failed source identity')
+    require(identity['build'] == read(ROOT / 'build/fp32-saved-p-backward-repair-final/build-identity.json'), 'failed binary identity')
+    require(identity['orchestration_sha256'] == completion['orchestration_sha256'] ==
+        'ddaec3470adea03c287ef3138f64a0d04ac9a0ca408d096c24303385d0c9f811', 'failed trace identity')
+    require(read(directory / 'preflight/device-preflight-private.json')['status'] == 'PASS' and identity['focus_takeover_count'] == 0, 'failed preflight/monitor')
+    require(sha(directory / 'saved-p-words.bin') == identity['raw_evidence_sha256'] and
+        sha(directory / 'saved-p-words.bin.gz') == identity['compressed_evidence_sha256'] and
+        (directory / 'saved-p-words.bin').stat().st_size == 0, 'partial raw identity')
+    text = (directory / 'stdout.txt').read_text(encoding='utf-8-sig')
+    stderr = (directory / 'stderr.txt').read_text(encoding='utf-8-sig')
+    require(len(re.findall(r'^owned_probe_pid=(\d+)\s*$', text, re.M)) == 1, 'actual failed process missing')
+    require(re.findall(r'^cohort_begin,mode=([^\r\n]+)', text, re.M) == MODES[:2], 'failed role order')
+    require(re.findall(r'^cohort_end,mode=([^\r\n]+)', text, re.M) == ['standalone_softmax,exit=0'], 'failed completion markers')
+    rows = [json.loads(line) for line in text.splitlines() if line.startswith('{') and json.loads(line).get('kind') == 'repair_pair']
+    keys = [tuple(row[k] for k in ('observed', 'tap', 'forward', 'gradient', 'head', 'consumer')) for row in rows]
+    expected = {(o, t, fi, gi, h, 0) for o in (0, 1) for t in (0, 1) for fi in range(60)
+        for gi in range(25 if fi < 44 else 8) for h in (0, 1)}
+    require(len(keys) == len(set(keys)) == 9824 and set(keys) == expected and
+        all(row['mode'] == 'standalone_softmax' for row in rows), 'partial role coverage')
+    require('mode=standalone_softmax,pairs=9824,required_failures=0,input_mutation=0,finite=1,complete_writes=1,poison_remaining=0,canary=1,teardown=1,cpu_arithmetic_fallback=0' in text, 'completed role terminal')
+    api_lines = [line for line in text.splitlines() if line.startswith('api,')]
+    require(all(line.endswith(',0') for line in api_lines) and api_lines.count('api,graphExecute,0') == 4912, 'failed execute accounting')
+    unfinished = text.split('cohort_begin,mode=standalone_dvalue\n', 1)[1]
+    require('api,graphExecute,' not in unfinished and 'api,graphFinalize,' not in unfinished and
+        api_lines[-1] == 'api,graphAddNode,0' and 'Segmentation fault' in stderr, 'failed graph-construction stage')
+    require(not re.search(r'(?<!\d)6031(?!\d)', text + stderr), 'exit139 must not hide API6031')
+    receipt = read(attempt_root / 'completed-role-readback-private.json')
+    raw = attempt_root / 'preserved-completed-roles/standalone_softmax.bin'
+    require(receipt['status'] == 'PASS' and receipt['source_role'] == 'standalone_softmax' and
+        receipt['actual_process_exit'] == 139 and receipt['physical_identity_verified'] and
+        receipt['read_only_evidence_preservation'] and receipt['additional_dsp_executes'] == receipt['pull_actual_exit'] == 0,
+        'completed role preservation missing')
+    raw_hash = sha(raw)
+    require(raw_hash == receipt['remote_before_sha256'] == receipt['local_sha256'] == receipt['remote_after_private'].split()[0] and
+        raw.stat().st_size == receipt['local_bytes'] > 16, 'completed role raw hash')
+    with raw.open('rb') as source: require(struct.unpack('<4I', source.read(16)) == (0x42525001, 1, 0, 60), 'completed role raw header')
+    failed = dict(source_commit=identity['source_sha'], actual_exit=139, preflight='PASS', focus_takeover_count=0,
+        completed_roles=['standalone_softmax'], completed_gradient_pairs=9824,
+        incomplete_role='standalone_dvalue', incomplete_gradient_pairs=0, graph_execute_successes=4912,
+        process_teardown='INCOMPLETE', partial_raw_bytes=0, completed_role_raw_preserved=True,
+        api_6031_occurrences=0, formal_eligible=False)
+    result = dict(status='FAILED_PARTIAL', complete_processes=0, digests={}, attempted_processes=1, failed_processes=[failed])
+    validate_cohort(result)
+    return directory.resolve(), result
+
+
 def validate(value):
     exact_keys(value, 'schema base source_commit branch binary_sha256 fixture_sha256 previous_pilots repair monitor runtime_6031 forward cohort performance regression protected_state classifications training' + (' formal_closeout' if 'formal_closeout' in value else ''))
     if 'formal_closeout' in value: validate_blocked_closeout(value['formal_closeout'])
@@ -137,9 +215,10 @@ def validate(value):
             else:
                 require(entry['native_contract'] is None, 'false native claim')
     require(set(value['repair']) == {'native_dvalue', 'dual'}, 'repair roles')
+    require(set(value['previous_pilots']) == set(MODES[:3]), 'missing previous pilot role')
     require(all(e['status'] == 'PILOT_PASS' and e['processes'] == 1 for e in value['previous_pilots'].values()), 'previous pilot promoted to formal')
-    exact_keys(value['cohort'], 'status complete_processes digests')
-    require(value['cohort'] == dict(status='NOT_EXECUTED', complete_processes=0, digests={}), 'unverified formal claim')
+    require(all(e['status'] != 'PASS' for e in value['repair'].values()), 'formal role without complete cohort')
+    validate_cohort(value['cohort'])
     require(value['performance'] is None, 'unmeasured performance')
     exact_keys(value['monitor'], 'diagnostic_commands diagnostic_rounds control_verified full_activity_agreement activity_task_empty alternative_verified historical_response_classification new_unknown_responses safety_waived')
     require(value['monitor']['alternative_verified'] is False and value['monitor']['safety_waived'] is False, 'unverified monitor/waiver')
@@ -167,7 +246,7 @@ def validate(value):
     safe(value)
 
 
-def make():
+def make(failed_attempt_root=None):
     initial = read(REPORT / 'starting-audit-private.json')
     for line in initial['refs'].splitlines():
         value, ref = line.split()
@@ -209,9 +288,14 @@ def make():
         result['classifications'] += ['SAVED_P_DUAL_NATIVE_VERIFIED', 'SAVED_P_LIFETIME_VERIFIED', 'SAVED_P_DUAL_OBSERVER_FREE_VERIFIED']
     else:
         result['classifications'].append('BLOCKED_NATIVE_DUAL')
-    require(not any(REPORT.glob('cohort-*/identity-private.json')) and
-        not any(REPORT.glob('cohort-*/execution-before-readback-private.json')) and
-        not any(REPORT.glob('cohort-*/stdout.txt')), 'actual or partial cohort evidence requires full cohort projection')
+    actual = {p.parent.resolve() for pattern in ('cohort-*/identity-private.json',
+        'cohort-*/execution-before-readback-private.json', 'cohort-*/stdout.txt') for p in REPORT.glob(pattern)}
+    if actual:
+        require(failed_attempt_root is not None, 'actual or partial cohort evidence requires explicit projection')
+        directory, result['cohort'] = failed_cohort(failed_attempt_root)
+        require(actual == {directory}, 'unaccounted actual cohort process')
+    else:
+        require(failed_attempt_root is None, 'failed attempt without actual process')
     require(not (REPORT / 'performance-1/identity-private.json').exists(), 'performance requires measured projection')
     if unknowns: result['classifications'].insert(1, 'BLOCKED_TOP_RESUMED_STATE')
     validate(result)
@@ -282,14 +366,53 @@ def selftest():
         except (ValueError, TypeError): pass
         else: raise AssertionError('false blocked closeout accepted')
     print(f'blocked_closeout_exporter_selftest=PASS rejection_cases={len(corruptions)} device_calls=0')
+    partial = dict(status='FAILED_PARTIAL', complete_processes=0, digests={}, attempted_processes=1,
+        failed_processes=[dict(source_commit='a'*40, actual_exit=139, preflight='PASS', focus_takeover_count=0,
+            completed_roles=['standalone_softmax'], completed_gradient_pairs=9824, incomplete_role='standalone_dvalue',
+            incomplete_gradient_pairs=0, graph_execute_successes=4912, process_teardown='INCOMPLETE', partial_raw_bytes=0,
+            completed_role_raw_preserved=True, api_6031_occurrences=0, formal_eligible=False)])
+    validate_cohort(partial)
+    mutations = [dict(status='PASS'), dict(complete_processes=1), dict(attempted_processes=0), dict(digests={'dual':'a'*64})]
+    role_mutations = [dict(actual_exit=None), dict(actual_exit=0), dict(preflight='BLOCKED'), dict(formal_eligible=True),
+        dict(process_teardown='PASS'), dict(completed_roles=['dual']), dict(completed_gradient_pairs=9823),
+        dict(incomplete_gradient_pairs=1), dict(completed_role_raw_preserved=False), dict(api_6031_occurrences=1)]
+    for change in mutations:
+        try: validate_cohort(dict(partial, **change))
+        except (ValueError, TypeError): pass
+        else: raise AssertionError('failed cohort promoted')
+    for change in role_mutations:
+        candidate = copy.deepcopy(partial); candidate['failed_processes'][0].update(change)
+        try: validate_cohort(candidate)
+        except (ValueError, TypeError): pass
+        else: raise AssertionError('failed process promoted')
+    # These role entries would otherwise claim three formal replicas alongside
+    # the failed cohort's zero complete processes.
+    for mode, granted in (('native_dvalue', 'NATIVE_DVALUE_SINGLE_VERIFIED'), ('dual', 'SAVED_P_DUAL_NATIVE_VERIFIED')):
+        candidate = copy.deepcopy(value); candidate['cohort'] = copy.deepcopy(partial)
+        role = pilot('native_dvalue' if mode == 'native_dvalue' else 'native_softmax')
+        if mode == 'dual':
+            role['consumers'] += pilot('native_dvalue')['consumers']
+            role['native_contract']['induced_bounds'] = {'0':0., '1':0.}
+        candidate['repair'][mode] = role; candidate['classifications'].append(granted)
+        validate(candidate)
+        role.update(status='PASS', processes=3); candidate['classifications'].remove(granted)
+        try: validate(candidate)
+        except (ValueError, TypeError): pass
+        else: raise AssertionError('formal role without cohort accepted')
+    candidate = copy.deepcopy(value); candidate['cohort'] = copy.deepcopy(partial)
+    del candidate['previous_pilots']['native_softmax']
+    try: validate(candidate)
+    except (ValueError, TypeError): pass
+    else: raise AssertionError('missing prerequisite pilot accepted')
+    print(f'failed_cohort_exporter_selftest=PASS rejection_cases={len(mutations)+len(role_mutations)+3} device_calls=0')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--output', type=Path); parser.add_argument('--self-test', action='store_true'); parser.add_argument('--blocked-closeout-root', type=Path); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--output', type=Path); parser.add_argument('--self-test', action='store_true'); parser.add_argument('--blocked-closeout-root', type=Path); parser.add_argument('--failed-attempt-root', type=Path); args = parser.parse_args()
     if args.self_test:
         selftest(); raise SystemExit(0)
     require(args.output is not None, 'output required')
-    result = make()
+    result = make(args.failed_attempt_root)
     if args.blocked_closeout_root:
         result['formal_closeout'] = blocked_closeout(args.blocked_closeout_root)
         validate(result)

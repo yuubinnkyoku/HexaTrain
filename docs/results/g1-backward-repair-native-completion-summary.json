@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "base": "c6c30c18713084e002ce5485b8f28d67d26faad2",
-  "source_commit": "9d8de7c169efa28777b078fb3b36714f13402a46",
+  "source_commit": "0e75d40ac48bcc0c0f37286c23457a8d96b6c392",
   "branch": "investigation/g1-backward-repair-native-completion",
   "binary_sha256": {
     "DSP": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
@@ -246,9 +246,30 @@
     "observer_word_mismatches": 0
   },
   "cohort": {
-    "status": "NOT_EXECUTED",
+    "status": "FAILED_PARTIAL",
     "complete_processes": 0,
-    "digests": {}
+    "digests": {},
+    "attempted_processes": 1,
+    "failed_processes": [
+      {
+        "source_commit": "0e75d40ac48bcc0c0f37286c23457a8d96b6c392",
+        "actual_exit": 139,
+        "preflight": "PASS",
+        "focus_takeover_count": 0,
+        "completed_roles": [
+          "standalone_softmax"
+        ],
+        "completed_gradient_pairs": 9824,
+        "incomplete_role": "standalone_dvalue",
+        "incomplete_gradient_pairs": 0,
+        "graph_execute_successes": 4912,
+        "process_teardown": "INCOMPLETE",
+        "partial_raw_bytes": 0,
+        "completed_role_raw_preserved": true,
+        "api_6031_occurrences": 0,
+        "formal_eligible": false
+      }
+    ]
   },
   "performance": null,
   "regression": {
