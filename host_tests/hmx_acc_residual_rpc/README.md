@@ -642,6 +642,7 @@ recorded requires explicit instruction.
 | CPU split-precision simulation: the FP16 hi/lo split is NOT exact — lo-normal bound 2^-23·\|A\| holds (0 viol of 100058 normal-lo cases, max ratio 1.191511e-07 ≈ 2^-23·1.006); subnormal-lo degrades and at 2^-20..2^-15 lo is 0 in all 2400 sweep points (max rel 3.02e-02, bound breaks below ≈9.5e-07); float-arith split (G3, unit-corrected): double→float input rounding is the only floatization loss (e0 max ratio exactly 2^-24, 0/100058 exceed) and the float subtraction is Sterbenz-exact against the RN16-hi partner (e1 ≡ 0, 27 exact cancellations); the final recovery ratio exceeds 2^-23 in 942 lo-normal cases (max 1.760996e-07 ≈ 1.48×2^-23 — e0 + RN16(lo), not cancellation); the earlier 671-viol count was a units mismatch (relative vs absolute) and is withdrawn; reviewer example x = 1+2^-11−2^-23 → residual exactly 2^-23 (hi=0x3c00, lo=0x1000) | `hmx_fp16x2_split_sim.c` via `scripts/run_fp16x2_split_sim.ps1` (gcc gcc-15.2 mingw + clang-22.1.8 msvc byte-identical, seeds fixed) |
 | B-1 device run (2026-10-20): ONE build + ONE run, mode 40 — two consecutive MMA operand packets into ONE accumulator, `mxclracc` once at start, no convert/store between batches, ONE final bias-0 convert at scale 64; trial 0 (+1)+(+2) stored **`0x5a00`** = 192 (accumulate branch of the pre-registered table), trial 1 (+2)+(−1) stored **`0x5400`** = 64 (mixed-sign batch additivity, positive sum); strict build-id all-agree gate PASS, exit 0, cleanup PASS — `TWO_MMA_ACCUMULATE_CONSISTENT` | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 40` (transcript `build/hmx_evidence/b1_run_20261020.txt`, gitignored) |
 | B2 CPU stored-domain comparison (E-3A, G7): final-FP16-store applied to the SAME synthesis — plain stored vs B3 stored mean abs err 1.446613e-03 vs 8.484465e-04 @n16, 2.719522e-03 vs 1.489992e-03 @n64 (FP32-carried act: 1.71×/1.83×, worsened 0 %, B3 oracle-optimal bits 99.6–100 % vs plain 52.9–55.1 %); FP16-exact act (W-only): 1.22×, worsened 12.5–12.7 %; pinned B-2 scalar fixtures reproduce exactly (plain `0x5400` / B3 `0x5401` and `0x5400`/`0x53ff`; full-RN16 coincide — fixture-specific) | same sim, G7: `split_b2_stored_*`, `split_b2_fixture`, `b2_cpu_gate=PASS improves=4/4`; pre-store G5/G6 figures above are internal-domain, not end-to-end |
+| B-2 device run (2026-10-20): ONE build + ONE run, mode 41 — three MMA packets (`Ahi·Whi`, `Ahi·Wlo`, `Alo·Whi`) into ONE accumulator, `mxclracc` once per subcase, no convert/store/clear between packets, ONE final bias-0 scale-64 convert + ONE store; trial 0 stored **`0x5401`** (64.0625), trial 1 stored **`0x53ff`** (63.96875) — both exactly the pre-registered 3-product bits, distinct from the plain context `0x5400`; strict build-id all-agree gate PASS, exit 0, cleanup PASS, `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` — `B2_THREE_PRODUCT_CONFIRMED` at 1-lane/1-run scope | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 41` (transcript `build/hmx_evidence/b2_run_20261020.txt`, gitignored) |
 | CPU 3-GEMM synthesis (G5/G6): both-operands-split mean rel err 5.66e-07 @n=64 (4.30e-06 @n=16) vs plain 2.57e-03 / 1.53e-02 → ~4.5e3× mean improvement; the 4-term variant is not better (5.73e-07); chained single-accumulator vs separate float accumulators equivalent (6.79e-07; combine loss subdominant: mean 2.83e-08, max 1.39e-07); W-only split (Alo=0 activations) gains only 1.5–1.8× | same sim |
 
 ### Path A — harvest hi/lo from one accumulator through two converts
@@ -956,16 +957,36 @@ automatic NO_GO on Path B; negative final FP16 store remains untested
 (no signed-range guarantee). E-3C (real multi-lane 3-GEMM accuracy +
 cost) is decision-only, NOT authorized by this stage.
 
+**B-2 result (mode 41 device run, 2026-10-20; one build + one run,
+build id `0xe99839a1`, host = DSP all-agree):**
+**`B2_THREE_PRODUCT_CONFIRMED`** — both subcases landed exactly on the
+pre-registered bits: trial 0 → **`0x5401`** (64.0625), trial 1 →
+**`0x53ff`** (63.96875), in both cases differing from the plain
+1-product context (`0x5400`, 64) exactly as the CPU fixtures
+predicted. The three MMA packets (`Ahi·Whi`, `Ahi·Wlo`, `Alo·Whi`,
+including the mixed-sign cancellation accumulator of trial 1:
+1 − 2^-12 − 2^-12) accumulated into the SAME ACC with no intermediate
+convert / FP16 store / clear, and the single bias-0 scale-64 convert
+stored `RN16(ACC·64)` exactly as simulated. Exit code 0, identity and
+resource-cleanup PASS, `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED`
+maintained. Claim scope: ONE run, ONE device, ONE lane, scalar
+fixtures with exact-representable store targets — what is confirmed is
+that the HMX ACC synthesizes the three-product sum *through the final
+FP16 store*, distinguishable from the plain FP16 pipeline output at
+these fixtures. General multi-lane accuracy/cost (E-3C), performance,
+and negative-final-store behaviour remain unmeasured; no
+production/permission claim.
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
 | --- | --- | --- | --- | --- |
-| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× (12.5–12.7 % worsened); split not exact (2^-23-class residue + subnormal-lo degradation); device stored numbers `INSUFFICIENT_EVIDENCE` (mode 41 pending) | reference |
+| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× (12.5–12.7 % worsened); split not exact (2^-23-class residue + subnormal-lo degradation); device scalar-fixture stored bits CONFIRMED (mode 41: `0x5401`/`0x53ff` vs plain `0x5400`, 1-lane/1-run); statistical multi-lane device accuracy `INSUFFICIENT_EVIDENCE` (E-3C decision-only) | reference |
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
-| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20) | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 met at minimal shape; E-3A stored-domain CPU gate PASS; mode-41 device check (E-3B) pending; multi-lane cost/accuracy (E-3C) separately gated, not authorized yet) | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20) | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C multi-lane cost/accuracy, performance and production integration NOT measured and separately gated) | — |
 
 ### Decision
 
@@ -976,11 +997,13 @@ cost) is decision-only, NOT authorized by this stage.
 - Path B is the only route consistent with every measured HMX law.
   (1) B-1 executed (mode 40, `TWO_MMA_ACCUMULATE_CONSISTENT` above);
   (2) Phase E-3 approved 2026-10-20 (PR #14 comment 6293114616):
-  E-3A stored-domain CPU gate **PASS (4/4)**, E-3B = mode 41 staged as
-  exactly ONE build + ONE device run (fixtures pre-registered above),
-  E-3C (multi-lane 3-GEMM accuracy + cost) is decision-only and NOT
-  authorized by this stage; production integration, benchmarking,
-  multi-tile implementation and long training remain out of scope.
+  E-3A stored-domain CPU gate **PASS (4/4)**, E-3B executed the same
+  day (mode 41, one build + one run, `B2_THREE_PRODUCT_CONFIRMED`
+  above) — the three-product synthesis survives the final FP16 store
+  at 1-lane/1-run scope; E-3C (multi-lane 3-GEMM accuracy + cost) is
+  decision-only and NOT authorized by this stage; production
+  integration, benchmarking, multi-tile implementation and long
+  training remain out of scope.
 - Mode 40 is added under the standing policy — new modes only for
   clearly discriminating minimal experiments, only on explicit
   instruction; this mode exists by exactly that gate.
