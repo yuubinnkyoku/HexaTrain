@@ -147,6 +147,35 @@ int main(void) {
             "mode 37 fallback residual is exactly 0");
   }
 
+  /* 4. Mode 39 (E-1 range discriminator) base: out_bias FP16 0xD404 =
+   * -64.25. It shares the 0xD408 exponent field (e = 6), so the fine
+   * grid stays 2^-8. Independent expectation:
+   * value = -(64.25 + n*2^-8), exact in double for all n. */
+  {
+    int base_cases = 0, base_failures = 0;
+    const long before = failures;
+    check_i((long)(0xD404u & 0x7c00u), (long)(0xD408u & 0x7c00u),
+            "0xD404 shares the 0xD408 exponent field (e=6)");
+    check_i((long)(0xD404u >> 15), 1L, "0xD404 is negative");
+    check_d(fp16_to_double(0xD404u), -64.25,
+            "fp16_to_double(0xD404) = -64.25");
+    for (unsigned n = 0; n <= 15; ++n) {
+      const double want = -(64.25 + (double)n * ldexp(1.0, -8));
+      check_d(bias20_decode_out_bias(0xD404u, n), want,
+              "decode(0xD404,n) equals -(64.25 + n*2^-8)");
+      ++base_cases;
+      if (failures != before) ++base_failures;
+    }
+    /* And the discriminator arithmetic itself:
+     * 64*1.00390625^2 - 64.25 = 64.5009765625 - 64.25 = 0.2509765625
+     * = 64.25 grid units, exactly representable as FP16 0x3404. */
+    check_d(64.0 * 1.00390625 * 1.00390625
+                + bias20_decode_out_bias(0xD404u, 0u),
+            0.2509765625, "mode 39 target is 64.25 grid units");
+    printf("mode39_base_sweep=PASS cases=%d failures=%d\n",
+           base_cases, base_failures);
+  }
+
   if (failures == 0) {
     printf("probe_bias20_test=PASS checks=%ld\n", checks);
     return 0;

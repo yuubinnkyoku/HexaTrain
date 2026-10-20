@@ -17,18 +17,20 @@
 
 /* Phase D mode range (extra4 nibble sweep + bias readback); must mirror
  * MODE_MAX in probe_dsp.c. */
-enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 38 };
+enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
  * a = b = 1.0, the q=8 variants (27/28/29) and the Phase D sweep modes
- * (31..36, 38) run a = b = 1 + 2^-8 regardless of the requested q, every
- * other mode runs a = b = 1 + 2^-q. The printed oracle derives from this,
- * so the zero-control and q=8 modes cannot show a stale q-based product. */
+ * (31..36, 38, 39) run a = b = 1 + 2^-8 regardless of the requested q,
+ * every other mode runs a = b = 1 + 2^-q. The printed oracle derives
+ * from this, so the zero-control and q=8 modes cannot show a stale
+ * q-based product. */
 static double mode_operand_a(int q, int mode) {
   if (mode == 21 || mode == 22 || mode == 37) return 1.0;
   if (mode >= 27 && mode <= 29) return 1.0 + ldexp(1.0, -8);
-  if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= 36) || mode == 38) {
+  if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= 36) || mode == 38 ||
+      mode == 39) {
     return 1.0 + ldexp(1.0, -8);
   }
   return 1.0 + ldexp(1.0, -q);
@@ -63,6 +65,7 @@ static const char *mode_hypothesis_note(int mode) {
     case 36: return "border_control_n3_between_2_and_8";
     case 37: return "exact_zero_control_fallback";
     case 38: return "bias_readback_probe";
+    case 39: return "e1_range_discriminator_base64p25";
     default: return NULL;
   }
 }
@@ -154,7 +157,7 @@ int main(int argc, char **argv) {
   if (argc >= 2) q = atoi(argv[1]);
   if (argc >= 3) mode = atoi(argv[2]);
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PHASE_D_MODE_MAX) {
-    fprintf(stderr, "usage: %s [q=6..10] [mode=0..38]\n", argv[0]);
+    fprintf(stderr, "usage: %s [q=6..10] [mode=0..39]\n", argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
@@ -319,7 +322,7 @@ int main(int argc, char **argv) {
     printf("bias_n=%d out_bias_fp16_raw=0x%04x extra4_nibble=%d "
            "decoded_out_bias_magnitude=%.17g ",
            bias_n, (unsigned)out_bias_fp16, bias_n, out_bias_mag);
-    if (mode == HMX_PHASE_D_MODE_MAX) {
+    if (mode == 38) {
       /* Mode 38 returns the stored bias cells, not a convert output. */
       printf("expected_fp16_raw=N/A expected_value=N/A "
              "expected_returned=bias_readback_cells\n");
@@ -371,6 +374,8 @@ int main(int argc, char **argv) {
   int oracle_selfcheck = 0;          /* 1 = literal cross-check registered */
   int oracle_selfcheck_ok = 1;
   uint16_t oracle_selfcheck_literal = 0;
+  uint16_t oracle_selfcheck_math_pin = 0;  /* optional extra pin on
+                                            * expected_math[0] (mode 39) */
   int oracle_selfcheck_compare = 0;  /* 0: pin expected_math[0] (modes 24..29,
                                       * math-drift guard). 1: compare the
                                       * hypothesis oracle expected[0] against
@@ -518,6 +523,24 @@ int main(int argc, char **argv) {
         oracle_selfcheck_compare = 1;
       }
       break;
+    case 39:
+      /* E-1 range discriminator (review-corrected bits, PR #14): with
+       * the bias base -64.25 (0xD404, nibble 0) the convert target is
+       * 0.2509765625 = 64.25 grid units, exactly representable in FP16
+       * as 0x3404; the global-ceiling hypothesis predicts 0x3410
+       * (65 units = 0.25390625). The two differ, so the measured raw
+       * bits decide whether the ceiling law is global or a
+       * small-magnitude effect; 0x3404 is itself off the 2^-8 bias
+       * grid, so a 0x3404 result falsifies the global-grid reading. */
+      expected[0] = double_to_fp16(hypothesis_out);
+      expected_math[0] = double_to_fp16(expected_residual);
+      have_expected = 1; have_math = 1; single_convert = 1;
+      expected_src[0] = "hypothesis_bias_grid";
+      math_source = "double_derived";
+      oracle_selfcheck = 1; oracle_selfcheck_literal = 0x3410;
+      oracle_selfcheck_compare = 1;
+      oracle_selfcheck_math_pin = 0x3404;
+      break;
     case 37:
       /* Exact-zero control: target 0 exactly; math and hypothesis agree. */
       expected[0] = 0x0000;
@@ -548,6 +571,18 @@ int main(int argc, char **argv) {
   int pass = status == 0 && meta[0] == HMX_IDENTITY_MAGIC &&
              meta[1] == HMX_IDENTITY_EXPECTED_ARCH && meta[4] == 0 &&
              meta[6] == 0 && meta[7] == 1 && meta[8] == 2;
+  if (oracle_selfcheck_math_pin) {
+    /* Mode 39 extra pin: the reviewer-corrected true-value FP16 bits
+     * (0x3404 = 0.2509765625, exactly representable) are fixed here so
+     * the discriminator pair cannot drift inside the oracle; the
+     * hypothesis side is pinned by oracle_selfcheck_literal. The device
+     * result is the experiment, not this check. */
+    const int math_pin_ok = (expected_math[0] == oracle_selfcheck_math_pin);
+    oracle_selfcheck_ok = oracle_selfcheck_ok && math_pin_ok;
+    printf("oracle_selfcheck_math_pin=%s literal=0x%04x derived_math=0x%04x\n",
+           math_pin_ok ? "OK" : "MISMATCH",
+           oracle_selfcheck_math_pin, expected_math[0]);
+  }
   if (oracle_selfcheck && !oracle_selfcheck_ok) pass = 0;
 
   if (single_convert) {
@@ -555,7 +590,7 @@ int main(int argc, char **argv) {
      * the DSP; it is not a residual and is labelled accordingly. */
     printf("slot2_label=unused_slot2 meaning=unused_dsp_forces_0\n");
   }
-  if (mode == HMX_PHASE_D_MODE_MAX) {
+  if (mode == 38) {
     printf("slot2_label=zeroed_by_contract meaning=mode38_readback_in_results_0_1\n");
   }
 
@@ -563,7 +598,7 @@ int main(int argc, char **argv) {
   int observed_all = 1;
   int math_any = 0;
   int math_all = 1;
-  if (mode == HMX_PHASE_D_MODE_MAX) {
+  if (mode == 38) {
     /* Mode 38 returns the stored bias cells, not FP16 convert outputs:
      * results[0] = lo(0) (bytes 0..3 of the row), results[1] = hi(0)
      * (bytes 128..131, PRM Fig.13), results[2..3] = 0 by contract. The

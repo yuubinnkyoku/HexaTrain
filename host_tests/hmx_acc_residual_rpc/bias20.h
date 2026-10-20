@@ -57,12 +57,14 @@ static inline double bias20_decode_out_bias(uint16_t out_bias_fp16,
   return (out_bias_fp16 & 0x8000u) ? base - extra : base + extra;
 }
 
-/* Phase D extra4 nibble per mode; -1 outside modes 31..38.
+/* Phase D extra4 nibble per mode; -1 outside modes 31..39.
  *   31..36 : sweep n = 0, 1, 2, 8, 15  (+ mode 36 border control n = 3)
  *   37     : exact-zero FALLBACK encoding uses nibble 0 (base -64.0);
  *            the intended n=1 alignment is off the 20-bit grid (see the
  *            README "Phase D" section and probe_bias20_test.c).
- *   38     : readback probe programs the n=1 sweep payload. */
+ *   38     : readback probe programs the n=1 sweep payload.
+ *   39     : E-1 range discriminator, base -64.25 (0xD404), nibble 0;
+ *            the convert target is 0.2509765625 = 64.25 grid units. */
 static inline int phase_d_extra4_nibble(int mode) {
   switch (mode) {
     case 31: return 0;
@@ -73,15 +75,18 @@ static inline int phase_d_extra4_nibble(int mode) {
     case 36: return 3;
     case 37: return 0;
     case 38: return 1;
+    case 39: return 0;
     default: return -1;
   }
 }
 
 /* FP16 half of the Phase D output bias: -64.5 (0xD408) for the sweep and
- * the readback probe, -64.0 (0xD400) for the mode-37 exact-zero control;
- * 0 outside modes 31..38. */
+ * the readback probe, -64.0 (0xD400) for the mode-37 exact-zero control,
+ * -64.25 (0xD404) for the mode-39 E-1 range discriminator; 0 outside
+ * modes 31..39. */
 static inline uint16_t phase_d_out_bias_fp16(int mode) {
   if (mode == 37) return 0xD400u;
+  if (mode == 39) return 0xD404u;
   if (mode >= 31 && mode <= 38) return 0xD408u;
   return 0u;
 }

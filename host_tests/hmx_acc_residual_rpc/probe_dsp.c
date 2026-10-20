@@ -45,7 +45,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 38,  /* Phase D highest mode; must mirror probe_host.c */
+  MODE_MAX = 39,  /* Phase D highest mode; must mirror probe_host.c */
 };
 
 typedef struct probe_context {
@@ -209,14 +209,17 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     // q=8 scale=128: hi=129 (0x5808), bias=-129
     init_bias(bias0, 0x5800, 0x5808 | 0x8000u, 0);
     init_bias(bias1, 0, 0, 0);
-  } else if (mode >= 31 && mode <= 38) {
-    /* Phase D (extra4 nibble sweep, README "Phase D"):
+  } else if (mode >= 31 && mode <= 39) {
+    /* Phase D/E (extra4 nibble sweep, README "Phase D"):
      * feedback disabled, single-CVT (bias set 0 only), q bound to 8,
      * scale 64 (0x5400), a=b=0x3c04 except the mode-37 fallback.
      * The 20-bit output-bias value = -(64.5 + n*2^-8) with the FP16 half
      * 0xD408 and the extra4 nibble n = phase_d_extra4_nibble(mode);
      * mode 37 uses the exact-zero fallback encoding (-64.0, nibble 0,
-     * a=b=1.0) because 64.5 + 2^-10 is off the 20-bit grid. */
+     * a=b=1.0) because 64.5 + 2^-10 is off the 20-bit grid. Mode 39 is
+     * the E-1 range discriminator: base 0xD404 = -64.25, nibble 0, so
+     * the convert target is 64.25 grid units (README "Phase E-1"); the
+     * FP16 half per mode is owned by bias20.h. */
     const int n = phase_d_extra4_nibble(mode);
     init_bias20(bias0, 0x5400, phase_d_out_bias_fp16(mode),
                 (unsigned)n, 0);
@@ -253,7 +256,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   // First convert retains ACC; optionally keeps 4 extra feedback bits.
   uint32_t first_rs = 1u | ((extra_four_bits & 1u) << 8);
   if (mode == 5 || mode == 8) first_rs |= (1u << 12);  // first convert uses bias set1
-  if (mode >= 31 && mode <= 38) {
+  if (mode >= 31 && mode <= 39) {
     /* Phase D: feedback disabled. PRM 80-N2040-62 AA §2.3.3 Table 6
      * (p.15): "For convert transfer instruction without feedback, set
      * Rs[bias_sel] ... Set the rest of the register to 0" — so Rs[8]
@@ -293,7 +296,7 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     return;
   }
 
-  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21 || mode == 23 || mode == 24 || mode == 25 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || (mode >= 31 && mode <= 37)) {
+  if (mode == 7 || mode == 8 || mode == 12 || mode == 13 || mode == 14 || mode == 15 || mode == 16 || mode == 17 || mode == 18 || mode == 19 || mode == 21 || mode == 23 || mode == 24 || mode == 25 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || (mode >= 31 && mode <= 39)) {
     *hi_bits = hi[0];
     *residual_bits = 0;
     return;
@@ -352,9 +355,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if ((mode == 27 || mode == 28 || mode == 29) && q != 8) return HMX_ERR_ARG;
   if (mode == 18 && q != 6) return HMX_ERR_ARG;
   if (mode == 22 && q != 6) return HMX_ERR_ARG;
-  /* Phase D modes 31..38 are hard-bound to q=8 (fixed -64.5/-64.0
+  /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
-  if (mode >= 31 && mode <= 38 && q != 8) return HMX_ERR_ARG;
+  if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;
   memset(results, 0, (size_t)resultsLen * sizeof(int));
   memset(metadata, 0, (size_t)metadataLen * sizeof(int));
 
