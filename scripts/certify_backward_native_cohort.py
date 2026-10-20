@@ -12,6 +12,36 @@ ROLES = ['standalone_softmax','standalone_dvalue','native_softmax','native_dvalu
 REPORT = ROOT/'build/reports/g1-backward-repair-native-completion'
 
 
+def require_cohort_directory(directory):
+    # A preflight-only directory is evidence too. A fresh eight-hex suffix lets
+    # the unchanged runner create a new exclusive directory without reusing it.
+    require(directory.resolve().parent == REPORT.resolve() and
+        re.fullmatch(r'cohort-(?:1(?:-awake)?|[23])(?:-[0-9a-f]{8})?', directory.name),
+        'actual new cohort directory required')
+
+
+def selftest():
+    accepted = ['cohort-1', 'cohort-1-awake', 'cohort-2', 'cohort-3',
+        'cohort-1-awake-0123abcd', 'cohort-2-0123abcd', 'cohort-3-0123abcd']
+    rejected = [REPORT / name for name in ('pilot-dual-1', 'cohort-0', 'cohort-4',
+        'cohort-1-awake-retry', 'cohort-1-awake-0123abc', 'cohort-1-awake-0123abcde',
+        'cohort-1-awake-0123ABCD', 'cohort-1-awake-0123abcd-extra')]
+    rejected += [REPORT.parent / accepted[-1], REPORT / 'nested' / accepted[-1]]
+    for name in accepted: require_cohort_directory(REPORT / name)
+    for path in rejected:
+        try: require_cohort_directory(path)
+        except ValueError: pass
+        else: raise AssertionError('noncohort/outside directory accepted')
+    # Changing a folder name never promotes a pilot or missing actual exit.
+    from unittest.mock import patch
+    for identity in (dict(mode='dual', exit_code=0), dict(mode='cohort', exit_code=None)):
+        with patch.dict(globals(), read=lambda path: identity):
+            try: certify(REPORT / accepted[-1])
+            except ValueError: pass
+            else: raise AssertionError('pilot/missing exit promoted')
+    print('cohort_directory_selftest=PASS accepted=7 rejected=12 device_calls=0')
+
+
 def role_digest(path, role, result):
     digest=hashlib.sha256(b'G1_NATIVE_COMPLETION_ROLE_V1\0'+role.encode('ascii')+b'\0')
     with path.open('rb') as raw:
@@ -29,7 +59,7 @@ def role_digest(path, role, result):
 
 
 def certify(directory, previous=()):
-    require(directory.resolve().parent == REPORT.resolve() and re.fullmatch('cohort-(?:1(?:-awake)?|[23])',directory.name),'actual new cohort directory required')
+    require_cohort_directory(directory)
     identity=read(directory/'identity-private.json');completion=read(directory/'execution-before-readback-private.json')
     require(identity['mode']=='cohort' and identity['exit_code']==completion['exit_code']==0,'actual cohort completion')
     require(read(directory/'preflight/device-preflight-private.json')['status']=='PASS','fresh preflight')
@@ -56,7 +86,10 @@ def certify(directory, previous=()):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--report-root',type=Path,required=True);p.add_argument('--previous',type=Path,action='append',default=[]);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--report-root',type=Path);p.add_argument('--previous',type=Path,action='append',default=[]);p.add_argument('--self-test',action='store_true');a=p.parse_args()
+    if a.self_test:
+        selftest(); raise SystemExit(0)
+    require(a.report_root is not None, 'report root required')
     result=certify(a.report_root,a.previous)
     destination=a.report_root/'cohort-assessment-private.json'
     if destination.exists():require(read(destination)==result,'existing cohort assessment differs')
