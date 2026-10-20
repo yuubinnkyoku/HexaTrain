@@ -543,14 +543,20 @@ accumulator's low-order information?):
   accumulation; cancellation behaviour is untested by design
   (single-nonzero-element construction); VTCM budget is 12 KiB for
   32×32 croutons.
-- **Minimal next experiment (Phase E-1 candidate).** The current data
-  pins the ceiling law only for *sub-unit* targets and pass-through for
-  *integral* targets. One mode decides the scope: configure a bias base
-  of −64.25 (same e=6, grid 2^-8) so the convert target is
+- **Minimal next experiment (Phase E-1 candidate, implemented as mode 39).**
+  The current data pins the ceiling law only for *sub-unit* targets and
+  pass-through for *integral* targets. One mode decides the scope: configure
+  a bias base of −64.25 (same e=6, grid 2^-8) so the convert target is
   64.5009765625 − 64.25 = 0.2509765625 — i.e. **64.25 grid units**,
-  exactly representable in FP16 (0x3410 = 0.2509765625). If the stored
-  value comes back 0x3450 (0.25390625 = 65 units), the ceiling law is
-  global and the slot is a quantizer, not an encoder; if it comes back
-  0x3410, the stored output is a plain correctly-rounded FP16 for large
-  targets and the quantization is only a small-magnitude effect. One
-  build, one run, no ABI changes.
+  exactly representable in FP16 as **0x3404** (exp field 13, frac10 = 4).
+  Prediction set (bit values corrected 2026-10-20 after PR review: the
+  original text wrote 0x3410/0x3450 here, which encode 0.25390625 (65
+  units) / 0.26953125 (69 units) and are bitwise wrong here):
+
+  | stored value | meaning |
+  | --- | --- |
+  | 0x3410 (0.25390625 = 65 units) | global ceiling law: the slot is a quantizer onto the bias grid |
+  | 0x3404 (0.2509765625) | plain correctly-rounded FP16: the ceiling is only a small-magnitude effect; this value is itself off the 2^-8 grid (64.25 units), so a 0x3404 result falsifies a global grid reading |
+  | anything else | third behaviour — analyze |
+
+  One build, one run, no ABI changes.
