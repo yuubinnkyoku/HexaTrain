@@ -41,13 +41,28 @@
 //       already RN-FP16; separate float accumulators combined in
 //       double vs one chained float accumulator).
 //   G6  combine loss: float-combined vs double-combined partial sums.
+//   G7  stored-domain comparison (Stage E-3A, reviewer-mandated): the
+//       G5 synthesis paths re-measured WITH the HMX store step — every
+//       result value is committed to FP16 (RN16, i.e.
+//       fp16_to_double(double_to_fp16(v))), exactly as the V81 path's
+//       `cvt.hf = acc` does, and the STORED values are compared against
+//       the same double oracle (ABSOLUTE errors are primary). Without
+//       the store, the G5/G6 numbers are pre-store CPU figures only.
+//       Two activation regimes per n in {16,64} on the SAME fixed
+//       tensors/seeds: fp32carried (both operands split, as G5) and
+//       fp16exact (activations exactly FP16, Alo = 0, the G5 W-only
+//       configuration). Plus pinned scalar fixtures (asserted) and the
+//       b2_cpu_gate decision line.
 //
 // Exit status is 0 only if no FAIL line was emitted. Hard FAILs are the
 // mathematically proven G1 invariants (when lo is a normal FP16,
 // |recover-x| <= 2^-23*|x|; when lo is subnormal/zero, |recover-x| <=
-// 2^-25 absolute) and the G5 assertion that both-operands-split beats
-// plain FP16. Everything else — the README's unconditional 2^-23 bound
-// and ALL G3 float-variant numbers — is REPORT-ONLY (see the
+// 2^-25 absolute), the G5 assertion that both-operands-split beats
+// plain FP16, and the G7 pinned-fixture bit asserts (exact
+// mathematical identities: a mismatch means the simulator or the
+// shared oracle is wrong). Everything else — the README's
+// unconditional 2^-23 bound, ALL G3 float-variant numbers, and ALL
+// other G7 numbers (cells, gate) — is REPORT-ONLY (see the
 // asserted-vs-reported comment inside g1_g3_recovery). The README's
 // unconditional 2^-23 bound is reported as the finding
 // `split_normal_ok=0 ... bound_cases_exceeded=k` (every violation is
@@ -575,10 +590,15 @@ static void rel_stats(const double *Y, const double *Yt, long elems,
   *max_out = mx;
 }
 
-static void run_synthesis(int n, double *plain_max_out,
-                          double *b3sep_max_out) {
+/* Deterministic synthesis inputs shared by G5/G6 and G7: reseeds the
+ * PRNG with the same per-n seed, fills the SAME fixed tensors (uniform
+ * [-2,2] plus the planted mantissa-hard entries), builds the double
+ * oracle Yt = X * W (same operand order as the simulated paths; matmul
+ * is not commutative) and the split/plain-FP16 operand arrays.
+ * Extracted verbatim from run_synthesis so both groups measure
+ * bit-identical inputs. */
+static void syn_build_inputs(int n) {
   const long nn = (long)n * (long)n;
-  double mean, mx;
   int i, j, k;
 
   g_rng = 0x9E3779B97F4A7C15ull ^ (uint64_t)n;
@@ -594,8 +614,7 @@ static void run_synthesis(int n, double *plain_max_out,
   gW[2] = 0x1.001ffep+0;
   gX[2] = 0x1.fffcp-1;
 
-  /* Double oracle Yt = X * W (same operand order as the simulated
-   * paths below; matmul is not commutative). */
+  /* Double oracle Yt = X * W. */
   for (i = 0; i < n; ++i) {
     for (j = 0; j < n; ++j) {
       double acc = 0.0;
@@ -617,6 +636,15 @@ static void run_synthesis(int n, double *plain_max_out,
     gA16[i] = fp16_to_double(double_to_fp16(gX[i]));
     gW16[i] = fp16_to_double(double_to_fp16(gW[i]));
   }
+}
+
+static void run_synthesis(int n, double *plain_max_out,
+                          double *b3sep_max_out) {
+  const long nn = (long)n * (long)n;
+  double mean, mx;
+  int i, j, k;
+
+  syn_build_inputs(n);
 
   /* Plain-FP16 path: RN16 both operands, exact fp16*fp16 products,
    * single float accumulator (FAU FP32 accumulate emulation). */
@@ -765,11 +793,373 @@ static void g5_g6_synthesis(void) {
   }
 }
 
+/* ---------------- G7: stored-domain comparison (Stage E-3A) ----------------
+ *
+ * Reviewer (PR #14 comment 6293114616): the G5/G6 figures are
+ * PRE-STORE CPU numbers — the real V81 path commits `cvt.hf = acc`,
+ * i.e. every accumulator result is rounded to FP16 before it leaves the
+ * MAC. G7 re-measures the SAME fixed tensors (syn_build_inputs, same
+ * seeds, same double oracle) with the store applied, and compares the
+ * STORED values against the oracle. ABSOLUTE errors are primary;
+ * relative stats use an explicit near-zero floor (elements with
+ * |ref| < G7_REL_FLOOR are excluded from the relative pool and counted
+ * in near_zero_count instead — never max(|ref|, eps) denominators).
+ *
+ * Regimes (activation side only; the weight split is always
+ * Whi/Wlo = split_double(W)):
+ *   fp32carried  Ahi/Alo = split_double(X)      (both operands split)
+ *   fp16exact    Ahi = RN16(X), Alo = 0         (activations exactly FP16;
+ *                                                = the G5 W-only config)
+ * plain is the plain FP16 GEMM baseline (RN16 operands, exact products,
+ * one chained float accumulator) and is therefore identical in both
+ * regimes — it is the yardstick the regime's b3 is measured against.
+ *
+ * ASSERTED in G7 (a break FAILs the run): only the pinned scalar
+ * fixture bits below — exact mathematical identities. Every cell
+ * metric and the b2_cpu_gate line are REPORT-ONLY. */
+
+#define G7_REL_FLOOR 0.05 /* min |oracle| pooled into relative stats */
+#define G7_TIE_TOL 1e-9   /* abs-error delta below this counts as a tie */
+
+static double gY7p[SYN_MAXN * SYN_MAXN];   /* plain internal (pre-store) */
+static double gY7b3[SYN_MAXN * SYN_MAXN];  /* b3 single-ACC internal */
+static double gY7b3s[SYN_MAXN * SYN_MAXN]; /* b3 sep-ACC + float combine */
+static double gY7b4[SYN_MAXN * SYN_MAXN];  /* b4 single-ACC internal */
+static double g7_err[SYN_MAXN * SYN_MAXN]; /* abs-error scratch (sorted) */
+static long g7_improved_cells = 0;
+
+/* The store step the V81 path performs: cvt.hf = acc commits the float
+ * accumulator to FP16. Everything "stored" below goes through this. */
+static double store16(double v) { return fp16_to_double(double_to_fp16(v)); }
+
+static int cmp_double_asc(const void *pa, const void *pb) {
+  double a = *(const double *)pa;
+  double b = *(const double *)pb;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/* mean/median/p95/max/rmse of the abs errors in err[], sorted in place.
+ * p95 = value at 1-based rank ceil(0.95*nn); median = average of the
+ * two central values for even nn. Both deterministic. */
+static void abs_error_stats(double *err, long nn, double *mean,
+                            double *median, double *p95, double *max,
+                            double *rmse) {
+  double sum = 0.0, sq = 0.0, mx = 0.0;
+  long i, rank;
+  for (i = 0; i < nn; ++i) {
+    double e = err[i];
+    sum += e;
+    sq += e * e;
+    if (e > mx) mx = e;
+  }
+  qsort(err, (size_t)nn, sizeof(double), cmp_double_asc);
+  *mean = sum / (double)nn;
+  *rmse = sqrt(sq / (double)nn);
+  *max = mx;
+  *median = (nn % 2 != 0) ? err[nn / 2]
+                          : 0.5 * (err[nn / 2 - 1] + err[nn / 2]);
+  rank = (long)ceil(0.95 * (double)nn);
+  if (rank < 1) rank = 1;
+  if (rank > nn) rank = nn;
+  *p95 = err[rank - 1];
+}
+
+static double stored_mean_abs_vs(const double *Y, const double *ref,
+                                 long nn) {
+  double sum = 0.0;
+  long i;
+  for (i = 0; i < nn; ++i) sum += fabs(store16(Y[i]) - ref[i]);
+  return sum / (double)nn;
+}
+
+/* Pinned scalar fixtures (reviewer table). Only the EXPECTED bits are
+ * literals; every value is derived through the same helpers the
+ * synthesis uses (split_double / double_to_fp16 / fp16_to_double and
+ * the G5 accumulation order: all T1, then all T2, then all T3, one
+ * retained float ACC, one final store). A mismatch is a simulator bug
+ * -> FAIL. */
+static void b2_fixtures(void) {
+  static const struct {
+    const char *name;
+    double a;
+    uint16_t ahi_exp, alo_exp, plain_exp, b3_exp, full_exp;
+  } fx[] = {
+      /* case 0 "positive": A = 1+2^-11 is the exact RN16 tie between
+       * 1.0 (even mantissa) and 1+2^-10 -> hi = 0x3c00, lo = +2^-11.
+       * plain: (1.0*1.0)*64 = 64.0 -> 0x5400.
+       * b3: 64*(1 + 2^-11 + 2^-11) = 64.0625 -> 0x5401.
+       * full product 64*(1+2^-11)^2 = 64.0625152587890625 -> also
+       * 0x5401: this coincidence is fixture-specific (the dropped
+       * Alo*Wlo = 64*2^-22 is far below the 2^-4 store ulp) — do NOT
+       * generalise "dropping lo*lo never costs a store ulp". */
+      {"b2_case0", 1.0 + 0x1p-11, 0x3c00, 0x1000, 0x5400, 0x5401, 0x5401},
+      /* case 1 "cancellation": A = 1-2^-12 is the exact RN16 tie
+       * between 1-2^-10 and 1.0 -> hi = 0x3c00, lo = -2^-12 (0x8c00).
+       * plain: 64.0 -> 0x5400. b3: 64*(1-2^-11) = 63.96875 -> 0x53ff.
+       * full: 64*(1-2^-12)^2 = 63.968753814697265625 -> 0x53ff. */
+      {"b2_case1", 1.0 - 0x1p-12, 0x3c00, 0x8c00, 0x5400, 0x53ff, 0x53ff},
+  };
+  size_t t;
+  long mismatches = 0;
+
+  for (t = 0; t < sizeof fx / sizeof fx[0]; ++t) {
+    double a = fx[t].a;
+    fp16_pair p = split_double(a); /* A-hi/lo AND W-hi/lo (W := A) */
+    uint16_t a16 = double_to_fp16(a); /* plain-FP16 operand */
+    float plain_acc = 0.0f, b3_acc = 0.0f;
+    uint16_t plain_stored, b3_stored, full_rn16;
+    double scaled_full;
+    int it;
+
+    for (it = 0; it < 64; ++it) {
+      plain_acc += (float)(fp16_to_double(a16) * fp16_to_double(a16));
+    }
+    for (it = 0; it < 64; ++it) { /* T1 = Ahi*Whi */
+      b3_acc += (float)(fp16_to_double(p.hi) * fp16_to_double(p.hi));
+    }
+    for (it = 0; it < 64; ++it) { /* T2 = Ahi*Wlo */
+      b3_acc += (float)(fp16_to_double(p.hi) * fp16_to_double(p.lo));
+    }
+    for (it = 0; it < 64; ++it) { /* T3 = Alo*Whi */
+      b3_acc += (float)(fp16_to_double(p.lo) * fp16_to_double(p.hi));
+    }
+    plain_stored = double_to_fp16((double)plain_acc);
+    b3_stored = double_to_fp16((double)b3_acc);
+    scaled_full = 64.0 * a * a; /* exact in double for both fixtures */
+    full_rn16 = double_to_fp16(scaled_full);
+
+    printf("split_b2_fixture name=%s a=%.17g ahi_bits=0x%04x "
+           "alo_bits=0x%04x plain_stored=0x%04x b3_stored=0x%04x "
+           "full_rn16=0x%04x scaled_full=%.17g\n",
+           fx[t].name, a, (unsigned)p.hi, (unsigned)p.lo,
+           (unsigned)plain_stored, (unsigned)b3_stored,
+           (unsigned)full_rn16, scaled_full);
+
+#define G7_FIXTURE_CHECK(field, got, want)                            \
+  do {                                                                \
+    ++g_checks;                                                       \
+    if ((got) != (want)) {                                            \
+      ++g_fail;                                                       \
+      ++mismatches;                                                   \
+      printf("FAIL b2_fixture name=%s field=" #field " got=0x%04x "   \
+             "want=0x%04x\n",                                         \
+             fx[t].name, (unsigned)(got), (unsigned)(want));          \
+    }                                                                 \
+  } while (0)
+    G7_FIXTURE_CHECK(ahi_bits, p.hi, fx[t].ahi_exp);
+    G7_FIXTURE_CHECK(alo_bits, p.lo, fx[t].alo_exp);
+    G7_FIXTURE_CHECK(plain_stored, plain_stored, fx[t].plain_exp);
+    G7_FIXTURE_CHECK(b3_stored, b3_stored, fx[t].b3_exp);
+    G7_FIXTURE_CHECK(full_rn16, full_rn16, fx[t].full_exp);
+#undef G7_FIXTURE_CHECK
+  }
+  printf("split_b2_fixture_mismatch=%ld\n", mismatches);
+}
+
+static void g7_cell(int n, int carry32) {
+  const long nn = (long)n * (long)n;
+  const char *regime = carry32 ? "fp32carried" : "fp16exact";
+  /* stored-domain stats */
+  double ps_mean, ps_median, ps_p95, ps_max, ps_rmse;
+  double bs_mean, bs_median, bs_p95, bs_max, bs_rmse;
+  /* internal (pre-store) means + secondary variants */
+  double pi_mean = 0.0, bi_mean = 0.0;
+  double b3sep_int_mean, b3sep_st_mean, b4_int_mean, b4_st_mean;
+  long improved = 0, equal = 0, worsened = 0;
+  long bit_diff = 0, plain_opt = 0, b3_opt = 0;
+  long near_zero = 0, pooled = 0;
+  double rel_sum = 0.0, rel_mean;
+  int i, j, k;
+
+  syn_build_inputs(n); /* SAME tensors / oracle / splits as G5 */
+
+  /* Plain-FP16 baseline (identical in both regimes: the plain GEMM
+   * always consumes RN16 activations). */
+  for (i = 0; i < n; ++i) {
+    for (j = 0; j < n; ++j) {
+      float acc = 0.0f;
+      for (k = 0; k < n; ++k) {
+        acc += (float)(gA16[(long)i * n + k] * gW16[(long)k * n + j]);
+      }
+      gY7p[(long)i * n + j] = (double)acc;
+    }
+  }
+
+  /* B3 device model: THREE products chained into ONE retained float
+   * ACC (all T1, then all T2, then all T3), one final store. In the
+   * fp16exact regime Alo = 0 so the T3 loop adds exact zeros. */
+#define G7_AHI(r) (carry32 ? gAhi[(r)] : gA16[(r)])
+#define G7_ALO(r) (carry32 ? gAlo[(r)] : 0.0)
+  for (i = 0; i < n; ++i) {
+    for (j = 0; j < n; ++j) {
+      float acc = 0.0f;
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_AHI((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_AHI((long)i * n + k) * gWlo[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_ALO((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      gY7b3[(long)i * n + j] = (double)acc;
+    }
+  }
+
+  /* Secondary: separate 3 accumulators + float combine (G5's b3_sep). */
+  for (i = 0; i < n; ++i) {
+    for (j = 0; j < n; ++j) {
+      float t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
+      for (k = 0; k < n; ++k) {
+        t1 += (float)(G7_AHI((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        t2 += (float)(G7_AHI((long)i * n + k) * gWlo[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        t3 += (float)(G7_ALO((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      gY7b3s[(long)i * n + j] =
+          (double)(float)((float)((float)t1 + t2) + t3);
+    }
+  }
+
+  /* B4: additionally T4 = Alo*Wlo, single retained ACC (same-ACC
+   * model extended by one product). */
+  for (i = 0; i < n; ++i) {
+    for (j = 0; j < n; ++j) {
+      float acc = 0.0f;
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_AHI((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_AHI((long)i * n + k) * gWlo[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_ALO((long)i * n + k) * gWhi[(long)k * n + j]);
+      }
+      for (k = 0; k < n; ++k) {
+        acc += (float)(G7_ALO((long)i * n + k) * gWlo[(long)k * n + j]);
+      }
+      gY7b4[(long)i * n + j] = (double)acc;
+    }
+  }
+#undef G7_AHI
+#undef G7_ALO
+
+  /* Internal (pre-store) mean abs vs the double oracle. */
+  for (i = 0; i < nn; ++i) {
+    pi_mean += fabs(gY7p[i] - gYt[i]);
+    bi_mean += fabs(gY7b3[i] - gYt[i]);
+  }
+  pi_mean /= (double)nn;
+  bi_mean /= (double)nn;
+  b3sep_int_mean = 0.0;
+  b4_int_mean = 0.0;
+  for (i = 0; i < nn; ++i) {
+    b3sep_int_mean += fabs(gY7b3s[i] - gYt[i]);
+    b4_int_mean += fabs(gY7b4[i] - gYt[i]);
+  }
+  b3sep_int_mean /= (double)nn;
+  b4_int_mean /= (double)nn;
+
+  /* STORED-domain absolute-error stats (PRIMARY): plain and b3. */
+  for (i = 0; i < nn; ++i) g7_err[i] = fabs(store16(gY7p[i]) - gYt[i]);
+  abs_error_stats(g7_err, nn, &ps_mean, &ps_median, &ps_p95, &ps_max,
+                  &ps_rmse);
+  for (i = 0; i < nn; ++i) g7_err[i] = fabs(store16(gY7b3[i]) - gYt[i]);
+  abs_error_stats(g7_err, nn, &bs_mean, &bs_median, &bs_p95, &bs_max,
+                  &bs_rmse);
+  b3sep_st_mean = stored_mean_abs_vs(gY7b3s, gYt, nn);
+  b4_st_mean = stored_mean_abs_vs(gY7b4, gYt, nn);
+
+  /* Per-element STORED pairwise: raw-bit disagreement, oracle-optimal
+   * bits (RN16(oracle) — the best any FP16 output can do), and
+   * improved/equal/worsened on absolute errors with the G7_TIE_TOL tie
+   * policy (|delta| <= tol counts as equal). Relative stats pooled only
+   * over |oracle| >= G7_REL_FLOOR. */
+  for (i = 0; i < nn; ++i) {
+    uint16_t pb = double_to_fp16(gY7p[i]);
+    uint16_t bb = double_to_fp16(gY7b3[i]);
+    uint16_t ob = double_to_fp16(gYt[i]);
+    double ap = fabs(fp16_to_double(pb) - gYt[i]);
+    double ab = fabs(fp16_to_double(bb) - gYt[i]);
+    if (pb != bb) ++bit_diff;
+    if (pb == ob) ++plain_opt;
+    if (bb == ob) ++b3_opt;
+    if (ap - ab > G7_TIE_TOL) {
+      ++improved;
+    } else if (ab - ap > G7_TIE_TOL) {
+      ++worsened;
+    } else {
+      ++equal;
+    }
+    if (fabs(gYt[i]) >= G7_REL_FLOOR) {
+      rel_sum += ab / fabs(gYt[i]);
+      ++pooled;
+    } else {
+      ++near_zero;
+    }
+  }
+  rel_mean = pooled > 0 ? rel_sum / (double)pooled : 0.0;
+
+  /* CPU decision basis: does STORED b3 beat STORED plain in mean abs? */
+  if (bs_mean < ps_mean) ++g7_improved_cells;
+
+  printf("split_b2_stored=n%d_%s regime=%s n=%d "
+         "plain_int_mean_abs=%.6e "
+         "plain_stored_mean_abs=%.6e plain_stored_median_abs=%.6e "
+         "plain_stored_p95_abs=%.6e plain_stored_max_abs=%.6e "
+         "plain_stored_rmse=%.6e b3_int_mean_abs=%.6e "
+         "b3_stored_mean_abs=%.6e b3_stored_median_abs=%.6e "
+         "b3_stored_p95_abs=%.6e b3_stored_max_abs=%.6e "
+         "b3_stored_rmse=%.6e "
+         "b3_stored_vs_plain_stored_improved=%.6e equal=%.6e worsened=%.6e "
+         "tie_tol=%.6e stored_bit_diff_n=%ld stored_bit_diff_frac=%.6e "
+         "plainoptimal_bits_frac=%.6e b3optimal_bits_frac=%.6e "
+         "rel_floor=%.6e b3_stored_mean_rel_ge_floor=%.6e "
+         "near_zero_count=%ld "
+         "b3sep_int_mean_abs=%.6e b3sep_stored_mean_abs=%.6e "
+         "b4_int_mean_abs=%.6e b4_stored_mean_abs=%.6e\n",
+         n, regime, regime, n, pi_mean, ps_mean, ps_median, ps_p95, ps_max,
+         ps_rmse, bi_mean, bs_mean, bs_median, bs_p95, bs_max, bs_rmse,
+         (double)improved / (double)nn, (double)equal / (double)nn,
+         (double)worsened / (double)nn, G7_TIE_TOL, bit_diff,
+         (double)bit_diff / (double)nn, (double)plain_opt / (double)nn,
+         (double)b3_opt / (double)nn, G7_REL_FLOOR, rel_mean, near_zero,
+         b3sep_int_mean, b3sep_st_mean, b4_int_mean, b4_st_mean);
+}
+
+static void g7_stored_domain(void) {
+  static const int ns[2] = {16, 64};
+  int ni, ri;
+
+  b2_fixtures();
+  for (ni = 0; ni < 2; ++ni) {
+    for (ri = 0; ri < 2; ++ri) {
+      g7_cell(ns[ni], ri == 0);
+    }
+  }
+  /* Reviewer decision line: k of 4 (n, regime) cells where STORED b3
+   * mean abs error < STORED plain mean abs error. Report-only. */
+  if (g7_improved_cells == 0) {
+    printf("b2_cpu_gate=NO_IMPROVE "
+           "basis=stored_b3_mean_abs_lt_plain_stored_mean_abs\n");
+  } else {
+    printf("b2_cpu_gate=PASS improves=%ld/4 cells "
+           "basis=stored_b3_mean_abs_lt_plain_stored_mean_abs\n",
+           g7_improved_cells);
+  }
+}
+
 int main(void) {
   g1_g3_recovery();
   g2_table();
   g4_subnormal_sweep();
   g5_g6_synthesis();
+  g7_stored_domain();
   if (g_fail == 0) {
     printf("fp16x2_split_sim=PASS cases=%ld\n", g_checks);
     return 0;
