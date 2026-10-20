@@ -45,7 +45,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 40, /* B-1 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
+  MODE_MAX = 41, /* B-2 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
 };
 
 typedef struct probe_context {
@@ -150,6 +150,90 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
                    : : "r"((uintptr_t)hi), "r"(wr_rt) : "memory");
     }
     *hi_bits = (int)hi[0];
+    *residual_bits = 0;
+    return;
+  }
+
+  if (mode == 41) {
+    /* B-2 experiment (PR #14 comment 6293114616, stage E-3B, user-ap-
+     * proved: one build, one device run): three MMA packets accumulate
+     * into the SAME ACC — Ahi*Whi, Ahi*Wlo, Alo*Whi (the three-product
+     * hs lo synthesis; lo*lo is deliberately omitted) — with NO
+     * convert, NO FP16 store and NO clear between packets, then ONE
+     * bias-0 convert (plain RN-FP16, scale 64) and ONE store.
+     * mxclracc runs exactly once per subcase, at the start.
+     * Pre-registered fixtures (expected bits fixed; do not retune):
+     *   trial 0: Ahi=Whi=0x3c00 (1.0), Alo=Wlo=0x1000 (+2^-11)
+     *     -> ACC = 1+2^-10, scaled = 64.0625 -> expect 0x5401
+     *     (plain 1-product context: 0x5400)
+     *   trial 1: Ahi=Whi=0x3c00, Alo=Wlo=0x8c00 (-2^-12)
+     *     -> ACC = 1-2^-11, scaled = 63.96875 -> expect 0x53ff
+     *     (plain context: 0x5400) */
+    uint16_t alo_bits;
+    uint16_t *act_hi = (uint16_t *)(base + 0 * TILE_BYTES);
+    uint16_t *act_lo = (uint16_t *)(base + 1 * TILE_BYTES);
+    uint16_t *wgt_hi = (uint16_t *)(base + 2 * TILE_BYTES);
+    uint16_t *wgt_lo = (uint16_t *)(base + 3 * TILE_BYTES);
+    uint16_t *out = (uint16_t *)(base + 5 * TILE_BYTES); /* store dst */
+    if (extra_four_bits) {
+      alo_bits = 0x8c00u;  /* -2^-12 */
+    } else {
+      alo_bits = 0x1000u;  /* +2^-11 */
+    }
+    memset(act_hi, 0, TILE_BYTES);
+    memset(act_lo, 0, TILE_BYTES);
+    memset(wgt_hi, 0, TILE_BYTES);
+    memset(wgt_lo, 0, TILE_BYTES);
+    memset(out, 0xa5, TILE_BYTES);
+    act_hi[0] = 0x3c00u;   /* Ahi = Whi = exactly 1.0 */
+    wgt_hi[0] = 0x3c00u;
+    act_lo[0] = alo_bits;  /* Alo = Wlo */
+    wgt_lo[0] = alo_bits;
+    init_bias(bias0, 0x5400, 0, 0);
+    init_bias(bias1, 0, 0, 0);
+    {
+      const uintptr_t bias0_reg = (uintptr_t)bias0;
+      const uintptr_t bias1_reg = ((uintptr_t)bias1) | 1u;
+      const uintptr_t act_hi_reg = (uintptr_t)act_hi;
+      const uintptr_t act_lo_reg = (uintptr_t)act_lo;
+      const uintptr_t wgt_hi_reg = (uintptr_t)wgt_hi;
+      const uintptr_t wgt_lo_reg = (uintptr_t)wgt_lo;
+      const uintptr_t out_reg = (uintptr_t)out;
+      const uint32_t spatial_mask = (14u << 7);
+      const uint32_t act_rt = spatial_mask | (31u << 2);
+      const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+      const uint32_t wr_rt = spatial_mask;
+
+      asm volatile("mxclracc.hf\n" ::: "memory");
+      /* packet 1: Ahi*Whi */
+      asm volatile(
+          "{ activation.hf = mxmem(%0, %1)\n"
+          "  weight.hf = mxmem(%2, %3) }\n"
+          : : "r"(act_hi_reg), "r"(act_rt), "r"(wgt_hi_reg), "r"(wgt_rt)
+          : "memory");
+      /* packet 2: Ahi*Wlo — same act tile (intentional), new weight */
+      asm volatile(
+          "{ activation.hf = mxmem(%0, %1)\n"
+          "  weight.hf = mxmem(%2, %3) }\n"
+          : : "r"(act_hi_reg), "r"(act_rt), "r"(wgt_lo_reg), "r"(wgt_rt)
+          : "memory");
+      /* packet 3: Alo*Whi — new activation, Whi tile back (intentional) */
+      asm volatile(
+          "{ activation.hf = mxmem(%0, %1)\n"
+          "  weight.hf = mxmem(%2, %3) }\n"
+          : : "r"(act_lo_reg), "r"(act_rt), "r"(wgt_hi_reg), "r"(wgt_rt)
+          : "memory");
+
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
+      /* One final convert (bias set 0, retain, no feedback rounding,
+       * Rs = 1: Rs[0] only) then the single FP16 store. */
+      asm volatile("cvt.hf = acc(%0)\n" : : "r"(1u) : "memory");
+      asm volatile("mxmem(%0, %1) = cvt\n"
+                   : : "r"(out_reg), "r"(wr_rt) : "memory");
+    }
+    *hi_bits = (int)out[0];
     *residual_bits = 0;
     return;
   }
@@ -431,6 +515,8 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   /* B-1 (mode 40) uses fixed operands independent of q; the host mirrors
    * q=6 like modes 18/22. */
   if (mode == 40 && q != 6) return HMX_ERR_ARG;
+  /* B-2 (mode 41) also has fixed fixtures independent of q; host mirrors. */
+  if (mode == 41 && q != 6) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;

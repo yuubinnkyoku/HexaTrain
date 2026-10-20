@@ -16,9 +16,9 @@
 #include "hmx_identity.h"
 
 /* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
- * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c (40 = B-1). */
+ * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c (41 = B-2, 40 = B-1). */
 enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
-       HMX_PROBE_MODE_MAX = 40 };
+       HMX_PROBE_MODE_MAX = 41 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
       mode = atoi(argv[arg_index]);
     } else {
       fprintf(stderr,
-              "usage: %s [q=6..10] [mode=0..40] [-strict-build-id]\n",
+              "usage: %s [q=6..10] [mode=0..41] [-strict-build-id]\n",
               argv[0]);
       return exit_with(2);
     }
@@ -180,19 +180,20 @@ int main(int argc, char **argv) {
   }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..40] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..41] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
    * mirror that gate host-side before touching any device state.
-   * B-1 (mode 40) is bound to q=6 like modes 18/22 (fixed operands). */
+   * B-1 (mode 40) and B-2 (mode 41) are bound to q=6 like modes 18/22
+   * (fixed operands/fixtures). */
   if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
        q != 8) ||
-      (mode == 40 && q != 6)) {
+      (mode == 40 && q != 6) || (mode == 41 && q != 6)) {
     fprintf(stderr,
-            "phase D modes 31..38 require q=8 and mode 40 requires q=6 "
-            "(got q=%d mode=%d)\n",
+            "phase D modes 31..38 require q=8 and modes 40 and 41 require "
+            "q=6 (got q=%d mode=%d)\n",
             q, mode);
     return exit_with(2);
   }
@@ -330,6 +331,13 @@ int main(int argc, char **argv) {
     printf("q=%d mode=%d b1_two_mma_one_cvt=1 operands_trial0=(+1,+2) "
            "operands_trial1=(+2,-1) scale=64 convert=bias0_plain_rn_fp16 "
            "oracle=na_scalar_sum_model\n",
+           q, mode);
+  } else if (mode == 41) {
+    printf("q=%d mode=%d b2_three_product_one_cvt=1 "
+           "fixtures_trial0=(1,1)+(2^-11,2^-11) "
+           "fixtures_trial1=(1,1)+(-2^-12,-2^-12) scale=64 "
+           "convert=bias0_plain_rn_fp16 expected_trial0=0x5401 "
+           "expected_trial1=0x53ff\n",
            q, mode);
   } else {
     printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
@@ -612,6 +620,15 @@ int main(int argc, char **argv) {
        * exists, so have_expected/have_math stay 0. */
       single_convert = 1;
       break;
+    case 41:
+      /* B-2 (three-product hs lo synthesis in one ACC, single final
+       * convert): the expectations are pre-registered fixture literals
+       * (user-fixed at 0x5401/0x53ff, PR #14 comment 6293114616); no
+       * observed-reproduction oracle exists (nothing has been measured
+       * before), and the classification lives in the B-2 block below —
+       * so have_expected/have_math stay 0. */
+      single_convert = 1;
+      break;
     case 37:
       /* Exact-zero control: target 0 exactly; math and hypothesis agree. */
       expected[0] = 0x0000;
@@ -759,10 +776,10 @@ int main(int argc, char **argv) {
     const char *slot2_value_key = single_convert ? "unused_val" : "residual";
     /* "extra4" here is the Rs[8] rnd/feedback-round bit of the convert;
      * Phase D modes force it to 0 in both trials (feedback disabled), and
-     * mode 40 also forces it to 0 (plain RN convert in both trials) — the
-     * trial index is the operand variant, not the rnd bit. Print the
-     * actual bit and keep the trial index as a separate field. */
-    const int rnd_bit = (phase_d || mode == 40) ? 0 : trial;
+     * modes 40/41 also force it to 0 (plain RN convert in both trials) —
+     * the trial index is the operand/fixture variant, not the rnd bit.
+     * Print the actual bit and keep the trial index as a separate field. */
+    const int rnd_bit = (phase_d || mode == 40 || mode == 41) ? 0 : trial;
     printf("extra4=%d trial=%d hi_bits=0x%04x %s=0x%04x hi=%.17g %s=%.17g "
            "basic=%.17g scale=%d ",
            rnd_bit, trial, hi_bits, slot2_key, slot2_bits, hi, slot2_value_key,
@@ -831,6 +848,35 @@ int main(int argc, char **argv) {
      * unclassifiable stored bits mark pass=0 for manual analysis. */
     if ((!c0_accum && !c0_overw) || (!c1_accum && !c1_overw)) pass = 0;
     if (c0_accum && c1_overw) pass = 0;  /* contradictory accumulate/overwrite */
+  }
+
+  if (mode == 41) {
+    /* B-2 classification (pre-registered fixtures, PR #14 comment
+     * 6293114616; expected bits are user-fixed — do not retune after
+     * measurement): subcase 0 accumulates 1 + 2^-11 + 2^-11 =
+     * 1+2^-10, scaled 64.0625 -> 0x5401; subcase 1 accumulates
+     * 1 - 2^-12 - 2^-12 = 1-2^-11, scaled 63.96875 -> 0x53ff.
+     * full-product RN16 coincides for BOTH chosen fixtures (0x5401 /
+     * 0x53ff) — a fixture-specific coincidence (lo*lo dropped). */
+    const uint16_t t0 = (uint16_t)result[0];  /* fixture 0 3-product */
+    const uint16_t t1 = (uint16_t)result[2];  /* fixture 1 3-product */
+    const int e0 = (t0 == 0x5401u), p0 = (t0 == 0x5400u);
+    const int e1 = (t1 == 0x53ffu), p1 = (t1 == 0x5400u);
+    const char *c0 = e0 ? "B2_EXPECTED" : (p0 ? "PLAIN_EQUIVALENT" : "UNEXPECTED");
+    const char *c1 = e1 ? "B2_EXPECTED" : (p1 ? "PLAIN_EQUIVALENT" : "UNEXPECTED");
+    const char *b2 = (e0 && e1)
+        ? "B2_THREE_PRODUCT_CONFIRMED"
+        : (!e0 && !p0) || (!e1 && !p1)
+            ? "INSUFFICIENT_EVIDENCE_UNEXPECTED_PATTERN"
+            : "MIXED_DIAGNOSE_ACC_LAYOUT_ROUNDING";
+    printf("b2_subcase0_bits=0x%04x b2_subcase0_class=%s\n", t0, c0);
+    printf("b2_subcase1_bits=0x%04x b2_subcase1_class=%s\n", t1, c1);
+    printf("b2_verdict=%s expected=0x5401_0x53ff fixture_specific_full=0x5401_0x53ff\n",
+           b2);
+    /* Exit-code semantics: a clean but non-expected outcome is a valid
+     * scientific result (diagnose, do not auto-NO_GO Path B); only an
+     * unclassifiable bit pattern marks pass=0 for manual analysis. */
+    if ((!e0 && !p0) || (!e1 && !p1)) pass = 0;
   }
 
   const char *observed_verdict =
