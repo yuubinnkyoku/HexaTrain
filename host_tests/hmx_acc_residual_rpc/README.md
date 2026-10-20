@@ -640,6 +640,7 @@ recorded requires explicit instruction.
 | `Rs[8]` fine feedback bit never changes the stored FP16; fine bits stay in the convert state | mode 20 both trials at every q; PRM Ch.5 after Fig.25 |
 | Dynamic feedback (convert state → next convert's bias) never positively confirmed | `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` every case; mode 0 wanted residual negative → could not distinguish consumption-then-clamp from no-consumption |
 | CPU split-precision simulation: the FP16 hi/lo split is NOT exact — lo-normal bound 2^-23·\|A\| holds (0 viol of 100058 normal-lo cases, max ratio 1.191511e-07 ≈ 2^-23·1.006); subnormal-lo degrades and at 2^-20..2^-15 lo is 0 in all 2400 sweep points (max rel 3.02e-02, bound breaks below ≈9.5e-07); float-arith split (G3, unit-corrected): double→float input rounding is the only floatization loss (e0 max ratio exactly 2^-24, 0/100058 exceed) and the float subtraction is Sterbenz-exact against the RN16-hi partner (e1 ≡ 0, 27 exact cancellations); the final recovery ratio exceeds 2^-23 in 942 lo-normal cases (max 1.760996e-07 ≈ 1.48×2^-23 — e0 + RN16(lo), not cancellation); the earlier 671-viol count was a units mismatch (relative vs absolute) and is withdrawn; reviewer example x = 1+2^-11−2^-23 → residual exactly 2^-23 (hi=0x3c00, lo=0x1000) | `hmx_fp16x2_split_sim.c` via `scripts/run_fp16x2_split_sim.ps1` (gcc gcc-15.2 mingw + clang-22.1.8 msvc byte-identical, seeds fixed) |
+| B-1 device run (2026-10-20): ONE build + ONE run, mode 40 — two consecutive MMA operand packets into ONE accumulator, `mxclracc` once at start, no convert/store between batches, ONE final bias-0 convert at scale 64; trial 0 (+1)+(+2) stored **`0x5a00`** = 192 (accumulate branch of the pre-registered table), trial 1 (+2)+(−1) stored **`0x5400`** = 64 (mixed-sign batch additivity, positive sum); strict build-id all-agree gate PASS, exit 0, cleanup PASS — `TWO_MMA_ACCUMULATE_CONSISTENT` | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 40` (transcript `build/hmx_evidence/b1_run_20261020.txt`, gitignored) |
 | CPU 3-GEMM synthesis (G5/G6): both-operands-split mean rel err 5.66e-07 @n=64 (4.30e-06 @n=16) vs plain 2.57e-03 / 1.53e-02 → ~4.5e3× mean improvement; the 4-term variant is not better (5.73e-07); chained single-accumulator vs separate float accumulators equivalent (6.79e-07; combine loss subdominant: mean 2.83e-08, max 1.39e-07); W-only split (Alo=0 activations) gains only 1.5–1.8× | same sim |
 
 ### Path A — harvest hi/lo from one accumulator through two converts
@@ -873,6 +874,26 @@ exercises. **B-1 success does not certify Path B for production**: the
 next step is a cost/accuracy measurement of the real 3-GEMM synthesis
 (separate work item, user-gated, not part of this run).
 
+**B-1 result (mode 40 device run, 2026-10-20; one build + one run):**
+**`TWO_MMA_ACCUMULATE_CONSISTENT`** — both stored bits landed exactly
+on the accumulate predictions: trial 0 (+1)+(+2) → **`0x5a00`**
+(192 = 3·64), trial 1 (+2)+(−1) → **`0x5400`** (64 = 1·64). The
+negative second contribution is therefore carried inside the
+accumulator (mixed-sign batch additivity, positive final sum), and the
+single bias-0 convert read the signed sum as plain RN-FP16 exactly as
+measured before. Strict build-id gate PASS (host = DSP = same id,
+all-agree), exit code 0, resource cleanup PASS. Claim scope: ONE run,
+ONE device, exact-representable scalar operands (each packet one
+scalar, sums exactly representable on the convert grid) — the
+*MMA-batch ↔ ACC* additivity across operand reloads is device-confirmed
+at this minimal shape. General multi-tile/multi-channel additivity and
+the negative FINAL store of the bias-0 convert remain unmeasured (the
+ACC stayed positive in both trials, so the contrast's overwrite branch
+never presented a negative store). Path B's B-1 gate is met at this
+minimal scope; this still does not certify production Path B — the
+next step is the cost/accuracy measurement of the real 3-GEMM
+synthesis (separate, user-gated work item).
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
@@ -881,8 +902,8 @@ next step is a cost/accuracy measurement of the real 3-GEMM synthesis
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
-| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive only | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 + cost measurement pending) | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20) | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 gate met at minimal shape; cost/accuracy measurement of the real 3-GEMM synthesis pending, user-gated) | — |
 
 ### Decision
 
@@ -891,11 +912,11 @@ next step is a cost/accuracy measurement of the real 3-GEMM synthesis
   behaviour; archive A-2 as the only worthwhile A follow-up, executed
   solely on explicit instruction.
 - Path B is the only route consistent with every measured HMX law.
-  (1) B-1 was user-approved on 2026-10-20 (PR #14 comment 6290840051)
-  and is staged as mode 40 (1 build + 1 device run, pre-registered
-  above); (2) the cost/throughput measurement of a 3-GEMM synthesis on
-  a real tile remains a separate device work item, out of this
-  harness's scope, gated on the B-1 outcome and on fresh user
+  (1) B-1 approved on 2026-10-20 (PR #14 comment 6290840051) and
+  executed the same day as mode 40 (1 build + 1 device run, result
+  above: `TWO_MMA_ACCUMULATE_CONSISTENT`); (2) the cost/accuracy
+  measurement of a 3-GEMM synthesis on a real tile remains a separate
+  device work item, out of this harness's scope, gated on fresh user
   instruction.
 - Mode 40 is added under the standing policy — new modes only for
   clearly discriminating minimal experiments, only on explicit
