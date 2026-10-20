@@ -63,19 +63,51 @@ Add-Case "empty_output" @() $false 'missing'
 Add-Case "no_identity_line" `
     @('identity_status=0 dsp_revision=1', 'dsp_identity=MATCH') `
     $false 'missing'
-# h. two identity lines (retry duplicates): first line wins.
-Add-Case "first_line_wins" `
+# h. retry duplicates: ALL-AGREE strict semantics. A MATCH line can no
+#    longer coexist with a MISMATCH line; every combination fails closed,
+#    and only fully agreeing MATCH lines pass.
+Add-Case "coexisting_mismatch_fails" `
     @(
         'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH',
         'build_id=0x19cc4c4f dsp_build_id=0x7dfcb259 build_id_status=MISMATCH'
     ) `
-    $true 'match'
-Add-Case "first_line_wins_mismatch_first" `
+    $false 'mismatch'
+Add-Case "mismatch_then_match_fails" `
     @(
         'build_id=0x19cc4c4f dsp_build_id=0x7dfcb259 build_id_status=MISMATCH',
         'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH'
     ) `
     $false 'mismatch'
+Add-Case "agreeing_duplicates_pass" `
+    @(
+        'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH',
+        '  [device] build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH'
+    ) `
+    $true 'match'
+Add-Case "cross_line_host_mismatch_fails" `
+    @(
+        'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH',
+        'build_id=0x539bf682 dsp_build_id=0x19cc4c4f build_id_status=MATCH'
+    ) `
+    $false 'cross_line_id_mismatch'
+Add-Case "cross_line_dsp_mismatch_fails" `
+    @(
+        'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH',
+        'build_id=0x19cc4c4f dsp_build_id=0x539bf682 build_id_status=MATCH'
+    ) `
+    $false 'cross_line_id_mismatch'
+Add-Case "match_then_unavailable_fails" `
+    @(
+        'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH',
+        'BUILD_ID=UNAVAILABLE dsp_build_id=0x00000000 expected_build_id=0x19cc4c4f'
+    ) `
+    $false 'unavailable_or_zero'
+Add-Case "unavailable_then_match_fails" `
+    @(
+        'BUILD_ID=UNAVAILABLE dsp_build_id=0x00000000 expected_build_id=0x19cc4c4f',
+        'build_id=0x19cc4c4f dsp_build_id=0x19cc4c4f build_id_status=MATCH'
+    ) `
+    $false 'unavailable_or_zero'
 # i. hex case robustness: uppercase hex still passes (status token stays strict).
 Add-Case "uppercase_hex" `
     @('build_id=0xA7037C38 dsp_build_id=0xA7037C38 build_id_status=MATCH') `

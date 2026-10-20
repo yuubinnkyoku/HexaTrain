@@ -11,6 +11,12 @@
 # UNAVAILABLE and does NOT fail identity inside the device harness. This
 # gate closes the orchestrator-level hole: a probe exit 0 with UNAVAILABLE
 # must no longer count as a successful provenance run.
+#
+# ALL-AGREE strict semantics: every normal-shape line must carry token
+# MATCH with the same nonzero host id and the same nonzero dsp id, host
+# must equal dsp, and no UNAVAILABLE-shaped line may appear anywhere.
+# A single MISMATCH/unknown-token line poisons the whole output even when
+# a MATCH line coexists (retry duplicates must agree or fail closed).
 function Test-HmxBuildIdGate {
   param(
     [AllowEmptyCollection()]
@@ -31,27 +37,28 @@ function Test-HmxBuildIdGate {
     HostBuildId  = $null
     DspBuildId   = $null
   }
-  $firstNormal = $null
+  $normals = New-Object System.Collections.Generic.List[object]
   $firstUnavail = $null
   foreach ($line in $Lines) {
     if ($null -eq $line) { continue }
-    if (($null -eq $firstNormal) -and ($line -cmatch $normal)) {
-      $firstNormal = [pscustomobject]@{
-        Line = $line
-        Host = [Convert]::ToUInt32($Matches[1], 16)
-        Dsp  = [Convert]::ToUInt32($Matches[2], 16)
+    if ($line -cmatch $normal) {
+      $normals.Add([pscustomobject]@{
+        Line  = $line
+        Host  = [Convert]::ToUInt32($Matches[1], 16)
+        Dsp   = [Convert]::ToUInt32($Matches[2], 16)
         Token = $Matches[3]
-      }
+      })
+      continue
     }
     if (($null -eq $firstUnavail) -and ($line -cmatch $unavailable)) {
       $firstUnavail = [pscustomobject]@{
-        Line = $line
-        Dsp     = [Convert]::ToUInt32($Matches[1], 16)
+        Line     = $line
+        Dsp      = [Convert]::ToUInt32($Matches[1], 16)
         Expected = [Convert]::ToUInt32($Matches[2], 16)
       }
     }
   }
-  if ($null -eq $firstNormal) {
+  if ($normals.Count -eq 0) {
     if ($null -ne $firstUnavail) {
       $result.Reason = 'unavailable_or_zero'
       $result.MatchedLine = $firstUnavail.Line
@@ -60,22 +67,44 @@ function Test-HmxBuildIdGate {
     }
     return $result
   }
-  $result.MatchedLine = $firstNormal.Line
-  $result.HostBuildId = $firstNormal.Host
-  $result.DspBuildId = $firstNormal.Dsp
-  if (($firstNormal.Host -eq 0) -or ($firstNormal.Dsp -eq 0)) {
+  $first = $normals[0]
+  $result.MatchedLine = $first.Line
+  $result.HostBuildId = $first.Host
+  $result.DspBuildId = $first.Dsp
+  # Any UNAVAILABLE-shaped line anywhere poisons the verdict.
+  if ($null -ne $firstUnavail) {
     $result.Reason = 'unavailable_or_zero'
     return $result
   }
-  if ($firstNormal.Token -cne 'MATCH') {
-    if ($firstNormal.Token -ceq 'MISMATCH') {
-      $result.Reason = 'mismatch'
-    } else {
-      $result.Reason = "status_$($firstNormal.Token)"
+  # Any parsed id of zero poisons the verdict.
+  foreach ($n in $normals) {
+    if (($n.Host -eq 0) -or ($n.Dsp -eq 0)) {
+      $result.Reason = 'unavailable_or_zero'
+      return $result
     }
-    return $result
   }
-  if ($firstNormal.Host -ne $firstNormal.Dsp) {
+  # Any MISMATCH token poisons the verdict.
+  foreach ($n in $normals) {
+    if ($n.Token -ceq 'MISMATCH') {
+      $result.Reason = 'mismatch'
+      return $result
+    }
+  }
+  # Any other non-MATCH token poisons the verdict.
+  foreach ($n in $normals) {
+    if ($n.Token -cne 'MATCH') {
+      $result.Reason = "status_$($n.Token)"
+      return $result
+    }
+  }
+  # Normal lines must agree on host and dsp ids.
+  foreach ($n in $normals) {
+    if (($n.Host -ne $first.Host) -or ($n.Dsp -ne $first.Dsp)) {
+      $result.Reason = 'cross_line_id_mismatch'
+      return $result
+    }
+  }
+  if ($first.Host -ne $first.Dsp) {
     $result.Reason = 'id_mismatch'
     return $result
   }

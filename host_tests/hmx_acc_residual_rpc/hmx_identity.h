@@ -204,4 +204,20 @@ static inline hmx_identity_report_t hmx_identity_status(
   return report;
 }
 
+/* Strict pre-experiment build-id gate for orchestrator-driven runs
+ * (probe_host -strict-build-id). The device-harness semantics above stay
+ * UNAVAILABLE-tolerant on purpose: a build id of 0 must not fail identity
+ * for unstamped manual builds. This pure predicate is the ADDITIONAL
+ * requirement used before any numerical RPC: it returns 1 only when the
+ * build id was proven nonzero and matching on both sides. Nothing else in
+ * the identity validator changes behavior. */
+static inline int hmx_identity_strict_build_id_ok(
+    const hmx_identity_report_t *report) {
+  if (report->build_id_status != HMX_BUILD_ID_MATCH) return 0;
+  if (report->expected_build_id == 0) return 0;
+  if (report->meta_build_id == 0) return 0;
+  if (report->meta_build_id != report->expected_build_id) return 0;
+  return 1;
+}
+
 #endif /* HEXATRAIN_HMX_IDENTITY_H */

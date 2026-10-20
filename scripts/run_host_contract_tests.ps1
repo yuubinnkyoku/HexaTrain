@@ -63,12 +63,36 @@ Invoke-PhoneLmHostCppRun -Label "CPU host tests" -Executable $CpuExecutable
 Invoke-PhoneLmHostPwshScript -Label "HMX FP16 oracle self-test" `
     -ScriptPath (Join-Path $Root "scripts\run_hmx_selftest.ps1")
 
+# Shared identity validator CPU-only self-test (hmx_identity.h contract,
+# including the strict pre-experiment build-id gate used by
+# probe_host -strict-build-id). Not previously built anywhere; gcc from
+# PATH, same contract as run_hmx_selftest.ps1.
+$IdentitySelfTestExe = Join-Path $OutputDirectory "probe_identity_selftest.exe"
+$identityGcc = Get-Command gcc -ErrorAction SilentlyContinue
+if (-not $identityGcc) {
+    throw "gcc not found on PATH (required for probe_identity_selftest)"
+}
+& $identityGcc.Source "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror" `
+    "-o" $IdentitySelfTestExe `
+    (Join-Path $Root "host_tests\hmx_acc_residual_rpc\probe_identity_selftest.c")
+if ($LASTEXITCODE -ne 0) {
+    throw "probe_identity_selftest compilation failed with exit $LASTEXITCODE"
+}
+Invoke-PhoneLmHostCppRun -Label "HMX identity validator self-test" `
+    -Executable $IdentitySelfTestExe
+Write-Host "probe_identity_selftest=PASS"
+
 # CPU-only self-test for the run_experiment.ps1 -DeployAndRun build-id
 # provenance gate (pure PowerShell; no SDK, no adb, no device). Asserts the
 # fail-closed identity parsing (MATCH+nonzero+equal required; UNAVAILABLE,
 # zero ids, non-MATCH tokens, missing lines all fail).
 Invoke-PhoneLmHostPwshScript -Label "HMX experiment identity gate self-test" `
     -ScriptPath (Join-Path $Root "scripts\run_experiment_identity_selftest.ps1")
+
+# CPU-only FP16 hi/lo split-precision simulation (Phase E-2 Path B evidence;
+# deterministic seeds, both-operands/W-only synthesis comparison; ~3 s).
+Invoke-PhoneLmHostPwshScript -Label "FP16x2 split precision sim" `
+    -ScriptPath (Join-Path $Root "scripts\run_fp16x2_split_sim.ps1")
 
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.

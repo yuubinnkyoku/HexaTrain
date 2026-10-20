@@ -154,10 +154,33 @@ static void print_verdicts(int rpc_status, int identity_ok, int hmx_executed,
 int main(int argc, char **argv) {
   int q = 10;
   int mode = 0;
-  if (argc >= 2) q = atoi(argv[1]);
-  if (argc >= 3) mode = atoi(argv[2]);
+  /* Optional flag: require a nonzero matching build id on the same handle
+   * BEFORE any numerical RPC. Scanned across all argv so its position does
+   * not disturb the positional q/mode contract (hand-run compatibility). */
+  int strict_build_id = 0;
+  int positional = 0;
+  int arg_index;
+  for (arg_index = 1; arg_index < argc; ++arg_index) {
+    if (strcmp(argv[arg_index], "-strict-build-id") == 0) {
+      strict_build_id = 1;
+      continue;
+    }
+    if (positional == 0) {
+      q = atoi(argv[arg_index]);
+    } else if (positional == 1) {
+      mode = atoi(argv[arg_index]);
+    } else {
+      fprintf(stderr,
+              "usage: %s [q=6..10] [mode=0..39] [-strict-build-id]\n",
+              argv[0]);
+      return exit_with(2);
+    }
+    positional++;
+  }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PHASE_D_MODE_MAX) {
-    fprintf(stderr, "usage: %s [q=6..10] [mode=0..39]\n", argv[0]);
+    fprintf(stderr,
+            "usage: %s [q=6..10] [mode=0..39] [-strict-build-id]\n",
+            argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
@@ -241,6 +264,32 @@ int main(int argc, char **argv) {
     const int close_status = hexatrain_hmx_acc_residual_close(handle);
     printf("close_status=%d\n", close_status);
     print_verdicts(identity_status, 0, -1, 0, "identity_fail_closed",
+                   close_status, "NOT_STARTED", "NOT_STARTED");
+    return exit_with(9);
+  }
+
+  if (strict_build_id && !hmx_identity_strict_build_id_ok(&id_report)) {
+    /* Orchestrator strict mode: all_ok above stays UNAVAILABLE-tolerant on
+     * purpose, but -strict-build-id requires a proven nonzero matching
+     * build id on the same handle BEFORE any numerical RPC. Fail closed
+     * with the same cleanup shape as the all_ok block above. */
+    const char *strict_type;
+    if (id_report.build_id_status == HMX_BUILD_ID_UNAVAILABLE) {
+      strict_type = "unavailable";
+    } else if (id_report.build_id_status == HMX_BUILD_ID_MISMATCH) {
+      strict_type = "mismatch";
+    } else if (id_report.expected_build_id == 0 ||
+               id_report.meta_build_id == 0) {
+      strict_type = "zero";
+    } else {
+      strict_type = "status";
+    }
+    printf("strict_identity_fail=%s\n", strict_type);
+    rpcmem_free(result);
+    rpcmem_free(meta);
+    const int close_status = hexatrain_hmx_acc_residual_close(handle);
+    printf("close_status=%d\n", close_status);
+    print_verdicts(identity_status, 0, -1, 0, "strict_build_id",
                    close_status, "NOT_STARTED", "NOT_STARTED");
     return exit_with(9);
   }

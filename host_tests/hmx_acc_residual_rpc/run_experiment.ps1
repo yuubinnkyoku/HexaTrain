@@ -264,7 +264,10 @@ function Invoke-DeployAndRun($artifacts) {
   & adb @adbArgs shell chmod 755 $DeviceDir/hexatrain_hmx_acc_residual_test 2>&1 | ForEach-Object { $script:LogLines.Add("  [adb] $_") }
   if ($LASTEXITCODE -ne 0) { throw 'ADB_CHMOD_FAILED: host test binary' }
 
-  $remoteCmd = "cd $DeviceDir && export LD_LIBRARY_PATH=$DeviceDir && export DSP_LIBRARY_PATH=$DspLibraryPath && ./hexatrain_hmx_acc_residual_test $Q $Mode"
+  # Orchestrator-driven runs always append -strict-build-id: a nonzero
+  # matching build id is required on the same handle BEFORE any numerical
+  # RPC (probe_host fails closed with strict_identity_fail + exit 9).
+  $remoteCmd = "cd $DeviceDir && export LD_LIBRARY_PATH=$DeviceDir && export DSP_LIBRARY_PATH=$DspLibraryPath && ./hexatrain_hmx_acc_residual_test $Q $Mode -strict-build-id"
   $attempt = 0
   $runExit = -1
   $runOutput = @()

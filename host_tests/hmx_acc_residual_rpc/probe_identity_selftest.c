@@ -223,12 +223,60 @@ static void test_multiple_failures(void) {
                          "META_TRIALS_NOT_CLEAR") == 0);
 }
 
+/* Strict pre-experiment gate (hmx_identity_strict_build_id_ok): the
+ * UNAVAILABLE-tolerant semantics pinned above MUST stay intact, while the
+ * strict predicate used by probe_host -strict-build-id rejects exactly the
+ * cases the tolerant path lets through. */
+static void test_strict_build_id_gate(void) {
+  int identity[4];
+  int meta[9];
+  hmx_identity_report_t report;
+
+  /* Key case: dsp build id 0 -> identity stays ok (all_ok==1) but the
+   * strict gate must abort before any numerical RPC. */
+  fill_valid(identity, meta, 6, HMX_IDENTITY_MODE, 0);
+  report = run_case(identity, meta, 0, 6, HMX_IDENTITY_MODE, 0x20261020);
+  expect_int("strict.dsp_zero.all_ok", report.all_ok, 1);
+  expect_int("strict.dsp_zero.strict_ok",
+             hmx_identity_strict_build_id_ok(&report), 0);
+
+  /* host build id 0 (unstamped manual build): identity stays ok, strict
+   * aborts. */
+  fill_valid(identity, meta, 6, HMX_IDENTITY_MODE, 0x11111111);
+  report = run_case(identity, meta, 0, 6, HMX_IDENTITY_MODE, 0);
+  expect_int("strict.host_zero.all_ok", report.all_ok, 1);
+  expect_int("strict.host_zero.strict_ok",
+             hmx_identity_strict_build_id_ok(&report), 0);
+
+  /* both zero: identity stays ok, strict aborts. */
+  fill_valid(identity, meta, 6, HMX_IDENTITY_MODE, 0);
+  report = run_case(identity, meta, 0, 6, HMX_IDENTITY_MODE, 0);
+  expect_int("strict.both_zero.all_ok", report.all_ok, 1);
+  expect_int("strict.both_zero.strict_ok",
+             hmx_identity_strict_build_id_ok(&report), 0);
+
+  /* nonzero mismatch: identity already fails, strict also rejects. */
+  fill_valid(identity, meta, 10, HMX_IDENTITY_MODE, 0xaaaa0001);
+  report = run_case(identity, meta, 0, 10, HMX_IDENTITY_MODE, 0xbbbb0002);
+  expect_int("strict.mismatch.all_ok", report.all_ok, 0);
+  expect_int("strict.mismatch.strict_ok",
+             hmx_identity_strict_build_id_ok(&report), 0);
+
+  /* correct matching nonzero payload: identity ok AND strict ok. */
+  fill_valid(identity, meta, 10, HMX_IDENTITY_MODE, 0x20261020);
+  report = run_case(identity, meta, 0, 10, HMX_IDENTITY_MODE, 0x20261020);
+  expect_int("strict.match.all_ok", report.all_ok, 1);
+  expect_int("strict.match.strict_ok",
+             hmx_identity_strict_build_id_ok(&report), 1);
+}
+
 int main(void) {
   test_valid_payload_passes();
   test_build_id_unavailable_semantics();
   test_build_id_mismatch_fails();
   test_adversarial_payloads();
   test_multiple_failures();
+  test_strict_build_id_gate();
   if (failures) {
     printf("FAILED: %d check(s)\n", failures);
     return 1;
