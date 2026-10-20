@@ -568,8 +568,11 @@ accumulator's low-order information?):
   bias-grid multiples.** Measured: mode 20 q=6 (correction +4 units)
   reconstructs the oracle exactly (`recovered_error=0`). This is a real,
   reproducible capability of the two-convert recipe.
-- **Sub-grid positives overshoot** (+1 unit; q=8..10 make reconstruction
-  strictly worse than the plain FP16 hi: 4.58e-05 vs 1.53e-05), and
+- **Sub-grid positives overshoot** (+1 unit; q=8..10 made reconstruction
+  worse than the plain FP16 hi: 4.58e-05 vs 1.53e-05 — those residuals
+  sat at r = 0.25g, below the 0.5g break-even of the ceil-error law
+  formalized in the Phase E-2 section; sub-grid residuals with r > 0.5g
+  *improve* under the same law), and
   **non-positive corrections vanish** (clamp to 0). Since round-to-
   nearest `hi` often sits *below* the scaled operand, the negative case
   is common — mode 0 hits it for both tested operands.
@@ -636,6 +639,8 @@ recorded requires explicit instruction.
 | On-grid positive corrections reconstruct exactly (recovered_error = 0); sub-grid positive corrections overshoot q8: 4.58e-05 vs plain-FP16 1.53e-05 | mode 20 q=6 vs q=8 |
 | `Rs[8]` fine feedback bit never changes the stored FP16; fine bits stay in the convert state | mode 20 both trials at every q; PRM Ch.5 after Fig.25 |
 | Dynamic feedback (convert state → next convert's bias) never positively confirmed | `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` every case; mode 0 wanted residual negative → could not distinguish consumption-then-clamp from no-consumption |
+| CPU split-precision simulation: the FP16 hi/lo split is NOT exact — lo-normal bound 2^-23·\|A\| holds (0 viol of 100058 normal-lo cases, max ratio 1.191511e-07 ≈ 2^-23·1.006); subnormal-lo degrades and at 2^-20..2^-15 lo is 0 in all 2400 sweep points (max rel 3.02e-02, bound breaks below ≈9.5e-07); float-arith split subtraction breaks the bound via cancellation (671 viol, max 1.76e-07); reviewer example x = 1+2^-11−2^-23 → residual exactly 2^-23 (hi=0x3c00, lo=0x1000) | `hmx_fp16x2_split_sim.c` via `scripts/run_fp16x2_split_sim.ps1` (gcc gcc-15.2 mingw + clang-22.1.8 msvc byte-identical, seeds fixed) |
+| CPU 3-GEMM synthesis (G5/G6): both-operands-split mean rel err 5.66e-07 @n=64 (4.30e-06 @n=16) vs plain 2.57e-03 / 1.53e-02 → ~4.5e3× mean improvement; the 4-term variant is not better (5.73e-07); chained single-accumulator vs separate float accumulators equivalent (6.79e-07; combine loss subdominant: mean 2.83e-08, max 1.39e-07); W-only split (Alo=0 activations) gains only 1.5–1.8× | same sim |
 
 ### Path A — harvest hi/lo from one accumulator through two converts
 
@@ -652,14 +657,49 @@ store(x) = ceil(x/g)·g            for x > 0        (laws 2/3, E-1)
 g       = 2^(e_b − 14)            substrate-tied   (g ∝ |b| ≈ substrate)
 ```
 
-so the exportable correction set is:
+For the exported correction r = s − RN(s) the ceil step is a quantizer
+onto the bias grid, and the reconstruction error after export is
 
-| wanted correction r = s − RN(s) | exported | error |
+```
+E(r) = g·ceil(r/g) − r     (for r > 0; E = 0 exactly when r ≡ 0 mod g;
+                            E ∈ [0, g) always, ties away from on-grid)
+```
+
+so the exportable-correction table with the exact error column is:
+
+| wanted correction r | exported | error E(r) |
 | --- | --- | --- |
-| r ≤ 0 (common; mode 0 hit it for both q) | 0 | the whole correction is lost |
-| 0 < r < g | ceil → +1 unit | strictly worse than baseline (measured q8: 4.58e-05 vs 1.53e-05) |
-| r = k·g, k ≥ 1, positive | exactly r | exact (measured q=6: recovered_error = 0) |
-| r > g off-grid | ceil | error < g, always worsens |
+| r ≤ 0 (common; mode 0 hit it for both q) | 0 | the whole correction is lost (clamp) |
+| r = k·g, k ≥ 1 (on-grid, positive) | exactly r | 0 — exact (measured q=6: recovered_error = 0) |
+| 0 < r < g | ceil → +1 unit | E = g − r |
+| r > g, off-grid | ceil | 0 ≤ E < g |
+
+**Sign of the ceil law (review correction 2026-10-20 — the first draft
+of this section claimed sub-grid positives always worsen; that was
+wrong):**
+
+- E(r) < r — improvement — exactly when frac(r/g) > 0.5. Example: r =
+  0.75g exports with E = 0.25g, i.e. the residual error shrinks to a
+  third of the uncorrected one.
+- E(r) > r — strict worsening — when frac(r/g) < 0.5. The measured q=8
+  case sits here: r = 0.25g ⇒ E = 0.75g ⇒ 4.58e-05 (= 0.75g/64)
+  reconstruction error vs the plain-FP16 baseline r/64 = 1.53e-05
+  (3× worse). r = 0.5g is the break-even (E = r).
+- A positive on-grid residual exports error-free; every other sign /
+  fraction combination is at best partial (E < r) and at worst a
+  regression (E > r) or a total loss (r ≤ 0).
+
+So A keeps NO_GO as a *general* exact-recovery recipe — E is never 0
+except on-grid, the negative half is clamped away outright, the
+residual distribution of a real training GEMM is not known a priori,
+and the recipe's ingredients (dynamic feedback) are unconfirmed. But
+the honest characterization is: the ceil quantizer flips between
+improving and worsening depending only on where the residual sits
+inside its grid cell, so a *residual-distribution-aware* variant is
+not ruled out by the mathematics alone — it is ruled out only by the
+missing mechanism (see below) and by the fact that steering residuals
+to frac > 0.5 is exactly what the static-bias baseline already
+controls.
 
 *Why no additional instruction path fixes this* (all three constraints
 are structural in the measured behaviour): (i) the store is FP16-only —
@@ -699,9 +739,24 @@ FP16 `hi/lo` splitting and *none of the measured HMX landmines apply to
 it*; it is gated on confirming one HMX primitive and on a cost
 measurement, not on new HMX knowledge.
 
-*Model:* A = Ahi + Alo, W = Whi + Wlo (each split exact: the
-round-to-nearest pair satisfies Ahi = RN(A), Alo = A − Ahi computed in
-FP32, representable in FP16 since |Alo| ≤ 2^-11·|A|). Then
+*Model:* A = Ahi + Alo, W = Whi + Wlo. **The split is NOT exact in
+general** (review correction 2026-10-20, with CPU simulation — see the
+evidence table and `hmx_fp16x2_split_sim.c`). With Ahi = RN16(A) and
+Alo = RN16(A − Ahi) computed with a ≥FP32 subtraction, recovery
+satisfies |hi + lo − A| ≤ 2^-23·|A| only while lo lands in the FP16
+*normal* range — simulated max ratio 1.191511e-07 ≈ 2^-23·1.006 with
+zero violations in the lo-normal domain — and degrades as soon as the
+residual A − Ahi falls below the FP16 smallest exponent: in the
+2^-20..2^-15 magnitude sweep lo is 0 in **all** 2400 points (the split
+degenerates to the plain FP16 value) with max relative recovery error
+3.02e-02, and the smallest magnitude breaking the 2^-23·|A| bound is
+≈9.5e-07. The reviewer's example is confirmed numerically: x =
+1 + 2^-11 − 2^-23 splits to hi = 0x3c00 (ties-to-even), lo = 0x1000,
+leaving recovery error exactly 2^-23 (rel 1.19e-07). Computing the
+split subtraction itself in float instead of ≥FP32 widens the damage
+through cancellation (671 lo-normal bound violations out of 100058,
+max ratio 1.76e-07): the split subtraction must be carried in ≥FP32
+precision. Then
 
 ```
 Y ≈ Ahi·Whi + (Ahi·Wlo + Alo·Whi) [+ Alo·Wlo]      (3 or 4 plain multiplies)
@@ -715,16 +770,25 @@ original problem statement "FP16×2 HMX arithmetic" is satisfied by
 reusing the FAU's own accumulation instead of trying to smuggle bits
 out of the convert state.
 
-*Error model (analytic, marked as estimate until measured):* per-term
-products of two FP16 values are exact in FP32; accumulation in the FAU
-is FP32 (PRM HMX chapter; accumulation format citation to re-verify
-before implementation). Dominant residual error ≈ FP32 accumulation
-rounding, ~2^-24·√N-class per accumulator, against the plain FP16
-path's 2^-11 input-rounding term: an expected ~2^12–2^13 improvement.
-This does **not** reach CPU double precision (~1e-16 rel); the double
-oracle remains the reference, and Path B's honest expectation is
-FP32-class accuracy, not double. Device-measured error numbers are
-`INSUFFICIENT_EVIDENCE` until a run exists.
+*Error model (CPU-simulated, deterministic; device numbers still
+pending):* per-term products of two FP16 values are exact in FP32;
+accumulation in the FAU is FP32 (PRM HMX chapter; accumulation format
+citation to re-verify before implementation). Simulated synthesis
+(`run_fp16x2_split_sim.ps1`, gcc gcc-15 mingw and clang-22 msvc agree
+byte-identically, fixed seeds — n ∈ {16, 64}, elements in [−2, 2] plus
+hard-case entries): plain-FP16 mean relative error 2.57e-03 (n=64) /
+1.53e-02 (n=16) vs the both-operands-split 3-GEMM mean 5.66e-07 (n=64)
+/ 4.30e-06 (n=16) — a ~4.5e3× (n=64) mean improvement, max errors
+2.39 → 1.44e-04 (n=64). Adding the 4th product (Alo·Wlo) is not
+measurably better (n=64 mean 5.73e-07), so 3 GEMMs are the baseline
+recipe; accumulating all passes into ONE chained float accumulator
+instead of separate ones is statistically equivalent (n=64 mean
+6.79e-07), and the loss from committing partials to separate float
+accumulators and combining in float is subdominant (mean 2.83e-08,
+max 1.39e-07). This does **not** reach CPU double precision (~1e-16
+rel) — the double oracle remains the reference, and Path B's honest
+expectation is FP32-class accuracy, not double. Device-measured error
+numbers are `INSUFFICIENT_EVIDENCE` until a run exists.
 
 *Cost model (analytic):*
 
@@ -749,13 +813,16 @@ split only helps where the operand tensors carry *more* than FP16
 information. Weights do — they are static and split offline once from
 the FP32 checkpoint. Activations in today's FP16 pipeline are already
 RN-FP16: their hi/lo split yields Alo = 0 and recovers nothing. To
-realize the ~2^-22-class estimate the graph must *carry FP32-class
+realize the FP32-class accuracy the graph must *carry FP32-class
 activations between layers* (or FP16 hi/lo pairs — the actual "FP16×2
 pipeline"), which moves the cost profile to activation traffic and
 storage and turns the accuracy comparison into a pipeline-design
 question, not just a kernel question. With FP16-exact activations and
-split weights only, the activation-rounding term (2^-11) remains
-dominant and the gain over plain FP16 is small.
+split weights only (simulated W-only variant: Alo ≡ 0), the gain over
+plain is small and quantitative: mean relative error 8.36e-03 vs
+plain 1.53e-02 at n=16 (1.8×) and 1.69e-03 vs 2.57e-03 at n=64
+(1.5×) — the activation-rounding term (2^-11) stays dominant, as the
+conditional model predicted.
 
 *Minimal experiment if proceeding* (**B-1**, not implemented this
 commit): one mode that runs two MMA batches into the same accumulator
@@ -772,7 +839,7 @@ additivity across batches, which no recorded mode exercises.
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
 | --- | --- | --- | --- | --- |
-| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only | est. FP32-class *only when both operands carry hi/lo pairs* (needs FP32-carried activations); activation-FP16-only case gains little; `INSUFFICIENT_EVIDENCE` until measured | reference |
+| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; ceil law allows *partial* improvement for frac(r/g) > 0.5 (distribution-dependent, mechanism missing) | CPU-simulated (deterministic, both operands split): mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3×; n=16: 4.30e-06 vs 1.53e-02); W-only (Alo=0) only 1.5–1.8×; split not exact (2^-23-class residue + subnormal-lo degradation, see split sim); device numbers `INSUFFICIENT_EVIDENCE` | reference |
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
