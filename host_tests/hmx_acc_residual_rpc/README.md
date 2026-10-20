@@ -374,11 +374,19 @@ then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-
 ## Device battery results (2026-10-20)
 
 All numbers below are quoted from device transcripts
-(`build/hmx_evidence/b_battery_console_full.txt` for battery 1 and
+(`build/hmx_evidence/b_battery_console_full.txt` for battery 1 — the raw
+per-case `[device]` console payload for all 27 cases — and
 `b_battery3_20261020.txt` for battery 3; gitignored like all provenance —
-the numbers and build ids are what matter). Provenance for every run
-(commit, dirty state, artifact SHA-256 table) is in
-`build/hmx_evidence/b_provenance_*.txt`.
+the numbers and build ids are what matter). The battery-3 file is a
+per-case summary (`CASE_EXIT ... exit=1` marks a failed case); the
+probe-level `[device]` detail for the battery-3 reruns was streamed to
+the run console and its repeated-case values agree with battery 1's raw
+console. The mode-0 measurement detail (wanted residual negative,
+`residual_bits=0x0000`, probe `exit_code=8`) is preserved in this
+section and in the PR record; if any battery-3 row is ever formalized as
+paper evidence, re-record it under the current harness for a durable raw
+transcript. Provenance for every run (commit, dirty state, artifact
+SHA-256 table) is in `build/hmx_evidence/b_provenance_*.txt`.
 
 Run provenance:
 
@@ -605,3 +613,183 @@ accumulator's low-order information?):
   (`0x3404`, expected fact). Conclusion: the bias-grid ceiling is
   global; the stored FP16 is a quantizer output, and the scope of the
   quantization laws is not limited to small magnitudes.
+
+## Phase E-2 feasibility assessment (2026-10-20)
+
+Question: does a **practical FP16×2 computing path** exist on HMX V81
+(this runtime) — either (A) harvesting the accumulator residual through
+two converts, or (B) splitting the *inputs* into FP16 hi/lo pairs and
+synthesizing the product from several plain HMX multiplies? Verdict
+vocabulary: `POSSIBLE` / `CONDITIONALLY_POSSIBLE` / `NO_GO` /
+`INSUFFICIENT_EVIDENCE`. This section adds no new probe mode and does
+not touch any production path; device work beyond what is already
+recorded requires explicit instruction.
+
+### Evidence base (file-backed unless noted)
+
+| fact | reference |
+| --- | --- |
+| Plain (no-output-bias) converts store round-to-nearest FP16 of the converted value: hi rows q=6..10 reproduce the double-derived RN bits exactly | `b_battery_console_full.txt` modes 20/23 hi rows; zero-residual controls 21/22 exact |
+| 2-CVT chains retain the accumulator and store per convert-recipe order (64 then 64−64=0) | battery 1 mode 22 (both trials, raw console) |
+| Stored = 0 for non-positive fine convert targets | modes 32–36 (battery 1 + battery 3), mode 0 both q (session-record detail; see battery-3 provenance note above) |
+| Positive targets ceil onto the output-bias grid, including far from zero; grid g = 2^(e_obias−14) tracks the bias magnitude | modes 27/28/29 scale sweep; mode 39 E-1 (global boundary) |
+| On-grid positive corrections reconstruct exactly (recovered_error = 0); sub-grid positive corrections overshoot q8: 4.58e-05 vs plain-FP16 1.53e-05 | mode 20 q=6 vs q=8 |
+| `Rs[8]` fine feedback bit never changes the stored FP16; fine bits stay in the convert state | mode 20 both trials at every q; PRM Ch.5 after Fig.25 |
+| Dynamic feedback (convert state → next convert's bias) never positively confirmed | `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` every case; mode 0 wanted residual negative → could not distinguish consumption-then-clamp from no-consumption |
+
+### Path A — harvest hi/lo from one accumulator through two converts
+
+**Verdict: `NO_GO` as a general recipe.** Narrow static case below is
+`POSSIBLE` — but it is already covered by the plain FP16 baseline, so
+the two-convert dynamic-feedback variant adds nothing measured.
+
+*Arithmetic of the export (from the measured laws):* the exported value
+is the second convert's stored target, and every measured store obeys
+
+```
+store(x) = 0                      for x ≤ 0        (law 4)
+store(x) = ceil(x/g)·g            for x > 0        (laws 2/3, E-1)
+g       = 2^(e_b − 14)            substrate-tied   (g ∝ |b| ≈ substrate)
+```
+
+so the exportable correction set is:
+
+| wanted correction r = s − RN(s) | exported | error |
+| --- | --- | --- |
+| r ≤ 0 (common; mode 0 hit it for both q) | 0 | the whole correction is lost |
+| 0 < r < g | ceil → +1 unit | strictly worse than baseline (measured q8: 4.58e-05 vs 1.53e-05) |
+| r = k·g, k ≥ 1, positive | exactly r | exact (measured q=6: recovered_error = 0) |
+| r > g off-grid | ceil | error < g, always worsens |
+
+*Why no additional instruction path fixes this* (all three constraints
+are structural in the measured behaviour): (i) the store is FP16-only —
+the fine (16+4) bits never leave the convert state except through the
+feedback input of the *next* convert (law 1/6); (ii) that next convert
+re-quantizes its own store onto its own bias lattice — and its bias must
+cancel the same substrate, so its g is tied to the same magnitude (the
+E-1 result closes the door on any far-from-zero escape); (iii) the
+sign clamp is unconditional for the store. The V81 convert surface
+offers no documented route that writes sub-lattice or signed residual
+information to memory. Via the bias payload the *programmer* can
+pre-align the substrate so that s − b lands on-grid and positive —
+that is exactly the mode 39/20 q6 family — and it requires no dynamic
+feedback at all, meaning the baseline already delivers every
+correction A can deliver.
+
+*What A would need to become general* (all unmet by the documented V81
+surface): a signed store bypassing the clamp, a store lattice finer than
+the substrate-tied grid, or a state-readout path other than
+state→next-bias feedback. None exists in the PRM-documented convert
+recipes measured here.
+
+*Minimal experiment if anyone wants to revive A* (**A-2**, not
+implemented this commit): program the recipe with a *positive* ≥1-unit
+residual and bias set 1 empty (bias 0) with `Rs[3:2]=1` feedback
+enabled on the second convert. Prediction matrix: if the convert state
+is truly consumed as a bias, the second store differs from plain RN by
+the state's contribution; if nothing changes (plain RN hi), the
+dynamic-feedback hypothesis is dead for the store and A closes
+entirely. Single mode, one build, no ABI change. Only run it on
+explicit instruction.
+
+### Path B — split inputs into FP16 hi/lo, synthesize from plain HMX multiplies
+
+**Verdict: `CONDITIONALLY_POSSIBLE`** — the composition is standard
+FP16 `hi/lo` splitting and *none of the measured HMX landmines apply to
+it*; it is gated on confirming one HMX primitive and on a cost
+measurement, not on new HMX knowledge.
+
+*Model:* A = Ahi + Alo, W = Whi + Wlo (each split exact: the
+round-to-nearest pair satisfies Ahi = RN(A), Alo = A − Ahi computed in
+FP32, representable in FP16 since |Alo| ≤ 2^-11·|A|). Then
+
+```
+Y ≈ Ahi·Whi + (Ahi·Wlo + Alo·Whi) [+ Alo·Wlo]      (3 or 4 plain multiplies)
+```
+
+The only convert in the whole path is the **final** commit with
+**bias 0** — precisely the case measured to behave as plain RN-FP16
+(hi rows q=6..10). No output-bias converts ⇒ no grid ceiling, no clamp
+(laws 2–4 target the output-bias recipe only). The context of the
+original problem statement "FP16×2 HMX arithmetic" is satisfied by
+reusing the FAU's own accumulation instead of trying to smuggle bits
+out of the convert state.
+
+*Error model (analytic, marked as estimate until measured):* per-term
+products of two FP16 values are exact in FP32; accumulation in the FAU
+is FP32 (PRM HMX chapter; accumulation format citation to re-verify
+before implementation). Dominant residual error ≈ FP32 accumulation
+rounding, ~2^-24·√N-class per accumulator, against the plain FP16
+path's 2^-11 input-rounding term: an expected ~2^12–2^13 improvement.
+This does **not** reach CPU double precision (~1e-16 rel); the double
+oracle remains the reference, and Path B's honest expectation is
+FP32-class accuracy, not double. Device-measured error numbers are
+`INSUFFICIENT_EVIDENCE` until a run exists.
+
+*Cost model (analytic):*
+
+| item | Path B multiplier vs plain FP16 GEMM |
+| --- | --- |
+| MMA compute | 3× (optionally 4× with the negligible Alo·Wlo term) |
+| weight storage | 2× (Whi, Wlo — static, split offline once) |
+| activation traffic | 2× (Ahi, Alo) + the split op itself (elementwise, FP32 domain) |
+| convert endpoints | unchanged vs baseline (one final RN commit; the baseline already converts its output) |
+| VTCM | two FP16 operand tiles must co-reside per synthesis; the probe's 12 KiB figure is the *probe's* operating envelope, not a device statement |
+| bias/registers | one plain bias row passed repeatedly; no per-pass output-bias tuning |
+
+*Implementation requirement (correctness-critical):* the partial
+results must NOT be committed to FP16 between passes. Either chain all
+three multiplies into one accumulator (single final convert) or commit
+them as FP32 tensors and combine on HVX/CPU; a half-measure that
+converts partials to FP16 throws away exactly the precision the
+splitting bought.
+
+*Input-precision requirement (decisive for the accuracy claim):* the
+split only helps where the operand tensors carry *more* than FP16
+information. Weights do — they are static and split offline once from
+the FP32 checkpoint. Activations in today's FP16 pipeline are already
+RN-FP16: their hi/lo split yields Alo = 0 and recovers nothing. To
+realize the ~2^-22-class estimate the graph must *carry FP32-class
+activations between layers* (or FP16 hi/lo pairs — the actual "FP16×2
+pipeline"), which moves the cost profile to activation traffic and
+storage and turns the accuracy comparison into a pipeline-design
+question, not just a kernel question. With FP16-exact activations and
+split weights only, the activation-rounding term (2^-11) remains
+dominant and the gain over plain FP16 is small.
+
+*Minimal experiment if proceeding* (**B-1**, not implemented this
+commit): one mode that runs two MMA batches into the same accumulator
+within a single kernel call, then one bias-0 convert, with a
+double-derived expected value `RN(s1+s2)`. Prediction matrix:
+`stored = RN(s1+s2)` ⇒ chained accumulation works and Path B's core
+primitive is confirmed; `stored = RN(s2)` (overwrite) ⇒ B needs
+separate accumulators per pass (still possible, costlier combine). The
+2-CVT retention measured in mode 22 already shows converts do not
+disturb the accumulator; what B-1 isolates is the *MMA-batch↔ACC*
+additivity across batches, which no recorded mode exercises.
+
+### Overall comparison against the plain FP16 baseline and the double oracle
+
+| criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
+| --- | --- | --- | --- | --- |
+| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only | est. FP32-class *only when both operands carry hi/lo pairs* (needs FP32-carried activations); activation-FP16-only case gains little; `INSUFFICIENT_EVIDENCE` until measured | reference |
+| negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
+| sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
+| extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive only | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 + cost measurement pending) | — |
+
+### Decision
+
+- Record Path A as **NO_GO (general)**; keep the exact-recovery
+  positive-on-grid capability as the *already-established* static-bias
+  behaviour; archive A-2 as the only worthwhile A follow-up, executed
+  solely on explicit instruction.
+- Path B is the only route consistent with every measured HMX law.
+  Before any new mode is written, the user decides: (1) run B-1
+  (~1 build + 1 device run), then (2) scope a cost/throughput
+  measurement of a 3-GEMM synthesis on a real tile (separate device
+  work item, out of this harness's scope).
+- No new HMX mode is added in this commit per the standing policy:
+  new modes only for clearly discriminating minimal experiments, only
+  on explicit instruction.
