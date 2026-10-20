@@ -17,6 +17,63 @@ REPORT = ROOT / 'build/reports/g1-backward-repair-native-completion'
 OLD = ROOT / 'build/reports/g1-backward-primitive-precision-repair'
 MODES = ['standalone_softmax', 'standalone_dvalue', 'native_softmax', 'native_dvalue', 'dual']
 HASHES = dict(DSP='658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5', Host='0aea5fe57625b236226b3cfb55f70dbdad0afda16cae98e1efd2420c4fc4e843', probe='23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05')
+CLOSEOUT_BASE = 'dffbc50efaec04f59d16bf126f0631d355f99ae7'
+
+
+def validate_blocked_closeout(value):
+    exact_keys(value, 'starting_commit status preflight_reason wakefulness top_resumed preflight_actual_exit started_processes complete_processes graph_executes actual_probe_exit manual_wake_required pilot_reassessment previous_regression_is_historical fresh_regression protected_state performance Formal_profile')
+    require(value['starting_commit'] == CLOSEOUT_BASE, 'closeout starting commit')
+    expected = dict(status='BLOCKED_FORMAL_COHORT', preflight_reason='DEVICE_NOT_AWAKE_OR_UNKNOWN',
+        wakefulness='Dozing', top_resumed='NOT_REACHED_AT_AWAKE_GATE', preflight_actual_exit=2,
+        started_processes=0, complete_processes=0, graph_executes=0, actual_probe_exit=None,
+        manual_wake_required=True, pilot_reassessment='FIVE_ROLES_PILOT_PASS',
+        previous_regression_is_historical=True, protected_state='PASS', performance=None,
+        Formal_profile='BLOCKED_SCOPE_NOT_EXECUTED')
+    require(all(value[k] == v for k, v in expected.items()), 'unsafe closeout promoted')
+    exact_keys(value['fresh_regression'], 'Fast Host Qnn Device_smoke Muon_W8 remaining_device_regressions')
+    require(value['fresh_regression']['Fast'] in ('PASS', 'BLOCKED'), 'fresh Fast state')
+    require(all(v == 'NOT_EXECUTED' for k, v in value['fresh_regression'].items() if k != 'Fast'), 'unmeasured fresh regression')
+
+
+def blocked_closeout(directory):
+    directory = directory.resolve()
+    require(directory.parent == REPORT.resolve(), 'closeout must be a new private mission directory')
+    audit = read(directory / 'starting-audit-private.json')
+    attempt = read(directory / 'attempt-private.json')
+    preflight_path = directory / 'preflight/device-preflight-private.json'
+    preflight = read(preflight_path)
+    require(audit['status'] == 'PASS' and audit['starting_commit'] == CLOSEOUT_BASE and audit['clean_tree'], 'closeout audit')
+    require(audit['prior_evidence_files_unchanged'] == 333, 'prior evidence coverage')
+    require(sha(preflight_path) == attempt['preflight_sha256'], 'preflight evidence changed')
+    require(preflight['status'] == 'BLOCKED' and preflight['read_only'] is True, 'unsafe preflight')
+    require(preflight['device_executes'] == preflight['device_operations_after_stop'] == 0, 'device work after stop')
+    require(re.search(r'^\s*mWakefulness=Dozing\s*$', preflight['power_private'], re.M), 'actual Dozing evidence')
+    require('awake' not in preflight['gates'] and 'top_resumed' not in preflight['gates'], 'unsafe preflight passed')
+    require(attempt['preflight_only'] and attempt['started_probe_processes'] == attempt['completed_cohort_processes'] == attempt['graph_executes'] == 0, 'preflight counted as process')
+    require(not (directory / 'identity-private.json').exists() and not (directory / 'stdout.txt').exists(), 'unexpected probe evidence')
+    pilots = read(directory / 'pilot-audit-private.json')
+    require(set(pilots) == set(MODES), 'missing reassessed pilot')
+    entry = read(REPORT / 'cohort-entry-private.json')['measured_gates']
+    require({p['digest'] for p in pilots.values()} == {p['digest'] for p in entry.values()}, 'pilot digests changed')
+    require(all(p['status'] == 'PILOT_PASS' for p in pilots.values()), 'incomplete pilot audit')
+    for mode, pilot in pilots.items():
+        measured_role = read(directory / (mode + '-reassessment-private.json'))
+        require(measured_role['mode'] == mode and measured_role['classification'] == 'PASS' and
+            measured_role['numerical_digest'] == pilot['digest'], 'reassessed pilot role binding')
+    for p, h in audit['protected'].items(): require(sha(ROOT / p) == h, 'protected mismatch')
+    for p, h in audit['existing_mission_evidence'].items(): require(sha(ROOT / p) == h, 'existing mission evidence changed')
+    log = directory / 'fast-closeout.txt'
+    fast = 'PASS' if log.exists() and re.search(r'total [0-9.]+s\s+PASS=[1-9][0-9]* FAIL=0 SKIP=0\s*$', log.read_text(encoding='utf-8-sig')) else 'BLOCKED'
+    result = dict(starting_commit=CLOSEOUT_BASE, status=attempt['status'], preflight_reason=preflight['reason'],
+        wakefulness='Dozing', top_resumed=attempt['top_resumed'], preflight_actual_exit=attempt['preflight_actual_exit'],
+        started_processes=attempt['started_probe_processes'], complete_processes=attempt['completed_cohort_processes'],
+        graph_executes=attempt['graph_executes'], actual_probe_exit=attempt['actual_probe_exit'],
+        manual_wake_required=attempt['manual_wake_required'], pilot_reassessment='FIVE_ROLES_PILOT_PASS',
+        previous_regression_is_historical=True, fresh_regression=dict(Fast=fast, Host='NOT_EXECUTED', Qnn='NOT_EXECUTED',
+            Device_smoke='NOT_EXECUTED', Muon_W8='NOT_EXECUTED', remaining_device_regressions='NOT_EXECUTED'),
+        protected_state='PASS', performance=None, Formal_profile=attempt['formal_profile'])
+    validate_blocked_closeout(result)
+    return result
 
 
 def empty(status='NOT_EXECUTED'):
@@ -43,7 +100,8 @@ def measured(directory, mode):
 
 
 def validate(value):
-    exact_keys(value, 'schema base source_commit branch binary_sha256 fixture_sha256 previous_pilots repair monitor runtime_6031 forward cohort performance regression protected_state classifications training')
+    exact_keys(value, 'schema base source_commit branch binary_sha256 fixture_sha256 previous_pilots repair monitor runtime_6031 forward cohort performance regression protected_state classifications training' + (' formal_closeout' if 'formal_closeout' in value else ''))
+    if 'formal_closeout' in value: validate_blocked_closeout(value['formal_closeout'])
     require(value['schema'] == 1 and value['base'] == BASE and value['branch'] == BRANCH, 'mission identity')
     require(re.fullmatch('[0-9a-f]{40}', value['source_commit']) is not None, 'source commit')
     require(value['binary_sha256'] == HASHES and value['training'] == 'NO-GO' and value['protected_state'] == 'PASS', 'binary/protected/training')
@@ -151,7 +209,9 @@ def make():
         result['classifications'] += ['SAVED_P_DUAL_NATIVE_VERIFIED', 'SAVED_P_LIFETIME_VERIFIED', 'SAVED_P_DUAL_OBSERVER_FREE_VERIFIED']
     else:
         result['classifications'].append('BLOCKED_NATIVE_DUAL')
-    require(not any((REPORT / f'cohort-{i}/identity-private.json').exists() for i in (1, 2, 3)), 'formal evidence requires full cohort projection')
+    require(not any(REPORT.glob('cohort-*/identity-private.json')) and
+        not any(REPORT.glob('cohort-*/execution-before-readback-private.json')) and
+        not any(REPORT.glob('cohort-*/stdout.txt')), 'actual or partial cohort evidence requires full cohort projection')
     require(not (REPORT / 'performance-1/identity-private.json').exists(), 'performance requires measured projection')
     if unknowns: result['classifications'].insert(1, 'BLOCKED_TOP_RESUMED_STATE')
     validate(result)
@@ -204,13 +264,34 @@ def selftest():
     reject(lambda v:v.update(old_negative_controls='OVERWRITTEN'))
     reject(lambda v:v['monitor']['new_unknown_responses'].append(dict(classification='TOP_RESUMED_VERIFIED',response_characters=100,top_field_count=0)))
     print(f'native_completion_exporter_selftest=PASS rejection_cases={rejected} device_calls=0')
+    closeout = dict(starting_commit=CLOSEOUT_BASE, status='BLOCKED_FORMAL_COHORT',
+        preflight_reason='DEVICE_NOT_AWAKE_OR_UNKNOWN', wakefulness='Dozing', top_resumed='NOT_REACHED_AT_AWAKE_GATE',
+        preflight_actual_exit=2, started_processes=0, complete_processes=0, graph_executes=0, actual_probe_exit=None,
+        manual_wake_required=True, pilot_reassessment='FIVE_ROLES_PILOT_PASS', previous_regression_is_historical=True,
+        fresh_regression=dict(Fast='PASS', Host='NOT_EXECUTED', Qnn='NOT_EXECUTED', Device_smoke='NOT_EXECUTED',
+            Muon_W8='NOT_EXECUTED', remaining_device_regressions='NOT_EXECUTED'), protected_state='PASS',
+        performance=None, Formal_profile='BLOCKED_SCOPE_NOT_EXECUTED')
+    validate_blocked_closeout(closeout)
+    corruptions = [dict(status='PASS'), dict(wakefulness='Awake'), dict(top_resumed='PASS'),
+        dict(started_processes=1), dict(complete_processes=3), dict(graph_executes=1), dict(actual_probe_exit=0),
+        dict(manual_wake_required=False), dict(protected_state='FAIL'), dict(performance={'median':1}),
+        dict(fresh_regression=dict(closeout['fresh_regression'], Muon_W8='PASS')),
+        dict(previous_regression_is_historical=False), dict(Formal_profile='PASS'), dict(raw_activity='private')]
+    for change in corruptions:
+        try: validate_blocked_closeout(dict(closeout, **change))
+        except (ValueError, TypeError): pass
+        else: raise AssertionError('false blocked closeout accepted')
+    print(f'blocked_closeout_exporter_selftest=PASS rejection_cases={len(corruptions)} device_calls=0')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--output', type=Path); parser.add_argument('--self-test', action='store_true'); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--output', type=Path); parser.add_argument('--self-test', action='store_true'); parser.add_argument('--blocked-closeout-root', type=Path); args = parser.parse_args()
     if args.self_test:
         selftest(); raise SystemExit(0)
     require(args.output is not None, 'output required')
     result = make()
+    if args.blocked_closeout_root:
+        result['formal_closeout'] = blocked_closeout(args.blocked_closeout_root)
+        validate(result)
     with args.output.open('x', encoding='utf-8') as f: json.dump(result, f, indent=2, allow_nan=False)
     print('native_completion_public=PASS formal_processes=0 training=NO-GO')

@@ -178,3 +178,110 @@ Public aggregate: `docs/results/g1-backward-repair-native-completion-summary.jso
 | 37 | Actual PV/Gate/Output dP/dContext, then dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation. |
 | 38 | Neither full1-layer nor full19-layer is certified. |
 | 39 | 40k→60k /200k training remains NO-GO. |
+
+## 2026-10-20 — Formal certification closeout from dffbc50
+
+### A. Starting state and preserved evidence
+
+Final decision for this continuation: **BLOCKED_FORMAL_COHORT**. This is a safety/preflight block, not an arithmetic failure. The fresh read-only preflight again observed **Dozing**; manual wake is required before a separately authorized continuation and another fresh preflight. No DSP probe process was started. The earlier blocked observations and all pilot evidence above remain historical records.
+
+The designated research checkout started clean at `dffbc50efaec04f59d16bf126f0631d355f99ae7`, on `investigation/g1-backward-repair-native-completion`, with no upstream. Git root/common-directory identity and ancestry of `c6c30c18713084e002ce5485b8f28d67d26faad2`, `49d91b67e1ca4b7b7ede66231e5b7abfe1220ec2`, `be4271efd1b8fb71f0c66f3ae7c35f04571aa78e`, and `e05f3539e2e0c0e461157a3abf1d9833d74b392b` were verified. The other checkout and audit clone were not operated on. Existing branch history is retained; no push, PR, merge or history rewrite is performed.
+
+All five frozen binary identities and both frozen fixture identities in A remain unchanged. All five bundle manifests were checked against current source/binary hashes, retaining frozen compiled source `bb6aaceb42de505b29689a362ce8293687e7ab89` and the fixed toolchain. No DSP/Host/ARM binary was rebuilt. The unchanged trace runner SHA256 is `ddaec3470adea03c287ef3138f64a0d04ac9a0ca408d096c24303385d0c9f811`; its ActivityManager check, two-second interval and stop behavior were not edited.
+
+The existing five full pilots were independently reassessed from raw/compressed evidence, captured completion, original double references and source-ordered FP32 arithmetic. All five remain **PILOT_PASS**; their raw hashes and legacy digests match the cohort-entry ledger. Starting Forward P was independently reassessed PASS for all480 outputs, retaining P maxAbs `4.236482907815642e-7`, row-sum error `2.682209014892578e-7`, dScores bound `0.0002459099714532658`, and dValue bound `2.7855243723208197e-5`. This reassessment consumes historical device outputs; it is not fresh device execution.
+
+### B. Fresh formal preflight
+
+One read-only preflight ran in a new exclusively created private closeout directory. It used pinned QAIRT arguments, the existing approved APK path and the existing research monitoring policy. QAIRT inventory exit3 was advisory for optional samples; Build ID and required core files were present. Host storage, compiler, frozen custom package, protected identities, same physical device and active-run absence passed before the Awake gate.
+
+Actual preflight exit was **2**; reason **DEVICE_NOT_AWAKE_OR_UNKNOWN**, with actual `mWakefulness=Dozing`. The authoritative top-resumed gate was not reached and is not reported PASS. Any foreground detail observed by the active-run check is not a substitute. Critical thermal, remaining competing-probe checks, installed-APK/device-storage checks and the immediate runner recheck were not completed after this early stop; full device readiness is therefore not certified.
+
+Device executes were0 and device operations after stop were0. No trace-runner invocation, probe staging, automatic wake/unlock, foreground takeover, force-stop, installation or state polling followed. The historical153,912-character missing-field response and earlier Dozing folders were retained unchanged. No new missing-field episode was exercised; the observed new safety violation is Dozing.
+
+Reproduction uses the existing `preflight_forward_p_resume.ps1` with explicit pinned QAIRT/Hexagon/NDK roots, Build ID `2.48.40.260702151143`, `-MixedQkvResearchMonitoring`, the approved existing APK and a new unique private `-ReportRoot`. The exact invocation, stdout/stderr, actual preflight exit2, raw power response and hashes are retained privately. Do not run the cohort from this blocked result; manual wake followed by a new complete PASS preflight is required.
+
+### C. Three-process cohort
+
+The unchanged preregistration requires five roles in each of three independent OS processes. The dual permit hash matched its registered entry. The supplemental role-contract specification and legacy digest remain unchanged; six Host checks confirmed output/role/case/contract sensitivity and timing/receipt-metadata exclusion.
+
+Current continuation: **0 started processes, 0 completed processes, 0 graphExecute calls, 0 completed roles**. The unused `cohort-1-awake` slot was not consumed; the new directory contains preflight-only evidence. Actual probe exit and raw probe hash are **null**, and teardown is **NOT_APPLICABLE_NO_PROCESS**. The preflight exit2 is not a probe exit. All historical preflight-only stops and pilots are excluded from formal counts.
+
+| Role | Retained pilot total maxAbs | Formal total maxAbs | Formal coverage / word contracts |
+| --- | ---: | --- | --- |
+| standalone_softmax | 6.335392901668513e-5 | null | NOT_EXECUTED |
+| standalone_dvalue | 1.68030018699028e-5 | null | NOT_EXECUTED |
+| native_softmax | 1.0078856647055545e-4 | null | NOT_EXECUTED |
+| native_dvalue | 1.3850631340517339e-5 | null | NOT_EXECUTED |
+| dual Softmax | 1.0078856647055545e-4 | null | NOT_EXECUTED |
+| dual dValue | 1.3850631340517339e-5 | null | NOT_EXECUTED |
+
+All pilots retain Core2,200/Holdout256 per observer, four observers, zero arithmetic/observer word mismatches, 4,912 graphExecute calls per role, actual exit0 and teardown success. None establishes three-process formal agreement. Formal legacy/supplemental digest agreement is **NOT_MEASURED**. No new6031 occurrence was observed because runtime arithmetic was not exercised; **UNRESOLVED / DORMANT / WATCH** remains unchanged.
+
+### D. Native Saved-P scope
+
+The retained dual pilot verifies one P producer per head, both consumers sharing the same per-head P tensor ID, NATIVE P in NoTap, no Host P reinjection, tested lifetime/immutability and both actual total gradients. NoReceipt/NoTap itself passes both gradient gates with final-word observer identity. These are pilot findings, with the invisible-storage observation limits stated in F; no formal certification is added by this continuation.
+
+### E. Performance
+
+**NOT_EXECUTED** because the three-process numerical entry gate is unmet. First execute,31 steady samples, median/p10/p90, execute wall, finalize, arithmetic/receipt windows and measured resource comparisons are unavailable for all Forward/single/dual configurations. They remain **null**, not zero. Existing pilot times are not substituted. The approximately17.8ms historical Forward measurement includes LN local Backward control; it is not a pure Forward cost. No diagnostic-time subtraction or19-layer/microbatch extrapolation is made.
+
+### F. Verification and protected state
+
+Fresh Fast and exporter checks for this documentation/exporter closeout are recorded below. Host/Qnn profile PASS records in I and the original public aggregate remain **historical**. They are not this continuation's fresh PASS. No candidate, graph, ABI, math or device runner changed; the only implementation change adds an allow-listed blocked-closeout projection to the public exporter, preserving its original18 rejection tests and adding14 unsafe/false-closeout rejection tests. This records the new preflight and explicitly separates historical profile results from fresh status; it does not authorize formal PASS.
+
+Fresh device regressions are **NOT_EXECUTED**: S2 LN1, Mixed QKV double Q/K, strict IEEE HVX V, Double QK, Custom Scale/Mask/Softmax, Forward cumulative P, HVX FFN2/QKV, QK/Backward Scale, LN2/Softmax Backward controls, device smoke and Muon W8. Historical W8 114/114 is not reused as fresh evidence. Fresh Host/Qnn profiles are also NOT_EXECUTED after the safety stop. Overall regression closure remains BLOCKED. Project Formal is **BLOCKED_SCOPE / NOT_EXECUTED**, preserving the explicit scope restriction.
+
+Closeout validation: **Fast PASS**, actual exit0,119.9s (outer profile PASS1/FAIL0/SKIP0; its intended inner Fast skips are not full-profile coverage). Original exporter18 reject paths and additional blocked-closeout14 reject paths **PASS**, device calls0. The exporter also refuses actual or partial cohort process evidence in every `cohort-*` directory, including `cohort-1-awake`, when projecting this zero-process blocked state. Public `formal_closeout.fresh_regression` is the freshness authority for this continuation; the older top-level regression entries remain explicitly historical.
+
+The protected40k checkpoint retains SHA256 `89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d`. All five protected files, all333 ledger-listed earlier private evidence files, all pre-existing evidence files in this mission root and all nonworking refs were checked byte-for-byte. The existing100k baseline,200k UNSTABLE/step41,647 forensic history, dataset/tokenizer/cache/order, production code, Muon and checkpoint codec were not edited or executed. No checkpoint decode/write, training update or final test occurred. New evidence is confined to a new private closeout directory; no old evidence folder was reused.
+
+Old negative controls remain historical and unchanged: C0 Host P9, old cumulative P36, Standard Scale1, Standard Mask176, Standard Softmax224 expected failures, Backward Softmax maxAbs0.30440565 and dValue0.03556465. None was rerun in this continuation. The35/40-node Tap incident stays **REPRODUCED / CAUSE UNRESOLVED**.
+
+### G. Research decision and required answers
+
+No formal Saved-P, lifetime, observer-free, total-gradient, performance or regression-closure certification is granted. Existing pilot classifications are preserved. Final classification is **BLOCKED_FORMAL_COHORT**, with unresolved runtime/frontier questions unchanged. Manual wake is the external condition for continuation; the original monitor and all hard gates still apply.
+
+| # | Answer for this continuation |
+| --- | --- |
+| 1 | Yes; exact dffbc50efaec04f59d16bf126f0631d355f99ae7 in the designated research clone/branch, initially clean. |
+| 2 | Yes; all five specified binaries, frozen source and fixtures are unchanged. |
+| 3 | Yes; historical Forward P raw evidence independently reassessed PASS,480 outputs. |
+| 4 | No; fresh Dozing. Authoritative top-resumed gate not reached. |
+| 5 | Yes; earlier Dozing preflight contributes0 processes. |
+| 6 | No; current preflight stopped before a probe process. |
+| 7 | No formal role ran; all five retained pilots independently reassessed PASS. |
+| 8 | No new coverage; historical pilots retain Core2,200/Holdout256 across four observers. |
+| 9 | Formal null; standalone Softmax pilot6.335392901668513e-5. |
+| 10 | Formal null; standalone dValue pilot1.68030018699028e-5. |
+| 11 | Formal null; Native Softmax pilot1.0078856647055545e-4. |
+| 12 | Formal null; Native dValue pilot1.3850631340517339e-5. |
+| 13 | Formal null; dual Softmax pilot1.0078856647055545e-4. |
+| 14 | Formal null; dual dValue pilot1.3850631340517339e-5. |
+| 15 | Pilot arithmetic mismatches0 for every role; formal NOT_EXECUTED. |
+| 16 | Pilot observer mismatches0 for every role; formal NOT_EXECUTED. |
+| 17 | Retained dual pilot yes; formal NOT_EXECUTED. |
+| 18 | Tested pilot lifetime/immutability yes; formal NOT_EXECUTED. |
+| 19 | No Host P reinjection in the retained native pilots; no new process. |
+| 20 | Retained dual NoReceipt/NoTap passes both total-gradient gates; no new measurement. |
+| 21 | No;0/3 independent formal OS processes completed. |
+| 22 | No formal exits; probe exit null, teardown not applicable. Preflight actual exit2 is separate. |
+| 23 | Not measured; no three-process digest set exists. |
+| 24 | Pilot legacy digests matched; supplemental Host sensitivity tests PASS. Formal cross-process comparison unavailable for both. |
+| 25 | No new observed6031; runtime not exercised. Existing watch remains unresolved. |
+| 26 | Dozing recurred; authoritative top-resumed query not reached, no new missing-field diagnosis. |
+| 27 | Yes; all pilots, unsafe/partial/preflight-only attempts remain excluded. |
+| 28 | No; formal numerical entry gate blocked. |
+| 29 | Forward/single/dual median and p10/p90 all null. |
+| 30 | No new timing comparison exists. Future comparisons must match LN control and graph conditions. |
+| 31 | Fresh HVX FFN2/QKV NOT_EXECUTED. |
+| 32 | Fresh device smoke NOT_EXECUTED. |
+| 33 | Fresh W8 114/114 NOT_EXECUTED; historical PASS not promoted. |
+| 34 | Yes; historical controls preserved, not rerun here. |
+| 35 | Fresh Fast PASS, exit0/119.9s; Host/Qnn NOT_EXECUTED here, historical PASS retained. |
+| 36 | Yes; Project Formal BLOCKED_SCOPE / NOT_EXECUTED. |
+| 37 | Yes within the recorded hash/ref ledgers; protected5, prior333 and all existing mission evidence unchanged. |
+| 38 | BLOCKED_FORMAL_COHORT; pilot verification retained, formal certification withheld. |
+| 39 | Actual PV/Gate/Output dP/dContext, then dQ/dK, Head Scatter, projection gradients and LN1 dY aggregation remain uncertified. |
+| 40 | Neither Full1-layer nor Full19-layer is certified; Full Attention Backward/Attention and TRAINING_READY also withheld. |
+| 41 | 40k→60k and200k training remain NO-GO. |

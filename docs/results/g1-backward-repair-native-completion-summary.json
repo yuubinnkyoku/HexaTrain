@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "base": "c6c30c18713084e002ce5485b8f28d67d26faad2",
-  "source_commit": "8e1a538268625e49a1a65e3a61efaaace43c482e",
+  "source_commit": "dffbc50efaec04f59d16bf126f0631d355f99ae7",
   "branch": "investigation/g1-backward-repair-native-completion",
   "binary_sha256": {
     "DSP": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
@@ -264,5 +264,31 @@
     "SAVED_P_LIFETIME_VERIFIED",
     "SAVED_P_DUAL_OBSERVER_FREE_VERIFIED"
   ],
-  "training": "NO-GO"
+  "training": "NO-GO",
+  "formal_closeout": {
+    "starting_commit": "dffbc50efaec04f59d16bf126f0631d355f99ae7",
+    "status": "BLOCKED_FORMAL_COHORT",
+    "preflight_reason": "DEVICE_NOT_AWAKE_OR_UNKNOWN",
+    "wakefulness": "Dozing",
+    "top_resumed": "NOT_REACHED_AT_AWAKE_GATE",
+    "preflight_actual_exit": 2,
+    "started_processes": 0,
+    "complete_processes": 0,
+    "graph_executes": 0,
+    "actual_probe_exit": null,
+    "manual_wake_required": true,
+    "pilot_reassessment": "FIVE_ROLES_PILOT_PASS",
+    "previous_regression_is_historical": true,
+    "fresh_regression": {
+      "Fast": "PASS",
+      "Host": "NOT_EXECUTED",
+      "Qnn": "NOT_EXECUTED",
+      "Device_smoke": "NOT_EXECUTED",
+      "Muon_W8": "NOT_EXECUTED",
+      "remaining_device_regressions": "NOT_EXECUTED"
+    },
+    "protected_state": "PASS",
+    "performance": null,
+    "Formal_profile": "BLOCKED_SCOPE_NOT_EXECUTED"
+  }
 }
