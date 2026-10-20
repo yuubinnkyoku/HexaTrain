@@ -1,10 +1,12 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-10-04 JST**
+> **研究内容の最終更新: 2026-10-20 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
 > **2026-10-04 更新**: `headwise_g1_sigmoid` を **current research baseline** へ昇格（`PROMOTE_WITH_RUNTIME_FOLLOWUP`）。legacy control（`attention_gate=none` / 758,528 params / `NPRTCKPTV4`）は historical anchor として保持し、**production / default behavior は変更していない**。詳細は「学習baseline」節と [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`。
+>
+> **2026-10-20 研究候補追記**: [Muse Glimmer 30B技術レポート](https://arxiv.org/abs/2610.24628)を踏まえ、同一runのcheckpoint平均化をP1候補へ、Dense対MoEのメモリ制約付き比較・MQA・蒸留・推論重みの精度配分・DFlashを既存の研究課題へ統合。**新規の実機検証結果やbaseline変更を意味しない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -226,6 +228,17 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 `incremental KV cache → MQA / low-bit KV → cross-layer KV/index reuse → CSA2 / CED → DSpark`
 
 とする。
+
+### Muse Glimmer 30Bから見えるmemory制約付き設計・学習終盤の課題（2026-10-20）
+
+Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2026-10公開）は、約29.6Bの**端末推論向け**Denseモデルであり、HexaTrainの**端末内でのscratch training**とは目的が異なる。直接の縮小移植や精度・速度倍率の外挿はしない。
+
+- **同一推論メモリ上限でDenseとMoEを比較**。32GB枠・事前学習計算予算に対するarchitecture ladderでは、Denseが1:8 / 1:16 sparse MoEより約2〜2.5倍高い計算効率と報告（§2.3 / Fig.1）。これはMetaの大規模GPU上の推定結果であり、T32/D64のHTPへ倍率を転用しない。HexaTrainでは当面Dense shape searchを先行し、parameter数だけでなく**training RAM・推論RAM・wall time・bpb**の制約を併記する。
+- **GQA Q32/KV2・Local×3→Global×1・LocalのみRoPE、Globalは位置埋め込みなし（NoPE）**（§2）。MQAのP1実験を後押しするが、Metaがglobal層で試した簡易MLAはRULERなどでGQAに劣った。T32では2048幅の局所窓に効果がないため、Local/Global混合と位置情報の層別化はT拡大後のP3のまま。
+- **学習終盤のsame-run checkpoint averaging**（§4.2）。最終5%で200 stepごとに保存して方法を比較し、最終的に「最後の1個＋過去600 step刻み3個」の単純重み平均を採用。単独最終checkpointに対して報告したperplexity評価すべてで改善。HexaTrainでは**異なるseed/runのmergeとは分離**し、既存の同一run snapshotから評価専用のweight soupを作る低コストpilotをP1 Candidate Poolへ。
+- **Muse Spark上位256 logitsによる蒸留**（§4.2）。学習の95%をKL、最後の5%を正解tokenのCEに切り替え、top-k教師分布の打切り偏りを回避する。HexaTrainのV1024と教師のV202048ではtoken identityが一致しないため、**同一語彙の教師を用意する等の整合手段がない限りlogitを直接比較しない**。外部教師を使う研究は単体scratch trainingと独立のP2 track。
+- **推論用の役割別量子化**（§7.1）。Q4_K/Q5_K/Q6_Kを重み群ごとに割当て、校正KL悪化と節約byteの関係を探索。EvoPressの15課題平均正答率75.6%はBF16の75.7%に近いが、**post-training量子化の結果であり、HTPでの学習演算精度を保証しない**。まず役割別のoffline fake-quant感度を測り、その後V81の実wallと互換性を見る。
+- **DFlashによる先読み生成**（§7.2）は通常の逐次生成・KV-cache成立後のP3に置く。Gated Attention採用は既存G1の独立再検証や、ReLU²の棄却の取り消しを正当化しない。
 
 ### 推論・Android基盤
 
@@ -460,11 +473,18 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 5. **Hq2/Hkv1 MQA**
    - 現行H2 MHAをQ heads=2 / KV heads=1 / head_dim=32へ一般化
+   - Muse GlimmerはQ32/KV2のGQAを採り、簡易MLAは長文脈評価でGQAより悪化（§2.3）。**小規模HTPでのMQA品質・速度は未検証**のまま、まず既定のA/Bを進める
    - Wk/Wv削減そのものと、浮いたparameterをFFN / depthへ戻すparameter-matched案を分離比較
    - config / checkpoint / metadataにquery/KV head数とKV dimensionを明示する
 
 ### P1 Candidate Pool【空きslotが出たら昇格】
 
+- **Same-run Checkpoint Averaging / Weight Soup【新規・評価専用pilot】**
+  - Meta Muse Glimmerの§4.2を参考に、**既存学習runの利用可能な終盤checkpoint**だけで単独最終checkpoint / 近接2点平均 / 3〜4点平均を比較。600-step等の間隔はMetaの実験値であり、HexaTrainに存在しないsnapshotを仮定しない
+  - **同一run / seed / dataset・順序 / tokenizer hash / architecture / parameter metadata / checkpoint schema / optimizer identity**の一致を強制。G1 V5とungated V4、異なるseedや別recipeは混ぜない
+  - **モデルparameterのみ**を安定な精度で平均。Muon momentumやAux Adam m/v等のoptimizer stateを平均せず、元checkpointを上書きしない。まず「推論・Val/Dev評価だけ」に限定し、学習再開は別protocol
+  - checksum / tensor shape / finite / load-eval parityを事前確認し、Val / Dev別bpb・Balanced・top-1・eval wall/RAMを最終checkpoint単体と比較。untouched finalは候補選択へ使わない
+  - 既存snapshotで成立し、複数split・可能なら複数seedで改善が見えた場合のみ再評価。**異なるrunを統合するP2のModel Mergingとは別仮説**。学習pipelineの変更や8000-step追加runは現段階で不要
 - **Incremental KV-cache generation【inference speed track】**
   - prepared generationのgraph / parameter warm reuseを保ったまま、各tokenのT32全再計算をper-layer KV cacheへ置き換える
   - first-token prefill / 1-token decodeを分離し、KV RAM / ms-token / APP tensor bytes / graph execute時間を測る
@@ -476,6 +496,7 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
   - まず500 / 1000 / 2000 step。2000でtieでもparameter分化とloss trendが改善方向なら4000へ延長
 - **Parameter-Matched Shape Search**
   - D / FFN / L / H / head_dim / Q-KVを総parameterを近づけ、bpb・wall time・original-byte throughput・RAMのParetoで比較する
+  - Muse GlimmerのDense対MoE比較（§2.3）は**推論メモリ上限を揃えた大規模モデルの結果**。HexaTrainではparameter-matchedに加えて学習・推論双方のメモリ上限を揃えた候補も別集計するが、Dense/MoEの優劣を小規模HTPで既証明とは扱わない
 - **Horizon-Specific MTP-lite**
   - t+1 headを維持し、t+2から小さいlow-rank horizon adapterを挟む
   - rank4 adapterはHexaTrain独自の縮約仮説であり、GLM等のMTP実装そのものとは扱わない
@@ -547,6 +568,9 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - AltUp
 - GaLore / SWAN / RACS / Alice / AdEMAMix比較
 - COAT型activation/optimizer state低bit保存
+- **Role-wise Post-Training Quantization Sensitivity【Muse Glimmer参考】**
+  - inference weightの量子化割当とtrain-time HTP precisionを混同せず、まずQ/K/V/O・FFN・embedding/headをsemantic role別にoffline量子化→復元してNLL感度 / saved byteを測る
+  - QNN V81の対応dtype・転送量・実wallが有利な場合のみ推論実装候補へ昇格。小型V1024ではグラフ固定費・KV再計算の優先度を上回る証拠が必要
 - FPTQuant / QuaRot / SpinQuant / Hadamard
 - stochastic rounding
 - IR-QLoRA / LR-QAT / QZO-LoRA
@@ -555,6 +579,8 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - Memory Layer / UltraMem
 - **MOPD / MOPD²型distillation**
   - external teacher利用を許す別研究trackとして、T32 suffix windowやprefix再利用へ小型化
+  - Muse Glimmerのtop-256 logit KL→終盤CE（95% / 5%）はteacher-target truncation対策の比較条件。まずV1024でteacherとstudentのtoken identityを一致させるか、byte-level整合を独立検証する
+  - top-k以外の確率質量 / student側tailの扱いと、KLのみ・KL+CE・終盤CEの差を分離評価。**外部教師あり**の結果はon-device scratch-onlyの品質主張へ混入しない
 - **Muon Turbo等の別algorithm**
   - Muownとの比較軸が揃った後に着手
 
@@ -565,8 +591,9 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - token-level sparse selection + forced recent window
 - hierarchical sparse indexer / candidate-pool reuse
 - Local / Global hybrid / Bounded Replay
+  - Muse Glimmerの[Local(RoPE)×3 → Global(NoPE)]をT拡大後の比較候補に追加。T32ではwindow=2048がFullと等価なため採用しない
 - KV low-bit storage（INT8/INT4/FP4相当）+ dequantize-before-attention
-- **DSpark / post-hoc speculative drafter**
+- **DSpark / DFlash / post-hoc speculative drafter**（通常KV-cache＋通常逐次decode成立後に比較。Muse GlimmerはDFlashを別学習）
 - NAMM / KeyDiff / KVP
 - CommVQ / ShadowKV / LaCache
 - Trellis / Lattice
@@ -615,12 +642,13 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
   - 1,568 prompts × 16 rollouts、multi-agent sandbox、grader cluster等はHexaTrainの現スケールと目的が違う
   - 取り込むのはoptimizer / data-mixture / distillation / reward設計の**縮約可能な原理**に限定する
 
-## 2026-09-26 直近LLMリリースからの差分
+## 主要LLMリリースからの差分（2026-09-26〜）
 
-直近1か月の公開モデルをHexaTrainの観点で読み直すと、単発の新奇技術よりも、**同じ方向の技術が複数の大規模モデルで同時に採用され始めたこと**が重要。
+2026年9月以降の公開モデルをHexaTrainの観点で読み直すと、単発の新奇技術よりも、**同じ方向の技術が複数の大規模モデルで同時に採用され始めたこと**が重要。
 
 | モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
+| **Muse Glimmer 30B（2026-10-19論文公開）** | 32GB inference memory制約でDense優位（対象ladder比）、Q32/KV2 GQA、Local×3/Global×1、Local RoPE/Global NoPE、Gated Attention、same-run checkpoint soup、top-256 logit蒸留→終盤CE、重み役割別PTQ、DFlash | **checkpoint soup評価専用pilotをP1候補へ**。MQA/parameter-matched searchはP1維持、蒸留/PTQはP2、local/global・DFlashはP3。MetaのGPU倍率・推論PTQ結果をHTP学習へ外挿しない |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
 | **HySparse2** | two-level KV sharing（KV Bridging + KV Reuse）、token-level sparse selection、forced local window、MQA、self/cross-decoder early-exit prefill | **本格sparseはP3据え置き**。ただしHq2/Hkv1 MQAとCross-Layer Top-k Reuse診断をP0/P1へ前倒し。generationは通常KV cacheを先に成立させる |
 | **Limite 1B - Violetto** | 1B Dense、48L/D1280、10Q/2KV GQA、local/global attention、QK RMS norm、head-wise gate、XSA、Value Embedding、限定MUDD、learned residual scale、SwiGLU、tied embedding、131k context | G1継続をP0、XSA / residual scale / Value Residual / packed QKVをP1、MUDD-liteをP2、local/global長文脈をP3。正式Technical Report未公開のためtraining recipeは未確定として扱う |
@@ -1057,7 +1085,7 @@ Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * 
 
 → **P1**
 
-既存LLMのhead比率をコピーせず、V81実測で決める。HySparse2が64Q/1KVのMQAを採り、KV容量とtoken-sparse kernel効率を狙っていることから、HexaTrainでは**Hq2/Hkv1を最初の具体的A/B**にする。
+既存LLMのhead比率をコピーせず、V81実測で決める。HySparse2が64Q/1KVのMQAを採り、KV容量とtoken-sparse kernel効率を狙っていることから、HexaTrainでは**Hq2/Hkv1を最初の具体的A/B**にする。Muse Glimmer（Q32/KV2）は共有比率を強くした実例だが、簡易MLAより良かったという長文脈結果が小さなT32でのMQA優位を証明するわけではない。
 
 現行D64/H2ではhead_dim=32。Hq2/Hkv1ならWq/Woは維持し、Wk/WvだけをD64→KV_DIM32へ縮められるため、L19全体で77,824 parametersを削減できる。
 
@@ -2333,11 +2361,11 @@ Tが大きくなってから。
 
 ## Local / Global Hybrid
 
-→ **P2〜P3**
+→ **P2〜P3（実装はT拡大後、P3優先）**
 
-Gemma 3の`5 local : 1 global`等をbaselineにする。
+Gemma 3の`5 local : 1 global`に加えて、Muse Glimmerの`3 local(RoPE) : 1 global(NoPE)`を長文脈時の独立候補とする（2026-10-20論文§2）。各要素はlocal window / global frequency / RoPE/NoPEを別因子で比較する。
 
-現在T=32では優先しない。
+現在T=32ではwindow=2048のLocalがFullと同じ参照範囲なので**着手しない**。
 
 ## Shared K=V / MQA系
 
@@ -2898,6 +2926,8 @@ Engram / N-gramを**静的・連想memory**、recurrent memoryを**動的memory*
 
 → **P2**
 
+Muse Glimmerの§7.1は**学習後の推論重み**についてQ4_K/Q5_K/Q6_Kをrole別に割り当て、校正KLの増分 / 節約byteを比較した。HexaTrainではまずoffline fake-quant感度・bpb・復元誤差を確認し、V81の対応形式・graph固定費・推論実wallを別途確認する。**学習activation / backward / optimizerの数値精度保証とは扱わない**。
+
 候補例:
 
 - QKV projection
@@ -3176,7 +3206,7 @@ PFN PLaMo / Meta MobileLLM-Flash / NVIDIA Minitron系を参考にする。
 
 ## Top-K / Sparse Logit Distillation
 
-PLaMo / Gemma等。
+PLaMo / Gemma等。Muse Glimmer（§4.2）はMuse Sparkの上位256 logitsでKLのみを最初の95%に使い、残り5%は正解token CEに切替えてtop-k切詰め偏りに対処した。ただし**教師と学生の語彙が一致する前提をHexaTrainへ無断で持ち込まない**。V1024の同一token ID教師を用意するか、byte確率への投影の妥当性を検証する必要がある。
 
 vocabularyが大きくなった場合、全teacher logitsを保存せず、
 
@@ -3188,9 +3218,9 @@ vocabularyが大きくなった場合、全teacher logitsを保存せず、
 
 ## Model Merging during Pre-training
 
-→ **P2 / 実験**
+→ **P2 / 実験**（**P1のsame-run checkpoint averagingとは別**）
 
-ByteDance Seed。
+ByteDance Seed。Muse Glimmerで行ったのは同一学習軌道の近接checkpointの重み平均であり、独立run・異なるseedのcheckpoint mergeとは同一視しない。評価専用same-run soupはP1 Candidate Poolの低コストpilotを先に試す。
 
 shape互換checkpointを複数短時間学習してmergeし、
 
@@ -3517,6 +3547,8 @@ KVを全layer分保持しない。
 
 ## Speculative Decoding
 
+Muse Glimmer（§7.2）はDFlashの別学習drafterを使う。これを既存のDSpark / MTPと混同せず、**incremental KV-cacheと逐次decodeの正確性・実wallが成立してから**候補を比較する。
+
 候補:
 
 - separate drafter
@@ -3688,6 +3720,7 @@ MUDD-liteは上記の軽量residual/value候補が不十分な場合のみ追加
 - head dimension
 - Attention placement
 - shallow/wide vs deep/narrow
+- parameter-matchedに加え、**同一推論メモリ上限**と**同一学習メモリ上限**の比較を分ける（Muse Glimmerの32GB inference-only条件との区別）
 
 parameter数/FLOPsではなく、bpb・wall time・original-byte throughput・RAMのParetoを保存する。
 
@@ -3746,7 +3779,7 @@ scratch-training側:
 
 外部teacher trackを有効にする場合:
 
-- Top-K / sparse-logit distillation
+- Top-K / sparse-logit distillation（top-k外の確率質量と終盤CE切替を検証。Muse Glimmer§4.2はtop256・95% KL→5% CE）
 - MOPD-lite
 - prefix reuse / MOPD²-lite
 - domain teacher integration
@@ -3870,6 +3903,7 @@ long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE�
 - Attention Skip
 - BLT / Compute-Optimal Tokenization
 - MODeL
+- Muse Glimmer 30B（Dense vs MoE / GQA / same-run checkpoint soup / top-k蒸留 / PTQ / DFlash）
 - GaLore
 - Memory Layers
 - LayerSkip
@@ -4060,6 +4094,12 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [D64/FFN128 capacity experiment](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-byte-bpe-v1024-d64-ffn128.md)
 
 - [Muon Row-Geometry Audit](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/muon-row-geometry-audit.md)
+
+## Muse Glimmer / Meta（2026-10-20追加）
+
+- [Muse Glimmer 30B: An On-Device Agentic Model — Technical Report](https://arxiv.org/abs/2610.24628)（§2.3 Dense対MoE・MQA/GQA、§4.2 top-k蒸留・same-run soup、§7.1 PTQ、§7.2 DFlash）
+- [Meta公式論文ページ](https://ai.meta.com/research/publications/muse-glimmer-30b-an-on-device-agentic-model/)
+- [Muse Glimmer 30B model card](https://huggingface.co/meta-models/Muse-Glimmer-30B)
 
 ## GLM / KDA / DSA / mHC
 
