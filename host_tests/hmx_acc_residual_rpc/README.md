@@ -350,11 +350,13 @@ hi cell `0x00000080`.
 | 36 | 3 | `border_control_n3_between_2_and_8` |
 | 37 | 0 | `exact_zero_control_fallback`: n=1 exact-zero alignment is off the 20-bit grid (0.25 nibble steps), so a=b=1.0 + out_bias=-64.0 gives target 0 exactly (proved exhaustively by `probe_bias20_test.c`) |
 | 38 | 1 | `bias_readback_probe` (see below) |
+| 39 | 0 | `e1_range_discriminator_base64p25`: base −64.25 (`0xD404`), target 64.25 grid units — E-1 range discriminator (see Phase E-1 below) |
 
 All D modes: q=8 mandatory (DSP returns 14001, host exits 2 otherwise),
 feedback disabled (single-CVT, Rs=1 only, §2.3.3 Table 6 no-feedback
 recipe), scale 64 (`0x5400`), a=b=`0x3c04` (mode 37: `0x3c00`). Expected
-observed bits = `fp16_round(scale*a^2 - (64.5 + n*2^-8))` — the FP16
+observed bits = `fp16_round(scale*a^2 - (base + n*2^-8))` with base 64.5
+(mode 37: 64.0; mode 39: 64.25) — the FP16
 rounding is part of the math: §2.4 stores the FP16 convert state to
 VTCM and Ch.5 says the extra four bits are internal to the convert state,
 used only for feedback.
@@ -367,7 +369,7 @@ the two vectors; they are not adjacent), `results[2]=results[3]=0`.
 
 CPU oracle test (no SDK/device): `gcc -std=c11 -O2 -Wall -Wextra -Werror -o probe_bias20_test probe_bias20_test.c -lm && ./probe_bias20_test`.
 Device runs: `.\run_experiment.ps1 -Provenance`,
-then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-Mode 38`). Executed results are in the battery section below.
+then `.\run_experiment.ps1 -DeployAndRun -Q 8 -Mode 31` (likewise `-Mode 32`..`-Mode 39`). Executed results are in the battery section below.
 
 ## Device battery results (2026-10-20)
 
@@ -475,11 +477,38 @@ The original recovery recipe therefore fails *for a measured,
 explainable reason*, not for a harness reason.
 `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` remains the honest headline.
 
+### Phase E-1 — range discriminator (mode 39)
+
+Built at a clean HEAD `a7037c3` (stamped `0xa7037c38`), q=8, two trials
+(`build/hmx_evidence/b_mode39_20261020.txt`):
+
+| mode | n | out_bias | math target | observed | hypothesis | OBS | MATH |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 39 | 0 | −64.25 (`0xD404`) | 0.2509765625 = 64.25 units | **`0x3410`** (0.25390625 = 65 units), both trials | ceil | PASS | FAIL (`0x3404`) |
+
+Oracle self-checks pinned both sides of the reviewer-corrected
+discriminator pair: `oracle_selfcheck=OK literal=0x3410 derived=0x3410`
+and `oracle_selfcheck_math_pin=OK literal=0x3404 derived_math=0x3404`
+(identity MATCH, cleanup PASS, exit 0). The MATH `FAIL` is the expected
+finding, not a harness failure: the device does not store the plain
+correctly-rounded FP16 value.
+
+**Verdict: the ceiling law is global in the measured range.** Every
+target measured until now sat within ±1 grid unit of zero; the
+64.25-unit target sits far from zero (two grid steps below the next
+integer multiple of 64 units) and the device still stores
+ceil(target)·grid, not the exact FP16. 0.2509765625 (= 64.25 units) is
+itself off the 2^-8 grid, so storing `0x3404` would have falsified the
+global-grid reading — it did not. The slot is a quantizer onto the
+output-bias fine grid, not an encoder of arbitrary exactly-representable
+FP16 values.
+
 ### Argument gate (host-side, device-verified)
 
-`q` outside 6..10, `mode` outside 0..38, and phase-D modes with `q≠8`
+`q` outside 6..10, `mode` outside 0..39, and phase-D modes with `q≠8`
 are rejected before any device state is touched. Device-verified with
-the same binary: arguments `5 0`, `11 31`, `8 39` each print the usage
+the same binary: arguments `5 0`, `11 31`, and `8 39` (invalid at the
+time, before mode 39 was added in `db94439`) each print the usage
 line and exit 2 with no capability query, no open, no HMX session
 (`build/hmx_evidence/b_arggate_20261020.txt`).
 
@@ -501,10 +530,14 @@ they are not claims about FP32 accuracy or HMX internal precision.
    2^-8). The scale sweep confirms the dependence on the bias magnitude:
    biases −32/−64/−128 give grids 2^-9/2^-8/2^-7, and the measured
    remainders 2^-11/2^-10/2^-9 all ceil to exactly one unit (modes
-   27/28/29 → 0x1800/0x1c00/0x2000).
+   27/28/29 → 0x1800/0x1c00/0x2000). The E-1 discriminator shows the
+   same reading far from zero: bias −64.25 (`0xD404`, e=6 → 2^-8) with
+   a 64.25-unit target stores 65 units (mode 39 → `0x3410`).
 3. **Positive targets: ceiling**, not round-to-nearest and not
    round-half-up. A +1/4-unit target stores +1 unit (0x1c00 at e=6;
-   nearest would store 0 — modes 20/23/28/31 at q=8..10).
+   nearest would store 0 — modes 20/23/28/31 at q=8..10). The
+   far-from-zero mode-39 target also ceils (64.25 units → 65 units =
+   `0x3410`), so the ceiling is not a small-magnitude artefact.
 4. **Non-positive targets: clamp to zero.** 0x0000 for all negative
    fine targets (modes 32–36) and for the mode-0 feedback residual.
 5. **On-grid targets pass through exactly.** q=6 (residual 2^-6 = 4
@@ -535,6 +568,12 @@ accumulator's low-order information?):
 - **The fine bits never leave the convert state** through either route:
   not through the FP16 store (law 1), and not through the Rs[8] feedback
   bit (law 6).
+- **Phase E-1 executed (2026-10-20): the ceiling is global.** Mode 39
+  measured the only discriminating target defined so far (64.25 grid
+  units, exactly representable in FP16 as 0x3404): the device stored
+  0x3410 (65 units) in both trials. The quantization-scope question is
+  closed for the measured range; what remains open is recipe
+  feasibility (blockers above), not quantizer behaviour.
 - **Generalization blockers** for a real GEMM/optimizer path: the grid
   varies with the per-tile bias magnitude (granularity is not uniform
   across accumulation ranges); corrections must be ≥ 1 unit and
@@ -559,4 +598,10 @@ accumulator's low-order information?):
   | 0x3404 (0.2509765625) | plain correctly-rounded FP16: the ceiling is only a small-magnitude effect; this value is itself off the 2^-8 grid (64.25 units), so a 0x3404 result falsifies a global grid reading |
   | anything else | third behaviour — analyze |
 
-  One build, one run, no ABI changes.
+  One build, one run, no ABI changes. **Executed 2026-10-20 (mode 39,
+  commit `a7037c3`, two trials): stored `0x3410` (0.25390625 = 65
+  units) in both trials** (`b_mode39_20261020.txt`), with
+  `OBSERVED_REGRESSION_MATCH=PASS` and `MATH_ORACLE_MATCH=FAIL`
+  (`0x3404`, expected fact). Conclusion: the bias-grid ceiling is
+  global; the stored FP16 is a quantizer output, and the scope of the
+  quantization laws is not limited to small magnitudes.
