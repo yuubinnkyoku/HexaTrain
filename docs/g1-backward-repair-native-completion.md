@@ -389,3 +389,73 @@ Overall classification is **BLOCKED_FORMAL_COHORT / UNRESOLVED**. Historical BLO
 | 41 | 40k→60k and200k training remain NO-GO. |
 
 Final closeout gate: fresh **Fast PASS**, actual exit0/85.4s (outer PASS1/FAIL0/SKIP0), on the final exporter guards. Original18 + blocked-closeout14 + failed-process17 rejection tests passed (49 total, zero device calls). A prior90.3s Fast run is also retained as intermediate evidence; it is not substituted for this final guard check. Protected/frozen identity, previous-evidence preservation, public/exporter equality and final clean-tree audits are retained privately. Only the completed Softmax role's runtime checks are reported; no independent five-role numerical assessment or formal digest agreement is claimed for the failed process.
+
+## 2026-10-20 — Offline root-cause diagnosis of the exit139 (no device, no DSP)
+
+Full diagnosis: [`docs/g1-backward-repair-exit139-diagnosis.md`](g1-backward-repair-exit139-diagnosis.md). This work executed **no DSP arithmetic**, did not retry the formal cohort, did not modify or rebuild any frozen DSP/Host/probe binary, and did not change any role order, coverage, fixture, oracle or numeric threshold. No existing private evidence was modified, deleted or overwritten.
+
+**Environment and authenticity.** The designated G1 research checkout was used (separate clone, own `.git`), branch `investigation/g1-backward-repair-native-completion`, starting HEAD `30d0cb3bc5eb9e632ac869a122438b3fab64ae06`, clean tree. The three frozen binaries and the frozen gradient fixture were re-hashed and match the bundle `build-identity.json`. The completed-role raw was re-verified at 284,827,248 bytes with SHA256 `b6465b0737696d3a2b5f342a772a059ccab5d75e357bac1a054ad918d33d3b8b`, equal to the recorded remote-before, remote-after and local hashes. `git diff bb6aaceb..30d0cb3` shows no change to the probe, graph headers or lifecycle helpers, so the analysed source is the source that produced the failing binary.
+
+**Timeline correction (new, important).** The previously recorded statement "dValue graphFinalize / graphExecute = 0, last successful API = graphAddNode / code 0" is correct for the *returned*-API log but must not be read as "the fault happened after `graphAddNode` returned". The stderr shows `QnnGraph_finalize started, graph = 0x1`, so **`graphFinalize` was invoked** and the fault occurred **inside** it. The stdout API log only records calls that returned, which is why no `api,graphFinalize,<rc>` line exists. The failing call is the first `graphFinalize` of the `standalone_dvalue` role, on registry graph id 260 / DSP handle 0x1.
+
+**Fault localisation.** The fault is inside the host-side QNN HTP graph-prepare library, in the region between `vtcm_wrapper.cc:278 "Acquired Cache"` and `graph_prepare.cc:1777 "do_prepare2 with num_nssp = 1"` — the latter line appears immediately after the former in every successful finalize and never appears in the failing one. It is not in the probe, not in the DSP skel and not in the custom op package.
+
+**Faulting PC / stack: not recoverable.** The whole private evidence tree was searched for `tombstone`, `signal 11`, `SIGSEGV`, `backtrace`, `#00 pc`, `Abort message`, `fault address` and `si_addr`: zero hits. `scripts/run_backward_repair_trace_probe.ps1` never runs `logcat`, never reads `/data/tombstones` and never attaches a debugger. Faulting PC, faulting address, unwound stack and thread name are therefore unavailable, and the tid printed during the finalize is not a differentiator (the passing pilot finalizes on the same kind of thread).
+
+**Host-only audit (new artifact).** `host_tests/fp32_custom/backward_repair_cohort_lifecycle_test.cpp` drives the frozen `DiagnosticGraph` and `repairprobe::Graph` against an instrumented mock QNN API. Result: `role_lifecycle_symmetric=1` (all five roles issue the identical 17-call QNN lifetime pattern), `descriptor_faults=0` (every tensor name/dimensions pointer still valid at `graphFinalize`), `handle_faults=0` (no use-after-free, double-free or stale handle). The Host therefore cannot distinguish role 1 from role 2, and hands no role-1 object into role 2. The audit also quantifies the exposure: the certified plan creates 5 backends, 5 contexts and 20 graphs per OS process and forces **4 prepare-library reload cycles**, while both candidate variants force **0**. A real but benign Host defect was found: the per-role `Qnn_LogHandle_t` is never destroyed (5 leaked handles per cohort process).
+
+**Root cause classification: `STRONGLY_SUPPORTED`.** The QNN HTP backend's backend-destroy / backend-recreate cycle inside one OS process leaves the second backend's graph-prepare path in an invalid state, and the second role's `QnnGraph_finalize` dereferences it. Supporting independent lines: the fault is inside the QNN library's finalize path; the Host is role-symmetric and defect-free across the whole 5-role sequence; the Host passes no cross-role pointer; and the device log shows a concrete non-symmetric process-global change exactly at the role boundary — `Initializing HtpProvider` appears only at role 1's `QnnLog_create` and is absent at role 2's, while `libQnnHtpPrepare.so` is unloaded at role 1's `backendFree` and reloaded at role 2's `backendCreate` with the hexnn environment closed and recreated at the identical address `0xb4000078b0e2d850`. `libQnnHtp.so` is `dlopen`ed with `RTLD_GLOBAL` and is never unloaded, while `libQnnHtpPrepare.so` is not a `NEEDED` dependency of it and is loaded/unloaded at runtime. It is not `VERIFIED`: there is no stack, no reproduction and no faulting PC. Memory exhaustion is *not* supported: role-2 setup was faster than role-1 (`registerOldHost` 58,634→3,388 µs, `deviceCreate` 113,181→85,338 µs) and the 284 MB raw is a file, not resident heap.
+
+**Correction to the plan, not a silent rewrite.** The certified plan `host_tests/fp32_custom/backward_repair_cohort_plan.json` itself mandates the crashing pattern — "Each role creates/tears down its own QNN backend/device/context" — so its `backend_lifetime` clause is the clause this diagnosis invalidates. The plan is **not** rewritten here; the amendment is a separate approved act. The candidate minimal fix is to keep **one backend and one device for the whole cohort OS process** and create one context per role, so per-role graphs are still released at each role end, the prepare library is never unloaded and reloaded, and the reload cycles drop from 4 to 0 with the same 20 graphs in the same role order. Arithmetic, oracle, fixtures, thresholds, observer contract, coverage, role order and the 5 × 3 formal requirement are all untouched. Because `backward_repair_probe.cpp` is hash-verified inside the frozen bundle, the fix requires a **new candidate bundle** (new source hash, new `build-identity.json`, new probe SHA256) and a new approval gate; the frozen bundle is not edited in place.
+
+**Minimum device experiment designed, not executed.** One diagnostic-only case: in one OS process, run `standalone_softmax` to completion and then `standalone_dvalue` **without** freeing the backend and device between the roles, with mandatory logcat/tombstone capture enabled (the missing capture is the single most important addition, because the 2026-10-20 run yielded no faulting PC). It requires a distinct diagnostic binary, a distinct exclusive evidence directory, verified device identity, a fresh Awake/top-resumed/safety preflight, unchanged monitoring and stop rules, **no retries**, one-stop-on-failure, and it is not counted toward the formal 5 × 3. Re-running the same cohort is excluded.
+
+**6031 / 6033 remain separate.** No 6031 or 6033 token occurs anywhere in the captured stdout/stderr. The exit139 is not attributed to them and they are not exonerated by it. The 6031 classification stays `UNRESOLVED / DORMANT / WATCH`.
+
+**Public summary.** `docs/results/g1-backward-repair-native-completion-summary.json` is regenerated by `scripts/export_public_backward_native_completion.py`, which enforces a strict top-level key allowlist and is guarded by the exporter rejection tests. It was therefore **not hand-edited**. Its formal-status fields (`cohort.status = FAILED_PARTIAL`, `complete_processes = 0`, `training = NO-GO`) are unchanged and remain accurate.
+
+**Gate.** Fresh **Fast PASS** under PowerShell 7: outer exit0 / 92.2s (PASS1/FAIL0/SKIP0), inner `verify_local` PASS=10/FAIL=0/SKIP=21, including `secret-path-audit` PASS over the 3 new/changed files and `powershell-parser-check` PASS over 168 scripts. Operational note for future runs: the Fast gate must be launched with **PowerShell 7** (`pwsh`); under Windows PowerShell 5.1 the legacy `PSParser` tokenizer used by `powershell-parser-check` rejects the PS7 leading-pipe syntax in the tracked, unmodified `scripts/pr_gate_policy.ps1` and reports a false failure. The host-only audit adds no device work and is not formal evidence.
+
+| # | Current answer after the exit139 offline diagnosis |
+| --- | --- |
+| 1 | Yes; this diagnosis started at `30d0cb3` in the designated G1 research checkout with a clean tree and no clone switch. |
+| 2 | Yes; all frozen binaries, the frozen compiled source and the fixtures were re-hashed unchanged; nothing was rebuilt. |
+| 3 | Starting Forward P identity and the independently checked historical contract are retained; no new native Forward role ran. |
+| 4 | Yes at the initial and runner preflights; the unchanged runtime monitor did not request a safety stop. |
+| 5 | Yes; all old Dozing/prelaunch-only attempts contribute 0 formal OS processes. |
+| 6 | Yes; one actual cohort OS process started and later exited 139. |
+| 7 | No; only standalone Softmax completed. dValue reached graph construction and crashed inside `graphFinalize`; three native roles did not start. |
+| 8 | Only standalone Softmax completed Core2,200/Holdout256 across four observers; overall coverage incomplete. |
+| 9 | Formal null; partial-process Softmax runtime maxAbs6.335392901668513e-5 is not formal certification. |
+| 10 | Formal null; current dValue produced 0 pairs. Retained pilot1.68030018699028e-5. |
+| 11 | Formal null; retained Native Softmax pilot1.0078856647055545e-4. |
+| 12 | Formal null; retained Native dValue pilot1.3850631340517339e-5. |
+| 13 | Formal null; retained dual Softmax pilot1.0078856647055545e-4. |
+| 14 | Formal null; retained dual dValue pilot1.3850631340517339e-5. |
+| 15 | Completed Softmax runtime reported 0 arithmetic mismatches; other new roles unmeasured, full formal contract unavailable. |
+| 16 | Completed Softmax runtime reported 0 observer mismatches; other new roles unmeasured, full formal contract unavailable. |
+| 17 | Retained dual pilot shares the same per-head NATIVE P ID; no new dual role ran. |
+| 18 | Retained pilot lifetime/immutability verified; no new formal native lifetime result. |
+| 19 | Native pilot graph has no Host P reinjection; this failed process did not reach native roles. |
+| 20 | Retained dual NoReceipt/NoTap pilot passes both gradients; no new formal measurement. |
+| 21 | No; 1 attempted/failed OS process, 0/3 completed formal processes. |
+| 22 | Actual process/runner exit139; whole-process teardown incomplete. The fault is localised inside the second role's `QnnGraph_finalize`, in the host-side QNN HTP graph-prepare library between `vtcm_wrapper.cc:278` and `graph_prepare.cc:1777`. No faulting PC, address or stack exists, because no tombstone/logcat was captured by the unchanged runner. First-role exit0/teardown success is separate. |
+| 23 | No; no three-process numerical digest agreement is available. |
+| 24 | Historical legacy digests retained; both formal legacy/supplemental agreement remain NOT_MEASURED. |
+| 25 | No 6031/6033 token occurs in the captured logs; the exit139 cause is `STRONGLY_SUPPORTED` and is **not** attributed to 6031. 6031/6033 are not exonerated by this episode; their classification is unchanged and they remain separate unresolved events. |
+| 26 | No new Dozing/top-missing stop in this actual attempt; historical episodes remain preserved/unresolved. |
+| 27 | Yes; this exit139 process is explicitly FAILED_PARTIAL and formally ineligible. |
+| 28 | No; formal numerical entry gate unmet. |
+| 29 | Forward/single/dual median and p10/p90 remain null. |
+| 30 | No new timing comparison; no pilot time relabeled as formal cost. |
+| 31 | Fresh HVX FFN2/QKV NOT_EXECUTED. |
+| 32 | Fresh device smoke NOT_EXECUTED. |
+| 33 | Fresh W8 114/114 NOT_EXECUTED; historical PASS not reused as fresh. |
+| 34 | Yes; all old negatives preserved, none rerun here or used to excuse the crash. |
+| 35 | Pre-execution Fast PASS119.3s and final closeout Fast PASS85.4s retained; this diagnosis adds a fresh Fast PASS92.2s (outer PASS1/FAIL0/SKIP0, inner PASS10/FAIL0/SKIP21) under PowerShell 7. Host/Qnn/Device profiles were not rerun; historical PASS retained. |
+| 36 | Yes; Project Formal BLOCKED_SCOPE / NOT_EXECUTED. |
+| 37 | Protected checkpoint/ref/ledger identities retained; no protected checkpoint decode/write. |
+| 38 | BLOCKED_FORMAL_COHORT; `EXIT139_ROOT_CAUSE = STRONGLY_SUPPORTED` (localised to the QNN HTP prepare path across a backend destroy/recreate cycle; Host-side role symmetry, descriptor validity and handle validity verified host-only). Not `VERIFIED`: no stack, no reproduction, no faulting PC. No formal Saved-P closure. |
+| 39 | Next step is **not** a cohort retry: (a) approve the single minimum device diagnostic (Softmax→dValue without inter-role backend teardown, with mandatory crash-dump capture, one attempt only); (b) build a **new candidate** bundle implementing one backend/device per cohort OS process with one context per role, and amend the plan's `backend_lifetime` clause as an approved act. Mathematical frontier remains actual dP/dContext, dQ/dK, scatter/projection/LN1 aggregation. |
+| 40 | Full1-layer/Full19-layer and higher Attention/training classifications remain unverified. |
+| 41 | 40k→60k and 200k training remain NO-GO. |
