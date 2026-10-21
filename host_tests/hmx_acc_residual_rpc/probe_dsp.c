@@ -24,6 +24,7 @@
 
 #include "hmx_identity.h"
 #include "bias20.h"
+#include "fp16_util.h" /* E-3C1: shared RN16 / fp16<->double helpers */
 
 #if !defined(__HEXAGON_ARCH__) || __HEXAGON_ARCH__ != 81
 #error This probe must be built for the V81 DSP target.
@@ -45,7 +46,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 41, /* B-2 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
+  MODE_MAX = 42, /* E-3C1 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
 };
 
 typedef struct probe_context {
@@ -70,6 +71,44 @@ static void init_bias20(uint32_t *dst, uint16_t scale_bits,
 static void init_bias(uint32_t *dst, uint16_t scale_bits,
                       uint16_t output_bias_bits, unsigned shape) {
   init_bias20(dst, scale_bits, output_bias_bits, 0, shape);
+}
+
+/* ---- E-3C1 (mode 42) tile-build helpers ----
+ * Deterministic 32x32 tile ported from the CPU oracle G8 in
+ * hmx_fp16x2_split_sim.c (rng64/rng_unit verbatim; integer xorshift is
+ * bit-exact on every target). The double truth tiles live in file scope
+ * so the DSP stack stays small. */
+#define E3C1_T8 32
+#define E3C1_T8_CELLS (E3C1_T8 * E3C1_T8)
+
+static uint64_t e3c1_rng;
+static double e3c1_x[E3C1_T8_CELLS]; /* activation truth (wider precision) */
+static double e3c1_w[E3C1_T8_CELLS]; /* weight truth */
+
+static uint64_t e3c1_rng64(void) {
+  uint64_t x = e3c1_rng;
+  x ^= x << 13;
+  x ^= x >> 7;
+  x ^= x << 17;
+  e3c1_rng = x;
+  return x;
+}
+
+/* Uniform in [0,1) with 53 random bits. */
+static double e3c1_rng_unit(void) {
+  return (double)(e3c1_rng64() >> 11) * (1.0 / 9007199254740992.0);
+}
+
+/* Float-arithmetic split residual: statement order mirrors the sim's
+ * split_float_parts — hi = RN16(x) is computed by the caller FIRST,
+ * then (float)x - (float)hi in FLOAT arithmetic as separate statements
+ * (no FMA can contract), then lo = RN16(sub). The plain operand is
+ * exactly hi = RN16(x), so the plain variant reuses the hi tiles. */
+static uint16_t e3c1_split_lo(double x, uint16_t hi_bits) {
+  float xf = (float)x;
+  float hf = (float)fp16_to_double(hi_bits);
+  float sub = xf - hf;
+  return double_to_fp16((double)sub);
 }
 
 static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
@@ -235,6 +274,162 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
     }
     *hi_bits = (int)out[0];
     *residual_bits = 0;
+    return;
+  }
+
+  if (mode == 42) {
+    /* E-3C1 (PR #14 comment 6294110662, user-approved: one build, one
+     * device run): ONE fixed realistic 32x32x32 multi-channel tile
+     * (bit-match of the CPU oracle G8 t8_build — the statement order
+     * below mirrors it verbatim) run through TWO variants, returning 4
+     * stored cells through the existing results[4] ABI (metadata[9]
+     * untouched, kernel_us still measured in metadata[3]):
+     *   trial 0 (extra_four_bits==0): PLAIN — mxclracc, then ONE MMA
+     *     packet {act_hi, wgt_hi}; plain operands are RN16(X)/RN16(W)
+     *     and act_hi/wgt_hi ARE RN16(X)/RN16(W), so the plain variant
+     *     reuses those two tiles (no extra tiles), then bias0 load,
+     *     bias1 load, convert, store.
+     *   trial 1 (extra_four_bits==1): B3 — mxclracc, then THREE
+     *     full-tile MMA packets {act_hi,wgt_hi},{act_hi,wgt_lo},
+     *     {act_lo,wgt_hi} accumulating into the SAME ACC with NO
+     *     convert, NO store and NO clear between packets (B-1/B-2
+     *     confirmed law), then ONE bias-0 convert (plain RN-FP16,
+     *     scale 64) and ONE store.
+     * Both trials read back out[0] (cell (s0,o0) under BOTH layout
+     * candidates) and out[32].
+     * Pre-registered expectations (FIXED before measurement; do not
+     * retune):
+     *   out[0]:  plain 0x5400, B3 0x5401
+     *   out[32]: the negative final store is UNMEASURED — signed RN16
+     *     (0xd400 plain / 0xd401 B3) vs a clamp to 0x0000 are both
+     *     candidates and the device discriminates (E-3C1 negative-store
+     *     discriminator).
+     *   Layout: out[32] = cell (s1,o0), value = -oracle (L1 spatial-
+     *     block layout) or 0x5400 = cell (s0,o1) positive (L2
+     *     transposed layout); the device discriminates L1 vs L2.
+     * VTCM layout: act_hi +0, act_lo +1, wgt_hi +2, wgt_lo +3 (all
+     * TILE_BYTES), bias0 +4*TILE, bias1 +4*TILE+256, out +5*TILE
+     * (fills VTCM_BYTES exactly). */
+    uint16_t *act_hi = (uint16_t *)(base + 0 * TILE_BYTES);
+    uint16_t *act_lo = (uint16_t *)(base + 1 * TILE_BYTES);
+    uint16_t *wgt_hi = (uint16_t *)(base + 2 * TILE_BYTES);
+    uint16_t *wgt_lo = (uint16_t *)(base + 3 * TILE_BYTES);
+    uint16_t *out = (uint16_t *)(base + 5 * TILE_BYTES); /* store dst */
+    int idx;
+    int s, o, i;
+
+    /* ---- t8_build port: statement order verbatim ---- */
+    e3c1_rng = 0xE3C0117E5EEDF00Dull;
+    for (idx = 0; idx < E3C1_T8_CELLS; ++idx) {
+      double u = e3c1_rng_unit();
+      double v = u * 4.0;
+      double val = v - 2.0;
+      e3c1_w[idx] = val;
+      u = e3c1_rng_unit();
+      v = u * 4.0;
+      val = v - 2.0;
+      e3c1_x[idx] = val;
+    }
+
+    /* Special W rows: out-ch 0..3 case-class anchors, 28..31 s3
+     * subnormal-edge targets; out-ch 4..27 stay seeded realistic. */
+    for (o = 0; o < E3C1_T8; ++o) {
+      if (o <= 3 || o >= 28) {
+        for (i = 0; i < E3C1_T8; ++i) e3c1_w[(long)o * E3C1_T8 + i] = 0.0;
+      }
+    }
+    e3c1_w[0 * E3C1_T8 + 0] = 1.0 + 0x1p-11; /* positive split-sensitive row */
+    e3c1_w[0 * E3C1_T8 + 1] = 0x1p-11;
+    e3c1_w[0 * E3C1_T8 + 2] = 0x1p-13;
+    e3c1_w[1 * E3C1_T8 + 0] = 1.0 - 0x1p-12;  /* B-2 case-1 anchor row */
+    e3c1_w[2 * E3C1_T8 + 0] = 0x1p-9;         /* s3 boundary row (64*acc=2^-14) */
+    e3c1_w[3 * E3C1_T8 + 0] = 1.0;            /* near-zero cancellation row */
+    e3c1_w[3 * E3C1_T8 + 1] = 1.0 + 0x1p-12;
+    e3c1_w[28 * E3C1_T8 + 0] = 0x1p-10;
+    e3c1_w[29 * E3C1_T8 + 0] = 0x1p-10 - 0x1p-21;
+    e3c1_w[30 * E3C1_T8 + 0] = 3.0 * 0x1p-12;
+    e3c1_w[31 * E3C1_T8 + 0] = 0x1p-13;
+
+    /* Special A lanes 0..3; lanes 4..31 stay seeded realistic. */
+    for (s = 0; s <= 3; ++s)
+      for (i = 0; i < E3C1_T8; ++i) e3c1_x[(long)s * E3C1_T8 + i] = 0.0;
+    e3c1_x[0 * E3C1_T8 + 0] = 1.0 + 0x1p-11; /* s0: positive multi-channel sum */
+    e3c1_x[0 * E3C1_T8 + 1] = 0x1p-11;
+    e3c1_x[0 * E3C1_T8 + 2] = 0x1p-13;
+    for (i = 0; i < E3C1_T8; ++i)          /* s1 = negation of s0 */
+      e3c1_x[1 * E3C1_T8 + i] = -e3c1_x[i];
+    e3c1_x[2 * E3C1_T8 + 0] = 1.0 - 0x1p-12; /* s2: B-2 case-1 + negated twin */
+    e3c1_x[2 * E3C1_T8 + 1] = -(1.0 - 0x1p-12);
+    e3c1_x[3 * E3C1_T8 + 0] = 0x1p-10;       /* s3: subnormal-edge lane */
+
+    /* Derive the four fp16 operand tiles per cell: hi = RN16(value) is
+     * the plain operand (plain reuses act_hi/wgt_hi), lo = the sim's
+     * float-split residual. Pure per-cell function of the FINAL double
+     * value, so deriving after all overwrites is equivalent to the
+     * sim's build-then-derive order. */
+    for (idx = 0; idx < E3C1_T8_CELLS; ++idx) {
+      uint16_t ah = double_to_fp16(e3c1_x[idx]);
+      uint16_t wh = double_to_fp16(e3c1_w[idx]);
+      act_hi[idx] = ah;
+      act_lo[idx] = e3c1_split_lo(e3c1_x[idx], ah);
+      wgt_hi[idx] = wh;
+      wgt_lo[idx] = e3c1_split_lo(e3c1_w[idx], wh);
+    }
+
+    init_bias(bias0, 0x5400, 0, 0);
+    init_bias(bias1, 0, 0, 0);
+    memset(out, 0xa5, TILE_BYTES);
+    {
+      const uintptr_t bias0_reg = (uintptr_t)bias0;
+      const uintptr_t bias1_reg = ((uintptr_t)bias1) | 1u;
+      const uintptr_t act_hi_reg = (uintptr_t)act_hi;
+      const uintptr_t act_lo_reg = (uintptr_t)act_lo;
+      const uintptr_t wgt_hi_reg = (uintptr_t)wgt_hi;
+      const uintptr_t wgt_lo_reg = (uintptr_t)wgt_lo;
+      const uintptr_t out_reg = (uintptr_t)out;
+      const uint32_t spatial_mask = (14u << 7);
+      const uint32_t act_rt = spatial_mask | (31u << 2);
+      const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+      const uint32_t wr_rt = spatial_mask;
+
+      asm volatile("mxclracc.hf\n" ::: "memory");
+      if (extra_four_bits) {
+        /* B3: three packets, SAME ACC, nothing between them. */
+        asm volatile(
+            "{ activation.hf = mxmem(%0, %1)\n"
+            "  weight.hf = mxmem(%2, %3) }\n"
+            : : "r"(act_hi_reg), "r"(act_rt), "r"(wgt_hi_reg), "r"(wgt_rt)
+            : "memory");
+        asm volatile(
+            "{ activation.hf = mxmem(%0, %1)\n"
+            "  weight.hf = mxmem(%2, %3) }\n"
+            : : "r"(act_hi_reg), "r"(act_rt), "r"(wgt_lo_reg), "r"(wgt_rt)
+            : "memory");
+        asm volatile(
+            "{ activation.hf = mxmem(%0, %1)\n"
+            "  weight.hf = mxmem(%2, %3) }\n"
+            : : "r"(act_lo_reg), "r"(act_rt), "r"(wgt_hi_reg), "r"(wgt_rt)
+            : "memory");
+      } else {
+        /* Plain: ONE packet; the plain tiles ARE act_hi/wgt_hi. */
+        asm volatile(
+            "{ activation.hf = mxmem(%0, %1)\n"
+            "  weight.hf = mxmem(%2, %3) }\n"
+            : : "r"(act_hi_reg), "r"(act_rt), "r"(wgt_hi_reg), "r"(wgt_rt)
+            : "memory");
+      }
+
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+      asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
+      /* One final convert (bias set 0, retain, no feedback rounding,
+       * Rs = 1: Rs[0] only) then the single FP16 store. */
+      asm volatile("cvt.hf = acc(%0)\n" : : "r"(1u) : "memory");
+      asm volatile("mxmem(%0, %1) = cvt\n"
+                   : : "r"(out_reg), "r"(wr_rt) : "memory");
+    }
+    *hi_bits = (int)out[0];
+    *residual_bits = (int)out[32];
     return;
   }
 
@@ -517,6 +712,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if (mode == 40 && q != 6) return HMX_ERR_ARG;
   /* B-2 (mode 41) also has fixed fixtures independent of q; host mirrors. */
   if (mode == 41 && q != 6) return HMX_ERR_ARG;
+  /* E-3C1 (mode 42) runs the fixed realistic tile independent of q;
+   * the host mirrors q=6 like modes 18/22/40/41. */
+  if (mode == 42 && q != 6) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;

@@ -642,6 +642,7 @@ recorded requires explicit instruction.
 | CPU split-precision simulation: the FP16 hi/lo split is NOT exact — lo-normal bound 2^-23·\|A\| holds (0 viol of 100058 normal-lo cases, max ratio 1.191511e-07 ≈ 2^-23·1.006); subnormal-lo degrades and at 2^-20..2^-15 lo is 0 in all 2400 sweep points (max rel 3.02e-02, bound breaks below ≈9.5e-07); float-arith split (G3, unit-corrected): double→float input rounding is the only floatization loss (e0 max ratio exactly 2^-24, 0/100058 exceed) and the float subtraction is Sterbenz-exact against the RN16-hi partner (e1 ≡ 0, 27 exact cancellations); the final recovery ratio exceeds 2^-23 in 942 lo-normal cases (max 1.760996e-07 ≈ 1.48×2^-23 — e0 + RN16(lo), not cancellation); the earlier 671-viol count was a units mismatch (relative vs absolute) and is withdrawn; reviewer example x = 1+2^-11−2^-23 → residual exactly 2^-23 (hi=0x3c00, lo=0x1000) | `hmx_fp16x2_split_sim.c` via `scripts/run_fp16x2_split_sim.ps1` (gcc gcc-15.2 mingw + clang-22.1.8 msvc byte-identical, seeds fixed) |
 | B-1 device run (2026-10-20): ONE build + ONE run, mode 40 — two consecutive MMA operand packets into ONE accumulator, `mxclracc` once at start, no convert/store between batches, ONE final bias-0 convert at scale 64; trial 0 (+1)+(+2) stored **`0x5a00`** = 192 (accumulate branch of the pre-registered table), trial 1 (+2)+(−1) stored **`0x5400`** = 64 (mixed-sign batch additivity, positive sum); strict build-id all-agree gate PASS, exit 0, cleanup PASS — `TWO_MMA_ACCUMULATE_CONSISTENT` | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 40` (transcript `build/hmx_evidence/b1_run_20261020.txt`, gitignored) |
 | B2 CPU stored-domain comparison (E-3A, G7): final-FP16-store applied to the SAME synthesis — plain stored vs B3 stored mean abs err 1.446613e-03 vs 8.484465e-04 @n16, 2.719522e-03 vs 1.489992e-03 @n64 (FP32-carried act: 1.71×/1.83×, worsened 0 %, B3 oracle-optimal bits 99.6–100 % vs plain 52.9–55.1 %); FP16-exact act (W-only): 1.22×, worsened 12.5–12.7 %; pinned B-2 scalar fixtures reproduce exactly (plain `0x5400` / B3 `0x5401` and `0x5400`/`0x53ff`; full-RN16 coincide — fixture-specific) | same sim, G7: `split_b2_stored_*`, `split_b2_fixture`, `b2_cpu_gate=PASS improves=4/4`; pre-store G5/G6 figures above are internal-domain, not end-to-end |
+| E-3C0 tile model (G8): ONE 32×32×32 HMX-native tile (PRM v81 §2.2 geometry: act 32 spatial×32 in-ch, wgt 32 out-ch×32 in-ch, out(s,o)=Σ_i A[s][i]·W[o][i]; ACC 37-bit FP — float-chain model validated by double-bracket delta 4.7e-10), SAME bias-0 scale-64 store on every variant: plain 1.307244e-03 → B3 7.084104e-04 mean abs (1.85×, improved 427/equal 597/worsened 0, oracle-optimal bits 58.2%→99.8%); W-only worsens 93/1024 (matches G7 `_vskref`); scale-64 grid preservation exact on [2^-14,1023.5], breaks only subnormal band (6 tile cells, by design) and overflow band (0 cells); negative-store oracle: signed RN16 `0xd400`/`0xd401` vs clamp `0x0000` (device discriminates); 16 pinned cell-bit asserts + 6 layout-distinctness asserts PASS; ABI = multi-lane spot-check under existing `results[4]`, metadata[9] untouched, no IDL change | same sim, G8: `e3c0_cell/e3c0_map/e3c0_tile/e3c0_wonly/e3c0_grid*/e3c0_cond_*/e3c0_cpu_gate=PASS`, tile seed `0xE3C0117E5EEDF00D` |
 | B-2 device run (2026-10-20): ONE build + ONE run, mode 41 — three MMA packets (`Ahi·Whi`, `Ahi·Wlo`, `Alo·Whi`) into ONE accumulator, `mxclracc` once per subcase, no convert/store/clear between packets, ONE final bias-0 scale-64 convert + ONE store; trial 0 stored **`0x5401`** (64.0625), trial 1 stored **`0x53ff`** (63.96875) — both exactly the pre-registered 3-product bits, distinct from the plain context `0x5400`; strict build-id all-agree gate PASS, exit 0, cleanup PASS, `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` — `B2_THREE_PRODUCT_CONFIRMED` at 1-lane/1-run scope | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 41` (transcript `build/hmx_evidence/b2_run_20261020.txt`, gitignored) |
 | CPU 3-GEMM synthesis (G5/G6): both-operands-split mean rel err 5.66e-07 @n=64 (4.30e-06 @n=16) vs plain 2.57e-03 / 1.53e-02 → ~4.5e3× mean improvement; the 4-term variant is not better (5.73e-07); chained single-accumulator vs separate float accumulators equivalent (6.79e-07; combine loss subdominant: mean 2.83e-08, max 1.39e-07); W-only split (Alo=0 activations) gains only 1.5–1.8× | same sim |
 
@@ -795,8 +796,13 @@ out of the convert state.
 
 *Error model (CPU-simulated, deterministic; device numbers still
 pending):* per-term products of two FP16 values are exact in FP32;
-accumulation in the FAU is FP32 (PRM HMX chapter; accumulation format
-citation to re-verify before implementation). Simulated synthesis
+accumulation is FP32-class in the device-approximation model (E-3C0
+update 2026-10-20: the local `80-N2040-62` V81 HMX PRM §2.2.3 resolves
+the earlier "citation to re-verify" — the accumulator cell is a
+**37-bit** FP pair, between float and double; G8's double-chain
+bracket moves the stored mean by 4.7e-10, i.e. immaterial at the
+store grid, so the chained-float model stays the device
+approximation). Simulated synthesis
 (`run_fp16x2_split_sim.ps1`, gcc gcc-15 mingw and clang-22 msvc agree
 byte-identically, fixed seeds — n ∈ {16, 64}, elements in [−2, 2] plus
 hard-case entries): plain-FP16 mean relative error 2.57e-03 (n=64) /
@@ -923,11 +929,18 @@ synthesis (separate, user-gated work item).
 **E-3A (CPU only, mandatory gate — executed 2026-10-20, `PASS`):** the
 simulator's G7 group re-runs the SAME G5/G6 synthesis tensors with the
 final `cvt.hf`-committed FP16 store applied to every variant before
-comparison. Verdict: **stored-domain B3 improves on stored plain in
-4/4 (n, regime) cells — 1.71× @n=16 and 1.83× @n=64 mean absolute
-error in the FP32-carried regime with zero worsened elements
-(oracle-optimal stored bits 99.6–100 % vs plain 52.9–55.1 %); W-only
-(FP16-exact activations) gains only 1.22× with 12.5–12.7 % worsened.**
+comparison. **CPU simulation only — device-confirmed stored-output
+evidence is (so far) the two B-2 scalar fixtures below.** Verdict:
+**stored-domain B3 improves on stored plain in 4/4 (n, regime) cells —
+1.71× @n=16 and 1.83× @n=64 mean absolute error in the FP32-carried
+regime with zero worsened elements (oracle-optimal stored bits
+99.6–100 % vs plain 52.9–55.1 %); W-only (FP16-exact activations)
+gains only 1.22× with 12.5–12.7 % worsened against the end-to-end
+reference — and the G7 `_vskref` correction shows that against the
+*kernel-given-input* reference `RN16(X)·RN16(W)` the W-only variant
+actually REGRESSES 1.4–1.5× (improved ~0 %, worsened 39–40 %): the
+~1.22× figure is upstream weight-precision recovery credited
+end-to-end, not kernel accuracy.**
 The pre-store ~4.5e3× figure is internal-domain only and is expressly
 NOT the end-to-end expectation (see the stored-domain correction in the
 error model above). The E-3A gate for device work is therefore met.
@@ -977,16 +990,77 @@ these fixtures. General multi-lane accuracy/cost (E-3C), performance,
 and negative-final-store behaviour remain unmeasured; no
 production/permission claim.
 
+### Phase E-3C: realistic-tile feasibility (user-approved bounded microtile research)
+
+Approved 2026-10-21 (PR #14 comment 6294110662) as a bounded RESEARCH
+experiment — NOT production work: E-3C0 (CPU-only design/oracle/interface
+gate) → E-3C1 (one device accuracy gate, mode 42) → E-3C2 (bounded cost
+measurement, only if accuracy and sign pass).
+
+**E-3C0 (CPU only, executed 2026-10-20, `e3c0_cpu_gate=PASS`,
+threshold=all_4_conds):** simulator group G8 models ONE HMX-native
+32×32×32 tile (activation 32 spatial × 32 in-ch, weight 32 out-ch × 32
+in-ch; out(s,o) = Σ_i A[s][i]·W[o][i], PRM v81 §2.2.4) through plain /
+B3 / W-only with the SAME bias-0 scale-64 store (`RN16(64·acc)`)
+applied to every variant, plus:
+
+- Per-cell results (means over the 1024-cell tile): plain stored mean
+  abs 1.307244e-03 → B3 **7.084104e-04 (1.85×, worsened 0; improved
+  427 / equal 597)**, oracle-optimal stored bits 58.2 % → 99.8 %.
+  W-only (current FP16-activation path): improved 225 / equal 706 /
+  **worsened 93** — matches the G7 `_vskref` finding.
+- Case-class anchors (all pinned literals, 16 asserts PASS): (s0,o0)
+  positive plain `0x5400` / B3 `0x5401`; (s1,o0) negative plain
+  **`0xd400`** / B3 **`0xd401`** under signed RN16 with `0x0000`
+  clamp printed as the alternative; (s2,o1) reproduces the
+  device-confirmed B-2 anchor (`0x5400`/`0x53ff`); s3 out-ch 28..31
+  exercise subnormal-store edges (normal/normal/subnormal/deep
+  subnormal, plain = B3 = oracle as expected).
+- Scale-64 de-scaling: grid preservation verified empirically —
+  `RN16(64·x)/64 = RN16(x)` exactly on |x| ∈ [2^-14, 1023.5] (0
+  breaks); breaks only below 2^-14 (subnormal band, 122 sweep points,
+  min 7.45e-10) and above 1023.5 (overflow band, 84 points) — 6 tile
+  cells sit in the subnormal band by design, none overflow.
+- Output ABI decision (pre-registered): **multi-lane spot-check under
+  the EXISTING `results[4]` ABI** — mode 42 returns 4 stored cells
+  (2 per variant); `metadata[9]` untouched; no IDL/stub change. No
+  full-tile device return is claimed; all full-tile numbers above are
+  CPU-sim.
+- Layout pre-registration: the store maps dst[0] = (spatial 0, out-ch
+  0) (device-verified); for dst[32] two PRM-consistent hypotheses
+  remain — **L1** spatial-block (`dst[32·s+o]` → (s1,o0) = the
+  negative cell) vs **L2** transposed (`dst[32·o+s]` → (s0,o1)
+  positive); the tile is built so both hypotheses predict DISTINCT
+  bits at dst[1]/dst[32], and the device run discriminates.
+
+**E-3C1 (mode 42, user-approved; exactly ONE build + ONE device run):**
+the G8 tile generator is ported bit-exactly to the DSP (xorshift64 +
+literal zones; split = the sim's float-subtract helper; plain reuses
+the hi tiles). trial 0 = plain (1 packet), trial 1 = B3 (3 packets,
+same-ACC chain, nothing between); one bias-0 scale-64 convert + one
+store per variant; readback out[0] and out[32]. Pre-registered
+candidate matrix (FIXED; retuning forbidden):
+plain(0,0) = `0x5400`, b3(0,0) = `0x5401`; dst[32]: plain =
+`0xd400` (signed L1) / `0x0000` (clamp) / `0x5400` (L2); b3 =
+`0xd401` (signed L1) / `0x0000` (clamp) / `0x5400` (L2). Verdicts:
+`E3C1_SIGNED_STORE_AND_B3_CONFIRMED` (all four expected-signed) /
+`E3C1_BLOCKED_SIGNED_OUTPUT` (clamp) / `E3C1_LAYOUT_L2_SIGN_UNRESOLVED`
+(transposed; sign question needs adjusted readback — INCONCLUSIVE on
+sign, not NO_GO) / `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`
+(any unclassifiable slot; pass = 0 only outside the enumerated
+candidates). A clamp outcome marks the direct signed GEMM pathway
+**BLOCKED_SIGNED_OUTPUT** with no throughput claims.
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
 | --- | --- | --- | --- | --- |
-| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× (12.5–12.7 % worsened); split not exact (2^-23-class residue + subnormal-lo degradation); device scalar-fixture stored bits CONFIRMED (mode 41: `0x5401`/`0x53ff` vs plain `0x5400`, 1-lane/1-run); statistical multi-lane device accuracy `INSUFFICIENT_EVIDENCE` (E-3C decision-only) | reference |
+| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× end-to-end but a 1.4–1.5× REGRESSION vs kernel-given-input ref; split not exact (2^-23-class residue + subnormal-lo degradation); device scalar-fixture stored bits CONFIRMED (mode 41: `0x5401`/`0x53ff` vs plain `0x5400`, 1-lane/1-run); realistic-tile CPU full-tile stored gain 1.85× (improved 427/equal 597/worsened 0) with the same scale-64 store; multi-lane device accuracy `INSUFFICIENT_EVIDENCE` (E-3C1 mode 42 pre-registered) | reference |
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
-| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20) | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C multi-lane cost/accuracy, performance and production integration NOT measured and separately gated) | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate pending (mode 42) | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device accuracy gate + E-3C2 bounded cost pending, separately gated) | — |
 
 ### Decision
 
@@ -1000,10 +1074,18 @@ production/permission claim.
   E-3A stored-domain CPU gate **PASS (4/4)**, E-3B executed the same
   day (mode 41, one build + one run, `B2_THREE_PRODUCT_CONFIRMED`
   above) — the three-product synthesis survives the final FP16 store
-  at 1-lane/1-run scope; E-3C (multi-lane 3-GEMM accuracy + cost) is
-  decision-only and NOT authorized by this stage; production
-  integration, benchmarking, multi-tile implementation and long
-  training remain out of scope.
+  at 1-lane/1-run scope; (3) Phase E-3C approved 2026-10-21 (PR #14
+  comment 6294110662) as a bounded microtile RESEARCH experiment:
+  E-3C0 CPU gate **PASS (all 4 conditions)**, E-3C1 = mode 42
+  pre-registered above (one build + one run), E-3C2 cost measurement
+  ONLY if the device accuracy and sign gates pass, and the E-3C2
+  decision framing already carries the standing caution — against the
+  kernel-given-input reference the W-only variant for the current
+  FP16-activation path REGRESSES 1.4–1.5× at ~3× MMA cost, so a useful
+  kernel must justify that cost (persistent FP16x2 activation
+  transport would be a separate architecture). Production
+  integration, benchmarking of a real pipeline, multi-tile
+  implementation and long training remain out of scope.
 - Mode 40 is added under the standing policy — new modes only for
   clearly discriminating minimal experiments, only on explicit
   instruction; this mode exists by exactly that gate.

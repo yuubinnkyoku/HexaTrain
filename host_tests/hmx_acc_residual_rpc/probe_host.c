@@ -16,9 +16,9 @@
 #include "hmx_identity.h"
 
 /* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
- * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c (41 = B-2, 40 = B-1). */
+ * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c (42 = E-3C1, 41 = B-2, 40 = B-1). */
 enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
-       HMX_PROBE_MODE_MAX = 41 };
+       HMX_PROBE_MODE_MAX = 42 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
       mode = atoi(argv[arg_index]);
     } else {
       fprintf(stderr,
-              "usage: %s [q=6..10] [mode=0..41] [-strict-build-id]\n",
+              "usage: %s [q=6..10] [mode=0..42] [-strict-build-id]\n",
               argv[0]);
       return exit_with(2);
     }
@@ -180,19 +180,20 @@ int main(int argc, char **argv) {
   }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..41] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..42] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
    * mirror that gate host-side before touching any device state.
-   * B-1 (mode 40) and B-2 (mode 41) are bound to q=6 like modes 18/22
-   * (fixed operands/fixtures). */
+   * B-1 (mode 40), B-2 (mode 41) and E-3C1 (mode 42) are bound to q=6
+   * like modes 18/22 (fixed operands/fixtures/tile). */
   if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
        q != 8) ||
-      (mode == 40 && q != 6) || (mode == 41 && q != 6)) {
+      (mode == 40 && q != 6) || (mode == 41 && q != 6) ||
+      (mode == 42 && q != 6)) {
     fprintf(stderr,
-            "phase D modes 31..38 require q=8 and modes 40 and 41 require "
+            "phase D modes 31..38 require q=8 and modes 40, 41 and 42 require "
             "q=6 (got q=%d mode=%d)\n",
             q, mode);
     return exit_with(2);
@@ -339,6 +340,13 @@ int main(int argc, char **argv) {
            "convert=bias0_plain_rn_fp16 expected_trial0=0x5401 "
            "expected_trial1=0x53ff\n",
            q, mode);
+  } else if (mode == 42) {
+    printf("q=%d mode=42 e3c1_tile=32x32x32_K32 variants_trial0=plain_trial1=b3 "
+           "readback=out[0]_out[32] store=bias0_scale64_plain_rn16 "
+           "expected: plain(0,0)=0x5400 plain_dst32=0xd400_or_clamp0x0000 "
+           "b3(0,0)=0x5401 b3_dst32=0xd401_or_clamp0x0000 "
+           "layout_dst32=L1_negative_or_L2_positive\n",
+           q);
   } else {
     printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
            oracle);
@@ -629,6 +637,16 @@ int main(int argc, char **argv) {
        * so have_expected/have_math stay 0. */
       single_convert = 1;
       break;
+    case 42:
+      /* E-3C1 (realistic-tile plain vs B3 accuracy + negative-store
+       * discriminator; PR #14 comment 6294110662): all expectations are
+       * pre-registered FIXED literals — no observed/math oracle on the
+       * first run (have_expected/have_math stay 0); the classification
+       * lives in the E-3C1 block below. single_convert=1 keeps the
+       * generic per-trial lines in first-slot mode; the dst[32]
+       * readback is reported by the dedicated e3c1_* lines. */
+      single_convert = 1;
+      break;
     case 37:
       /* Exact-zero control: target 0 exactly; math and hypothesis agree. */
       expected[0] = 0x0000;
@@ -776,10 +794,12 @@ int main(int argc, char **argv) {
     const char *slot2_value_key = single_convert ? "unused_val" : "residual";
     /* "extra4" here is the Rs[8] rnd/feedback-round bit of the convert;
      * Phase D modes force it to 0 in both trials (feedback disabled), and
-     * modes 40/41 also force it to 0 (plain RN convert in both trials) —
-     * the trial index is the operand/fixture variant, not the rnd bit.
-     * Print the actual bit and keep the trial index as a separate field. */
-    const int rnd_bit = (phase_d || mode == 40 || mode == 41) ? 0 : trial;
+     * modes 40/41/42 also force it to 0 (plain RN convert in both
+     * trials) — the trial index is the operand/fixture variant, not the
+     * rnd bit. Print the actual bit and keep the trial index as a
+     * separate field. */
+    const int rnd_bit =
+        (phase_d || mode == 40 || mode == 41 || mode == 42) ? 0 : trial;
     printf("extra4=%d trial=%d hi_bits=0x%04x %s=0x%04x hi=%.17g %s=%.17g "
            "basic=%.17g scale=%d ",
            rnd_bit, trial, hi_bits, slot2_key, slot2_bits, hi, slot2_value_key,
@@ -877,6 +897,122 @@ int main(int argc, char **argv) {
      * scientific result (diagnose, do not auto-NO_GO Path B); only an
      * unclassifiable bit pattern marks pass=0 for manual analysis. */
     if ((!e0 && !p0) || (!e1 && !p1)) pass = 0;
+  }
+
+  if (mode == 42) {
+    /* E-3C1 classification (user-approved framework, PR #14 comment
+     * 6294110662): expected bits are pre-registered FIXED literals —
+     * do not retune them after measurement. Slots: result[0] = plain
+     * out[0] (s0,o0), result[1] = plain out[32], result[2] = b3 out[0],
+     * result[3] = b3 out[32].
+     *   slot0 plain (s0,o0): 0x5400 = PLAIN_EXPECTED; 0x5401 =
+     *     B3_LIKE_SUSPECT; else UNEXPECTED
+     *   slot2 b3 (s0,o0):    0x5401 = B3_EXPECTED; 0x5400 =
+     *     PLAIN_LIKE_SUSPECT; else UNEXPECTED
+     *   slot1 plain dst[32]: 0xd400 = SIGNED_PLAIN_EXPECTED (L1);
+     *     0x0000 = CLAMP_CANDIDATE; 0x5400 = L2_LAYOUT_POSITIVE; else
+     *     UNEXPECTED
+     *   slot3 b3 dst[32]:    0xd401 = SIGNED_B3_EXPECTED (L1); 0x0000 =
+     *     CLAMP_CANDIDATE; 0x5400 = L2_LAYOUT_POSITIVE; else UNEXPECTED */
+    const uint16_t plain00 = (uint16_t)result[0];
+    const uint16_t plain32 = (uint16_t)result[1];
+    const uint16_t b300 = (uint16_t)result[2];
+    const uint16_t b332 = (uint16_t)result[3];
+    const int e_plain00 = (plain00 == 0x5400u), s_plain00 = (plain00 == 0x5401u);
+    const int e_b300 = (b300 == 0x5401u), s_b300 = (b300 == 0x5400u);
+    const int sg_plain32 = (plain32 == 0xd400u),
+              cl_plain32 = (plain32 == 0x0000u),
+              l2_plain32 = (plain32 == 0x5400u);
+    const int sg_b332 = (b332 == 0xd401u), cl_b332 = (b332 == 0x0000u),
+              l2_b332 = (b332 == 0x5400u);
+    const char *c0 = e_plain00
+        ? "PLAIN_EXPECTED"
+        : (s_plain00 ? "B3_LIKE_SUSPECT" : "UNEXPECTED");
+    const char *c2 = e_b300
+        ? "B3_EXPECTED"
+        : (s_b300 ? "PLAIN_LIKE_SUSPECT" : "UNEXPECTED");
+    const char *c1 = sg_plain32
+        ? "SIGNED_PLAIN_EXPECTED"
+        : (cl_plain32
+               ? "CLAMP_CANDIDATE"
+               : (l2_plain32 ? "L2_LAYOUT_POSITIVE" : "UNEXPECTED"));
+    const char *c3 = sg_b332
+        ? "SIGNED_B3_EXPECTED"
+        : (cl_b332
+               ? "CLAMP_CANDIDATE"
+               : (l2_b332 ? "L2_LAYOUT_POSITIVE" : "UNEXPECTED"));
+    const int pos_ok = e_plain00 && e_b300;
+    const char *e3c1;
+    if (pos_ok && sg_plain32 && sg_b332) {
+      e3c1 = "E3C1_SIGNED_STORE_AND_B3_CONFIRMED";
+    } else if (pos_ok && cl_plain32 && cl_b332) {
+      e3c1 = "E3C1_BLOCKED_SIGNED_OUTPUT";
+    } else if (pos_ok && l2_plain32 && l2_b332) {
+      e3c1 = "E3C1_LAYOUT_L2_SIGN_UNRESOLVED";
+    } else {
+      e3c1 = "E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT";
+    }
+    printf("e3c1_plain00_bits=0x%04x class=%s\n", plain00, c0);
+    printf("e3c1_plain_dst32_bits=0x%04x class=%s\n", plain32, c1);
+    printf("e3c1_b300_bits=0x%04x class=%s\n", b300, c2);
+    printf("e3c1_b332_bits=0x%04x class=%s\n", b332, c3);
+    printf("e3c1_verdict=%s\n", e3c1);
+
+    /* plain vs B3 accuracy over the returned cells: descaled stored
+     * value (RN16 bits / 64) vs the true double oracle. dst[32] is
+     * only defined when BOTH slots landed in the signed or positive
+     * classes of ONE layout; else N/A. */
+    {
+      const double oracle00 = 1.0009770542383194; /* true oracle (s0,o0) */
+      const double pd = fp16_to_double(plain00) / 64.0;
+      const double bd = fp16_to_double(b300) / 64.0;
+      const double perr = fabs(pd - oracle00);
+      const double berr = fabs(bd - oracle00);
+      const char *cmp = (berr < perr)
+          ? "improved"
+          : ((berr > perr) ? "worsened" : "equal");
+      double o32 = 0.0;
+      int o32_ok;
+      printf("e3c1_b3_vs_plain cell=(s0,o0) plain_descaled=%.17g "
+             "b3_descaled=%.17g oracle=%.17g plain_err=%.17g b3_err=%.17g "
+             "cmp=%s\n",
+             pd, bd, oracle00, perr, berr, cmp);
+      if (sg_plain32 && sg_b332) {
+        o32 = -oracle00; /* L1: dst[32] = (s1,o0) = negation of s0 */
+        o32_ok = 1;
+      } else if (l2_plain32 && l2_b332) {
+        o32 = 1.0 + 0x1p-12 - 0x1p-23; /* L2: dst[32] = (s0,o1) truth */
+        o32_ok = 1;
+      } else {
+        o32_ok = 0;
+      }
+      if (o32_ok) {
+        const double pd32 = fp16_to_double(plain32) / 64.0;
+        const double bd32 = fp16_to_double(b332) / 64.0;
+        const double perr32 = fabs(pd32 - o32);
+        const double berr32 = fabs(bd32 - o32);
+        const char *cmp32 = (berr32 < perr32)
+            ? "improved"
+            : ((berr32 > perr32) ? "worsened" : "equal");
+        printf("e3c1_b3_vs_plain cell=dst32 plain_descaled=%.17g "
+               "b3_descaled=%.17g oracle=%.17g plain_err=%.17g b3_err=%.17g "
+               "cmp=%s\n",
+               pd32, bd32, o32, perr32, berr32, cmp32);
+      } else {
+        printf("e3c1_b3_vs_plain cell=dst32 plain_descaled=%.17g "
+               "b3_descaled=%.17g oracle=N/A cmp=N/A\n",
+               fp16_to_double(plain32) / 64.0, fp16_to_double(b332) / 64.0);
+      }
+    }
+
+    /* Exit-code semantics: BLOCKED_SIGNED_OUTPUT and the L2 outcomes
+     * are valid scientific results (exit 0 with the verdict printed);
+     * pass = 0 ONLY when a slot falls outside its enumerated candidate
+     * set (an unclassifiable pattern needing manual analysis). */
+    if (!e_plain00 && !s_plain00) pass = 0;
+    if (!e_b300 && !s_b300) pass = 0;
+    if (!sg_plain32 && !cl_plain32 && !l2_plain32) pass = 0;
+    if (!sg_b332 && !cl_b332 && !l2_b332) pass = 0;
   }
 
   const char *observed_verdict =
