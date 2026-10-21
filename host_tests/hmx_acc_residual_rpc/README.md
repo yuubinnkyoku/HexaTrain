@@ -1051,6 +1051,64 @@ sign, not NO_GO) / `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`
 candidates). A clamp outcome marks the direct signed GEMM pathway
 **BLOCKED_SIGNED_OUTPUT** with no throughput claims.
 
+**E-3C1 result (mode 42, executed 2026-10-21, one build
+`0x5f6a9887` + one runner session; verdict
+`E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`):** transport was
+recovered before the numeric run after an ADB daemon restart (endpoint
+rotation; classified transport failure, private report) — the numeric
+RPC then ran host-binary ×3 runner-internal attempts, all
+deterministically identical (rpc OK, strict build-id `0x5f6a9887`
+MATCH, `hmx_executed=1 trials=2`, `vtcm_bytes=12288`,
+`kernel_us=2582/2587/2606` informational, `close_status=0`,
+`RESOURCE_CLEANUP_OK=PASS`; `exit_code=8` = pass-gate failure by
+design, outside-enumerated-candidates). Measured slots (identical
+across attempts):
+
+- `out[0]`: plain `0x0000`, B3 `0x0000` — pre-registered candidates
+  (`0x5400` plain / `0x5401` B3) NOT observed.
+- `out[32]`: plain `0x59f6` (descaled ≈ 2.9804), B3 `0x59f7` (descaled
+  ≈ 2.9824) — none of the pre-registered candidates
+  (`0xd400`/`0x0000`/`0x5400` families); the 1-ulp plain-vs-B3
+  difference shows variant-dependent MMA output reaching the convert,
+  but the value does not exist among the simulated tile's stored
+  outputs.
+- Side gates: `OBSERVED_REGRESSION_MATCH/MATH_ORACLE_MATCH =
+  NO_ORACLE` (no oracle wired in mode 42 by design);
+  `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` unchanged.
+
+**E-3C0-side diagnosis (CPU, bounded stop — no further device work
+without explicit authorization):** a throwaway search over the G8 tile
+(SIM's generator, compiled alongside `fp16_util.h`) found NO tile cell
+whose plain stored bits equal `0x59f6`/`0x59f7` under the modeled
+scale-64 store, and — critically — NO cell under an aggregation-family
+sweep (4 axis-order hypotheses: activation/weight transpositions ×
+5 in-channel mask hypotheses incl. group masks {8..31}/{1..31}/{24..31}
+/ all) that simultaneously produces (`dst[0]` = `0x0000` for both
+variants AND any cell plain = `0x59f6`). The scalar-era rt constants
+(`act_rt = spatial_mask(14<<7) | (31u<<2)`, `wr_rt = spatial_mask(14<<7)`
+) are consistent with every 1-nonzero-element probe result but their
+FULL-tile issue/convert/store geometry is evidently NOT the
+row-major-family order assumed for L1/L2. Two honest notes: (a) the
+mode-42 device split helper mirrors `split_float_parts` (FP32-arith
+residual, the realistic FP32-carried deployment model) while the G8
+CPU oracle uses `split_double` — identical on the pinned dyadic cells,
+differently rounded on seeded nondyadic cells; this may shift seeded-cell
+B3 predictions but cannot explain `out[0] = 0x0000` (plain path is
+split-free); (b) the negative-final-store question (signed RN16 vs
+clamp) remains UNRESOLVED — no signed candidate was ever observed at
+any readback. `E3C1_LAYOUT_L2_SIGN_UNRESOLVED` also not directly
+reached: neither candidate family matched. E-3C1 verdict stands as the
+pre-registered catch-all; **Path B remains `CONDITIONALLY_POSSIBLE`
+with the realistic-tile device gate `INSUFFICIENT_EVIDENCE`**, and
+E-3C2 remains UNTRIGGERED (requires
+`E3C1_SIGNED_STORE_AND_B3_CONFIRMED`). Possible bounded next probes
+(awaiting user authorization): a dedicated identifier-probe mode
+writing per-cell-distinct literal values to separate the store layout
+from the issue geometry in ONE run, and/or a PRM §2.4 figure-level
+re-derivation of the convert/store state ordering before any device
+retry. No accuracy, throughput, or signed-store conclusion may be
+drawn from mode 42 numbers.
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
@@ -1060,7 +1118,7 @@ candidates). A clamp outcome marks the direct signed GEMM pathway
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
 | new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate pending (mode 42) | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device accuracy gate + E-3C2 bounded cost pending, separately gated) | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device gate executed 2026-10-21 → `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT` (realistic-tile device accuracy `INSUFFICIENT_EVIDENCE`; all models/unexpected, no NO_GO); E-3C2 untriggered, separately gated) | — |
 
 ### Decision
 
@@ -1076,16 +1134,27 @@ candidates). A clamp outcome marks the direct signed GEMM pathway
   above) — the three-product synthesis survives the final FP16 store
   at 1-lane/1-run scope; (3) Phase E-3C approved 2026-10-21 (PR #14
   comment 6294110662) as a bounded microtile RESEARCH experiment:
-  E-3C0 CPU gate **PASS (all 4 conditions)**, E-3C1 = mode 42
-  pre-registered above (one build + one run), E-3C2 cost measurement
-  ONLY if the device accuracy and sign gates pass, and the E-3C2
-  decision framing already carries the standing caution — against the
+  E-3C0 CPU gate **PASS (all 4 conditions)**; E-3C1 mode 42 executed
+  2026-10-21 (one build + one runner session) →
+  **`E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`** — both variants
+  computed and returned deterministic but unmodeled stored values
+  (`out[0]` = `0x0000`, `out[32]` = `0x59f6`/`0x59f7`); CPU diagnosis
+  (aggregation-family sweep: axis transpositions × in-channel masks)
+  found NO modeled hypothesis matching the observation, so the
+  full-tile issue/convert/store geometry under the scalar-era rt
+  constants is NOT the assumed row-major family. E-3C2 cost
+  measurement stays UNTRIGGERED (requires
+  `E3C1_SIGNED_STORE_AND_B3_CONFIRMED`), and the E-3C2 decision
+  framing already carries the standing caution — against the
   kernel-given-input reference the W-only variant for the current
   FP16-activation path REGRESSES 1.4–1.5× at ~3× MMA cost, so a useful
   kernel must justify that cost (persistent FP16x2 activation
-  transport would be a separate architecture). Production
+  transport would be a separate architecture). Any further device work
+  (identifier-probe layout mode, retry) is user-gated. Production
   integration, benchmarking of a real pipeline, multi-tile
   implementation and long training remain out of scope.
 - Mode 40 is added under the standing policy — new modes only for
   clearly discriminating minimal experiments, only on explicit
-  instruction; this mode exists by exactly that gate.
+  instruction; this mode exists by exactly that gate. Mode 42 likewise
+  (user-approved E-3C1 experiment); any follow-up layout/identifier
+  probe mode would need its own explicit authorization.
