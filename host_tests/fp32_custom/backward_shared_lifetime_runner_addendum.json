@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "classification": "DIAGNOSTIC_ORCHESTRATION_ADDENDUM_NOT_FORMAL",
+  "base_diagnostic_plan": "host_tests/fp32_custom/backward_shared_lifetime_diagnostic_plan.json",
+  "arm_sha256": "2ba5640f5842f9477ad165bae4d49e3a59d19135b60751ff101de508f46ce94d",
+  "arm_source_commit": "658df776aff26b2297e9d4c8703e6978878d6b7d",
+  "arm_binary_unchanged": true,
+  "reason": "Prelaunch Host binding test showed PowerShell automatic $Args discards the declared capture argument array; old runner never launched any probe. New runner uses CaptureArguments.",
+  "runner": "scripts/run_backward_shared_lifetime_device.ps1",
+  "allowed_support_files": [
+    "scripts/test_backward_shared_lifetime_runner.ps1"
+  ],
+  "additional_guard": "launch permit binds runner and this committed addendum SHA256",
+  "maximum_os_processes": 1,
+  "retries": 0,
+  "roles": [
+    "standalone_softmax",
+    "standalone_dvalue"
+  ],
+  "softmax_pairs": 9824,
+  "dvalue_maximum_executes": 100,
+  "dvalue_pairs": 200,
+  "arithmetic_fixtures_gates_ownership_unchanged": true,
+  "existing_plan_and_old_runner_unchanged": true,
+  "fresh_safety_recheck": "required after Host validation and before launch; no wake/reconnect/takeover",
+  "crash_collection": "original committed collection commands, corrected argument binding; baseline logcat and running collector required before launch; missing artifacts null",
+  "formal_processes_added": 0,
+  "training": "NO-GO"
+}
