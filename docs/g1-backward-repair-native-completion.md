@@ -612,3 +612,10 @@ See [G1 shared Backend/Device lifetime diagnostic](g1-backward-shared-lifetime-d
 Classification: **BLOCKED_DEVICE_SAFETY / ADB_NO_ONLINE_DEVICE**, with zero new
 diagnostic processes. This separate candidate does not change the historical
 failure judgments above or contribute to the formal cohort: **0/3** remains.
+
+## 2026-10-23 — Shared-lifetime boundary pilot result
+
+The [independent shared Backend/Device diagnostic](g1-backward-shared-lifetime-diagnostic.md)
+now records **SHARED_LIFETIME_BOUNDARY_PILOT_PASS** from one process. The Backend
+reinitialization hypothesis is strengthened, not proven. The diagnostic adds zero
+formal processes; **BLOCKED_FORMAL_COHORT = 0/3** and training **NO-GO** remain.

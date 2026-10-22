@@ -14,7 +14,7 @@ PLAN=ROOT/'host_tests/fp32_custom/backward_shared_lifetime_diagnostic_plan.json'
 BUNDLE=ROOT/'build/fp32-saved-p-backward-shared-lifetime-v1'
 ANCHOR='fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267'
 ORIGINAL='23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05'
-COUNTS=dict(backend_create=1,backend_free=1,device_create=1,device_free=1,context_create=2,context_free=2)
+COUNTS=dict(backend_create=1,backend_free=1,device_create=1,device_free=1,context_create=2,context_free=2,graphs=8)
 
 def source_delta():
     old=(ROOT/'host_tests/fp32_custom/backward_repair_probe.cpp').read_text()
@@ -59,7 +59,8 @@ def skeleton(m):
       root_cause='NOT_PROVEN',hypothesis='SUPPORTED_BY_ORIGINAL_FAILURES_INTERVENTION_UNMEASURED',protected_state='PASS',source_delta='LIFETIME_ONLY',
       host_lifecycle='PASS',preflight=None,resource_counts=None,inter_role_prepare_reload=None,
       softmax=None,dvalue=None,dvalue_first_finalize_return=None,actual_exit=None,process_teardown=None,
-      sigsegv=None,api6031_occurrences=None,token6033_occurrences=None,crash_collection=None,
+      sigsegv=None,api6031_occurrences=None,token6033_occurrences=None,crash_collection=None,continuous_logcat_stream=None,
+      prepare_library_loads=None,prepare_library_unloads=None,
       faulting_library=None,faulting_library_offset=None,matching_main_thread_frames=None,safety=None,recognizable_competition=None)
 
 def validate(v):
@@ -83,11 +84,13 @@ def validate(v):
     require(v['faulting_library'] in (None,'libQnnHtpPrepare.so'),'private crash library')
     require(v['faulting_library_offset'] is None or (v['faulting_library_offset'].startswith('0x') and len(v['faulting_library_offset'])<=12 and all(c in '0123456789abcdef' for c in v['faulting_library_offset'][2:])),'absolute/private PC')
     require(v['classification'] in read(PLAN)['outcomes'],'outcome classification')
+    require(v['continuous_logcat_stream'] in (None,'AVAILABLE'),'private/unknown capture status')
     if v['diagnostic_processes']==0:
-        require(all(v[k] is None for k in ('resource_counts','softmax','dvalue','dvalue_first_finalize_return','actual_exit','process_teardown','sigsegv','api6031_occurrences','token6033_occurrences','crash_collection')),'unexecuted evidence promoted')
+        require(all(v[k] is None for k in ('resource_counts','softmax','dvalue','dvalue_first_finalize_return','actual_exit','process_teardown','sigsegv','api6031_occurrences','token6033_occurrences','crash_collection','continuous_logcat_stream','prepare_library_loads','prepare_library_unloads')),'unexecuted evidence promoted')
     if v['classification']=='SHARED_LIFETIME_BOUNDARY_PILOT_PASS':
         require(v['diagnostic_processes']==1 and v['actual_exit']==0 and v['process_teardown']=='PASS','missing process exit/teardown')
         require(v['resource_counts']==COUNTS and v['inter_role_prepare_reload']==0,'missing resource-count evidence')
+        require(v['prepare_library_loads']==v['prepare_library_unloads']==1,'missing observed Prepare lifetime')
         require(v['dvalue_first_finalize_return']==0,'missing finalize return')
         require(v['preflight']=='PASS' and v['safety']=='PASS' and v['recognizable_competition']==0,'safety/competition')
         require(v['sigsegv'] is False and v['api6031_occurrences']==0 and v['token6033_occurrences']==0 and v['crash_collection']=='AVAILABLE','crash evidence absent or failure hidden')
@@ -105,15 +108,21 @@ def project(run):
         validate(v);return v
     identity=read(run/'identity-private.json');completion=read(run/'execution-before-readback-private.json')
     require(identity['exit_code']==completion['exit_code'],'actual completion')
+    runner='scripts/run_backward_shared_lifetime_device.ps1'
+    require(identity['orchestration_file']==completion['orchestration_file']==runner and identity['orchestration_sha256']==completion['orchestration_sha256']==sha(ROOT/runner),'orchestration identity')
+    require(identity['build']==completion['build']==m and identity['mode']=='shared-boundary' and identity['forward_limit']==60,'compiled diagnostic identity/scope')
+    permit=read(PRIVATE/'launch-permit-private.json')
+    require(permit['runner_sha256']==sha(ROOT/runner) and permit['addendum_sha256']==sha(ROOT/'host_tests/fp32_custom/backward_shared_lifetime_runner_addendum.json') and permit['host_inventory_sha256']==sha(run/'host-processes-private.json'),'preregistered runner/inventory binding')
     claim=read(PRIVATE/'probe-attempt-private.json');require(claim['maximum_os_processes']==1 and claim['candidate_sha256']==m['probe_sha256'],'one-shot identity')
     out=(run/'stdout.txt').read_text(encoding='utf-8-sig');err=(run/'stderr.txt').read_text(encoding='utf-8-sig')
     require(out.count('owned_probe_pid=')==1,'unregistered process')
     apis=[line.split(',') for line in out.splitlines() if line.startswith('api,')]
     counts={key:sum(x[1]==name and x[2]=='0' for x in apis) for key,name in [('backend_create','backendCreate'),('backend_free','backendFree'),('device_create','deviceCreate'),('device_free','deviceFree'),('context_create','contextCreate'),('context_free','contextFree')]}
+    counts['graphs']=sum(x[1]=='graphCreate' and x[2]=='0' for x in apis)
     require('diagnostic_begin,mode=standalone_softmax' in out and 'native_softmax' not in out and 'diagnostic_begin,mode=dual' not in out,'role scope')
     pre=read(run/'preflight/device-preflight-private.json');require(pre['status']=='PASS','preflight')
     import re
-    api6031=sum(x[2]=='6031' for x in apis);token6033=len(re.findall(r'(?<!\d)6033(?!\d)',out+'\n'+err))
+    api6031=max(sum(x[2]=='6031' for x in apis),len(re.findall(r'(?<!\d)6031(?!\d)',out+'\n'+err)));token6033=len(re.findall(r'(?<!\d)6033(?!\d)',out+'\n'+err))
     v.update(diagnostic_processes=1,resource_counts=counts,actual_exit=identity['exit_code'],preflight='PASS',api6031_occurrences=api6031,token6033_occurrences=token6033,
        sigsegv=identity['exit_code']==139,process_teardown='PASS' if counts==COUNTS and identity['exit_code']==0 else 'INCOMPLETE')
     between=out.split('diagnostic_begin,mode=standalone_dvalue',1)
@@ -125,14 +134,25 @@ def project(run):
             a=assess_role(run,mode,m,identity['exit_code']);roles[key]=a
             v[key]={k:a[k] for k in ('pairs','classification','numerical_digest','arithmetic_word_mismatches','observer_mismatch_words')}
             v[key]['maxAbs']=a['metrics']['total_'+str(int(key=='dvalue'))]['maxAbs']
-    with (PRIVATE/'independent-assessment-private.json').open('x') as f:json.dump(roles,f,indent=2)
+    assessment=PRIVATE/'independent-assessment-private.json'
+    if assessment.exists():require(read(assessment)==roles,'assessment overwrite rejected')
+    else:
+        with assessment.open('x') as f:json.dump(roles,f,indent=2)
     capture=all((run/n).exists() for n in ('logcat-before-private.json','logcat-after-private.json','logcat-stream-private.txt','dropbox-after-private.json','tombstones-after-private.json'))
     capture=capture and all(read(run/n)['exit']==0 for n in ('logcat-before-private.json','logcat-after-private.json'))
+    capture=capture and all(read(run/n)['text_private'] for n in ('logcat-before-private.json','logcat-after-private.json')) and bool(err)
+    # Require independent snapshot/stderr evidence. Stream availability below
+    # describes the completed saved file, not completeness of every message.
+    capture=capture and all(read(run/n)['exit']==0 for n in ('tombstones-before-private.json','tombstones-after-private.json','dropbox-before-private.json','dropbox-after-private.json'))
     v['crash_collection']='AVAILABLE' if capture else None
+    v['continuous_logcat_stream']='AVAILABLE' if (run/'logcat-stream-private.txt').stat().st_size else None
+    v['prepare_library_loads']=err.count('PrepareLibLoader Loading libQnnHtpPrepare.so')
+    v['prepare_library_unloads']=err.count('PrepareLibLoader Unloading libQnnHtpPrepare.so')
     # Parent ownership trace must show no backend/device free between roles.
     if len(between)==2:
         boundary=between[0].split('diagnostic_begin,mode=standalone_softmax',1)[1]
-        v['inter_role_prepare_reload']=0 if 'api,backendFree,' not in boundary and 'api,deviceFree,' not in boundary and counts['backend_create']==counts['device_create']==1 else None
+        observed_prepare=(err.count('PrepareLibLoader Loading libQnnHtpPrepare.so')==1 and err.count('PrepareLibLoader Unloading libQnnHtpPrepare.so')==1 and 'QnnBackend_free started' in err and err.index('PrepareLibLoader Unloading')>err.index('QnnBackend_free started'))
+        v['inter_role_prepare_reload']=0 if 'api,backendFree,' not in boundary and 'api,deviceFree,' not in boundary and counts['backend_create']==counts['device_create']==1 and observed_prepare else None
     competition=[json.loads(x) for x in (run/'competition-private.jsonl').read_text(encoding='utf-8-sig').splitlines()]
     require(competition and all(x['exit']==0 for x in competition),'competition snapshots')
     # A separate reviewed receipt binds the actual snapshots/logs and safety.
@@ -150,9 +170,11 @@ def selftest():
     frozen=read(PLAN)['original_binary_sha256']
     m=dict(source_sha='a'*40,probe_sha256='b'*64,binary_hashes={'libHexaBackwardRepairDsp.so':frozen['dsp'],'libHexaBackwardRepairHost.so':frozen['host']})
     v=skeleton(m);v.update(classification='SHARED_LIFETIME_BOUNDARY_PILOT_PASS',diagnostic_processes=1,actual_exit=0,process_teardown='PASS',resource_counts=COUNTS.copy(),inter_role_prepare_reload=0,dvalue_first_finalize_return=0,preflight='PASS',safety='PASS',recognizable_competition=0,sigsegv=False,api6031_occurrences=0,token6033_occurrences=0,crash_collection='AVAILABLE')
+    v.update(prepare_library_loads=1,prepare_library_unloads=1)
     for key,n in [('softmax',9824),('dvalue',200)]:v[key]=dict(pairs=n,classification='PASS',maxAbs=0.,numerical_digest=ANCHOR,arithmetic_word_mismatches=0,observer_mismatch_words=0)
     validate(v)
     mutations=[('probe_sha256',ORIGINAL),('candidate','ordered-fp32-v1'),('dsp_sha256','e'*64),('host_sha256','e'*64),('formal_processes_added',1),('formal_status','PASS'),('classification','FORMAL_PASS'),('dvalue_first_finalize_return',None),('actual_exit',None),('process_teardown',None),('resource_counts',None),('crash_collection',None),('diagnostic_processes',2),('protected_state','FAIL'),('private_path','secret'),('root_cause','VERIFIED'),('api6031_occurrences',1),('token6033_occurrences',1),('sigsegv',True),('safety','BLOCKED'),('inter_role_prepare_reload',1),('faulting_library','private'),('faulting_library_offset','0x123456789abcdef0')]
+    mutations += [('dvalue_first_finalize_return',1),('resource_counts',{**COUNTS,'graphs':7}),('prepare_library_loads',2),('prepare_library_unloads',None)]
     count=0
     for key,value in mutations:
         bad=copy.deepcopy(v);bad[key]=value

@@ -1,6 +1,14 @@
 # G1 exit139 — shared Backend/Device lifetime diagnostic
 
-## Decision
+Latest result, **2026-10-23**: **SHARED_LIFETIME_BOUNDARY_PILOT_PASS**.
+One diagnostic OS process completed Softmax 9,824 pairs and the registered dValue
+200 pairs, including the formerly crashing first dValue finalize, with actual
+exit0. Independent double/FP32 oracles, word contracts, observed resource counts
+and teardown passed. The hypothesis is strengthened; root cause is not proven.
+The resumed evidence and current answers follow the preserved initial record below.
+Formal cohort remains **0/3**, higher-layer certification absent, training **NO-GO**.
+
+## Initial preparation decision (preserved)
 
 **BLOCKED_DEVICE_SAFETY: ADB_NO_ONLINE_DEVICE.** The independent candidate and
 Host gates are complete. The fresh read-only preflight could not resolve an
@@ -277,3 +285,228 @@ treated as successful capture, private fields, a second process and protected
 mismatch. The private evidence root is independent of every old report root;
 raw data, local paths, runtime addresses, app/device identities, APK hashes and
 endpoints are not exported.
+
+## 2026-10-23 — Resumed one-process boundary pilot
+
+### Provenance and prelaunch-only corrections
+
+The user explicitly resumed the mission after an online endpoint became visible.
+Resume started clean at `8de526883ccada2b62b90ea7b6d4c94a59c36c18`, on the same
+diagnostic branch and research clone. The original `6c4058a` branch, all protected
+refs, original source/binaries and old private evidence remained unchanged.
+
+The first fresh read-only safety preflight passed physical identity, active-run
+absence, Awake, known top-resumed, installed approved APK, SDK/toolchain, storage
+and critical protection. A subsequent read-only crash-availability check lost
+its ADB endpoint before any probe launch. A currently online endpoint was then
+matched by stable device identity to the original phone, without a reconnect,
+wake or other device-state command. A new safety preflight passed. This transport
+episode is preserved separately; it is not an arithmetic trial or numerical failure.
+
+Prelaunch Host testing exposed the old, never-executed diagnostic runner's use
+of PowerShell's automatic `$Args` variable as a declared parameter: it discarded
+the crash command array. The old runner and ARM compilation manifest were kept
+frozen. A separate runner, `scripts/run_backward_shared_lifetime_device.ps1`, and
+committed `backward_shared_lifetime_runner_addendum.json` correct that binding.
+The addendum keeps the original roles, case identities, limits, mathematics,
+source/binary identities, hard gates and one-process cap. Its launch receipt
+binds the exact fresh Host inventory, runner and addendum hashes, with a bounded
+review handoff and another safety/competition recheck before the process claim.
+
+An additional prelaunch-only stop falsely matched two system processes by the
+substring `probe`: the exact `policy_probe_wq` kernel worker and `traced_probes`.
+Read-only `/proc` evidence established Kthread1/PPID2/root/empty cmdline for the
+former, and Kthread0/PPID1/UID9999 with exact system cmdline for the latter.
+Perfetto documents `traced_probes` as its system/kernel tracing daemon, consistent
+with the observed identity. [Perfetto reference](https://perfetto.dev/docs/reference/traced_probes).
+Executable symlink access was unavailable and remains null; root was not used.
+
+The corrected classifier accepts only those exact, attested identities, pins
+PID/PPID/user/name/full-command tuples, saves the evidence, and still stops on
+unknown probe/training/HMX matches. This applies the existing distinction between
+system infrastructure and recognizable NPU experiments; it does not waive a real
+competing workload. Both prelaunch stops had **zero diagnostic processes** and
+no consumed process claim. They were retained, not overwritten as successes.
+
+The executed orchestration source was committed in
+`da614e5403d71b83aaeb2a2365af899de5d0ddc2`. Runner SHA256:
+`8499bcb577a310f3b11f188c9694ae95b660b34af23c8efa6f20fa5bfb5a9e18`.
+The ARM candidate stayed exactly
+`2ba5640f5842f9477ad165bae4d49e3a59d19135b60751ff101de508f46ce94d`,
+compiled from `658df776aff26b2297e9d4c8703e6978878d6b7d`.
+No ARM, DSP, Host, graph or arithmetic source changed during resume.
+
+### Fresh gates and safety
+
+All seven dedicated lifecycle/arithmetic/prepare/independent-reference/graph
+executables were rerun successfully with new private outputs. Capture-function
+Host tests passed six command/error-preservation cases; infrastructure tests
+passed nine cases, including rejection of unknown workloads, wrong user/parent,
+wrong Kthread status, wrong cmdline and unreadable identity. Fresh PS7 Fast passed
+after each substantive runner change; the executed runner's gate was 70.9 seconds,
+outer 1 PASS / 0 FAIL / 0 SKIP. The frozen candidate's prior fresh Qnn profile
+remained applicable; Qnn/standalone Host profiles were not invoked again on resume.
+The actual runner performed fresh approved-APK and staged-file audits.
+
+Final runner preflight and immediate prelaunch safety checks passed on the same
+physical device. No active training or recognizable competing NPU experiment was
+found. Five successful process snapshots covered prelaunch and runtime; only the
+owned diagnostic, two attested system identities and reviewed persistent RPC/
+kernel infrastructure matched the relevant terms. This does not prove absence
+of all in-process clients or activity between snapshots. Two-second top-resumed
+monitoring remained in place, with takeover count0 and no safety stop. Before/
+after critical thermal status was0 and battery health was healthy; ordinary power,
+temperature and battery telemetry retained the existing monitoring-only policy.
+No UI takeover, install, permission change, force-stop, root, reboot or training
+occurred. The approved APK was not replaced.
+
+### Actual execution, numerical and lifetime evidence
+
+An exclusively created mission-level claim allowed exactly **one** ARM process.
+Its claim time was **2026-10-23 00:05:47 JST**. There was no automatic retry,
+second process, third role, full dValue run or formal/performance experiment.
+The controller reviewed the exact fresh Host inventory before issuing its bound
+launch receipt. Probe output, shell completion and captured completion metadata
+agree on **actual OS exit0**.
+
+| Measurement | Result |
+| --- | --- |
+| Backend create/free | 1 / 1, both return0 |
+| Device create/free | 1 / 1, both return0 |
+| Context create/free | 2 / 2, all return0 |
+| Graphs / successful finalize returns | 8 / 8; four per independent role Context |
+| Successful executes | 5,012 = 4,912 Softmax + 100 bounded dValue |
+| First dValue finalize | Actual entry and return0 captured |
+| Prepare load/unload | 1 / 1 for the entire process; unload only after final Backend free starts |
+| Inter-role Prepare unload/reload | 0 observed; no inter-role Backend/Device free or recreate |
+| HTP provider initialization | 1 |
+| Whole-process required cleanup | Both Contexts, then Device, then Backend; return0 throughout |
+| Runtime QNN nonzero API results | 0 |
+| API6031 / token6033 | 0 / 0 in the complete probe stdout/stderr, independently scanned |
+| SIGSEGV / owned-process tombstone | Not reproduced / no matching owned-process tombstone |
+
+SDK stderr additionally reports zero remaining Contexts/Graphs before final Device
+free and successful Device free. Only then are packages unloaded, the environment
+closed and Prepare unloaded. Logger repair remains excluded; this result does not
+claim that the known original Logger leak has been fixed.
+
+| Independent numerical audit | Softmax | Bounded dValue |
+| --- | ---: | ---: |
+| Pairs | 9,824 | 200 |
+| Observer conditions | All four | All four |
+| Core coverage | 2,200 per observer | Registered Forward0 × gradients0–24 × heads0–1 per observer |
+| Holdout coverage | 256 per observer | NOT_EXECUTED |
+| Total/Core maxAbs | `6.335392901668513e-5` | `6.955715726064682e-6` |
+| Holdout maxAbs | `2.2067718461471486e-6` | null |
+| Unchanged maxAbs gate | 0.002 | 0.01 |
+| Ordered FP32 word mismatches | 0 | 0 |
+| Observer word mismatches | 0 | 0 |
+| Independent double recheck | PASS | PASS |
+| Finite / full writes / guards / poison / input immutability | PASS | PASS |
+
+Softmax numerical digest is
+`fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267`,
+equal to the old anchor and both completed crash-episode Softmax observations.
+The bounded dValue digest is
+`1808c34fc0011796c1693355a3bccce5efa08794c5aafdf0820499430f7bb76e`;
+it is a 200-pair diagnostic digest, not the full standalone dValue anchor or a
+formal legacy/supplemental cohort digest.
+
+The independently read raw sizes are 284,827,248 bytes for Softmax and 3,713,216
+bytes for dValue. Each compressed transfer was hashed, losslessly decoded into
+an exclusively created local file, and checked against remote-before/local/
+remote-after identities. Independent assessment checks exact frozen P/gradient
+words, receipts, all expected case keys, numerical reference and output words.
+
+### Crash capture and final stream audit
+
+Before/after crash/main/system logcat snapshots, probe QNN stderr, accessible
+Android tombstones and DropBox metadata were collected successfully without
+root, clearing logs or changing SELinux. All 32 accessible text tombstones were
+read; none matched the owned diagnostic PID. Signal/fault address, new faulting
+library/relative offset and new main-thread backtrace are null because this
+process did not crash. The old two matching 17-frame stacks at
+`libQnnHtpPrepare.so + 0x3007bac` remain intact.
+
+After collector shutdown and Host redirection drain, the continuous logcat file
+contains **1,737,957 bytes / 11,960 lines**, including 139 owned-process lines;
+its stderr is empty. The owned-process stream and post-snapshot lines each have
+zero 6031/6033 tokens and zero SIGSEGV/fatal-signal 11 records. Continuous capture
+is therefore exported as AVAILABLE. Complete probe stderr, successful snapshots,
+tombstone/DropBox access and actual API/exit/cleanup evidence provide additional
+comparison sources; completeness of every Android log message is not asserted.
+
+An interim inspection saw the still-active redirection file at zero bytes and
+was prematurely described as the final stream state. That commentary and the
+provisional private review are corrected by a separate final stream audit receipt;
+the earlier observation is retained rather than overwritten. The final projection
+uses the completed, nonempty saved stream. The exporter also requires successful,
+nonempty snapshots/stderr and successful tombstone/DropBox collections for this
+observed PASS, so missing capture is not silently treated as normal evidence.
+
+### Scientific conclusion and next decision
+
+**SHARED_LIFETIME_BOUNDARY_PILOT_PASS.**
+**BACKEND_REINITIALIZATION_HYPOTHESIS_STRENGTHENED. ROOT_CAUSE_NOT_PROVEN.**
+
+With the same physical device, fixed QAIRT and unchanged DSP/Host/operands/math,
+the old candidate crashed twice at first dValue finalize after Backend/Device
+recreation; the new candidate retained them and passed that boundary, its bounded
+arithmetic and required teardown in one process. This is an intervention result,
+not a failure-rate estimate or unique-cause proof. It jointly retains Backend,
+Device and their package/Prepare state; it does not isolate Backend from Device,
+package registration or process-global vendor state. Other lifetime/corruption/
+vendor-runtime explanations remain unresolved.
+
+A separate full-candidate research plan is now justified. It must explicitly
+amend the original formal lifetime clause and freeze the new ARM identity, then
+cover full standalone Softmax/dValue, native singles and dual, all four observers,
+full Core/Holdout, three independent processes, legacy/supplemental agreement,
+fresh regression and subsequently performance. None of that was started here.
+The original formal plan is unchanged. **BLOCKED_FORMAL_COHORT = 0/3** remains;
+Full Attention/Full1-layer/Full19-layer are NOT_CERTIFIED; 40k→60k and 200k training
+remain **NO-GO**. Performance remains NOT_MEASURED.
+
+### Current answers to all 30 final questions
+
+| # | Current answer after the one-process intervention |
+| --- | --- |
+| 1 | Yes; exact clean research base and ancestry retained; resume on its dedicated branch. |
+| 2 | Yes; original frozen DSP/Host/probe unchanged. |
+| 3 | `2ba5640f5842f9477ad165bae4d49e3a59d19135b60751ff101de508f46ce94d`. |
+| 4 | ARM delta remains lifetime/ownership plus registered entry/tracing controls; no arithmetic/topology change. Resume changed collection/orchestration only. |
+| 5 | Yes under the audited pinned API contract; generic legality and actual tested success do not prove vendor-runtime defect absence. |
+| 6 | Yes: two independently created/freed role Contexts; no cross-role graph/tensor/descriptor handoff. |
+| 7 | Actual Backend create/free 1/1, return0. |
+| 8 | Actual Device create/free 1/1, return0. |
+| 9 | Actual Context create/free 2/2, return0. |
+| 10 | No inter-role reload observed; one Prepare load, one final Backend-time unload. |
+| 11 | PASS, including fresh resume reruns and the separately tested runner corrections. |
+| 12 | PASS: Softmax 9,824 pairs across full Core/Holdout and all four observers. |
+| 13 | Yes: digest exactly equals the old anchor. |
+| 14 | Yes: first dValue graphFinalize returned0; all four dValue finalizes returned0. |
+| 15 | PASS: registered 200 pairs / 100 executes, both independent oracles and word contracts. |
+| 16 | Not reproduced in this single diagnostic process; no general no-crash guarantee. |
+| 17 | New fault library/offset/stack null; original two matching signatures retained. |
+| 18 | API6031 and token6033 each0 in complete probe stdout/stderr; historical watches remain separate and unresolved. |
+| 19 | Required Context→Device→Backend cleanup PASS; the deliberately excluded Logger leak is not repaired. |
+| 20 | Actual Android child/process exit0, captured through shell wait/completion metadata. |
+| 21 | Yes: fresh Awake/known-top checks and runtime monitor passed, takeover count0. |
+| 22 | No recognizable separate NPU experiment in five reviewed snapshots; complete absence is not proven. |
+| 23 | Yes: exact worker source, unchanged DSP/Host and fixtures, actual ordered-word and independent numerical PASS. |
+| 24 | Yes: old failure raw/tombstones preserved and rehashed. |
+| 25 | Yes: protected artifacts/refs and prior 333 ledger unchanged; new evidence is separate. |
+| 26 | Strengthened by the intervention; unique root cause still unresolved, not verified. |
+| 27 | Yes: this pilot is excluded; zero formal processes added. |
+| 28 | A separate full-candidate plan is justified; no formal launch or certification approval is inferred. |
+| 29 | Yes: Backward performance remains NOT_MEASURED. |
+| 30 | Full Attention/Full1-layer/Full19-layer NOT_CERTIFIED; both requested training paths NO-GO. |
+
+Closeout: fresh PS7 Fast **PASS**, 73.3 seconds, outer 1 PASS / 0 FAIL / 0 SKIP;
+inner 10 PASS / 0 FAIL / 21 SKIP. The final allow-list exporter passes 30 rejection
+cases, including nonzero first finalize, missing graph-count evidence and missing
+observed Prepare lifetime. All original frozen bundles, protected artifacts,
+prior 333 ledger, 288 earlier native/exit139 evidence files and pre-existing
+nonworking refs passed final preservation checks. No additional device process
+was launched for closeout. The result is committed on the dedicated diagnostic
+branch; no push, PR, merge or history rewrite is performed.
