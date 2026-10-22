@@ -178,8 +178,11 @@ def failed_cohort(attempt_root):
 
 
 def validate(value):
-    exact_keys(value, 'schema base source_commit branch binary_sha256 fixture_sha256 previous_pilots repair monitor runtime_6031 forward cohort performance regression protected_state classifications training' + (' formal_closeout' if 'formal_closeout' in value else ''))
+    exact_keys(value, 'schema base source_commit branch binary_sha256 fixture_sha256 previous_pilots repair monitor runtime_6031 forward cohort performance regression protected_state classifications training' + (' formal_closeout' if 'formal_closeout' in value else '') + (' idle_npu_reproduction' if 'idle_npu_reproduction' in value else ''))
     if 'formal_closeout' in value: validate_blocked_closeout(value['formal_closeout'])
+    if 'idle_npu_reproduction' in value:
+        from export_public_backward_idle_npu import validate_idle
+        validate_idle(value['idle_npu_reproduction'])
     require(value['schema'] == 1 and value['base'] == BASE and value['branch'] == BRANCH, 'mission identity')
     require(re.fullmatch('[0-9a-f]{40}', value['source_commit']) is not None, 'source commit')
     require(value['binary_sha256'] == HASHES and value['training'] == 'NO-GO' and value['protected_state'] == 'PASS', 'binary/protected/training')

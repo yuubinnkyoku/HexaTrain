@@ -459,3 +459,149 @@ Full diagnosis: [`docs/g1-backward-repair-exit139-diagnosis.md`](g1-backward-rep
 | 39 | Next step is **not** a cohort retry: (a) approve the single minimum device diagnostic (Softmax→dValue without inter-role backend teardown, with mandatory crash-dump capture, one attempt only); (b) build a **new candidate** bundle implementing one backend/device per cohort OS process with one context per role, and amend the plan's `backend_lifetime` clause as an approved act. Mathematical frontier remains actual dP/dContext, dQ/dK, scatter/projection/LN1 aggregation. |
 | 40 | Full1-layer/Full19-layer and higher Attention/training classifications remain unverified. |
 | 41 | 40k→60k and 200k training remain NO-GO. |
+
+## 2026-10-22 — One-shot idle-NPU diagnostic: EXIT139_REPRODUCED
+
+**EXIT139_REPRODUCED; BLOCKED_FORMAL_COHORT remains in force (0/3).**
+One additional diagnostic OS process reproduced the original failure at the
+Softmax teardown → dValue initialize → graphFinalize boundary, with no
+recognizable competing NPU workload observed. No second process, repair,
+rebuild, performance measurement, regression probe or training followed it.
+Formal resumption and 40k→60k / 200k training remain **NO-GO**.
+
+Work started clean at `fad9d19a669032aa6d3e29651eb547920ca76506`, on
+`investigation/g1-backward-repair-native-completion`, without upstream. This
+HEAD includes the diagnostic commit after the failed-process record
+`30d0cb3`; history was retained without checkout/reset/rebase. The frozen
+compiled source remains `bb6aaceb42de505b29689a362ce8293687e7ab89`.
+The existing runner, graph, per-role backend/device/context lifetime, fixtures,
+5-role order and accuracy gates were unchanged. The one-shot plan and starting
+audit were saved before device execution in a new exclusively created private
+ReportRoot; the unchanged runner exclusively created its own new child root.
+Old failure folders and completed-role raw were never reused or overwritten.
+
+| Frozen binary | SHA256, freshly verified locally and after staging |
+| --- | --- |
+| DSP | `658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5` |
+| Host | `0aea5fe57625b236226b3cfb55f70dbdad0afda16cae98e1efd2420c4fc4e843` |
+| ARM probe | `23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05` |
+
+Read-only Host process inventory showed no other recognizable HexaTrain/HMX/
+QNN experiment. Device `ps -A` with PID/PPID/user/name/full arguments found no
+other recognizable training, QNN/HTP probe or HMX workload. Persistent vendor
+RPC services and kernel workers were reviewed as infrastructure; their mere
+presence is not evidence of an active competing experiment. General apps were
+present and the user's foreground app was retained.
+
+The preregistered outer observer recorded **46 successful process snapshots**,
+approximately every 2 seconds, spanning preflight/staging and the complete
+probe lifetime (20:45:15–20:46:44 JST). Ten memory snapshots were also retained.
+Its two broad name-match candidates were independently reviewed against their
+full arguments: the same runner's `sha256sum` of its staged Prepare library,
+and its read-only `run-as … cat files/headless/status.json` safety query.
+Neither executes NPU arithmetic; both observations remain in the private raw
+monitor. No separate workload or monitor command failure was observed.
+This is **observable idle-NPU evidence**, not proof that every possible NPU
+client was absent: private/in-process activity and activity between snapshots
+may be invisible. No other process was killed or force-stopped.
+
+| Safety/runtime observation | This diagnostic |
+| --- | --- |
+| Same physical device | Stable identity matched the original protected run; both fresh preflights passed |
+| Awake / top-resumed | Both preflights and unchanged final runner checks passed; 2-second top monitoring, takeover count0, no safety stop |
+| Active run / competing probe | Original active-run gates passed; extended observable-workload review above |
+| QAIRT | Fixed `2.48.40.260702151143`; fresh core/Build ID inventory passed, optional samples absent only; no fallback |
+| Approved APK | Installed identity matched approved APK; fresh unchanged APK audit succeeded |
+| Storage | Host93,196,746,752 free bytes; original Host20GiB and device12GiB hard gates passed |
+| Thermal/battery/power | All recorded critical thermal status0, healthy battery,36°C,18%, external power absent; ordinary readings monitored under the unchanged research policy |
+| Memory | Baseline MemAvailable4,323,832KiB; monitored range4,002,928–4,195,512KiB; postrun4,161,228KiB; these observations do not exclude a library/resource defect |
+| Process/runner completion | Both captured actual exit139; runner probe-monitor duration14.72s; only one owned probe PID |
+
+The frozen cohort entered `standalone_softmax`, completed it, and entered
+`standalone_dvalue` in that same OS process. It stopped on the crash before
+`native_softmax`, `native_dvalue` or `dual` could begin. No role was omitted
+or reordered by orchestration.
+
+| Role/coverage check | Result |
+| --- | --- |
+| Standalone Softmax | Complete4 observers × (Core2,200 + Holdout256) =9,824 pairs;4 graphFinalize returns0 and4,912 graphExecute returns0 |
+| Softmax numerical accuracy | Independently recomputed from preserved raw: Core maxAbs `6.335392901668513e-5`, Holdout `2.2067718461471486e-6`; unchanged0.002 gate passed |
+| Words / runtime invariants | Arithmetic word mismatches0; observer word mismatches0; finite, complete writes, poison, canary and immutable inputs separately verified; role exit0 and role teardown succeeded |
+| Softmax numerical digest | `fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267`, equal to the existing Softmax anchor |
+| Standalone dValue | Initialization/graph construction entered;0 pairs and0 graphExecute calls; graphFinalize entered with no return |
+| Remaining3 roles | NOT_STARTED; no accuracy, observer or teardown PASS claimed |
+| Whole process | Exit139; teardown INCOMPLETE; no formal process added |
+| API6031 / token6033 | Separately scanned:0 /0 in captured probe stdout/stderr; historical6031 remains UNRESOLVED / DORMANT / WATCH |
+
+The completed Softmax raw (284,827,248 bytes) was recovered read-only with
+physical identity confirmation and equal remote-before/local/remote-after
+hashes. The failed cohort's partial container remains0 bytes. Original
+stdout/stderr, returned API records, process/runner completion, monitoring and
+compressed/partial raw are preserved in full. For Host-only independent
+accuracy assessment, a new explicitly labeled completed-role view binds the
+recovered raw and exact stdout segment to the captured role exit0, while
+retaining parent process exit139. It does not reinterpret the failed process
+as successful and is excluded from formal accounting.
+
+Android crash/main/system log snapshots, DropBox output, memory information,
+and accessible old/new text tombstones were collected without root, log
+clearing or SELinux changes. **Both crashes have SIGSEGV / SEGV_MAPERR and
+the same17 main-thread library/offset frames.** The first6 frames are in
+`libQnnHtpPrepare.so`, beginning at `+0x3007bac`, followed by6 HTP backend
+frames,4 probe frames and libc initialization. Absolute PC/fault addresses,
+PIDs, device identifiers, paths and complete backtraces remain private.
+Absolute PC and fault addresses differ between processes; matching relative
+offsets establish matching crash localization, not a root cause.
+Symbol names for these QNN frames were not available (null). The optional
+debugfs FastRPC resource interfaces were unavailable (null); ordinary
+FastRPC lifecycle logs were retained. They include failed `cdsp/` search-path
+attempts followed by successful Skel load/open; these are not promoted to a
+6031/6033 diagnosis.
+
+Compared with `30d0cb3`, the last returned API is again `graphAddNode / 0`,
+the entered API is again `QnnGraph_finalize`, and the last visible backend
+stage is again successful8MiB VTCM cache acquisition. Both stop in the first
+dValue graph after complete Softmax teardown, with exit139 and no6031/6033
+in probe output. Differences are the new observed-workload monitoring,
+fresh process/runtime addresses, elapsed time and newly obtained old/new
+tombstone evidence. Earlier documentation's statements that no backtrace was
+available describe what was available then; the old crash tombstone has now
+been recovered and compared.
+
+The reproduction shows that **an observable competing NPU experiment is not
+required for this failure to occur** under the tested conditions. It does not
+prove the complete absence of every NPU user, exclude concurrency effects in
+the original failure, or establish a unique library-internal cause. The next
+limited investigation target is QNN backend/Prepare role-to-role
+reinitialization. No lifetime change or diagnostic repair is authorized by
+this result. The exact causal mechanism remains **NOT_PROVEN**. This single
+additional attempt does not estimate a failure rate or establish reproducibility
+across independent boots/devices.
+
+Formal eligibility of this diagnostic was withheld before launch; its failed
+process independently fails the unchanged completion/teardown requirements.
+Formal cohort resumption is **NO-GO**, `FORMAL_COMPLETED=0/3`, and
+`BLOCKED_FORMAL_COHORT` remains. No formal3-process accuracy/lifetime closure,
+Full Attention/Full1-layer/Full19-layer or TRAINING_READY claim is added.
+
+All five frozen bundle manifests/source/binary sets, five protected artifacts
+and234 pre-existing mission evidence files were rehashed unchanged. The earlier
+333-file private ledger and all nonworking refs were also confirmed unchanged. Public
+output is updated only through the added strict allow-list diagnostic
+exporter, retaining the historical failed cohort and closeout objects. Exporter
+changes add evidence projection and rejection checks only; they are outside
+every frozen candidate manifest. Raw logs/tombstones/tensors, endpoints and
+absolute paths are not committed. Fast and Host-only exporter/raw checks are
+reported separately below; broad Formal/Qnn/device regression suites are not
+substituted for this explicitly bounded diagnostic or newly claimed PASS.
+
+Closeout validation: **Fast PASS**, actual exit0; unchanged exporter rejection
+suites18+14+17 cases and the new diagnostic exporter18 cases **PASS**, with0
+device calls. The live allow-list export rechecked frozen identities, original
+and new failed-process evidence, main-thread tombstone identity/offsets,
+observable-workload records and the full Host-only Softmax raw assessment.
+The historical aggregate field values are unchanged; only the explicit
+`idle_npu_reproduction` projection is added. This validates evidence projection,
+not formal cohort completion. Fresh Host/Qnn broad profiles, generic Device
+smoke, W8 and Formal remain **NOT_EXECUTED / BLOCKED_SCOPE** for this bounded
+task; no candidate or fixture rebuild and no extra device arithmetic was used.
