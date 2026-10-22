@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "classification": "DIAGNOSTIC_ONLY_NOT_FORMAL",
+  "base_commit": "6c4058af820151f89996065380b12778fbd965bc",
+  "original_compiled_source": "bb6aaceb42de505b29689a362ce8293687e7ab89",
+  "original_binary_sha256": {
+    "dsp": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
+    "host": "0aea5fe57625b236226b3cfb55f70dbdad0afda16cae98e1efd2420c4fc4e843",
+    "probe": "23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05"
+  },
+  "original_failure": {
+    "episodes": 2,
+    "exit": 139,
+    "signal": "SIGSEGV",
+    "code": "SEGV_MAPERR",
+    "library": "libQnnHtpPrepare.so",
+    "offset": "0x3007bac",
+    "matching_main_thread_frames": 17,
+    "last_returned_api": "graphAddNode / 0",
+    "entered_no_return": "first standalone_dvalue graphFinalize",
+    "last_prepare_stage": "8MiB VTCM cache acquired",
+    "api6031_6033": "not observed in probe stdout/stderr"
+  },
+  "candidate": {
+    "name": "shared-lifetime-boundary-v1",
+    "bundle": "fp32-saved-p-backward-shared-lifetime-v1",
+    "arm_identity": "new source commit and manifest SHA256 required before execution",
+    "dsp_host": "copy original bytes; bit-identical required",
+    "new_dsp_kernel": false
+  },
+  "allowed_implementation_files": [
+    "host_tests/fp32_custom/backward_shared_lifetime.h",
+    "host_tests/fp32_custom/backward_shared_lifetime_probe.cpp",
+    "host_tests/fp32_custom/backward_shared_lifetime_test.cpp",
+    "scripts/build_backward_shared_lifetime_probe.ps1",
+    "scripts/run_backward_shared_lifetime_probe.ps1"
+  ],
+  "exact_lifetime_change": "One backend/device per process; separate sequential role contexts; backend packages registered once; no graph/tensor/descriptor crosses a context; logger leak retained, no logFree added",
+  "roles": [
+    "standalone_softmax",
+    "standalone_dvalue"
+  ],
+  "expected_order": [
+    "logCreate",
+    "backendCreate",
+    "forward package registration x8",
+    "deviceCreate",
+    "softmax contextCreate",
+    "repair package registration x2",
+    "softmax graphFinalize/Execute x4 observers",
+    "softmax contextFree",
+    "dvalue contextCreate",
+    "backend packages reused",
+    "dvalue graphFinalize/Execute x4 observers",
+    "dvalue contextFree",
+    "deviceFree",
+    "backendFree"
+  ],
+  "expected_counts": {
+    "os_processes": 1,
+    "backend_create": 1,
+    "backend_free": 1,
+    "device_create": 1,
+    "device_free": 1,
+    "context_create": 2,
+    "context_free": 2,
+    "graphs": 8,
+    "inter_role_prepare_reload": 0
+  },
+  "softmax_prerequisite": {
+    "core_per_observer": 2200,
+    "holdout_per_observer": 256,
+    "observers": 4,
+    "pairs": 9824,
+    "executes": 4912,
+    "maxAbs": 0.002,
+    "word_mismatches": 0,
+    "observer_mismatches": 0,
+    "digest_anchor": "fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267",
+    "failure_action": "never enter dvalue"
+  },
+  "dvalue_target": "actual entry and return of first graphFinalize; do not infer return from entry",
+  "bounded_dvalue": {
+    "selection": "unchanged worker with ForwardLimit=1; forward index0, frozen Core gradient indices0..24, heads0..1, all four observers in original order",
+    "fixture_identity": "all original manifests and frozen operands rehashed",
+    "maximum_executes": 100,
+    "pairs": 200,
+    "maxAbs": 0.01,
+    "oracles": [
+      "independent ordered double",
+      "source-ordered FP32"
+    ],
+    "word_mismatches": 0,
+    "observer_mismatches": 0,
+    "invariants": [
+      "finite",
+      "guards",
+      "complete writes",
+      "poison",
+      "input immutability"
+    ],
+    "full_9824_pairs": false
+  },
+  "arithmetic_topology_abi_fixture_gates": "unchanged; exact copied-worker comparison required",
+  "host_matrix": [
+    "normal",
+    "backend create failure",
+    "device create failure",
+    "softmax contextCreate failure",
+    "softmax finalize failure",
+    "softmax teardown failure",
+    "dvalue contextCreate failure",
+    "dvalue finalize failure",
+    "dvalue execute failure",
+    "dvalue teardown failure",
+    "early exit",
+    "repeated cleanup rejection",
+    "stale context/graph rejection",
+    "package registration failure",
+    "logger/API contract validation"
+  ],
+  "cleanup": "reverse dependency order; failed free ownership ambiguous: no retry or parent free, classify teardown failure",
+  "safety": "fresh existing preflight and approved APK audit, same physical device, known Awake/top-resumed; 2s top monitoring; no active training/recognizable competitor; critical hard protection; ordinary battery/temperature/power monitoring-only; no wake/unlock/takeover/force-stop/root/reboot",
+  "crash_capture": {
+    "before_launch": [
+      "read-only crash/main/system logcat snapshots and collection",
+      "accessible tombstone inventory",
+      "DropBox metadata availability"
+    ],
+    "after": [
+      "logcat QNN logs",
+      "accessible tombstones",
+      "DropBox crash metadata",
+      "relative offsets/main thread comparison",
+      "actual exit and resource/API sequence"
+    ],
+    "missing": null,
+    "root_or_clear": false,
+    "insufficient_comparability": "STOP before arithmetic"
+  },
+  "execution_cap": {
+    "maximum_os_processes": 1,
+    "automatic_retries": 0,
+    "claim": "exclusive process-attempt record must be created before launching; never reused"
+  },
+  "stop_rules": [
+    "any frozen/protected mismatch",
+    "any mandatory host/build/API gate failure",
+    "safety unknown or Dozing",
+    "recognized competitor",
+    "Softmax failure",
+    "nonzero QNN API",
+    "6031/6033",
+    "first failure; no third role or unregistered dvalue cases"
+  ],
+  "outcomes": [
+    "SHARED_LIFETIME_BOUNDARY_PILOT_PASS",
+    "SHARED_LIFETIME_DIAGNOSTIC_FAILED",
+    "BLOCKED_DEVICE_SAFETY",
+    "BLOCKED_QNN_API",
+    "BLOCKED_RESOURCE_LIFETIME",
+    "DIAGNOSTIC_NUMERICAL_FAIL",
+    "DIAGNOSTIC_TEARDOWN_FAIL",
+    "INCONCLUSIVE"
+  ],
+  "pass_requires": [
+    "all Softmax9824 pairs",
+    "measured expected resource counts",
+    "first dvalue finalize return0",
+    "bounded dvalue200 pairs accuracy and word contracts",
+    "no SIGSEGV or API6031/6033",
+    "all required teardown",
+    "actual exit0",
+    "safety maintained"
+  ],
+  "interpretation": "PASS strengthens backend reinitialization hypothesis; never ROOT_CAUSE_VERIFIED. Same signature means hypothesis not sufficient, not unrelated. Different failures classified separately.",
+  "formal_exclusion": {
+    "formal_processes_added": 0,
+    "formal_completed": "0/3",
+    "formal_status": "BLOCKED_FORMAL_COHORT",
+    "full_attention": "NOT_CERTIFIED",
+    "full1_layer": "NOT_CERTIFIED",
+    "full19_layer": "NOT_CERTIFIED",
+    "training": "NO-GO",
+    "performance": "NOT_MEASURED",
+    "formal_plan_unchanged": true
+  },
+  "public_export": "strict allowlist; reject private fields, binary overwrite/impersonation, formal promotion, missing finalize/exit/teardown/counts, hidden arithmetic mismatch, missing crash evidence treated as normal, second process, protected mismatch"
+}
