@@ -125,6 +125,25 @@ $baseline=Capture-Readonly 'logcat-before' @('logcat','-b','crash','-b','main','
 if($baseline.ExitCode){throw 'CRASH_LOG_COLLECTION_UNAVAILABLE'}
 Capture-Readonly 'tombstones-before' @('shell','ls','-l','/data/tombstones')|Out-Null
 Capture-Readonly 'dropbox-before' @('shell','dumpsys','dropbox')|Out-Null
+$script:verifiedInfrastructure=@{}
+function Test-VerifiedInfrastructure([string]$Line) {
+ if($Line -notmatch '^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.+?)\s*$'){return $false}
+ $processNumber=$Matches[1];$parentNumber=$Matches[2];$userName=$Matches[3];$processName=$Matches[4];$command=$Matches[5]
+ $kernel=($parentNumber -eq '2' -and $userName -eq 'root' -and $processName -eq '[kworker/R-policy_probe_wq]' -and $command -eq $processName)
+ $trace=($parentNumber -eq '1' -and $userName -eq 'nobody' -and $processName -eq 'traced_probes' -and $command -eq 'traced_probes')
+ if(!$kernel -and !$trace){return $false}
+ $identity="$processNumber|$parentNumber|$userName|$processName|$command"
+ if($script:verifiedInfrastructure.ContainsKey($identity)){return $true}
+ $status=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$processNumber/status") -AllowFailure
+ $cmdline=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','cat',"/proc/$processNumber/cmdline") -AllowFailure
+ if($status.ExitCode -ne 0 -or $cmdline.ExitCode -ne 0){return $false}
+ $verified=$false
+ if($kernel){$verified=($status.Text -match '(?m)^Kthread:\s*1\s*$' -and $status.Text -match '(?m)^PPid:\s*2\s*$' -and $status.Text -match '(?m)^Uid:\s*0\s+0\s+0\s+0\s*$' -and [string]::IsNullOrEmpty($cmdline.Text))}
+ if($trace){$verified=($status.Text -match '(?m)^Name:\s*traced_probes\s*$' -and $status.Text -match '(?m)^Kthread:\s*0\s*$' -and $status.Text -match '(?m)^PPid:\s*1\s*$' -and $status.Text -match '(?m)^Uid:\s*9999\s+9999\s+9999\s+9999\s*$' -and $cmdline.Text -ceq ('/system/bin/traced_probes'+[char]0))}
+ @{verified=$verified;identity_private=$identity;status_private=$status.Text;cmdline_private=$cmdline.Text;utc=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json -Compress|Add-Content "$out/infrastructure-private.jsonl" -Encoding utf8
+ if($verified){$script:verifiedInfrastructure[$identity]=$true}
+ return $verified
+}
 function Competition {
  $r=Invoke-PhoneLmAdb -Adb $adb -Device $d.Endpoint -Arguments @('shell','ps','-A','-o','PID,PPID,USER,NAME,ARGS') -AllowFailure
  @{exit=$r.ExitCode;text_private=$r.Text;utc=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json -Compress|Add-Content "$out/competition-private.jsonl" -Encoding utf8
@@ -134,6 +153,7 @@ function Competition {
   if($line -match '^\s*(\d+)\s+\d+\s+\S+\s+(\S+)'){
    $observedPid=$Matches[1];$name=$Matches[2]
    if($name -match '(?i)(probe|saved_p_backwa|qnn-net-run|simple_app|hmx|hexatrain|training)'){
+    if(Test-VerifiedInfrastructure $line){continue}
     $ownedMatch=$null
     if(Test-Path "$out/stdout.txt"){
      $f=[IO.File]::Open("$out/stdout.txt",[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)

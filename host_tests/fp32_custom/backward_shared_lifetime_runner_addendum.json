@@ -10,6 +10,7 @@
   "allowed_support_files": [
     "scripts/test_backward_shared_lifetime_runner.ps1"
   ],
+  "infrastructure_classification": "Exact policy_probe_wq kernel worker (root, PPID2, Kthread1, empty cmdline) and Android Perfetto traced_probes (nobody UID9999, PPID1, Kthread0, exact system cmdline) are infrastructure only after read-only proc attestation; evidence is saved and PID/PPID/user/name/full-command tuple pinned. All unknown matches still stop. This corrects two observed prelaunch name false positives; it does not waive competing NPU workloads.",
   "additional_guard": "launch permit binds runner, this committed addendum and the exact fresh host inventory SHA256; bounded 120-second controller review handoff, followed by fresh safety/competition recheck before the exclusive process claim",
   "maximum_os_processes": 1,
   "retries": 0,
