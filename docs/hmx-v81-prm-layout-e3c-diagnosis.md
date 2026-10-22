@@ -1,7 +1,9 @@
 # HMX V81 VTCM layout and the E-3C1 mode-42 mismatch
 
 Status: CPU-only diagnosis, 2026-10-22. No DSP change, no device run, no
-production path. Classification: **`MULTIPLE_CAUSES_IDENTIFIED`** with
+production path for the diagnosis itself; the separately approved mode-43
+follow-up was implemented and executed on the same day (§8). Classification:
+**`MULTIPLE_CAUSES_IDENTIFIED`** with
 sub-findings `LAYOUT_MISMATCH_RESOLVED` (both operands) and
 `CONVERT_STORE_MAPPING_RESOLVED`; `ISSUE_GEOMETRY_MISMATCH_NOT_FOUND`.
 
@@ -406,27 +408,31 @@ evidence is the recorded mode-42 data.
    vs B3 accuracy. E-3C1 device accuracy remains
    `INSUFFICIENT_EVIDENCE`; E-3C2 stays untriggered.
 
-## 8. Mode 43 proposal (not implemented, not executed)
+## 8. Mode 43 (E-3C1R) — implemented and executed 2026-10-22
 
 A sparse layout-identifier probe is **not needed**: the layout is
 already uniquely determined by the recorded mode-42 slots and the PRM.
 The remaining device question is narrower: does correctly packed input
 produce the intended cells, and is the negative final store signed or
-clamped? A single confirmation run would answer both.
+clamped? The approved single confirmation run answered the packing and
+slot-1 question at four-slot scope.
 
-**Mode 43 — corrected-packing confirmation (E-3C1R), PROPOSED ONLY.**
+**Mode 43 — corrected-packing confirmation (E-3C1R), EXECUTED under
+separate approval (PR #14 comment 6335830744): one clean stamped build
+plus one `-DeployAndRun` session, no retry.**
 
-* Reuse the exact mode-42 fixture and instruction sequence; add only two
-  DSP-side pack helpers that write each hi/lo tile at
-  `act_u16`/`wgt_u16` offsets. No instruction, register, or bias change.
-* One plain trial; return four store slots through the existing
-  `results[4]` ABI: `out[0]`, `out[1]`, `out[2]`, `out[32]`.
-  Plain-only is deliberate: B3 is not an independent variable for
-  layout, and its 1-ulp sensitivity was already observed at `out[32]`
-  in mode 42. `trials=1`; no IDL/stub change. Add a small host-side
-  mode-43 branch that maps the four `results[]` slots to the table below
-  and prints the verdict; do not reuse mode 42's classifier.
-* Pre-registered expectations (fixed before any run):
+* Reused the exact mode-42 fixture and instruction sequence; the only
+  intended data change was the plain Ahi/Whi packing at
+  `act_u16`/`wgt_u16` offsets. No instruction, register or bias change.
+  Mode 42's code path and historical verdict were left intact.
+* One plain trial; a dedicated DSP handler returned four store slots
+  through the existing `results[4]` ABI: `out[0]`, `out[1]`, `out[2]`,
+  `out[32]`. Plain-only was deliberate: B3 is not an independent
+  variable for layout, and its 1-ulp sensitivity was already observed
+  at `out[32]` in mode 42. `trials=1`; no IDL/stub change. The host
+  branch used the shared `hmx_mode43.h` decision procedure and failed
+  closed unless the trial count was exactly one.
+* Pre-registered expectations (fixed before the run):
 
 | slot | expected | classification meaning |
 | --- | --- | --- |
@@ -440,28 +446,43 @@ clamped? A single confirmation run would answer both.
   `E3C1R_LAYOUT_CONFIRMED_CLAMP` (`out[1]=0x0000`, others as above),
   `E3C1R_RESIDUAL_MISMATCH` (anything else; stop and re-diagnose, no
   retuning).
-* Cost/risk: same VTCM allocation (12 KB, 10.5 KB used) and the same
-  per-trial packet shape; one plain trial (1 MMA packet) instead of mode
-  42's two trials (4 packets), so kernel time should be at or below the
-  recorded ~2.6 ms. One build, one device run, user authorization
-  required. Tier-3 precautions of the existing device runner apply.
-* Explicitly out of scope: accuracy measurement (E-3C2 remains
-  untriggered), throughput, production integration.
+* Result (raw, 2026-10-22; build `d7c1603` / build id `0xd7c1603c`):
+  `out[0]=0x5400`, `out[1]=0x0000`, `out[2]=0x5400`,
+  `out[32]=0x55e3`; positive checks 3/3; `hmx_executed=1`, `trials=1`,
+  `rpc_status=0`, `close_status=0`, exit 0 →
+  **`E3C1R_LAYOUT_CONFIRMED_CLAMP`**. This confirms the corrected
+  packing at the four readback slots and records the clamp candidate.
+  It does not locate the clamp stage (ACC, convert or store), does not
+  establish a signed store, and does not measure full-tile accuracy.
+* Cost/risk: same VTCM reserve (12 KB); mode 43 uses act+wgt+out plus
+  two 256-byte bias sets (6.5 KB). One plain trial (1 MMA packet)
+  instead of mode 42's two trials (4 packets). One build, one device
+  run; the approved one-run gate was applied with no retry and no B3
+  expansion.
+* Explicitly out of scope: full-tile accuracy measurement (E-3C2
+  remains untriggered), throughput, signed-store law, clamp-stage
+  attribution, production integration.
 
-If the user prefers to validate without a new mode, the alternative is
-to re-run the E-3C1 gate after fixing mode 42's packing, but a new mode
-preserves mode 42's historical measurement and its pre-registered
-verdict. No option is executed in this task.
+The run preserved mode 42's historical measurement and verdict. Further
+device work (B3 expansion, clamp-stage or signed-store discriminator)
+requires new explicit authorization. E-3C2 remains untriggered.
 
 ## 9. Files and next gate
 
 * `host_tests/hmx_acc_residual_rpc/hmx_prm_layout_sim.c` — CPU model,
-  assertions and mapping tables.
-* `scripts/run_prm_layout_sim.ps1` — gcc/clang runner.
+  assertions and mapping tables, all-1024 packing contract and mode-43
+  decision-procedure tests.
+* `scripts/run_prm_layout_sim.ps1` — gcc/clang runner, wired into the
+  Fast host-contract suite.
+* `host_tests/hmx_acc_residual_rpc/hmx_mode43.h` — shared mode-43
+  literals, one-trial contract and four-slot classifier.
+* `host_tests/hmx_acc_residual_rpc/probe_dsp.c` — dedicated one-trial
+  mode-43 handler; `probe_host.c` — host gate and raw-slot reporting.
 * `host_tests/hmx_acc_residual_rpc/README.md` — corrected E-3C1
-  diagnosis and pointers.
+  diagnosis, E-3C1R pre-registration and measured result.
 * This document.
 
-Next gate: no device work without explicit authorization. If mode 43 is
-approved, it is one build + one run and resolves signed vs clamp; if it
-passes, E-3C1 accuracy can be re-measured as a separate gate.
+Next gate: E-3C1 accuracy remains `INSUFFICIENT_EVIDENCE`; mode 43
+resolved the four-slot packing and the slot-1 clamp candidate but not
+the clamp stage or a signed-store law. E-3C2 remains untriggered.
+Further device work requires explicit authorization.

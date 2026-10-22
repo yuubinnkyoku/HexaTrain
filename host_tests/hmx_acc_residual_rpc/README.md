@@ -1188,9 +1188,47 @@ the one-trial gate. `run_prm_layout_sim.ps1` reports
 `prm_layout_checks=9335 fail=0` (gcc and clang), and the full
 `verify.ps1 -Profile Fast` gate passes with this suite wired in.
 
-**Device result: PENDING the single approved stamped build/run.** Scope:
-four readback slots only; no full 32×32 accuracy claim, no signed-store
-law generalization, no throughput claim. E-3C2 remains UNTRIGGERED.
+**Device result (2026-10-22, ONE clean stamped build `d7c1603` / build id
+`0xd7c1603c` plus ONE `-DeployAndRun` session, `attempts=1`, exit 0):**
+`rpc_status=0`, `dsp_identity=MATCH`, `build_id_status=MATCH`,
+`vtcm_bytes=12288`, `hmx_executed=1`, `trials=1`, `close_status=0`. Raw
+slots:
+
+| slot | expected | observed | class |
+| --- | --- | --- | --- |
+| `results[0]` | `0x5400` | `0x5400` | EXPECTED |
+| `results[1]` | `0xd400` signed or `0x0000` clamp | **`0x0000`** | CLAMP_CANDIDATE |
+| `results[2]` | `0x5400` | `0x5400` | EXPECTED |
+| `results[3]` | `0x55e3` | `0x55e3` | EXPECTED |
+
+`e3c1r_positive_checks=3/3`, `e3c1r_slot1_interpretation=ENABLED`,
+`e3c1r_host_contract=PASS`, fixed verdict
+**`E3C1R_LAYOUT_CONFIRMED_CLAMP`**. Raw metadata:
+`magic=0x484d5831 dsp_arch=81 kernel_us=706 power=0 modeA_lock=0
+modeB_lock=0`. `kernel_us` is a single-run metadata value, not a
+throughput or cost claim.
+
+This confirms the corrected pair-interleaved packing at the four readback
+slots and reproduces the clamp candidate at slot 1. It does **not**
+establish a signed store, does **not** locate the clamp stage (ACC,
+convert or store), and does **not** provide a full 32×32 accuracy
+measurement. No B3 expansion and no retry were performed. E-3C2 remains
+UNTRIGGERED because the signed-store trigger was not met.
+
+The one clean stamped build came from clean HEAD `d7c1603`
+(`git_dirty=False`); both build targets exited 0. Artifact hashes:
+
+| artifact | repo-relative path | SHA-256 |
+| --- | --- | --- |
+| stub `.so` | `host_tests/hmx_acc_residual_rpc/android_ReleaseG_aarch64/ship/libhexatrain_hmx_acc_residual.so` | `49f8b77ba9d3e375dc5d2553ecdfa257703bf6835f6aaecd4eedd88e627ae508` |
+| skel `.so` | `host_tests/hmx_acc_residual_rpc/hexagon_ReleaseG_toolv19_v81/ship/libhexatrain_hmx_acc_residual_skel.so` | `127a3f98374daa2d50987e93652c806283128739c4e08139c677428cde8d0c9f` |
+| host exe | `host_tests/hmx_acc_residual_rpc/android_ReleaseG_aarch64/ship/hexatrain_hmx_acc_residual_test` | `877fb187720edf94f93251985c9e0efbe41aec9e1b464ea78365fd53289befe8` |
+
+Private build/deploy evidence is under the gitignored
+`build/hmx_evidence/` (`b_provenance_20261022_194244.txt` and
+`b_provenance_20261022_194438.txt`). The device endpoint and stable serial
+are intentionally not recorded in this public log. Scope remains four
+slots only; no full 32×32 accuracy, signed-store law or throughput claim.
 
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
@@ -1200,8 +1238,8 @@ law generalization, no throughput claim. E-3C2 remains UNTRIGGERED.
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
-| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate executed (mode 42); its mismatch is explained by row-major operand packing vs the pair-interleaved VTCM layout (2026-10-22) | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device gate executed 2026-10-21 → `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT` (realistic-tile device accuracy `INSUFFICIENT_EVIDENCE`; all models/unexpected, no NO_GO); 2026-10-22 CPU re-derivation → `MULTIPLE_CAUSES_IDENTIFIED` (row-major operand packing + `(s0,o16)` readback + negative clamp), accuracy still `INSUFFICIENT_EVIDENCE`; E-3C2 untriggered, separately gated) | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate executed (mode 42); its mismatch is explained by row-major operand packing vs the pair-interleaved VTCM layout (2026-10-22); E-3C1R mode 43 (2026-10-22, one build + one run) confirmed corrected packing at four slots and observed the clamp candidate at slot 1 (`E3C1R_LAYOUT_CONFIRMED_CLAMP`); no full-tile accuracy, signed-store or clamp-location claim; E-3C2 untriggered | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device gate executed 2026-10-21 → `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT` (realistic-tile device accuracy `INSUFFICIENT_EVIDENCE`; all models/unexpected, no NO_GO); 2026-10-22 CPU re-derivation → `MULTIPLE_CAUSES_IDENTIFIED` (row-major operand packing + `(s0,o16)` readback + negative clamp), accuracy still `INSUFFICIENT_EVIDENCE`; E-3C1R mode 43 (2026-10-22) → `E3C1R_LAYOUT_CONFIRMED_CLAMP` at four-slot scope (3/3 positive checks, slot 1 `0x0000`; no clamp-stage location, no full-tile accuracy, no signed store); E-3C2 untriggered, separately gated) | — |
 
 ### Decision
 
@@ -1235,14 +1273,21 @@ law generalization, no throughput claim. E-3C2 remains UNTRIGGERED.
   kernel-given-input reference the W-only variant for the current
   FP16-activation path REGRESSES 1.4–1.5× at ~3× MMA cost, so a useful
   kernel must justify that cost (persistent FP16x2 activation
-  transport would be a separate architecture). Any further device work
-  (corrected-packing confirmation mode 43, retry) is user-gated; a
-  sparse layout-identifier probe is not needed — the layout is already
-  determined by the mode-42 data plus the PRM. Production
-  integration, benchmarking of a real pipeline, multi-tile
+  transport would be a separate architecture). E-3C1R (mode 43) was
+  approved on 2026-10-22 (comment 6335830744) and executed under the
+  one-build/one-run gate: **`E3C1R_LAYOUT_CONFIRMED_CLAMP`** (3/3
+  positive slots; slot 1 `0x0000`). This confirms the corrected packing
+  at four-slot scope and records the clamp candidate, but does not
+  locate the clamp stage or establish signed-store/full-tile accuracy.
+  E-3C2 remains UNTRIGGERED. Any further device work (B3 expansion,
+  retry, clamp-stage or signed-store discriminator) remains user-gated;
+  a sparse layout-identifier probe is not needed — the layout is already
+  determined by the mode-42 data plus the PRM and confirmed by mode 43.
+  Production integration, benchmarking of a real pipeline, multi-tile
   implementation and long training remain out of scope.
 - Mode 40 is added under the standing policy — new modes only for
   clearly discriminating minimal experiments, only on explicit
   instruction; this mode exists by exactly that gate. Mode 42 likewise
-  (user-approved E-3C1 experiment); any follow-up layout/identifier
-  probe mode would need its own explicit authorization.
+  (user-approved E-3C1 experiment). Mode 43 (E-3C1R) was approved
+  separately on 2026-10-22 and executed; any further layout/identifier
+  or B3-expansion mode would need its own explicit authorization.
