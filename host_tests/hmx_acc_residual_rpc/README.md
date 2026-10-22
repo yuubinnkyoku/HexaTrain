@@ -643,6 +643,7 @@ recorded requires explicit instruction.
 | B-1 device run (2026-10-20): ONE build + ONE run, mode 40 — two consecutive MMA operand packets into ONE accumulator, `mxclracc` once at start, no convert/store between batches, ONE final bias-0 convert at scale 64; trial 0 (+1)+(+2) stored **`0x5a00`** = 192 (accumulate branch of the pre-registered table), trial 1 (+2)+(−1) stored **`0x5400`** = 64 (mixed-sign batch additivity, positive sum); strict build-id all-agree gate PASS, exit 0, cleanup PASS — `TWO_MMA_ACCUMULATE_CONSISTENT` | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 40` (transcript `build/hmx_evidence/b1_run_20261020.txt`, gitignored) |
 | B2 CPU stored-domain comparison (E-3A, G7): final-FP16-store applied to the SAME synthesis — plain stored vs B3 stored mean abs err 1.446613e-03 vs 8.484465e-04 @n16, 2.719522e-03 vs 1.489992e-03 @n64 (FP32-carried act: 1.71×/1.83×, worsened 0 %, B3 oracle-optimal bits 99.6–100 % vs plain 52.9–55.1 %); FP16-exact act (W-only): 1.22×, worsened 12.5–12.7 %; pinned B-2 scalar fixtures reproduce exactly (plain `0x5400` / B3 `0x5401` and `0x5400`/`0x53ff`; full-RN16 coincide — fixture-specific) | same sim, G7: `split_b2_stored_*`, `split_b2_fixture`, `b2_cpu_gate=PASS improves=4/4`; pre-store G5/G6 figures above are internal-domain, not end-to-end |
 | E-3C0 tile model (G8): ONE 32×32×32 HMX-native tile (PRM v81 §2.2 geometry: act 32 spatial×32 in-ch, wgt 32 out-ch×32 in-ch, out(s,o)=Σ_i A[s][i]·W[o][i]; ACC 37-bit FP — float-chain model validated by double-bracket delta 4.7e-10), SAME bias-0 scale-64 store on every variant: plain 1.307244e-03 → B3 7.084104e-04 mean abs (1.85×, improved 427/equal 597/worsened 0, oracle-optimal bits 58.2%→99.8%); W-only worsens 93/1024 (matches G7 `_vskref`); scale-64 grid preservation exact on [2^-14,1023.5], breaks only subnormal band (6 tile cells, by design) and overflow band (0 cells); negative-store oracle: signed RN16 `0xd400`/`0xd401` vs clamp `0x0000` (device discriminates); 16 pinned cell-bit asserts + 6 layout-distinctness asserts PASS; ABI = multi-lane spot-check under existing `results[4]`, metadata[9] untouched, no IDL change | same sim, G8: `e3c0_cell/e3c0_map/e3c0_tile/e3c0_wonly/e3c0_grid*/e3c0_cond_*/e3c0_cpu_gate=PASS`, tile seed `0xE3C0117E5EEDF00D` |
+| V81 VTCM layout re-derivation (E-3C-DIAG, CPU only, 2026-10-22): activation/weight/store are **pair-interleaved**, `act_u16=(s>>1)*64+i*2+(s&1)`, `wgt_u16=(i>>1)*64+o*2+(i&1)`, `store_u16=(s>>1)*64+o*2+(s&1)` (PRM §2.2.1/Fig. 4, §2.2.2/Fig. 8, §2.4/Figs. 18–19, corroborated by the §3.1 writer loops; Fig. 7 omits address bit 10 in its input-channel labels); replaying the row-major mode-42 buffers through this layout reproduces all four recorded slots exactly (`out[0]` pre-clamp `0xcf88` → clamp `0x0000`; `out[32]` = device cell `(s0,o16)` = `0x59f6`/`0x59f7`), and only row-major/row-major packing matches; `act_rt=0x77C` (SM=11100), `wgt_rt=0x7FF`, `wr_rt=0x700` all decode correctly (no issue-geometry mismatch) | `docs/hmx-v81-prm-layout-e3c-diagnosis.md`, `hmx_prm_layout_sim.c` via `scripts/run_prm_layout_sim.ps1` |
 | B-2 device run (2026-10-20): ONE build + ONE run, mode 41 — three MMA packets (`Ahi·Whi`, `Ahi·Wlo`, `Alo·Whi`) into ONE accumulator, `mxclracc` once per subcase, no convert/store/clear between packets, ONE final bias-0 scale-64 convert + ONE store; trial 0 stored **`0x5401`** (64.0625), trial 1 stored **`0x53ff`** (63.96875) — both exactly the pre-registered 3-product bits, distinct from the plain context `0x5400`; strict build-id all-agree gate PASS, exit 0, cleanup PASS, `DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED` — `B2_THREE_PRODUCT_CONFIRMED` at 1-lane/1-run scope | `run_experiment.ps1 -DeployAndRun -Q 6 -Mode 41` (transcript `build/hmx_evidence/b2_run_20261020.txt`, gitignored) |
 | CPU 3-GEMM synthesis (G5/G6): both-operands-split mean rel err 5.66e-07 @n=64 (4.30e-06 @n=16) vs plain 2.57e-03 / 1.53e-02 → ~4.5e3× mean improvement; the 4-term variant is not better (5.73e-07); chained single-accumulator vs separate float accumulators equivalent (6.79e-07; combine loss subdominant: mean 2.83e-08, max 1.39e-07); W-only split (Alo=0 activations) gains only 1.5–1.8× | same sim |
 
@@ -1088,7 +1089,10 @@ variants AND any cell plain = `0x59f6`). The scalar-era rt constants
 (`act_rt = spatial_mask(14<<7) | (31u<<2)`, `wr_rt = spatial_mask(14<<7)`
 ) are consistent with every 1-nonzero-element probe result but their
 FULL-tile issue/convert/store geometry is evidently NOT the
-row-major-family order assumed for L1/L2. Two honest notes: (a) the
+row-major-family order assumed for L1/L2. **Superseded 2026-10-22 (see
+the follow-up paragraph below): the issue/convert/store geometry is
+correct; the operand tiles were written row-major while HMX reads a
+pair-interleaved layout.** Two honest notes: (a) the
 mode-42 device split helper mirrors `split_float_parts` (FP32-arith
 residual, the realistic FP32-carried deployment model) while the G8
 CPU oracle uses `split_double` — identical on the pinned dyadic cells,
@@ -1109,16 +1113,44 @@ re-derivation of the convert/store state ordering before any device
 retry. No accuracy, throughput, or signed-store conclusion may be
 drawn from mode 42 numbers.
 
+**E-3C1 follow-up diagnosis (2026-10-22, CPU only, no device run;
+`MULTIPLE_CAUSES_IDENTIFIED`; full derivation in
+[`docs/hmx-v81-prm-layout-e3c-diagnosis.md`](../../docs/hmx-v81-prm-layout-e3c-diagnosis.md)):**
+the PRM §2.2/§2.4 layout resolves every recorded slot. HMX croutons are
+**pair-interleaved**: one 128-byte VTCM vector holds two spatials
+(activation) or two input channels (weight) across all 32 of the other
+dimension, in u16 units `act=(s>>1)*64+i*2+(s&1)`,
+`wgt=(i>>1)*64+o*2+(i&1)`, `store=(s>>1)*64+o*2+(s&1)` (PRM §2.2.1
+Fig. 4; §2.2.2 Fig. 8; §2.4 Figs. 18–19; the §3.1 writer loops are the
+index ground truth). Mode 42 wrote both operand tiles **row-major**, so
+the device computed dot products of pair-interleaved *gathers* of the
+logical tile, not logical cells — which is why no logical-cell search
+could find `0x59f6`. A CPU model (`hmx_prm_layout_sim.c`) reproduces the
+four measured slots exactly: `out[0]=(s0,o0)` pre-clamp `0xcf88` →
+stored `0x0000` (the law-4 negative clamp, now extended to a large
+negative value), `out[32]=(s0,o16)` plain `0x59f6` / B3 `0x59f7`;
+`(s0,o16)` is the unique cell with that plain/B3 pair. The store index
+is not the L1/L2 row-major family: `dst[32]` decodes to `(s0,o16)`.
+Register fields are correct (`act_rt=0x77C` → SM `11100` = 4×8,
+`wgt_rt=0x7FF` = dW 15 + reserved `0x7F`, `wr_rt=0x700`), so there is no
+issue-geometry mismatch. With correctly packed operands the same model
+predicts `out[0]=0x5400`/`0x5401`, `out[1]=0xd400`/`0xd401` (signed) or
+`0x0000` (clamp), `out[2]=0x5400`, `out[32]=0x55e3`. Mode 42's
+pre-registered verdict stays historical
+(`E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`); the diagnosis
+reclassifies the cause, not the measurement. Tile-wide device accuracy
+remains `INSUFFICIENT_EVIDENCE` and E-3C2 remains UNTRIGGERED.
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |
 | --- | --- | --- | --- | --- |
-| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× end-to-end but a 1.4–1.5× REGRESSION vs kernel-given-input ref; split not exact (2^-23-class residue + subnormal-lo degradation); device scalar-fixture stored bits CONFIRMED (mode 41: `0x5401`/`0x53ff` vs plain `0x5400`, 1-lane/1-run); realistic-tile CPU full-tile stored gain 1.85× (improved 427/equal 597/worsened 0) with the same scale-64 store; multi-lane device accuracy `INSUFFICIENT_EVIDENCE` (E-3C1 mode 42 pre-registered) | reference |
+| accuracy vs double | input-rounding 2^-11 term dominates | equal-or-worse in general (measured); exactly equal on on-grid positives only; for 0 < r < g the ceil export improves iff frac(r/g) > 0.5, for r ≥ g it always improves (E < g ≤ r) — distribution-dependent in the sub-unit cell, mechanism (dynamic feedback) missing | internal pre-store: mean rel err 5.66e-07 @n=64 vs plain 2.57e-03 (~4.5e3× — internal-domain only, NOT end-to-end); STORED-domain (final FP16 store): 1.71×@n16 / 1.83×@n64 mean-abs vs stored plain (FP32-carried act, zero worsened, 99.6–100 % oracle-optimal bits); W-only 1.22× end-to-end but a 1.4–1.5× REGRESSION vs kernel-given-input ref; split not exact (2^-23-class residue + subnormal-lo degradation); device scalar-fixture stored bits CONFIRMED (mode 41: `0x5401`/`0x53ff` vs plain `0x5400`, 1-lane/1-run); realistic-tile CPU full-tile stored gain 1.85× (improved 427/equal 597/worsened 0) with the same scale-64 store; multi-lane device accuracy `INSUFFICIENT_EVIDENCE` (mode 42 executed 2026-10-21; the 2026-10-22 layout re-derivation identified the operand-packing cause, accuracy still unmeasured) | reference |
 | negative residual corrections | falls out naturally of RN | lost (clamp, measured) | unaffected (no clamp path involved) | — |
 | sub-lattice corrections | lost | lost (grid ceiling is global — E-1) | preserved inside FP32 domain | — |
 | extra compute | 0 | 2 converts + bias re-inits | 3× MMA + split op | — |
-| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate pending (mode 42) | — |
-| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device gate executed 2026-10-21 → `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT` (realistic-tile device accuracy `INSUFFICIENT_EVIDENCE`; all models/unexpected, no NO_GO); E-3C2 untriggered, separately gated) | — |
+| new HMX knowledge required | none | none — verdict derivable from laws | B-1 primitive — device-confirmed at minimal shape (mode 40, 2026-10-20); B-2 three-product-through-store — device-confirmed at 1-lane/1-run (mode 41, 2026-10-20); realistic-tile multi-channel stored-domain + signed-store discrimination — E-3C0 CPU gate PASS, E-3C1 device gate executed (mode 42); its mismatch is explained by row-major operand packing vs the pair-interleaved VTCM layout (2026-10-22) | — |
+| verdict | baseline | general: `NO_GO`; on-grid static: `POSSIBLE` (= baseline capability); dynamic feedback: `INSUFFICIENT_EVIDENCE` (A-2 only) | `CONDITIONALLY_POSSIBLE` (B-1 and B-2 both confirmed at minimal/1-lane scope; E-3C0 CPU tile gate PASS — full-tile CPU gain 1.85×, worsened 0, with W-only regressing under the kernel-given-input reference; E-3C1 device gate executed 2026-10-21 → `E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT` (realistic-tile device accuracy `INSUFFICIENT_EVIDENCE`; all models/unexpected, no NO_GO); 2026-10-22 CPU re-derivation → `MULTIPLE_CAUSES_IDENTIFIED` (row-major operand packing + `(s0,o16)` readback + negative clamp), accuracy still `INSUFFICIENT_EVIDENCE`; E-3C2 untriggered, separately gated) | — |
 
 ### Decision
 
@@ -1138,11 +1170,14 @@ drawn from mode 42 numbers.
   2026-10-21 (one build + one runner session) →
   **`E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`** — both variants
   computed and returned deterministic but unmodeled stored values
-  (`out[0]` = `0x0000`, `out[32]` = `0x59f6`/`0x59f7`); CPU diagnosis
-  (aggregation-family sweep: axis transpositions × in-channel masks)
-  found NO modeled hypothesis matching the observation, so the
-  full-tile issue/convert/store geometry under the scalar-era rt
-  constants is NOT the assumed row-major family. E-3C2 cost
+  (`out[0]` = `0x0000`, `out[32]` = `0x59f6`/`0x59f7`). The pre-registered
+  verdict stays historical; the 2026-10-22 CPU-only PRM re-derivation
+  explains the observation (`MULTIPLE_CAUSES_IDENTIFIED`): both operand
+  croutons were written row-major while HMX reads a pair-interleaved
+  layout, `out[32]` is the device cell `(s0,o16)` (not L1/L2), and
+  `out[0]=0` is the known negative-store clamp — replay reproduces all
+  four slots, and the issue geometry/convert mapping are correct (see
+  `docs/hmx-v81-prm-layout-e3c-diagnosis.md`). E-3C2 cost
   measurement stays UNTRIGGERED (requires
   `E3C1_SIGNED_STORE_AND_B3_CONFIRMED`), and the E-3C2 decision
   framing already carries the standing caution — against the
@@ -1150,7 +1185,9 @@ drawn from mode 42 numbers.
   FP16-activation path REGRESSES 1.4–1.5× at ~3× MMA cost, so a useful
   kernel must justify that cost (persistent FP16x2 activation
   transport would be a separate architecture). Any further device work
-  (identifier-probe layout mode, retry) is user-gated. Production
+  (corrected-packing confirmation mode 43, retry) is user-gated; a
+  sparse layout-identifier probe is not needed — the layout is already
+  determined by the mode-42 data plus the PRM. Production
   integration, benchmarking of a real pipeline, multi-tile
   implementation and long training remain out of scope.
 - Mode 40 is added under the standing policy — new modes only for
