@@ -1141,6 +1141,57 @@ pre-registered verdict stays historical
 reclassifies the cause, not the measurement. Tile-wide device accuracy
 remains `INSUFFICIENT_EVIDENCE` and E-3C2 remains UNTRIGGERED.
 
+### Phase E-3C1R: corrected-packing one-trial confirmation (mode 43)
+
+Approved 2026-10-22 (PR #14 comment 6335830744) as exactly **ONE clean
+stamped V81 build plus ONE `-DeployAndRun` session** (`-DeployRetries 1`),
+with no retry and no B3 expansion. Mode 42's historical path and verdict
+remain unchanged (`E3C1_INCONCLUSIVE_DIAGNOSE_PACKET_LANE_CONVERT`).
+
+Design: the same 32×32×32-K32 fixture, packet shape, bias0 = 0, scale = 64,
+plain-only and no feedback. The **only intended data difference is operand
+packing**: `act=(s>>1)*64+i*2+(s&1)`,
+`wgt=(i>>1)*64+o*2+(i&1)` instead of row-major. A dedicated DSP handler
+executes ONE MMA packet, ONE convert and ONE store, and reads four cells
+from that one converted tile through the existing `results[4]` ABI:
+`results[0]=out[0]`, `[1]=out[1]`, `[2]=out[2]`, `[3]=out[32]`;
+`metadata[7]=1`, `metadata[8]=1`. The host fails closed unless the trial
+count is exactly 1.
+
+Pre-registered slots and verdicts (fixed before the run; no post-hoc
+retuning):
+
+| slot | device cell | expected bits | role |
+| --- | --- | --- | --- |
+| `results[0]` | `(s0,o0)` | `0x5400` | positive check |
+| `results[1]` | `(s1,o0)` | `0xd400` signed or `0x0000` clamp | slot-1 candidate |
+| `results[2]` | `(s0,o1)` | `0x5400` | positive check |
+| `results[3]` | `(s0,o16)` | `0x55e3` | positive check |
+
+All three positive checks must pass before slot 1 is interpreted. A zero
+at slot 1 only records the observed zero-store behavior; it does **not**
+locate the clamp (ACC, convert or store). `0xd401` is not a mode-43
+candidate: mode 43 is plain-only and B3 belongs to mode 42. The fixed
+verdicts are `E3C1R_LAYOUT_CONFIRMED_SIGNED`,
+`E3C1R_LAYOUT_CONFIRMED_CLAMP` and `E3C1R_RESIDUAL_MISMATCH`. A residual
+mismatch is a valid scientific outcome, not a harness pass; only
+host-contract violations (wrong trial count, HMX not executed,
+RPC/identity/cleanup failure) fail closed.
+
+CPU pre-run evidence (2026-10-22, no device contact):
+`hmx_prm_layout_sim.c` now also proves the all-1024 act/wgt/store
+pack–decode bijection and inverse, VTCM bounds/disjointness, deterministic
+untouched mode-42 replay (`out[0]=0x0000`, `out[32]=0x59f6`/`0x59f7`), the
+mode-43 predictions (pre `0x5400/0xd400/0x5400/0x55e3`; modeled clamp
+store `0x0000` at slot 1), and the exact host decision procedure including
+the one-trial gate. `run_prm_layout_sim.ps1` reports
+`prm_layout_checks=9335 fail=0` (gcc and clang), and the full
+`verify.ps1 -Profile Fast` gate passes with this suite wired in.
+
+**Device result: PENDING the single approved stamped build/run.** Scope:
+four readback slots only; no full 32×32 accuracy claim, no signed-store
+law generalization, no throughput claim. E-3C2 remains UNTRIGGERED.
+
 ### Overall comparison against the plain FP16 baseline and the double oracle
 
 | criterion | plain FP16 baseline (today) | Path A (2-convert harvest) | Path B (input split) | CPU double oracle |

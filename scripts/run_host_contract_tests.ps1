@@ -94,6 +94,12 @@ Invoke-PhoneLmHostPwshScript -Label "HMX experiment identity gate self-test" `
 Invoke-PhoneLmHostPwshScript -Label "FP16x2 split precision sim" `
     -ScriptPath (Join-Path $Root "scripts\run_fp16x2_split_sim.ps1")
 
+# CPU-only HMX PRM pair-interleaved layout + mode-43 contract. Covers the
+# all-1024 pack/decode bijection, VTCM bounds/overlap, deterministic
+# mode-42 replay and the exact one-trial/slot-1 host gate in hmx_mode43.h.
+Invoke-PhoneLmHostPwshScript -Label "HMX PRM layout / mode43 contract" `
+    -ScriptPath (Join-Path $Root "scripts\run_prm_layout_sim.ps1")
+
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
     # Remaining product contracts stay in Suite All (Host / Formal / PrGate).

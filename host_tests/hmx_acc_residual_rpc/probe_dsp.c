@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "hmx_identity.h"
+#include "hmx_mode43.h"
 #include "bias20.h"
 #include "fp16_util.h" /* E-3C1: shared RN16 / fp16<->double helpers */
 
@@ -46,7 +47,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 42, /* E-3C1 highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
+  MODE_MAX = 43, /* E-3C1R highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
 };
 
 typedef struct probe_context {
@@ -672,6 +673,132 @@ static void run_one(uint8_t *base, unsigned extra_four_bits, int q, int mode,
   *residual_bits = residual[0];
 }
 
+/* E-3C1R (mode 43): corrected-packing, plain-only, ONE-trial confirmation.
+ *
+ * Same fixture, packet shape, bias0 scale=64 and no-feedback convert as
+ * mode 42's plain trial. The ONLY intended data change is that the plain
+ * Ahi/Whi cells are written at the PRM pair-interleaved VTCM offsets
+ * instead of row-major:
+ *   act_u16(s,i)   = (s>>1)*64 + i*2 + (s&1)
+ *   wgt_u16(o,i)   = (i>>1)*64 + o*2 + (i&1)
+ * The hardware store writes convert cell (s,o) at
+ *   store_u16(s,o) = (s>>1)*64 + o*2 + (s&1)
+ * so the ONE converted plain tile is read back at the four slots
+ * results[0]=out[0], [1]=out[1], [2]=out[2], [3]=out[32].
+ *
+ * The fixture construction below is a VERBATIM copy of the mode-42 block;
+ * it is intentionally not factored out so mode 42's historical code path
+ * stays untouched. Any change here must be mirrored in mode 42 and
+ * re-validated by hmx_prm_layout_sim.c.
+ *
+ * Pre-registered expectations (fixed before the run; do not retune):
+ *   0x5400, 0xd400 (signed) or 0x0000 (clamp), 0x5400, 0x55e3.
+ */
+static void run_mode43_one_trial(uint8_t *base, int *results) {
+  uint16_t *act = (uint16_t *)(base + 0 * TILE_BYTES);
+  uint16_t *wgt = (uint16_t *)(base + 1 * TILE_BYTES);
+  uint32_t *bias0 = (uint32_t *)(base + 4 * TILE_BYTES);
+  uint32_t *bias1 = (uint32_t *)((uint8_t *)bias0 + BIAS_BYTES);
+  uint16_t *out = (uint16_t *)(base + 5 * TILE_BYTES);
+  int idx;
+  int s, o, i;
+
+  /* ---- t8_build port: statement order verbatim (mode 42) ---- */
+  e3c1_rng = 0xE3C0117E5EEDF00Dull;
+  for (idx = 0; idx < E3C1_T8_CELLS; ++idx) {
+    double u = e3c1_rng_unit();
+    double v = u * 4.0;
+    double val = v - 2.0;
+    e3c1_w[idx] = val;
+    u = e3c1_rng_unit();
+    v = u * 4.0;
+    val = v - 2.0;
+    e3c1_x[idx] = val;
+  }
+
+  /* Special W rows: out-ch 0..3 case-class anchors, 28..31 s3
+   * subnormal-edge targets; out-ch 4..27 stay seeded realistic. */
+  for (o = 0; o < E3C1_T8; ++o) {
+    if (o <= 3 || o >= 28) {
+      for (i = 0; i < E3C1_T8; ++i) e3c1_w[(long)o * E3C1_T8 + i] = 0.0;
+    }
+  }
+  e3c1_w[0 * E3C1_T8 + 0] = 1.0 + 0x1p-11; /* positive split-sensitive row */
+  e3c1_w[0 * E3C1_T8 + 1] = 0x1p-11;
+  e3c1_w[0 * E3C1_T8 + 2] = 0x1p-13;
+  e3c1_w[1 * E3C1_T8 + 0] = 1.0 - 0x1p-12;  /* B-2 case-1 anchor row */
+  e3c1_w[2 * E3C1_T8 + 0] = 0x1p-9;         /* s3 boundary row (64*acc=2^-14) */
+  e3c1_w[3 * E3C1_T8 + 0] = 1.0;            /* near-zero cancellation row */
+  e3c1_w[3 * E3C1_T8 + 1] = 1.0 + 0x1p-12;
+  e3c1_w[28 * E3C1_T8 + 0] = 0x1p-10;
+  e3c1_w[29 * E3C1_T8 + 0] = 0x1p-10 - 0x1p-21;
+  e3c1_w[30 * E3C1_T8 + 0] = 3.0 * 0x1p-12;
+  e3c1_w[31 * E3C1_T8 + 0] = 0x1p-13;
+
+  /* Special A lanes 0..3; lanes 4..31 stay seeded realistic. */
+  for (s = 0; s <= 3; ++s)
+    for (i = 0; i < E3C1_T8; ++i) e3c1_x[(long)s * E3C1_T8 + i] = 0.0;
+  e3c1_x[0 * E3C1_T8 + 0] = 1.0 + 0x1p-11; /* s0: positive multi-channel sum */
+  e3c1_x[0 * E3C1_T8 + 1] = 0x1p-11;
+  e3c1_x[0 * E3C1_T8 + 2] = 0x1p-13;
+  for (i = 0; i < E3C1_T8; ++i)          /* s1 = negation of s0 */
+    e3c1_x[1 * E3C1_T8 + i] = -e3c1_x[i];
+  e3c1_x[2 * E3C1_T8 + 0] = 1.0 - 0x1p-12; /* s2: B-2 case-1 + negated twin */
+  e3c1_x[2 * E3C1_T8 + 1] = -(1.0 - 0x1p-12);
+  e3c1_x[3 * E3C1_T8 + 0] = 0x1p-10;       /* s3: subnormal-edge lane */
+
+  /* Plain operands: hi = RN16(value), exactly the tiles mode 42's plain
+   * trial uses. Pack each logical cell at the PRM offsets; every one of
+   * the 1024 u16 lanes is written exactly once (checked on CPU). */
+  memset(act, 0, TILE_BYTES);
+  memset(wgt, 0, TILE_BYTES);
+  for (idx = 0; idx < E3C1_T8_CELLS; ++idx) {
+    const int row = idx >> 5; /* activation spatial / weight output channel */
+    const int col = idx & 31; /* input channel */
+    const uint16_t ah = double_to_fp16(e3c1_x[idx]);
+    const uint16_t wh = double_to_fp16(e3c1_w[idx]);
+    act[((row >> 1) * 64) + col * 2 + (row & 1)] = ah;
+    wgt[((col >> 1) * 64) + row * 2 + (col & 1)] = wh;
+  }
+
+  init_bias(bias0, 0x5400, 0, 0);
+  init_bias(bias1, 0, 0, 0);
+  memset(out, 0xa5, TILE_BYTES);
+  {
+    const uintptr_t bias0_reg = (uintptr_t)bias0;
+    const uintptr_t bias1_reg = ((uintptr_t)bias1) | 1u;
+    const uintptr_t act_reg = (uintptr_t)act;
+    const uintptr_t wgt_reg = (uintptr_t)wgt;
+    const uintptr_t out_reg = (uintptr_t)out;
+    const uint32_t spatial_mask = (14u << 7);
+    const uint32_t act_rt = spatial_mask | (31u << 2);
+    const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+    const uint32_t wr_rt = spatial_mask;
+
+    asm volatile("mxclracc.hf\n" ::: "memory");
+    /* Plain: ONE packet, deliberately the only MMA in this mode. */
+    asm volatile(
+        "{ activation.hf = mxmem(%0, %1)\n"
+        "  weight.hf = mxmem(%2, %3) }\n"
+        : : "r"(act_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+        : "memory");
+
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
+    /* One final convert (bias set 0, retain, no feedback rounding,
+     * Rs = 1: Rs[0] only) then the single FP16 store. */
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(1u) : "memory");
+    asm volatile("mxmem(%0, %1) = cvt\n"
+                 : : "r"(out_reg), "r"(wr_rt) : "memory");
+  }
+
+  results[0] = (int)out[0];
+  results[1] = (int)out[1];
+  results[2] = (int)out[2];
+  results[3] = (int)out[32];
+}
+
 int hexatrain_hmx_acc_residual_open(const char *uri, remote_handle64 *handle) {
   (void)uri;
   if (!handle) return HMX_ERR_ARG;
@@ -713,8 +840,10 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   /* B-2 (mode 41) also has fixed fixtures independent of q; host mirrors. */
   if (mode == 41 && q != 6) return HMX_ERR_ARG;
   /* E-3C1 (mode 42) runs the fixed realistic tile independent of q;
-   * the host mirrors q=6 like modes 18/22/40/41. */
+   * the host mirrors q=6 like modes 18/22/40/41. E-3C1R (mode 43) reuses
+   * that fixture/packet and is likewise bound to q=6. */
   if (mode == 42 && q != 6) return HMX_ERR_ARG;
+  if (mode == 43 && q != 6) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;
@@ -835,17 +964,26 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
           metadata[6] = combined_lock_status;
           if (!combined_lock_status) {
             /* Execute HMX only if lock succeeded. */
-            run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
-            run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
-            if (mode == 38) {
-              /* Mode 38 contract: the bias readback payload lives in
-               * results[0..1] only (lo(0), hi(0)); slots 2/3 are zeroed.
-               * Both trials still execute, so metadata[8]=2 stays true. */
-              results[2] = 0;
-              results[3] = 0;
+            if (mode == 43) {
+              /* E-3C1R is genuinely ONE trial: a dedicated handler reads
+               * four cells from ONE converted plain tile. Do not force
+               * four cells into two run_one() scalar outputs. */
+              run_mode43_one_trial(vtcm, results);
+              metadata[7] = 1;
+              metadata[8] = HMX_MODE43_TRIALS;
+            } else {
+              run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
+              run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
+              if (mode == 38) {
+                /* Mode 38 contract: the bias readback payload lives in
+                 * results[0..1] only (lo(0), hi(0)); slots 2/3 are zeroed.
+                 * Both trials still execute, so metadata[8]=2 stays true. */
+                results[2] = 0;
+                results[3] = 0;
+              }
+              metadata[7] = 1;
+              metadata[8] = 2;
             }
-            metadata[7] = 1;
-            metadata[8] = 2;
             combined_unlock_status = HAP_compute_res_hmx_unlock2(
                 combined_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
           }

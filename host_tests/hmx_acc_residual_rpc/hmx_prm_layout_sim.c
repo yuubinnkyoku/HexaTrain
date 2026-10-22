@@ -55,6 +55,7 @@
 #include <string.h>
 
 #include "fp16_util.h"
+#include "hmx_mode43.h"
 
 #define T8 32
 #define T8_CELLS (T8 * T8)
@@ -530,6 +531,251 @@ static void run_combos(void) {
   }
 }
 
+/* ---------------- all-index packing contract ---------------- */
+
+/* Every one of the 1024 logical cells must map to a distinct u16 index in
+ * [0, 1023], and the documented inverse must recover the logical pair.
+ * This covers act, wgt and store with the same formulas the DSP uses. */
+static void check_pack_bijection(void) {
+  int seen[T8_CELLS];
+  int s, o, i, idx, count;
+  char tag[128];
+
+  memset(seen, 0, sizeof seen);
+  count = 0;
+  for (s = 0; s < T8; ++s) {
+    for (i = 0; i < T8; ++i) {
+      idx = prm_act_u16(s, i);
+      ++g_checks;
+      if (idx >= T8_CELLS || seen[idx]) {
+        ++g_fail;
+        printf("FAIL prm_act_bijection s=%d i=%d idx=%d seen=%d\n", s, i,
+               idx, seen[idx]);
+      } else {
+        seen[idx] = 1;
+        ++count;
+      }
+      snprintf(tag, sizeof tag, "prm_act_decode_pair s=%d i=%d", s, i);
+      check_int(tag, prm_decode_pair(idx), s);
+      snprintf(tag, sizeof tag, "prm_act_decode_fast s=%d i=%d", s, i);
+      check_int(tag, prm_decode_fast(idx), i);
+    }
+  }
+  check_int("prm_act_bijection_count", count, T8_CELLS);
+
+  memset(seen, 0, sizeof seen);
+  count = 0;
+  for (o = 0; o < T8; ++o) {
+    for (i = 0; i < T8; ++i) {
+      idx = prm_wgt_u16(o, i);
+      ++g_checks;
+      if (idx >= T8_CELLS || seen[idx]) {
+        ++g_fail;
+        printf("FAIL prm_wgt_bijection o=%d i=%d idx=%d seen=%d\n", o, i,
+               idx, seen[idx]);
+      } else {
+        seen[idx] = 1;
+        ++count;
+      }
+      snprintf(tag, sizeof tag, "prm_wgt_decode_i o=%d i=%d", o, i);
+      check_int(tag, prm_decode_pair(idx), i);
+      snprintf(tag, sizeof tag, "prm_wgt_decode_o o=%d i=%d", o, i);
+      check_int(tag, prm_decode_fast(idx), o);
+    }
+  }
+  check_int("prm_wgt_bijection_count", count, T8_CELLS);
+
+  memset(seen, 0, sizeof seen);
+  count = 0;
+  for (s = 0; s < T8; ++s) {
+    for (o = 0; o < T8; ++o) {
+      idx = prm_store_u16(s, o);
+      ++g_checks;
+      if (idx >= T8_CELLS || seen[idx]) {
+        ++g_fail;
+        printf("FAIL prm_store_bijection s=%d o=%d idx=%d seen=%d\n", s, o,
+               idx, seen[idx]);
+      } else {
+        seen[idx] = 1;
+        ++count;
+      }
+      snprintf(tag, sizeof tag, "prm_store_decode_s s=%d o=%d", s, o);
+      check_int(tag, prm_decode_pair(idx), s);
+      snprintf(tag, sizeof tag, "prm_store_decode_o s=%d o=%d", s, o);
+      check_int(tag, prm_decode_fast(idx), o);
+    }
+  }
+  check_int("prm_store_bijection_count", count, T8_CELLS);
+  printf("prm_pack_bijection act=1024 wgt=1024 store=1024 "
+         "range=[0,1023] unique=1\n");
+}
+
+/* VTCM allocation used by the probe: six 2 KiB tiles = 12 KiB. Mode 43
+ * uses act(0), wgt(1), bias0(4), bias1(4*TILE+256), out(5); mode 42 also
+ * uses hi(2)/lo(3). Every 2 KiB tile is disjoint and inside the reserve;
+ * the two 256-byte bias sets sit between the four operand tiles and the
+ * out tile. */
+static void check_vtcm_layout(void) {
+  enum { TILE_BYTES = 2048, BIAS_BYTES = 256, VTCM_BYTES = 12288 };
+  const int act_off = 0;
+  const int wgt_off = 1 * TILE_BYTES;
+  const int hi_off = 2 * TILE_BYTES;
+  const int lo_off = 3 * TILE_BYTES;
+  const int bias0_off = 4 * TILE_BYTES;
+  const int bias1_off = bias0_off + BIAS_BYTES;
+  const int out_off = 5 * TILE_BYTES;
+
+  check_int("vtcm_act_within", act_off + TILE_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_wgt_within", wgt_off + TILE_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_hi_within", hi_off + TILE_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_lo_within", lo_off + TILE_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_bias1_within", bias1_off + BIAS_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_out_within", out_off + TILE_BYTES <= VTCM_BYTES, 1);
+  check_int("vtcm_operand_tiles_disjoint",
+            act_off + TILE_BYTES <= wgt_off &&
+                wgt_off + TILE_BYTES <= hi_off &&
+                hi_off + TILE_BYTES <= lo_off &&
+                lo_off + TILE_BYTES <= bias0_off,
+            1);
+  check_int("vtcm_bias_sets_disjoint",
+            bias0_off + BIAS_BYTES <= bias1_off &&
+                bias1_off + BIAS_BYTES <= out_off,
+            1);
+  check_int("vtcm_mode43_operand_bias_disjoint",
+            wgt_off + TILE_BYTES <= bias0_off &&
+                bias1_off + BIAS_BYTES <= out_off,
+            1);
+  check_int("vtcm_out_within_reserve", out_off + TILE_BYTES <= VTCM_BYTES, 1);
+  printf("prm_vtcm_layout total=%d act=%d wgt=%d hi=%d lo=%d bias0=%d "
+         "bias1=%d out=%d mode43_used=%d\n",
+         VTCM_BYTES, act_off, wgt_off, hi_off, lo_off, bias0_off, bias1_off,
+         out_off, 3 * TILE_BYTES + 2 * BIAS_BYTES);
+}
+
+/* The mode-42 as-written replay must stay deterministic and unchanged.
+ * Recompute it twice, compare all 1024 physical pre/store cells, and pin
+ * the four recorded device slots. */
+static uint16_t g_mode42_plain_pre_snap[T8_CELLS];
+static uint16_t g_mode42_plain_st_snap[T8_CELLS];
+static uint16_t g_mode42_b3_pre_snap[T8_CELLS];
+static uint16_t g_mode42_b3_st_snap[T8_CELLS];
+
+static void check_mode42_replay_deterministic(void) {
+  int run;
+  for (run = 0; run < 2; ++run) {
+    compute_plain(g_ahi_row, g_whi_row);
+    compute_b3(g_ahi_row, g_alo_row, g_whi_row, g_wlo_row);
+    place_out(g_plain_pre, g_plain_st, g_pout_pre, g_pout_st);
+    place_out(g_b3_pre, g_b3_st, g_bout_pre, g_bout_st);
+    if (run == 0) {
+      memcpy(g_mode42_plain_pre_snap, g_pout_pre, sizeof g_pout_pre);
+      memcpy(g_mode42_plain_st_snap, g_pout_st, sizeof g_pout_st);
+      memcpy(g_mode42_b3_pre_snap, g_bout_pre, sizeof g_bout_pre);
+      memcpy(g_mode42_b3_st_snap, g_bout_st, sizeof g_bout_st);
+    }
+  }
+  check_int("mode42_plain_pre_deterministic",
+            memcmp(g_mode42_plain_pre_snap, g_pout_pre, sizeof g_pout_pre) == 0,
+            1);
+  check_int("mode42_plain_store_deterministic",
+            memcmp(g_mode42_plain_st_snap, g_pout_st, sizeof g_pout_st) == 0,
+            1);
+  check_int("mode42_b3_pre_deterministic",
+            memcmp(g_mode42_b3_pre_snap, g_bout_pre, sizeof g_bout_pre) == 0,
+            1);
+  check_int("mode42_b3_store_deterministic",
+            memcmp(g_mode42_b3_st_snap, g_bout_st, sizeof g_bout_st) == 0, 1);
+  check_u16("mode42_recorded_out0_store", g_pout_st[0], 0x0000);
+  check_u16("mode42_recorded_out32_plain", g_pout_st[32], 0x59f6);
+  check_u16("mode42_recorded_out32_b3", g_bout_st[32], 0x59f7);
+  printf("prm_e3c1_mode42_replay deterministic=1 out0_store=0x%04x "
+         "out32_plain=0x%04x out32_b3=0x%04x\n",
+         (unsigned)g_pout_st[0], (unsigned)g_pout_st[32],
+         (unsigned)g_bout_st[32]);
+}
+
+/* Mode-43 pre-registered predictions. The store column uses the empirical
+ * negative clamp (0x0000) only as the model alternative; the signed
+ * pre-store value 0xd400 is the other pre-registered candidate. */
+static void check_mode43_predictions(void) {
+  compute_plain(g_ahi_prm, g_whi_prm);
+  place_out(g_plain_pre, g_plain_st, g_pout_pre, g_pout_st);
+  check_u16("mode43_out0_pre", g_pout_pre[0], 0x5400);
+  check_u16("mode43_out1_pre_signed", g_pout_pre[1], 0xd400);
+  check_u16("mode43_out2_pre", g_pout_pre[2], 0x5400);
+  check_u16("mode43_out32_pre", g_pout_pre[32], 0x55e3);
+  check_u16("mode43_out0_store", g_pout_st[0], 0x5400);
+  check_u16("mode43_out1_store_clamp_model", g_pout_st[1], 0x0000);
+  check_u16("mode43_out2_store", g_pout_st[2], 0x5400);
+  check_u16("mode43_out32_store", g_pout_st[32], 0x55e3);
+  printf("prm_e3c1r_mode43_packed pre out0=0x%04x out1=0x%04x out2=0x%04x "
+         "out32=0x%04x store out0=0x%04x out1=0x%04x out2=0x%04x "
+         "out32=0x%04x signed_candidate=0xd400 clamp_model=0x0000\n",
+         (unsigned)g_pout_pre[0], (unsigned)g_pout_pre[1],
+         (unsigned)g_pout_pre[2], (unsigned)g_pout_pre[32],
+         (unsigned)g_pout_st[0], (unsigned)g_pout_st[1],
+         (unsigned)g_pout_st[2], (unsigned)g_pout_st[32]);
+}
+
+/* CPU test of the EXACT host-side mode-43 decision procedure in
+ * hmx_mode43.h: all three positive checks gate slot-1 interpretation,
+ * signed/clamp verdicts are fixed, and the host contract requires exactly
+ * one executed trial. */
+static void check_mode43_host_contract(void) {
+  static const int signed_bits[4] = {0x5400, 0xd400, 0x5400, 0x55e3};
+  static const int clamp_bits[4] = {0x5400, 0x0000, 0x5400, 0x55e3};
+  static const int b3_slot1[4] = {0x5400, 0xd401, 0x5400, 0x55e3};
+  static const int bad_out0[4] = {0x5401, 0xd400, 0x5400, 0x55e3};
+  static const int bad_out2[4] = {0x5400, 0xd400, 0x5401, 0x55e3};
+  static const int bad_out32[4] = {0x5400, 0xd400, 0x5400, 0x55e2};
+  hmx_mode43_report_t r;
+  const long fail_before = g_fail;
+
+  r = hmx_mode43_classify(signed_bits, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.signed.verdict",
+            r.verdict == HMX_MODE43_LAYOUT_CONFIRMED_SIGNED, 1);
+  check_int("mode43.signed.positive_checks", r.positive_checks, 3);
+  check_int("mode43.signed.positive_ok", r.positive_ok, 1);
+  check_int("mode43.signed.slot1_signed", r.slot1_signed, 1);
+  check_int("mode43.signed.trials_ok", r.trials_ok, 1);
+  check_int("mode43.signed.executed_ok", r.hmx_executed_ok, 1);
+
+  r = hmx_mode43_classify(clamp_bits, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.clamp.verdict",
+            r.verdict == HMX_MODE43_LAYOUT_CONFIRMED_CLAMP, 1);
+  check_int("mode43.clamp.slot1_clamp", r.slot1_clamp, 1);
+
+  r = hmx_mode43_classify(b3_slot1, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.b3_slot1.verdict",
+            r.verdict == HMX_MODE43_RESIDUAL_MISMATCH, 1);
+  check_int("mode43.b3_slot1.positive_ok", r.positive_ok, 1);
+  check_int("mode43.b3_slot1.slot1_interpreted",
+            r.slot1_signed || r.slot1_clamp, 0);
+
+  /* Positive checks gate slot-1 interpretation. */
+  r = hmx_mode43_classify(bad_out0, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.bad_out0.positive_checks", r.positive_checks, 2);
+  check_int("mode43.bad_out0.verdict",
+            r.verdict == HMX_MODE43_RESIDUAL_MISMATCH, 1);
+  r = hmx_mode43_classify(bad_out2, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.bad_out2.positive_checks", r.positive_checks, 2);
+  r = hmx_mode43_classify(bad_out32, HMX_MODE43_TRIALS, 1);
+  check_int("mode43.bad_out32.positive_checks", r.positive_checks, 2);
+
+  /* One-trial host contract: 0 or 2 is a fail-closed violation. */
+  r = hmx_mode43_classify(signed_bits, 2, 1);
+  check_int("mode43.trials2.trials_ok", r.trials_ok, 0);
+  check_int("mode43.trials2.observed", r.observed_trials, 2);
+  r = hmx_mode43_classify(signed_bits, 0, 1);
+  check_int("mode43.trials0.trials_ok", r.trials_ok, 0);
+  r = hmx_mode43_classify(signed_bits, HMX_MODE43_TRIALS, 0);
+  check_int("mode43.not_executed.executed_ok", r.hmx_executed_ok, 0);
+
+  printf("prm_e3c1r_host_contract=%s signed=1 clamp=1 residual=1 "
+         "positive_gate=1 trials_required=%d\n",
+         g_fail == fail_before ? "PASS" : "FAIL", HMX_MODE43_TRIALS);
+}
+
 /* ---------------- main ---------------- */
 
 int main(void) {
@@ -540,6 +786,8 @@ int main(void) {
   write_all_tiles();
   check_and_print_maps();
   check_and_print_regs();
+  check_pack_bijection();
+  check_vtcm_layout();
 
   /* As-written replay: mode 42's actual VTCM contents (row-major
    * tiles) read through the PRM layout, then stored through the
@@ -560,8 +808,11 @@ int main(void) {
          (unsigned)g_bout_pre[1], (unsigned)g_bout_pre[2],
          (unsigned)g_bout_pre[32]);
 
+  check_mode42_replay_deterministic();
   print_uniqueness();
   run_combos();
+  check_mode43_predictions();
+  check_mode43_host_contract();
 
   printf("prm_layout_checks=%u fail=%u\n", (unsigned)g_checks,
          (unsigned)g_fail);
