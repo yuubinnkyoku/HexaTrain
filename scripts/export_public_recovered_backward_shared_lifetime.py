@@ -21,14 +21,16 @@ def role_projection(a,digest):
 
 def template():
     return dict(schema=1,candidate='shared-lifetime-five-role-final',base_commit=read(PLAN)['base_commit'],compiled_source_commit=None,probe_sha256=None,dsp_sha256=None,host_sha256=None,
-        plan_sha256=sha(PLAN),analysis_addendum_sha256=sha(ADDENDUM),classification='BLOCKED_FORMAL_COHORT',pilot_classification='SHARED_LIFETIME_FIVE_ROLE_PILOT_VERIFIED',
+        plan_sha256=sha(PLAN),analysis_addendum_sha256=sha(ADDENDUM),classification='BLOCKED_FORMAL_COHORT',pilot_classification='FIVE_ROLE_NUMERICS_AND_LIFETIME_PASS',pilot_protocol_qualification='BLOCKED',
         blocker='POST_EXIT_ADB_TRANSFER_TIMEOUT',pilot_processes=1,formal_processes=0,formal_completed='0/3',pilot_formal_eligible=False,further_device_arithmetic='STOPPED_NO_RETRY',
+        additional_blocker='STRICT_TWO_SECOND_MONITOR_CADENCE_NOT_MET',
+        monitor_cadence=dict(requested_wait_seconds=2,nominal_wait_preserved=True,total_top_records=37,runtime_loop_top_records=34,minimum_interval_seconds=3.250952,median_interval_seconds=4.029617,maximum_interval_seconds=5.244854,strict_two_second_period='NOT_MET'),
         actual_exit=0,required_teardown='PASS',logger_leak='RETAINED_NOT_REPAIRED',duration_seconds=None,resource_counts=COUNTS.copy(),prepare_loads=1,prepare_unloads=1,inter_role_prepare_reload=0,
         first_dvalue_finalize_return=0,api6031_occurrences=0,dma6033_error_occurrences=0,sigsegv_observed=False,timing_false_matches={'6031':4,'6033':3},
         roles={},legacy_anchor_agreement='PASS_FIVE_PILOT_ROLES',three_process_legacy_agreement='NOT_EXECUTED',three_process_supplemental_agreement='NOT_EXECUTED',
         native_same_P_fanout='PASS_PILOT_ONLY',observer_free_accuracy='PASS_PILOT_ONLY',
         safety_during_process=dict(preflight='PASS',awake='PASS',known_top_resumed='PASS',focus_takeovers=0,recognizable_competing_workloads=0,critical_protection_events=0),
-        transfer=dict(status='TIMEOUT_AFTER_EXIT0',five_role_files_verified=True,reconstructed_container_matches_original=True,partial_gzip_preserved=True,original_identity_fabricated=False,new_device_arithmetic=0),
+        transfer=dict(status='TIMEOUT_AFTER_EXIT0',five_role_files_verified=True,reconstructed_container_matches_original=True,partial_gzip_preserved=True,original_identity_fabricated=False,new_device_arithmetic=0,existing_raw_write_rejected=True,first_role_gzip_recopied_in_error_path=True),
         crash_capture=dict(logcat_snapshots='AVAILABLE',runtime_stderr='AVAILABLE',tombstones='AVAILABLE',dropbox='AVAILABLE',continuous_stream='LIMITED_NO_OWNED_RECORDS',faulting_library=None,relative_offset=None,main_thread_stack=None),
         host_gates={},performance=dict(status='NOT_MEASURED',figures=None),fresh_device_regressions='NOT_EXECUTED',negative_controls='PRESERVED',protected_state='PASS',
         hypothesis='BACKEND_REINITIALIZATION_HYPOTHESIS_STRENGTHENED',root_cause='NOT_PROVEN',training='NO-GO',full_attention_backward='NOT_CERTIFIED',full_attention='NOT_CERTIFIED',full1_layer='NOT_CERTIFIED',full19_layer='NOT_CERTIFIED',training_ready=False)
@@ -65,13 +67,16 @@ def validate(v,expected_identity=None):
 
 def project():
     protected();m=manifest();r=assess();v=template();completion=read(PRIVATE/'pilot/execution-before-readback-private.json')
+    protocol=read(PRIVATE/'pilot/closeout-protocol-audit-private.json')
+    require(protocol['status']=='BLOCKED_PROTOCOL_QUALIFICATION' and protocol['source_top_sha256']==sha(PRIVATE/'pilot/top-private.jsonl') and protocol['intermediate_numerical_assessment_sha256']==sha(PRIVATE/'pilot/recovered-pilot-assessment-private.json'),'final protocol audit binding')
+    require(protocol['total_top_records']==v['monitor_cadence']['total_top_records'] and protocol['runtime_loop_top_records']==v['monitor_cadence']['runtime_loop_top_records'] and protocol['runtime_interval_median_seconds']==v['monitor_cadence']['median_interval_seconds'] and protocol['runtime_interval_max_seconds']==v['monitor_cadence']['maximum_interval_seconds'],'actual monitor cadence')
     v.update(compiled_source_commit=m['source_sha'],probe_sha256=m['probe_sha256'],dsp_sha256=m['binary_hashes']['libHexaBackwardRepairDsp.so'],host_sha256=m['binary_hashes']['libHexaBackwardRepairHost.so'],duration_seconds=completion['duration_seconds'],
         roles={name:role_projection(a,r['role_contract_digests'][name]) for name,a in r['roles'].items()})
     require(r['analysis_source_sha256']==sha(ROOT/'scripts/assess_recovered_backward_shared_lifetime_pilot.py'),'assessment source binding')
     require(r['logcat_stream_owned_records']==0 and r['timer_6031_false_matches']==4 and r['timer_6033_false_matches']==3,'actual capture/timing classification')
     gates=read(PRIVATE/'host-gates-private.json')
     for name,a in gates.items():
-        require(a['status']=='PASS' and a['actual_exit']==0 and a['sha256']==sha(ROOT/a['log']),'fresh Host evidence binding');v['host_gates'][name]=a['status']
+        require(a['status']=='PASS' and a['actual_exit']==0 and a['candidate_sha256']==m['probe_sha256'] and a['sha256']==sha(ROOT/a['log']),'fresh Host evidence binding');v['host_gates'][name]=a['status']
     validate(v);return v
 
 
@@ -92,6 +97,12 @@ def selftest():
     b=copy.deepcopy(v);b['roles']['dual']['accuracy_metrics']['total_1']=.02;tests.append(b)
     b=copy.deepcopy(v);del b['roles']['native_softmax'];tests.append(b)
     b=copy.deepcopy(v);b['probe_sha256']='e'*64;tests.append(b)
+    b=copy.deepcopy(v);b['pilot_classification']='SHARED_LIFETIME_FIVE_ROLE_PILOT_VERIFIED';tests.append(b)
+    b=copy.deepcopy(v);b['monitor_cadence']['strict_two_second_period']='PASS';tests.append(b)
+    for key in ('backend_create','device_create','context_create'):
+        b=copy.deepcopy(v);b['resource_counts'][key]+=1;tests.append(b)
+    b=copy.deepcopy(v);b['transfer']['reconstructed_container_matches_original']=False;tests.append(b)
+    b=copy.deepcopy(v);b['native_same_P_fanout']='FAIL';tests.append(b)
     for b in tests:
         try:validate(b,expected)
         except (ValueError,TypeError):pass
