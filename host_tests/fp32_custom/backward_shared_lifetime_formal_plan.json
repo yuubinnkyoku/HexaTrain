@@ -1,0 +1,241 @@
+{
+  "schema": 1,
+  "candidate": "shared-lifetime-five-role-final",
+  "base_commit": "88b2e8f1237edd230568a1947a6e31984408bb97",
+  "classification": "NEW_FIVE_ROLE_CANDIDATE_REQUIRES_FRESH_QUALIFICATION",
+  "original_formal_plan": {
+    "path": "host_tests/fp32_custom/backward_repair_cohort_plan.json",
+    "sha256": "be44cd32dcbc3cf901b1ed2374c3f181ac3bda3fd5149dcb80226417d45be6e7",
+    "immutable": true,
+    "historical_backend_lifetime": "One OS process per cohort. Each role creates/tears down its own QNN backend/device/context, retaining immutable packages and fixtures. Fresh safety preflight once before this OS process, then two-second foreground monitoring throughout all roles."
+  },
+  "approved_amendment": "Retain one Backend and one Device for the entire OS process, use five sequential independent role Contexts and release all graphs/tensors with their Context. Register packages once per owning Backend. No inter-role Backend/Device/Prepare teardown/reinitialization. Original arithmetic, fixtures, gates, observer contract, role order and three independent formal processes unchanged.",
+  "roles": [
+    "standalone_softmax",
+    "standalone_dvalue",
+    "native_softmax",
+    "native_dvalue",
+    "dual"
+  ],
+  "coverage": {
+    "forward_core_indices": [
+      0,
+      43
+    ],
+    "forward_holdout_indices": [
+      44,
+      59
+    ],
+    "core_gradients": 25,
+    "holdout_gradients": 8,
+    "heads": 2,
+    "observers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "logical_pairs_per_role": 9824,
+    "consumer_pairs_single": 9824,
+    "consumer_pairs_dual": 19648,
+    "executes_per_role": 4912,
+    "executes_per_five_role_process": 24560,
+    "full_consumer_pairs": 58944
+  },
+  "resource_counts": {
+    "backend_create": 1,
+    "backend_free": 1,
+    "device_create": 1,
+    "device_free": 1,
+    "context_create": 5,
+    "context_free": 5,
+    "graphs": 20,
+    "inter_role_prepare_reload": 0
+  },
+  "ownership": "Reuse proven process owner; no overlapping Contexts; no cross-role tensor/graph/descriptor handoff; no stale handles/double free/UAF; failed free is ambiguous, never retry it or free dependent parents. Logger handle stays valid; existing leak deliberately excluded from repair.",
+  "frozen": {
+    "original_compiled_source": "bb6aaceb42de505b29689a362ce8293687e7ab89",
+    "original_binary_sha256": {
+      "dsp": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
+      "host": "0aea5fe57625b236226b3cfb55f70dbdad0afda16cae98e1efd2420c4fc4e843",
+      "probe": "23616e58144eb23ac91f0071f6591359f77f821a0f3bd20715f6388ad2e6cc05"
+    },
+    "two_role_arm_sha256": "2ba5640f5842f9477ad165bae4d49e3a59d19135b60751ff101de508f46ce94d",
+    "double_qk_dsp_sha256": "962a98c6f30e4e8f610abba22f69cd2f08fb216d5ed111586b45d7c73f8991e7",
+    "forward_host_sha256": "e2df381e1682ab12e68784ee22ddc468fe553d5cf12c778a167c75990a83ea0a",
+    "protected_40k_sha256": "89f197d3085f496a22a9ab4ef2161bf2644ba9311b4571faed55f60a7959243d"
+  },
+  "toolchain": {
+    "qairt_build_id": "2.48.40.260702151143",
+    "qnn_api": "2.37.0",
+    "hexagon_sdk": "6.6.0.0",
+    "hexagon_tools": "19.0.07",
+    "htp": "V81",
+    "ndk": "26.2.11394342",
+    "ucrt64_gcc": "15.2.0",
+    "compiler_hashes": "Require equal frozen manifests; no install/update/fallback"
+  },
+  "source_delta": "Exact compare the existing repair worker, observer loops, tensor layout and numerical/word gates. Only lifecycle binding changes. New main enables five roles and gated performance. New owner differs from proven owner only in role capacity/namespace and required tracing. No changes to DSP/Host, production, oracle, graph topology, fixture, rescale, mask/scale or optimizer ABI.",
+  "proposed_files": [
+    "host_tests/fp32_custom/backward_shared_lifetime_formal.h",
+    "host_tests/fp32_custom/backward_shared_lifetime_formal_probe.cpp",
+    "host_tests/fp32_custom/backward_shared_lifetime_formal_test.cpp",
+    "scripts/build_backward_shared_lifetime_formal.ps1",
+    "scripts/run_backward_shared_lifetime_formal.ps1",
+    "scripts/assess_backward_shared_lifetime_formal.py",
+    "scripts/certify_backward_shared_lifetime_formal.py",
+    "scripts/export_public_backward_shared_lifetime_formal.py"
+  ],
+  "host_fault_matrix": [
+    "backend create",
+    "device create",
+    "package registration",
+    "context create each of five roles",
+    "graph create",
+    "graph add node",
+    "finalize each of five roles",
+    "execute each of five roles",
+    "context free each of five roles",
+    "device free",
+    "backend free",
+    "early exit each role",
+    "repeated cleanup",
+    "stale graph/context",
+    "logger validity through backend free",
+    "native same-P fanout shape/ownership",
+    "exit-path cleanup"
+  ],
+  "gates": {
+    "pilot_entry": [
+      "plan committed",
+      "all Host lifecycle/fault tests fresh PASS",
+      "independent arithmetic/Forward/graph references fresh PASS",
+      "exact source/ABI/binary audit PASS",
+      "new ARM compiled and immutable manifest frozen",
+      "fresh Fast/Host/Qnn PASS",
+      "same physical device fresh safe preflight",
+      "approved installed APK and staged hashes PASS",
+      "read-only crash capture ready",
+      "exclusive private directory and one-shot pilot claim"
+    ],
+    "formal_entry": [
+      "same candidate full five-role pilot independently PASS",
+      "all cases/observers/oracles/words/ownership PASS",
+      "resource counts and teardown PASS",
+      "all old numerical anchors match",
+      "formal plan precommitted",
+      "fresh safe preflight for each process"
+    ],
+    "formal_progression": "Start formal2 only after formal1 independently assessed PASS; formal3 only after formal2 PASS. Pilot/partial/old candidates never count.",
+    "performance_entry": "All three independent formal processes certified, same frozen compiled candidate; fresh safety",
+    "regression_entry": "Formal numerical PASS; approved existing paths only; preserve all previous evidence"
+  },
+  "maximums": {
+    "full_pilot_processes": 1,
+    "formal_processes": 3,
+    "automatic_retry": 0,
+    "owned_process_timeout_seconds": 1200,
+    "performance": "One gated process for four comparison roles, all four observers, first execute plus31 steady samples per graph; no unregistered arithmetic/optimization",
+    "regression": "Only explicit required existing approved suites, no unrelated CPU training probes"
+  },
+  "safety": "Fresh same-device identity/Awake/known top-resumed/no active training/no recognized NPU experiment/SDK/APK/staged package/fixture/storage/protected assets/critical thermal checks before EVERY process; retain two-second top monitor. Unknown unsafe. Only exactly attested existing system infrastructure exceptions. Ordinary battery/temperature/power monitored, not sole blockers. No wake/unlock/reboot/force-stop/foreground takeover/root/SELinux change.",
+  "failure_policy": "First device safety/runtime/API/numerical/observer/teardown failure stops additional Device arithmetic for this mission; no automatic retry or later-phase start. Preserve partial raw, actual exit, API/boundary timeline, SDK logs, logcat, accessible tombstones/DropBox. Continue Host-only assessment/report/export/commit. Classify139 separately from6031/6033 and numerical errors.",
+  "numerical_gates": {
+    "forward_P_maxAbs": 1e-06,
+    "P_rowsum": 2e-06,
+    "dScores_P_bound": 0.00025,
+    "dValue_P_bound": 0.001,
+    "softmax_total_maxAbs": 0.002,
+    "dvalue_total_maxAbs": 0.01,
+    "arithmetic_word_mismatch": 0,
+    "observer_word_mismatch": 0
+  },
+  "anchor_legacy_digests": {
+    "standalone_softmax": "fc0db14324e12cd11dec234405f0e3a767c1787f2bc08b6be65702040b2f1267",
+    "standalone_dvalue": "64248fcdfaf2534c37f40bc961987d0a627f6d4c457b3ba7cc553de2ac316e41",
+    "native_softmax": "edcaa214b0833b00c77d8c410d9e32894eef7e6aaecbce0cfb9307933bfaa16d",
+    "native_dvalue": "e1238888e75695d08cbd5d267851c49025a3b3578fb394dd59b58bf15ed5ee1a",
+    "dual": "58eed431aaccb1db918355314cbd0b0dbd5fd83955d41736a9d16ec0ace1eda0"
+  },
+  "digest_contract": {
+    "legacy": "Unchanged role assessor SHA256 of ordered six-word case key plus actual output words; exclude timestamps/timing/receipt counters/device identity. Accuracy independent from digest.",
+    "supplemental": "Unchanged certify_backward_native_cohort.role_digest G1_NATIVE_COMPLETION_ROLE_V1 domain separation, role, ordered case/output words, canonical mathematical contract outcome; all three corresponding roles must agree.",
+    "formal_identity": "Three distinct actual OS processes, same ARM/DSP/Host/fixture/SDK/plan/runner. No pilot or previous two-role binary promotion."
+  },
+  "raw_contract": "Little endian words header 0x42524301,version1,role_count5,forward_limit60. Each role: modecode,uint64 byte_count low/high words, then unchanged complete 0x42525001 evidence bytes. No lossy conversion. Device raw SHA, gzip SHA, pull SHA, decompressed SHA checked. Exclusive derived role files independently rehashed against verified container.",
+  "performance": {
+    "comparisons": [
+      "Forward P only",
+      "Forward P + native Softmax backward",
+      "Forward P + native dValue",
+      "Forward P + dual backward"
+    ],
+    "same_common_LN_local_backward": true,
+    "first_executes": 1,
+    "steady_samples": 31,
+    "quantiles": "Existing pct order-statistic implementation; median/p10/p90",
+    "record": [
+      "graph finalize",
+      "execute wall",
+      "observed consumer arithmetic timer",
+      "receipt-inclusive timer",
+      "Backend/Device and package setup once per process",
+      "Context setup/free per role",
+      "node/tensor counts",
+      "explicit scratch when visible",
+      "native logical bytes",
+      "Host buffers",
+      "frozen static stack frame"
+    ],
+    "unobservable": null,
+    "NoReceipt_internal_timing": null,
+    "no_training_wall_extrapolation": true,
+    "no_old_17_8ms_pure_forward_claim": true
+  },
+  "fresh_regressions": [
+    "S2 LN1",
+    "Mixed QKV double Q/K",
+    "HVX V",
+    "Double QK transpose",
+    "Custom Scale/Mask/Softmax P",
+    "Forward P joint contract",
+    "HVX FFN2",
+    "HVX QKV",
+    "QK/backward Scale controls",
+    "LN2/custom Softmax backward controls",
+    "Device smoke",
+    "Muon W8 114/114"
+  ],
+  "project_formal_profile": "PROHIBITED",
+  "public_export": "Strict closed allow-list, independent evidence binding, reject pilot promotion/missing role-observer-CoreHoldout/exit-teardown/counts/Prepare reload/P ownership/digests/accuracy/word mismatches/mixed candidate/unsafe preflight/false3-process/unmeasured performance/historical regression promotion/private fields/protected mismatch; retain existing rejection suites.",
+  "report": "docs/g1-backward-shared-lifetime-formal.md",
+  "summary": "docs/results/g1-backward-shared-lifetime-formal-summary.json",
+  "private_root": "build/reports/g1-backward-shared-lifetime-formal",
+  "further_frontier": [
+    "actual dP/dContext from PV/Gate/Output",
+    "dQ/dK",
+    "Head Scatter",
+    "projection gradients",
+    "LN1 dY aggregation"
+  ],
+  "always_not_certified": [
+    "Full Attention Backward",
+    "Full Attention",
+    "Full1-layer",
+    "Full19-layer",
+    "TRAINING_READY"
+  ],
+  "training": "NO-GO: neither40k->60k nor200k; no checkpoint decode/write, final_test, dataset/fixture generation, optimizer/LR change, production switch, push/PR/merge/reset/rebase/amend/history rewrite"
+}
