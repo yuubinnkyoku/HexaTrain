@@ -22,3 +22,6 @@ __pycache__/
 
 # Local CMake/clangd compilation database
 compile_commands.json
+# HMX ACC residual RPC harness build outputs (SDK build_cmake, regenerable)
+host_tests/hmx_acc_residual_rpc/android_ReleaseG_aarch64/
+host_tests/hmx_acc_residual_rpc/hexagon_ReleaseG_toolv19_v81/
