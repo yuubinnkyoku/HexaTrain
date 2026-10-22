@@ -34,6 +34,7 @@ $script:mockExit=1;$r=Capture-Readonly 'unavailable' @('shell','ls','/inaccessib
 if($r.ExitCode -ne 1 -or (Get-Content "$out/unavailable-private.json" -Raw|ConvertFrom-Json).exit -ne 1){throw 'FAILED_COLLECTION_MASKED'}
 $text=Get-Content $runner -Raw
 if($text -notmatch 'CRASH_LOG_COLLECTION_UNAVAILABLE' -or $text -notmatch 'CRASH_STREAM_NOT_RUNNING_NO_PROBE' -or
+ $text -notmatch 'HOST_INVENTORY_REVIEW_TIMEOUT_NO_PROBE' -or $text -notmatch 'HOST_INVENTORY_REVIEW_NOT_BOUND' -or
  $text -notmatch 'probe-attempt-private.json",\[IO.FileMode\]::CreateNew' -or
  ([regex]::Matches($text,'\./saved_p_backward_probe double-inputs').Count -ne 1)) {throw 'ONE_SHOT_CAPTURE_GUARD_MISSING'}
 Write-Host 'shared_lifetime_runner_host=PASS capture_cases=6 device_calls=0 argument_binding=PASS failed_capture_preserved=PASS process_cap=1'

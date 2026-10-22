@@ -149,8 +149,21 @@ $hostInventory=Get-CimInstance Win32_Process|Select-Object ProcessId,ParentProce
 $hostInventory|ConvertTo-Json -Depth 4|Out-File "$out/host-processes-private.json" -Encoding utf8
 # A fresh human-independent review of this saved inventory is required by the
 # caller before launch; the exclusive permit binds this runner and candidate.
+$reviewStarted=[DateTime]::UtcNow
+while(!(Test-Path "$mission/launch-permit-private.json")){
+ if(([DateTime]::UtcNow-$reviewStarted).TotalSeconds -ge 120){throw 'HOST_INVENTORY_REVIEW_TIMEOUT_NO_PROBE'}
+ Start-Sleep -Milliseconds 200
+}
 $permit=Get-Content "$mission/launch-permit-private.json" -Raw|ConvertFrom-Json
+if($permit.host_inventory_sha256 -ne (Get-FileHash "$out/host-processes-private.json").Hash.ToLowerInvariant()){throw 'HOST_INVENTORY_REVIEW_NOT_BOUND'}
 if($permit.candidate_sha256 -ne $build.probe_sha256 -or $permit.runner_sha256 -ne (Get-FileHash $PSCommandPath).Hash.ToLowerInvariant() -or $permit.addendum_sha256 -ne (Get-FileHash "$root/host_tests/fp32_custom/backward_shared_lifetime_runner_addendum.json").Hash.ToLowerInvariant() -or !$permit.host_workload_review_pass -or !$permit.host_gates_pass -or !$permit.protected_pass -or !$permit.source_delta_pass){throw 'DIAGNOSTIC_ENTRY_NOT_VALIDATED'}
+Competition
+if((Top) -eq 'com.yuubinnkyoku.phonelm'){throw 'TARGET_FOREGROUND'}
+if((Adb @('shell','dumpsys','power')) -notmatch '(?m)^\s*mWakefulness=Awake\s*$'){throw 'DEVICE_NOT_AWAKE_OR_UNKNOWN'}
+Assert-PhoneLmNoExistingRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+Assert-PhoneLmNoExistingHeadlessRun -Adb $adb -Device $d.Endpoint -Package com.yuubinnkyoku.phonelm
+$before=Get-MixedQkvMonitoringState -Adb $adb -Device $d.Endpoint
+if((Resolve-MixedQkvMonitoringState $before) -like 'BLOCKED*'){throw 'CRITICAL_DEVICE_PROTECTION'}
 $claim=[IO.File]::Open("$mission/probe-attempt-private.json",[IO.FileMode]::CreateNew)
 try{$bytes=[Text.UTF8Encoding]::new($false).GetBytes((@{maximum_os_processes=1;retry=0;candidate_sha256=$build.probe_sha256;utc=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json));$claim.Write($bytes,0,$bytes.Length)}finally{$claim.Dispose()}
 $crashCollector=Start-Process -FilePath $adb -ArgumentList @('-s',$d.Endpoint,'logcat','-b','crash','-b','main','-b','system','-v','threadtime','-T','1') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$out/logcat-stream-private.txt" -RedirectStandardError "$out/logcat-stream-stderr-private.txt"

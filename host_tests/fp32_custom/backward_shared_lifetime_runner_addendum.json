@@ -10,7 +10,7 @@
   "allowed_support_files": [
     "scripts/test_backward_shared_lifetime_runner.ps1"
   ],
-  "additional_guard": "launch permit binds runner and this committed addendum SHA256",
+  "additional_guard": "launch permit binds runner, this committed addendum and the exact fresh host inventory SHA256; bounded 120-second controller review handoff, followed by fresh safety/competition recheck before the exclusive process claim",
   "maximum_os_processes": 1,
   "retries": 0,
   "roles": [
