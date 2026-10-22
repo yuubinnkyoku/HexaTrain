@@ -605,3 +605,10 @@ The historical aggregate field values are unchanged; only the explicit
 not formal cohort completion. Fresh Host/Qnn broad profiles, generic Device
 smoke, W8 and Formal remain **NOT_EXECUTED / BLOCKED_SCOPE** for this bounded
 task; no candidate or fixture rebuild and no extra device arithmetic was used.
+
+## 2026-10-22 — Independent shared-lifetime diagnostic
+
+See [G1 shared Backend/Device lifetime diagnostic](g1-backward-shared-lifetime-diagnostic.md).
+Classification: **BLOCKED_DEVICE_SAFETY / ADB_NO_ONLINE_DEVICE**, with zero new
+diagnostic processes. This separate candidate does not change the historical
+failure judgments above or contribute to the formal cohort: **0/3** remains.
