@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "purpose": "Correct typed timing/numerical records falsely recognized as QNN error6031/6033; preserve raw evidence and compiled candidate.",
+  "timing_records_observed": {
+    "6031": 4,
+    "6033": 3
+  },
+  "actual_api_nonzero": 0,
+  "observed_examples_us": [
+    6031.667,
+    6033.177
+  ],
+  "new_error_scope": "Exclude stdout api_us timer records and recognized typed numerical/performance JSON kinds only from lexical error scan. Preserve all api,NAME,RC records, unknown/malformed JSON, unstructured runtime diagnostics and all stderr. Actual API return success independently required.",
+  "frozen_manifest_sha256": "c37ef5139de465a09eed555fdb6563a6d85689f4a6d182cd23fff19c614c9a28",
+  "frozen_arm_sha256": "6ffeec218c2532e6b54c433dbe963f9210ed1beb6c3da4234001a67b7b03126f",
+  "compiled_source_commit": "9ceb0324c2a8d82396d597feb0ac46cd1e5ac3c9",
+  "analysis_source_hashes": {
+    "scripts/backward_shared_lifetime_runtime_scope.py": "376682f0772f3fe38bdc96599fa583ef180eb30c0fb8548928eab9cdf7fc59ac",
+    "scripts/certify_backward_shared_lifetime_formal_v2.py": "94d046f0f6c2d18345357c17a0fea310c8c50e14eb48b4cf2234e5c688a167bb",
+    "scripts/run_backward_shared_lifetime_formal_v2.ps1": "f324dc2f82713ba0b2ef47361781d7560b0fc6574bf95f1abc29224781ebaab7",
+    "scripts/export_public_backward_shared_lifetime_formal_v2.py": "1728b3e66a5f68f6d5d76952d2ac8067a34d3aa799358e4bd4292c1586198c8e"
+  },
+  "arithmetic_changed": false,
+  "gates_changed": false,
+  "fixture_changed": false,
+  "arm_bytes_changed": false,
+  "raw_modified": false,
+  "new_device_retry_authorized": false,
+  "original_runner_preserved": true,
+  "pilot_runner": "scripts/run_backward_shared_lifetime_formal.ps1",
+  "formal_runner": "scripts/run_backward_shared_lifetime_formal_v2.ps1",
+  "runner_delta": "Only select revised independent Host certifier and accurately record its new runner identity; staging/preflight/monitoring/claims/QNN execution/cleanup/readback unchanged.",
+  "pilot_reuse": "Same compiled ARM/DSP/Host bytes. Completed one full pilot is assessed with corrected non-numerical error classification; not rerun and never counted toward formal3.",
+  "pre_formal_commit_required": true,
+  "scientific_limits": "No root-cause proof; no formal promotion without all original numerical/ownership/observer/cleanup/digest gates. No performance before formal3; training NO-GO."
+}
