@@ -1,15 +1,38 @@
 # G1 Shared Backend/Device Lifetime — Monitor / Transport Recovery and Formal Re-entry Blockade
 
-**Status: `MONITOR_REPAIR_HOST_QUALIFIED`, `TRANSPORT_REPAIR_HOST_QUALIFIED`, `DEVICE_ENTRY_GATE_BLOCKED`, `FORMAL_COMPLETED = 0/3`.**
+**Status: `MONITOR_REPAIR_HOST_QUALIFIED`, `TRANSPORT_REPAIR_HOST_QUALIFIED`, `DEVICE_ENTRY_GATE_PASS`, `FORMAL_PREREQUISITE_BLOCKED`, `FORMAL_COMPLETED = 0/3`.**
 **`NUMERICAL_PILOT_VERIFIED` is retained. `MONITOR_CONTRACT_FAILED` and `POST_EXIT_TRANSPORT_INCOMPLETE` remain the historical classifications and are not rewritten as PASS.**
 
-本文書は `docs/g1-backward-shared-lifetime-formal.md` の続編である。前回の five-role pilot は数値・resource としては PASS したが、strict 2 秒 monitor 契約と post-exit evidence transfer の 2 点で protocol qualification が BLOCKED となった。今回の mission はその 2 点だけを host-side で修復し、Host 検証、dry run、独立 assessor、公開集計までを閉じた。実機は offline のままであり、新しい formal OS process は 1 つも起動していない。
+本文書は `docs/g1-backward-shared-lifetime-formal.md` の続編である。前回の five-role pilot は数値・resource としては PASS したが、strict 2 秒 monitor 契約と post-exit evidence transfer の 2 点で protocol qualification が BLOCKED となった。今回の mission はその 2 点だけを host-side で修復し、Host 検証、dry run、独立 assessor、公開集計までを閉じた。2026-10-23 に同じ物理 device の endpoint が復帰し、entry gate / dry run / fresh Qnn / entry assessor は PASS したが、v3 runner が要求する independent prerequisite（`certify_v2 --entry formal-1`）が保持済み `mission-stop-private.json` を理由に FAIL したため、formal OS process は 1 つも起動していない。
 
 - 対象: research clone（`PhoneLM-g1-long-linear-200k`）
 - branch: `investigation/g1-backward-shared-lifetime-formal`
 - base: `900e949dc5eee62cb230af39136f96a45df1824e`
 - 候補: `shared-lifetime-five-role-final`（probe `6ffeec21…`、DSP `658bd900…`、Host `0aea5fe5…`、compiled source `9ceb0324…`、gradients `c742bfa2…`、plan `d42e0ecc…`）
 - 変更したのは host orchestration のみ。算術、graph、fixture、observer、Backend/Device lifetime、APK、QAIRT 2.48.40.260702151143 は不変。
+
+---
+
+## Re-entry observation and formal prerequisite gate (2026-10-23)
+
+同じ物理 device の wireless-debug endpoint が復帰したため、read-only で再入口を確認した。device の数値実行は行っていない。
+
+| 項目 | 結果 |
+| --- | --- |
+| endpoint | `100.108.106.81:39723` と mDNS の 2 経路。両方 `device` |
+| serial | 両経路とも `324753221196`。pilot の `recovery-identity-private.json` と一致 |
+| model / device / product | `NX741J` / `PQ85A01` / `PQ85A01-UN` |
+| device state | Awake、top は target 外、owned probe / target app なし |
+| device mutation | 0（read-only のみ） |
+| entry gate | `PASS`（同一物理 device 検証済み、`new_formal_processes=0`） |
+| dry run | 10 samples、max start-to-start `1916.0566 ms`、`contract_met=true`、missed/timeouts/invalid/unknown/aux 0、11/11 fail-closed cases、`device_calls=0` |
+| entry assessor | `PASS`（exit 0、`device_calls=0`） |
+| fresh Qnn | `PASS`、`total 972.2s PASS=4 FAIL=0 SKIP=0` |
+| `certify_v2 --entry formal-1` | **FAIL: `mission Device stop active`** |
+
+`certify_v2` は pilot の `mission-stop-private.json` が残存していることを active stop とみなす。この file は recovery assessor が `mission_stop_retained=true` として保持を要求している historical evidence であり、削除・rename しない。v3 runner は line 54 でこの prerequisite を hard requirement として呼ぶため、`formal-1` directory を作る前に `INDEPENDENT_PREVIOUS_STAGE_NOT_PASS` で停止する。したがって device probe は 1 回も起動していない。
+
+さらに `certify_v2` は `orchestration_sha256 == sha(v2 runner)` を要求するため、たとえ entry を通っても v3 evidence を正式認定できない。v3 runner に bind し、保持された historical mission-stop と host-qualified repair の関係を明示的に扱う v3 prerequisite / certifier が未実装である。これは device の安全性や 2 秒・transport 契約を緩和する話ではなく、独立認定経路の追加が必要という blocker である。formal は **0/3**、新規 formal process は **0**、one-process allowance は未使用のまま保持する。
 
 ---
 
@@ -160,13 +183,15 @@ v3 は数値・graph・fixture を変更しない。v1 との差は monitor と 
 | `post_exit_transport_incomplete`（historical） | true |
 | `host_repair_qualified` | true |
 | `formal_eligible` | false |
-| `formal_blocker` | `DEVICE_OFFLINE` |
+| `formal_blocker` | `FORMAL_PROCESS_NOT_RUN`（assessor。runner の independent prerequisite は別途 `mission Device stop active`） |
 
-`--self-test` は `PASS rejection_cases=34 device_calls=0`。`--entry formal-1` は現在 `ENTRY_BLOCKED: DEVICE_ENTRY_GATE_NOT_PASS` を返す（exit 3）。順序は host logs → dry run → pilot → device gate → prior attempt → committed source → runner identity → plan identity であり、device gate で止まるのは仕様どおりである。runner/plan の hash 一致は別途 file から直接照合した。
+`--self-test` は `PASS rejection_cases=34 device_calls=0`。`--entry formal-1` は再入口後 **PASS**（exit 0、`device_calls=0`）。`--out` の再評価は `formal_eligible=false` / `FORMAL_PROCESS_NOT_RUN` を返す。順序は host logs → dry run → pilot → device gate → prior attempt → committed source → runner identity → plan identity であり、以前は device gate で止まっていた。ただし v3 runner はさらに line 54 で `certify_v2 --entry formal-1` を hard requirement として呼ぶため、entry assessor の PASS だけでは formal-1 を起動できない。
 
 plan record は private evidence であり、commit 対象の plan file と runner の hash を固定する。plan file の内容は「2 秒契約、Lead 100 ms、deadline 式、chunk 契約、host 検証、dry run、entry 条件、1 process 上限、retry 0」を列挙する。
 
-## L. Device entry gate
+## L. Device entry gate (initial repair-mission observation)
+
+この節は修復 mission 開始時（device offline）の記録である。2026-10-23 の再入口は冒頭の「Re-entry observation and formal prerequisite gate」を参照。
 
 | 項目 | 観測値 |
 | --- | --- |
@@ -215,7 +240,7 @@ pilot の数値・resource evidence は不変である。
 | automatic retry | 0 |
 | pilot の再利用 | 数値証拠のみ。formal へ昇格しない |
 
-entry gate が PASS しない限り formal-1 を起動しない。今回は gate が `BLOCKED_DEVICE_OFFLINE` のため、1 process の枠すら使っていない。
+entry assessor が PASS しても、v3 runner の independent prerequisite（`certify_v2 --entry formal-1`）が保持済み `mission-stop-private.json` を理由に FAIL するため、formal-1 は起動しない。今回は entry assessor は PASS したが、この prerequisite で停止し、1 process の枠は未使用のまま保持している。
 
 ## O. Verification executed
 
@@ -225,9 +250,9 @@ entry gate が PASS しない限り formal-1 を起動しない。今回は gate
 | Fast 内の新規 3 step | monitor host 9.9 s、transport host 3.9 s、dry-run self-test 23.8 s（全て PASS） |
 | Host | 今回は再実行していない（候補の数値/checkpoint 変更なし） |
 | Android | 今回は再実行していない（Kotlin/JNI/Gradle 変更なし） |
-| Qnn | 今回は再実行していない（QNN graph/QAIRT package 変更なし）。v3 は実行時に fresh Qnn PASS log を要求する |
-| Device | 未実行（endpoint offline） |
-| Formal | 未実行（entry gate blocked） |
+| Qnn | 再入口後に **PASS**、972.2 s、PASS=4 FAIL=0 SKIP=0（fresh log） |
+| Device | read-only entry gate は PASS（online / same-device / Awake / no owned probe）。formal probe は未実行 |
+| Formal | 未実行（v3 の independent prerequisite が `mission Device stop active` で FAIL） |
 
 Fast は `scripts/verify_local.ps1` に monitor/transport host test と dry-run self-test を組み込んだ状態で実行した。したがって次回以降の通常開発でも同じ host 検証が回る。Qnn の freshness は formal 実行直前の前提条件であり、今回の host 修復によって省略可能にはならない。
 
@@ -240,12 +265,14 @@ Fast は `scripts/verify_local.ps1` に monitor/transport host test と dry-run 
 | previous summary sha256 | `a18ef7d11ba2170f95f13938bccd9aca62c48820f7ca3fc264f043a9840d2713` |
 | new summary sha256 | `1d7efeacb9034d9c9249ea01e30cf29a8644f1f41f48e87d2f29607d1900c741` |
 | base 55 key の一致性 | 全件 byte-equivalent（独立比較） |
-| status | `HOST_REPAIR_QUALIFIED_DEVICE_UNVERIFIED` |
-| formal eligible | false / `DEVICE_OFFLINE` |
-| device cadence established | false |
-| device transfer qualified | false |
+| status | `HOST_REPAIR_QUALIFIED_DEVICE_UNVERIFIED`（再入口前の export。現在の private assessor は gate PASS / `FORMAL_PROCESS_NOT_RUN`） |
+| formal eligible | false / `FORMAL_PROCESS_NOT_RUN` |
+| device cadence established | false（formal-1 未実行） |
+| device transfer qualified | false（formal-1 未実行） |
 
 exporter は closed allow-list で、`historical_cases=45` と `new_cases=40` の rejection を含む self-test が PASS。absolute path、device/app identifier、endpoint、APK hash、raw tensor bytes、ActivityManager dump、crash address を含まない。monitor/transport/numerical の verdict は別 field のまま維持した。
+
+再入口後の private 評価は更新したが、公開集計は再発行していない。現行 exporter は既存の `monitor_transport_recovery` key を拒否するため、formal 後の公開更新には後段 exporter が必要である。公開 file は再入口前の export のままである。
 
 ## Q. What is and is not qualified
 
@@ -267,21 +294,23 @@ Not qualified:
 
 ## R. Blocked status and exact re-entry condition
 
-**BLOCKED_DEVICE_OFFLINE。** 数値 PASS と host 修復 PASS は保持するが、formal は 0/3 のままである。
+**BLOCKED_FORMAL_PREREQUISITE。** 数値 PASS と host 修復 PASS、device entry PASS は保持するが、formal は 0/3 のままである。修復 mission 開始時は `BLOCKED_DEVICE_OFFLINE` であったが、2026-10-23 に同じ物理 device の endpoint が復帰した。
 
-再開に必要な唯一の手動操作は、同じ物理 device の wireless-debug ADB endpoint を有効な online 状態へ戻すこと。その後に次を順に実行する。
+再入口で完了したこと:
 
-1. `scripts/run_backward_monitor_dryrun.ps1` を再実行し、`contract_met=true` を確認する。
-2. `python -B scripts/assess_monitor_transport_recovery.py --entry formal-1` を通す。
-3. device entry gate を再観測し、`PASS` / `online_endpoint=true` / `same_physical_device_verified=true` を記録する。
-4. fresh Qnn gate log を用意する（v3 の実行時前提）。
-5. committed tree を確認し、formal-1 を 1 回だけ起動する。自動 retry はしない。
+1. `scripts/run_backward_monitor_dryrun.ps1 -Force` を再実行し、`contract_met=true`（max 1916.0566 ms、counters 0、11/11 fail-closed cases）を確認した。
+2. `python -B scripts/assess_monitor_transport_recovery.py --entry formal-1` を PASS（exit 0、`device_calls=0`）させた。
+3. device entry gate を read-only で再観測し、`PASS` / `online_endpoint=true` / `same_physical_device_verified=true` / `new_formal_processes=0` を記録した。
+4. fresh Qnn gate log を取得した（`total 972.2s PASS=4 FAIL=0 SKIP=0`）。
+5. committed tree を確認した。
 
-wake、unlock、reboot、force-stop、reconnect の自動実行は行わない。endpoint が戻らない限り、この mission は BLOCKED のまま閉じる。
+残る blocker は、v3 runner が line 54 で要求する `certify_v2 --entry formal-1` が `mission Device stop active` で FAIL することである。`mission-stop-private.json` は pilot の historical evidence として保持が要求されており、削除・rename しない。さらに `certify_v2` は v2 runner に bind しているため、v3 evidence を正式認定できない。v3 prerequisite / certifier の実装と独立検証が必要である。これは device 安全条件、2 秒契約、transport 契約を緩和する変更ではない。
+
+wake、unlock、reboot、force-stop、reconnect の自動実行は行っていない。formal-1 は起動しておらず、automatic retry も 0 である。
 
 ## S. Next frontier / training
 
-直近の engineering 作業は「endpoint 復旧 → dry run → entry assessor → formal-1 1 回」である。formal-1 が独立 assessor で PASS して初めて formal-2、formal-3 へ進む。performance と fresh regression はその後。
+直近の engineering 作業は「v3 prerequisite / certifier の実装・独立検証 → formal-1 1 回」である。formal-1 が独立 assessor で PASS して初めて formal-2、formal-3 へ進む。performance と fresh regression はその後。
 
 数学的 frontier は従来どおり、実 dP/dContext（PV/Gate/Output 由来）、dQ/dK、Head Scatter、projection gradients、LN1 dY aggregation。Full Attention Backward / Full Attention / Full1-layer / Full19-layer / TRAINING_READY は未認定のまま。
 
@@ -330,17 +359,17 @@ wake、unlock、reboot、force-stop、reconnect の自動実行は行わない�
 | 35 | Forward/single/dual median/p10/p90 | すべて null / NOT_MEASURED。pilot の診断 api_us を正式性能値に昇格しない。 |
 | 36 | Setup/teardown 分離 | process/Context 別 timer は実装・診断記録済み。正式比較測定は未実行。 |
 | 37 | Fresh HVX FFN2/QKV | NOT_EXECUTED。 |
-| 38 | Fresh Device smoke | NOT_EXECUTED（endpoint offline）。 |
+| 38 | Fresh Device smoke | NOT_EXECUTED（formal-1 は prerequisite で停止。device entry は online / same-device / gate PASS）。 |
 | 39 | Fresh W8 114/114 | NOT_EXECUTED。historical PASS を流用しない。 |
 | 40 | Fresh Forward P joint | pilot 内 native P の joint gate は PASS。別の required fresh device regression は NOT_EXECUTED。 |
-| 41 | Fast/Host/Qnn | 今回 **Fast PASS 145.5 s（PASS=13 FAIL=0 SKIP=21）**。Host/Android/Qnn は今回再実行せず。前回 candidate の Host 232.4 s / Qnn 257.5 s は保持するが、今回の fresh とは表現しない。 |
+| 41 | Fast/Host/Qnn | 今回 **Fast PASS 145.5 s（PASS=13 FAIL=0 SKIP=21）**。再入口後に **fresh Qnn PASS 972.2 s（PASS=4 FAIL=0 SKIP=0）** を取得。Host/Android/Device/Formal は再実行していない。前回 candidate の Host 232.4 s は保持するが、今回の fresh とは表現しない。 |
 | 42 | Old negative controls | 全保全。expected FAIL を PASS に書き換えていない。 |
 | 43 | 35/40 Tap / 6031 の扱い | 不変。Tap は REPRODUCED / CAUSE UNRESOLVED、旧 6031/DMA6033 も原因未解決。monitor の計時誤検出とは別問題。 |
 | 44 | Protected checkpoint/refs/evidence | hash 読取のみ。旧 ledger と private files を個別照合し、加算しない。remote raw / private evidence の上書き・削除なし。 |
-| 45 | Shared lifetime 正式 candidate 認定 | 不可。数値/host 修復は PASS だが protocol は `DEVICE_OFFLINE` で未認定、formal 0/3。 |
+| 45 | Shared lifetime 正式 candidate 認定 | 不可。数値/host 修復は PASS、device entry も PASS だが、formal prerequisite（`mission Device stop active`）で formal-1 未起動、formal 0/3。 |
 | 46 | 根本原因証明か支持仮説か | monitor は実測 phase の整合による **quantified host-side root cause**（`ADDITIVE_WAIT_PLUS_SERIAL_QUERY_BLOCK`）。device A/B による証明ではない。transport は wrapper の 180 秒 bound による `ADB_WRAPPER_TIMEOUT` と直接分類。 |
-| 47 | Saved-P Backward 正式 closure | 不可。`BLOCKED_DEVICE_OFFLINE`、formal 0/3。performance / fresh regression も未完了。 |
-| 48 | 残る frontier | endpoint 復旧 → dry run → entry assessor → formal-1 1 回 → formal-2/3。その後 performance/fresh regression。数学は実 dP/dContext、dQ/dK、Head Scatter、projection gradients、LN1 dY aggregation。 |
+| 47 | Saved-P Backward 正式 closure | 不可。`BLOCKED_FORMAL_PREREQUISITE`、formal 0/3。performance / fresh regression も未完了。 |
+| 48 | 残る frontier | endpoint 復旧・dry run・entry assessor は完了。次は v3 prerequisite / certifier の実装・独立検証 → formal-1 1 回 → formal-2/3。その後 performance/fresh regression。数学は実 dP/dContext、dQ/dK、Head Scatter、projection gradients、LN1 dY aggregation。 |
 | 49 | Full1-layer / Full19-layer | ともに NOT_CERTIFIED。Full Attention / Full Attention Backward / TRAINING_READY も未認定。 |
 | 50 | 40k→60k / 200k training | NO-GO 維持。今回 training は実行していない。 |
 
@@ -348,12 +377,12 @@ wake、unlock、reboot、force-stop、reconnect の自動実行は行わない�
 
 ## Final validation / closeout
 
-- 変更は host orchestration、host 検証、assessor/exporter、Fast 配線、文書、公開集計の 1 key に限定した。
+- 前回 commit までの変更は host orchestration、host 検証、assessor/exporter、Fast 配線、文書、公開集計の 1 key に限定した。今回の再入口は read-only 観測と private evidence の追加のみで、code / candidate / 公開集計を変更していない。
 - candidate / 算術 / graph / fixture / observer / Backend-Device lifetime の hash は不変。
 - v1 runner は byte-identical で保存し、v3 は formal-1 専用として分離した。
 - 2 秒契約は緩和していない。4 秒観測は historical FAIL のまま。dry run は emulation と明記した。
 - transport 修復は in-run monitor を止めない。remote raw と既存 private evidence は append-only。
-- Fast は PASS。Host/Android/Qnn/Device/Formal は今回の変更に対して未実行であり、実行済みとは表現しない。
+- Fast は PASS。再入口後の fresh Qnn も PASS。Android / Device / Formal は今回実行していない。
 - 公開集計は 56 key、追加は `monitor_transport_recovery` 1 つだけ。base 55 key は独立比較で全一致。private 情報を含まない。
 - formal は **0/3**、新規 formal process 0、automatic retry 0。
-- 最終状態は **BLOCKED_DEVICE_OFFLINE**。再開には同じ物理 device の online wireless-debug endpoint が必要である。
+- 最終状態は **BLOCKED_FORMAL_PREREQUISITE**。device は online / same-device で entry gate は PASS だが、保持済み mission-stop を扱う v3 prerequisite / certifier が未実装である。この file は削除・rename していない。
