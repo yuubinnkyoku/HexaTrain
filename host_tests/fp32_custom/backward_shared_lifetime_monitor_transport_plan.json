@@ -1,0 +1,272 @@
+{
+  "schema": 1,
+  "kind": "G1_SHARED_LIFETIME_MONITOR_TRANSPORT_REPAIR_PLAN",
+  "base_commit": "900e949dc5eee62cb230af39136f96a45df1824e",
+  "branch": "investigation/g1-backward-shared-lifetime-formal",
+  "candidate": "shared-lifetime-five-role-final",
+  "mission": "Recover formal-1 eligibility for the 900e949 five-role DSP candidate after two host-side orchestration defects in the first formal attempt: the in-run foreground monitor exceeded the 2 s cadence contract, and the post-exit evidence transfer aborted on a single 180 s ADB wrapper bound. Repair only host orchestration. Do not change arithmetic, candidate, graph, fixture, observer, or Backend/Device lifetime. Qualification evidence must remain separate per claim.",
+  "defect_attribution": {
+    "private_evidence": [
+      "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/evidence-freeze-private.json",
+      "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/monitor-cadence-attribution-private.json",
+      "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/transport-attribution-private.json"
+    ],
+    "monitor": {
+      "classification": "MONITOR_CADENCE_CONTRACT_VIOLATED",
+      "root_cause": "v1 ran a blocking $process.WaitForExit(2000) in series with a serial competition/awake/top query block, so the observed start-to-start interval was the sum of the wait plus the query latencies, not a 2 s period.",
+      "runtime_loop_records": 34,
+      "runtime_intervals": 33,
+      "minimum_interval_seconds": 3.250952,
+      "median_interval_seconds": 4.029617,
+      "maximum_interval_seconds": 5.244854,
+      "intervals_over_2s": 33,
+      "reconciliation": "4.029617 s median = 2.379454 s post-top-to-ps-completion including the 2000 ms wait + 0.99 s awake + 0.36 s top; iterations that also ran the 10 s thermal block reached 5.244854 s.",
+      "not_a_numerical_failure": true
+    },
+    "transport": {
+      "classification": "ADB_WRAPPER_TIMEOUT",
+      "failure_operation": "adb pull saved-p-words.bin.gz",
+      "configured_timeout_seconds": 180,
+      "local_partial_bytes": 332333056,
+      "local_partial_sha256_prefix": "20cbd99e",
+      "remote_gzip_sha256_prefix": "430d763a",
+      "remote_uncompressed_sha256_prefix": "5ba99db6",
+      "remote_uncompressed_bytes": 1401659004,
+      "remote_original_intact": true,
+      "five_role_raw_and_gzip_identities_verified": true,
+      "container_reconstructed_losslessly": true,
+      "post_exit_evidence_incomplete": true,
+      "not_a_numerical_failure": true
+    }
+  },
+  "frozen_candidate_identity": {
+    "plan_path": "host_tests/fp32_custom/backward_shared_lifetime_formal_plan.json",
+    "plan_sha256": "d42e0ecc6c96f8bda43d0155d4d809481cc683cc2f0de15179c262be14fdba8d",
+    "probe_sha256": "6ffeec218c2532e6b54c433dbe963f9210ed1beb6c3da4234001a67b7b03126f",
+    "dsp_sha256": "658bd9005d5ce807f460a7c05d54eb997cb1d5a0f025468c96d9fd19fdc498b5",
+    "host_sha256": "0aea5fe57625b236226b3cfb55f70dbdad0afda16cae98e1efd2420c4fc4e843",
+    "compiled_source": "9ceb0324c2a8d82396d597feb0ac46cd1e5ac3c9",
+    "gradients_sha256": "c742bfa2ed410a5f1aa42cb51b9d4b0e9ae5e35b3813d52661283c8027ab969b",
+    "candidate_unchanged": true,
+    "apk": "approved existing build/reports/g1-s2-mixed-qkv-df-hvx-v/approved-apk/app-debug.apk; no install, no replacement, no rebuild",
+    "reason_frozen": "Any candidate or arithmetic change would invalidate the 58,944-pair numerical pilot; this mission repairs only host observation and transfer."
+  },
+  "repair_scope": {
+    "changed": [
+      "in-run foreground monitor scheduling (scripts/backward_formal_monitor.ps1)",
+      "post-exit evidence transfer (scripts/backward_formal_transport.ps1)",
+      "new v3 formal-1 runner that composes those modules (scripts/run_backward_shared_lifetime_formal_v3.ps1)",
+      "host self-tests, host-only dry run, assessor, exporter and report"
+    ],
+    "unchanged": [
+      "probe, DSP library, Host library, compiled source, APK, plan and fixtures",
+      "Backend/Device creation, retention, teardown, Context/Graph lifetime, role order",
+      "numerical arithmetic, oracles, word gates, observer contract, digest contract",
+      "QAIRT 2.48.40.260702151143, QNN API 2.37.0, Hexagon SDK 6.6.0.0, Tools 19.0.07, HTP V81, NDK 26.2.11394342",
+      "frozen v1 runner scripts/run_backward_shared_lifetime_formal.ps1 (byte-identical, kept as defect source)"
+    ],
+    "prohibited": [
+      "promoting the 4 s observation to a PASS",
+      "relaxing the 2 s contract, adding a waiver, or raising the maximum interval",
+      "using the repair to interrupt the in-run safety monitor",
+      "overwriting or deleting any remote raw or existing private evidence",
+      "new arithmetic or candidate rebuild",
+      "automatic retry"
+    ]
+  },
+  "runner_identity": {
+    "v1_defect_source": {
+      "path": "scripts/run_backward_shared_lifetime_formal.ps1",
+      "sha256": "a0a776659d786f53009f6b65bfac63c5f40769f97800edc1ed9de5a046badd42",
+      "immutable": true
+    },
+    "v3_formal1": {
+      "path": "scripts/run_backward_shared_lifetime_formal_v3.ps1",
+      "sha256": "2ac326fcd02db5993190584cbeed0049e0367124eb00982c665fb2f229d69b79",
+      "scope": "Stage=formal-1 only; pilot, formal-2, formal-3 and performance remain bound to their frozen runners",
+      "self_test": "saved_p_runner_v3_selftest=PASS staging_cases=3 monitor_cases=14 transport_cases=23 device_calls=0"
+    },
+    "modules": {
+      "monitor": {
+        "path": "scripts/backward_formal_monitor.ps1",
+        "sha256": "2434c833b995f547add1ba12e06fabe8c6660875c45a149a1ecb121cc8b1dcc3"
+      },
+      "transport": {
+        "path": "scripts/backward_formal_transport.ps1",
+        "sha256": "fa4eded6632b01bbaf9cc4ad447c3f9d6a5f50282dde911a5f2c0e0ba73c7903"
+      },
+      "thermal_auxiliary_probe": {
+        "path": "scripts/backward_formal_thermal_probe.ps1",
+        "sha256": "651fe88b2866ceb223b5c3237ce09dcff2df54133886d77cccfb92fd76485b7a"
+      },
+      "dry_run_harness": {
+        "path": "scripts/run_backward_monitor_dryrun.ps1",
+        "sha256": "8a300021c0fd53752c3152c84304304f1abd489d401608ca18f6cd6477f540d4"
+      }
+    }
+  },
+  "monitor_contract": {
+    "required_max_start_to_start_milliseconds": 2000,
+    "period_milliseconds": 2000,
+    "lead_milliseconds": 100,
+    "schedule": "deadline_k = previous_sample_start_k + Period - Lead, evaluated on a fixed monotonic deadline sequence; no deadline is re-based on a late completion, so lateness never accumulates into a shorter next interval.",
+    "timing_source": "single monotonic clock object per monitor; start measured immediately before the first command of the serial fast lane",
+    "serial_fast_lane": [
+      "competition (ps snapshot)",
+      "awake state",
+      "top-resumed state"
+    ],
+    "per_command_timeout_seconds": 8,
+    "overlap": "none; a sample never starts before the previous sample's lane and auxiliary claim handling complete",
+    "auxiliary_lane": {
+      "purpose": "thermal classification",
+      "owned_child_process": true,
+      "period_milliseconds": 6000,
+      "collect_bound_milliseconds": 4000,
+      "rule": "the auxiliary thermal read never blocks the 2 s fast lane; an unfinished claim is collected at a later deadline without delaying the next sample start"
+    },
+    "violation_semantics": [
+      "a missed absolute deadline is recorded as an explicit violation, never silently absorbed",
+      "command timeouts, invalid samples and unknown states each have their own counter",
+      "contract_met is false if any counter is non-zero, if any start-to-start interval exceeds 2000 ms, or if any sample is invalid",
+      "in the device runner a timing violation preserves readback and identity first, sets safety_complete=false, and then throws MONITOR_CONTRACT_VIOLATION; it does not stop the probe for lateness"
+    ],
+    "state_violations": "asleep, foreground takeover, competing NPU workload, unknown states and auxiliary failures still stop the owned probe through the existing Stop-Owned path",
+    "evidence": [
+      "build/reports/g1-backward-shared-lifetime-formal/formal-1/monitor-samples-private.jsonl",
+      "build/reports/g1-backward-shared-lifetime-formal/formal-1/monitor-summary-private.json",
+      "build/reports/g1-backward-shared-lifetime-formal/formal-1/monitor-post-exit-samples-private.jsonl",
+      "build/reports/g1-backward-shared-lifetime-formal/formal-1/monitor-post-exit-summary-private.json",
+      "build/reports/g1-backward-shared-lifetime-formal/formal-1/monitor-contract-failure-private.json (only on violation)"
+    ],
+    "post_exit_separation": "post-exit checks use a fresh monitor so they cannot contaminate the in-run cadence ledger"
+  },
+  "transport_contract": {
+    "method": "binary-safe adb exec-out dd per fixed byte range",
+    "chunk_bytes": 8388608,
+    "chunk_timeout_seconds": 120,
+    "chunk_attempts": 2,
+    "file_timeout_seconds": 2700,
+    "resume": "completed chunk part files are hashed and reused; no restart from zero after a chunk failure",
+    "exclusive_local_creation": true,
+    "partial_preservation": "on failure the partial file and its per-chunk parts remain on disk; nothing is deleted or overwritten",
+    "identity_contract": [
+      "remote sha256 before transfer",
+      "host sha256 after assembly",
+      "remote sha256 after transfer",
+      "all three equal per role file"
+    ],
+    "role_files": [
+      "standalone_softmax",
+      "standalone_dvalue",
+      "native_softmax",
+      "native_dvalue",
+      "dual"
+    ],
+    "gzip_retention": "the gzip readback is retained because certify_v2 requires both the raw file and its .gz",
+    "remote_policy": "remote originals are read-only and are never deleted, overwritten or re-uploaded",
+    "no_safety_relaxation": "the transfer runs after the owned probe exits; it never pauses, replaces or relaxes the in-run 2 s monitor"
+  },
+  "host_qualification": {
+    "device_calls_required": 0,
+    "monitor_test": {
+      "path": "scripts/test_backward_formal_monitor.ps1",
+      "cases": 16,
+      "module_selftest_cases": 14,
+      "pass_line": "backward_formal_monitor_host=PASS cases=16 selftest_cases=14 realistic_period=2000 max_start_to_start_ms=1958.36 device_calls=0",
+      "observed_max_start_to_start_milliseconds": 1958.36,
+      "log": "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/host-tests/monitor-host-test.log"
+    },
+    "transport_test": {
+      "path": "scripts/test_backward_formal_transport.ps1",
+      "cases": 16,
+      "module_selftest_cases": 23,
+      "pass_line": "backward_formal_transport_host=PASS cases=16 selftest_cases=23 binary_roundtrip=PASS device_calls=0",
+      "binary_roundtrip": "PASS",
+      "log": "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/host-tests/transport-host-test.log"
+    },
+    "dry_run": {
+      "path": "scripts/run_backward_monitor_dryrun.ps1",
+      "private_record": "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/monitor-dryrun-private.json",
+      "host_only": true,
+      "device_calls": 0,
+      "emulated_latencies": true,
+      "emulation_basis": "attribution medians: competition 379 ms, awake 994 ms, top 361 ms; disclosed as emulation, not device measurement",
+      "sample_count": 10,
+      "maximum_start_to_start_milliseconds": 1916.2354999999989,
+      "missed_deadlines": 0,
+      "command_timeouts": 0,
+      "invalid_samples": 0,
+      "unknown_states": 0,
+      "contract_met": true,
+      "monitoring_status": "PASS",
+      "host_timeout_tests_pass": true
+    },
+    "assessor": {
+      "path": "scripts/assess_monitor_transport_recovery.py",
+      "mode": "--entry formal-1 (read-only, no device calls) and --out for the private assessment",
+      "rejection_self_test": "PASS rejection_cases=34 device_calls=0"
+    }
+  },
+  "device_entry_gate": {
+    "private_record": "build/reports/g1-backward-shared-lifetime-formal/monitor-transport-recovery/device-entry-gate-private.json",
+    "required": [
+      "result=PASS",
+      "online_endpoint=true",
+      "same_physical_device_verified=true",
+      "new_formal_processes=0 before launch"
+    ],
+    "observed_result": "BLOCKED_DEVICE_OFFLINE",
+    "observed_reason": "no online ADB endpoint; the configured wireless endpoint is absent from the ADB device table and its TCP port is unreachable",
+    "observed_read_only_device_calls": 2,
+    "device_mutations": 0,
+    "reconnect_wake_unlock_reboot_force_stop_performed": false,
+    "reentry_condition": "restore a valid online wireless-debug ADB endpoint on the same physical device, then re-run the monitor dry-run gate, the host tests and the entry assessor before any formal process"
+  },
+  "entry_conditions": [
+    "monitor host test qualified (16/16, pass line last, one module hash, max <= 2000 ms, device_calls=0)",
+    "transport host test qualified (16/16, binary roundtrip PASS, pass line last, one module hash, device_calls=0)",
+    "host-only monitor dry run contract met with zero missed deadlines/timeouts/invalid/unknown and max <= 2000 ms",
+    "58,944-pair pilot numerics independently verified against the frozen five legacy anchors",
+    "device entry gate PASS with an online same-physical-device endpoint",
+    "no prior formal-1 attempt directory for this repaired runner",
+    "committed source tree",
+    "v3 runner sha256 matches the committed plan record",
+    "new plan sha256 matches the committed plan file"
+  ],
+  "process_limits": {
+    "new_formal_processes_this_mission": 1,
+    "formal_processes_total": 3,
+    "formal_completed": 0,
+    "automatic_retry": 0,
+    "on_failure": "preserve partial raw and actual exit; stop additional device arithmetic; continue host-only assessment, report and export"
+  },
+  "verification": {
+    "host_profiles": [
+      "Fast (wired host self-tests and existing gates)",
+      "Host (numerical and shape validation already frozen for the candidate)"
+    ],
+    "device_profile_required_before_formal": "fresh preflight plus the entry assessor; no Formal project profile",
+    "explicitly_not_run": [
+      "Formal project profile",
+      "performance",
+      "fresh device regressions",
+      "training"
+    ]
+  },
+  "report": "docs/g1-backward-shared-lifetime-monitor-transport-recovery.md",
+  "prior_report": "docs/g1-backward-shared-lifetime-formal.md",
+  "summary": "docs/results/g1-backward-shared-lifetime-formal-summary.json",
+  "public_export": {
+    "path": "scripts/export_public_backward_shared_lifetime_monitor_transport.py",
+    "policy": "strict closed allow-list with reject tests; no raw tensor bytes, no ActivityManager dumps, no absolute paths, no device/app identifiers, no APK hashes, no endpoints, no crash addresses; numerical, monitor and transport verdicts stay separate"
+  },
+  "never_certified_by_this_plan": [
+    "Full Attention Backward",
+    "Full Attention",
+    "TRAINING_READY",
+    "NPU-only execution",
+    "monitor contract compliance of the historical attempt",
+    "post-exit transfer completeness of the historical attempt"
+  ]
+}

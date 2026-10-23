@@ -268,5 +268,79 @@
   "full_attention": "NOT_CERTIFIED",
   "full1_layer": "NOT_CERTIFIED",
   "full19_layer": "NOT_CERTIFIED",
-  "training_ready": false
+  "training_ready": false,
+  "monitor_transport_recovery": {
+    "status": "HOST_REPAIR_QUALIFIED_DEVICE_UNVERIFIED",
+    "monitor_contract": {
+      "registered_requirement": "foreground sample start-to-start period <= 2.000 s",
+      "period_milliseconds": 2000,
+      "lead_milliseconds": 100,
+      "command_timeout_seconds": 8,
+      "monotonic_clock": true,
+      "explicit_scheduled_deadline": true,
+      "missed_deadline_detected": true,
+      "overlapping_poll_possible": false
+    },
+    "monitor_history": {
+      "runtime_loop_records": 34,
+      "runtime_intervals": 33,
+      "minimum_interval_seconds": 3.250952,
+      "median_interval_seconds": 4.029617,
+      "maximum_interval_seconds": 5.244854,
+      "period_required_seconds": 2.0,
+      "root_cause": "ADDITIVE_WAIT_PLUS_SERIAL_QUERY_BLOCK",
+      "classification": "MONITOR_CONTRACT_FAILED"
+    },
+    "monitor_host_qualification": {
+      "cases": 16,
+      "result": "PASS",
+      "selftest_cases": 14,
+      "device_calls": 0,
+      "realistic_period_milliseconds": 2000,
+      "max_start_to_start_milliseconds": 1958.36,
+      "monitor_source_sha256": "2434c833b995f547add1ba12e06fabe8c6660875c45a149a1ecb121cc8b1dcc3"
+    },
+    "transport_history": {
+      "failure_operation": "adb pull of the device-gzipped 5-role container",
+      "configured_timeout_seconds": 180,
+      "partial_bytes": 332333056,
+      "partial_complete": false,
+      "classification": "ADB_WRAPPER_TIMEOUT",
+      "remote_raw_preserved": true,
+      "container_reconstructed_losslessly": true,
+      "five_role_files_verified": true
+    },
+    "transport_contract": {
+      "chunk_bytes": 8388608,
+      "chunk_timeout_seconds": 120,
+      "chunk_attempts": 2,
+      "file_timeout_seconds": 2700,
+      "per_chunk_sha256": true,
+      "remote_before_after_sha256": true,
+      "binary_safe_readback": true,
+      "distinct_from_monitor_timeout": true
+    },
+    "transport_host_qualification": {
+      "cases": 16,
+      "result": "PASS",
+      "selftest_cases": 23,
+      "device_calls": 0,
+      "binary_roundtrip": "PASS",
+      "transport_source_sha256": "fa4eded6632b01bbaf9cc4ad447c3f9d6a5f50282dde911a5f2c0e0ba73c7903"
+    },
+    "device_entry_gate": {
+      "result": "BLOCKED_DEVICE_OFFLINE",
+      "online_endpoint": false,
+      "same_physical_device_verified": false,
+      "dry_run_executed": true,
+      "new_formal_processes": 0
+    },
+    "device_cadence_established": false,
+    "device_transfer_qualified": false,
+    "formal_eligible": false,
+    "formal_eligible_reason": "DEVICE_OFFLINE",
+    "plan_sha256": "e3a86756c97b992e03a6346164cad7d6d2de871dd4b115f07b7ac8d93199f34f",
+    "assessment_sha256": "e7b2117ba51d56f87559163a6b8543e877e41ec9b063ee16effabb122bd9cf0e",
+    "previous_public_summary_sha256": "a18ef7d11ba2170f95f13938bccd9aca62c48820f7ca3fc264f043a9840d2713"
+  }
 }

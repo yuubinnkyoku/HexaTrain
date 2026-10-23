@@ -240,3 +240,7 @@ C0 Host P9 expected FAIL、old cumulative Device P36 FAIL、standard Scale1 FAIL
 最終保護/公開監査はPASS。旧tracked pathの変更0、旧333 ledgerと前2-role153 private filesは個別にbyte照合し、全protected refs/frozen binaries/old rawを保持した。全A〜R節と50回答、public schema/privacyを検査した。私的raw、tombstone、fault address、device/app identifiers、APK hashes、SDK binaries、absolute local paths、endpointsはcommit対象に含めていない。
 
 **BLOCKED_FORMAL_COHORT = 0/3。追加Device arithmetic停止、no retry。Backward performance / fresh Device regressions NOT_EXECUTED。Full Attention / Full1-layer / Full19-layer未認定、40k→60k / 200k training NO-GO。**
+
+---
+
+**Recovery follow-up (2026-10-23):** the monitor cadence and post-exit transfer defects reported above were repaired and host-qualified in a separate mission; the five-role pilot numerics are retained unchanged, and the formal count remains 0/3 because no online ADB endpoint was available. See [`g1-backward-shared-lifetime-monitor-transport-recovery.md`](g1-backward-shared-lifetime-monitor-transport-recovery.md).

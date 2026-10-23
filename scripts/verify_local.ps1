@@ -201,6 +201,27 @@ try {
         "deterministic classifier matrix PASS (fail-closed unknown/shared)"
     }
 
+    # Monitor/transport recovery host qualification. The two module tests are the
+    # exact 16-case suites whose PASS lines the formal entry assessor parses; the
+    # dry run is host-only with disclosed emulated latencies. None touch a device.
+    Invoke-Step "backward-monitor-host-test" {
+        Invoke-PwshScript "backward formal monitor host test" `
+            (Join-Path $Root "scripts\test_backward_formal_monitor.ps1") @()
+        "16/16 deadline/state/evidence cases PASS at a realistic 2000 ms period (no device)"
+    }
+
+    Invoke-Step "backward-transport-host-test" {
+        Invoke-PwshScript "backward formal transport host test" `
+            (Join-Path $Root "scripts\test_backward_formal_transport.ps1") @()
+        "16/16 chunked/resumable/identity cases PASS with binary roundtrip (no device)"
+    }
+
+    Invoke-Step "backward-monitor-dryrun-self-test" {
+        Invoke-PwshScript "backward monitor dry-run self-test" `
+            (Join-Path $Root "scripts\run_backward_monitor_dryrun.ps1") @("-SelfTest")
+        "host-only dry-run fail-closed cases PASS (device_calls=0)"
+    }
+
     # Generated .commandcode/skills must match .agents/skills SSOT.
     Invoke-Step "agent-skills-sync-check" {
         Invoke-PwshScript "sync_agent_skills" `
