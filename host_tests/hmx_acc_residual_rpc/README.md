@@ -1279,7 +1279,14 @@ slots only; no full 32×32 accuracy, signed-store law or throughput claim.
   positive slots; slot 1 `0x0000`). This confirms the corrected packing
   at four-slot scope and records the clamp candidate, but does not
   locate the clamp stage or establish signed-store/full-tile accuracy.
-  E-3C2 remains UNTRIGGERED. Any further device work (B3 expansion,
+  The negative-output constraint is recorded for the current path only:
+  across the surveyed bias-0 / shape-0 / scale-64 converts (modes 0,
+  12, 13, 16, 19, 32-36, 42 and 43), negative mathematical outputs store
+  as `0x0000`; no surveyed setting preserves signed FP16, and the absence
+  of a signed path elsewhere is UNCONFIRMED. Generic signed-GEMM adoption
+  on this convert path stays on hold
+  (`BLOCKED_SIGNED_OUTPUT_FOR_CURRENT_CONVERT_PATH`); E-3C2 remains
+  UNTRIGGERED and Path B stays `CONDITIONALLY_POSSIBLE`. Any further device work (B3 expansion,
   retry, clamp-stage or signed-store discriminator) remains user-gated;
   a sparse layout-identifier probe is not needed — the layout is already
   determined by the mode-42 data plus the PRM and confirmed by mode 43.

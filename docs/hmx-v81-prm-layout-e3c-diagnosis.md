@@ -484,5 +484,12 @@ requires new explicit authorization. E-3C2 remains untriggered.
 
 Next gate: E-3C1 accuracy remains `INSUFFICIENT_EVIDENCE`; mode 43
 resolved the four-slot packing and the slot-1 clamp candidate but not
-the clamp stage or a signed-store law. E-3C2 remains untriggered.
+the clamp stage or a signed-store law. The negative-output constraint
+is recorded for the current path only: across the surveyed bias-0 /
+shape-0 / scale-64 converts (modes 0, 12, 13, 16, 19, 32-36, 42 and 43),
+negative mathematical outputs store as `0x0000`; no surveyed setting
+preserves signed FP16, and the absence of a signed path elsewhere is
+UNCONFIRMED. Generic signed-GEMM adoption on this convert path stays on
+hold (`BLOCKED_SIGNED_OUTPUT_FOR_CURRENT_CONVERT_PATH`); E-3C2 remains
+untriggered and Path B stays `CONDITIONALLY_POSSIBLE`.
 Further device work requires explicit authorization.
