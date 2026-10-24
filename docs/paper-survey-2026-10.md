@@ -330,6 +330,20 @@ exact backprop で回している公開文献は見つからなかった。** He
   energy-oriented 設定で NPU backend の energy を最大 53.2% 削減。
 - [T-MAN（arXiv:2511.11248）](https://arxiv.org/abs/2511.11248) — 低bit LLM の
   NPU end-to-end 推論。Qualcomm QNN を industry SOTA として llm.npu と比較する視点。
+- [When NPUs Are Not Always Faster（arXiv:2605.27435）](https://arxiv.org/abs/2605.27435) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2605.27435)
+  — Li, Qi, Chen、2026-05。
+  **【2026-10-25 確認済み】**: CPU-NPU heterogeneous SoC 上の LLM 推論を
+  OPMASK-based pipeline 分解で通信・量子化・計算に分離した初の体系的 benchmark。
+  **Prefill で CPU が NPU より最大 1.6x 速い stage-level 逆転**、
+  decode では NPU でも 1.05〜1.2x 程度、scheduling overhead と cross-backend
+  fallback が gain を侵食、NPU offload 増で energy が最大 51% 増える場合もある、
+  という結果。**SIGMETRICS 2027 論文（NPU は prefill で勝つ）と逆向きの結論**で、
+  NPU 利得が framework・SoC・workload 依存で不安定であることを示す。
+- **HexaTrain との追加関連**: この矛盾自体が「実機 telemetry を正本とする」
+  HexaTrain の運用原則（G1 runtime lane の `NO_SAFE_GAIN` 教訓）を
+  外部から支持する。backend placement は graph 理論だけでなく
+  実測の通信・量子化・scheduling 分解で決めるべきという同系統の主張。
 - **HexaTrain との関連**: 「NPU decode は弱い」という計測は、
   P1「Incremental KV-cache generation」の設計に直接影響する。
   1-token decode を HTP 固定 graph で回すか、decode だけ CPU/HVX に置くかの
