@@ -597,3 +597,60 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
    実装戦略を正当化する。Phase 14 の graph 設計言語として使える。
 
 ---
+
+## G. Training memory planner（KEEP / 低bit / RECOMPUTE の自動選択）
+
+**調査日: 2026-10-25。** repo の P1「HTP Memory Planner」
+（tensor ごとに KEEP FP / KEEP low-bit / SPILL / RECOMPUTE を実機 cost 最小で選ぶ）に
+直接対応する外部研究が見つかった。
+
+### G-1. Adacc — compression と recomputation の統一的適応選択
+
+- [arXiv:2508.00806](https://arxiv.org/abs/2508.00806) / [AlphaXiv](https://www.alphaxiv.org/abs/2508.00806)
+  — Chen, Deng, Li, He, Zhu, Zheng, Wang, Huai, Guo（SJTU / 华为 系）、2025-08。
+- **要約**: activation の再計算・保持・圧縮を**tensor 単位で動的に選択**する適応 framework。
+  (1) LLM activation の outlier を扱う layer 特化 compression algorithm、
+  (2) layer 横断で memory 戦略を大域最適化する MILP-based scheduling、
+  (3) 学習中の data 分布変化へ追従する policy evolution。
+  SOTA 比で throughput 1.01〜1.37x、精度は baseline 相当。
+- **HexaTrain との関連**: **repo の Training Memory Planner 設計の外部対応物。**
+  「recompute vs keep vs compress を tensor 特性 + hardware 制約の関数として選ぶ」
+  という問題定義が同一。HexaTrain 版の差分は、hardware 制約の入力が
+  V81 実機 telemetry（HTP kernel 時間 / APP tensor traffic / RPC 境界）である点と、
+  候補に spill (DDR/UFS) と backend 移動（HVX/CPU で再計算）が入る点。
+  MILP による大域 scheduling は Phase 9 の heuristic からの出発点として参照できる。
+- **次に読む**: tensor 特徴量（どの統計で recompute/compress を予測するか）の設計。
+
+### G-2. CompAct — 低ランク射影による activation 圧縮
+
+- [NAACL 2025](https://aclanthology.org/2025.naacl-long.71/) — Shamshoum, Hodos, Sieradzki, Schuster（Technion）、2025-04。
+- **要約**: backward 用に保存する activation を**random projection による低ランク圧縮**で保存
+  （量子化ではない）。projection は random なので追加 memory なし。
+  pretraining で peak memory 25〜30%、fine-tuning で 50% 削減。
+- **HexaTrain との関連**: 「Quantized Activation Checkpointing（INT8/INT4 保存）」と
+  「低ランク保存」は同じ KEEP slot の別実装。D64 と小さい隠れ次元では
+  低ランク圧縮の効率が落ちる可能性が高いが、T32 window × B8 の小さい tensor 群では
+  「保存コストより projection MatMul コスト」が逆転するか実測する価値がある。
+  QNN graph に random projection を足すのは node 数小で済む。
+- **次に読む**: projection の rank 選択規則。
+
+### G-3. 既知系統の整理（repo 参照済み）
+
+- **COAT**（NVIDIA）: activation / optimizer state の細粒度 group 量子化。
+- **MODeL**（Meta）: tensor lifetime / placement / spill / rematerialization /
+  reduced precision を一つの scheduling 問題として扱う。Adacc と同じ「統合」路線の先駆。
+- **FastSA**（PFN）: 計算 graph 上の保存/再計算配置の自動探索。
+- **MeBP**（Apple, cluster B-2）: layer 分割と memory hierarchy への逃がし。
+- **HexaTrain との関連**: Memory Planner の設計要素（lifetime 解析 / granularity /
+  大域 scheduling / 適応更新）はすべて外部に先行例がある。HexaTrain 独自の価値は
+  「QNN HTP / HVX / CPU の3 backend と FastRPC 境界を含めた cost model」と
+  「端末実測での検証」にある。
+
+### クラスタGの統合所見（2026-10-25時点）
+
+1. **Memory Planner は「新規概念」ではなく「確立した問題領域の HTP 版」**として設計できる。
+   Adacc の MILP scheduling と policy evolution は Phase 9 の実装柱として直接参照する。
+2. HexaTrain の差別化要素は backend 異質性（HTP/HVX/CPU + RPC 境界）と spill 先の
+   memory 階層。外部論文の cost model にこの2つを足すのが設計の本体。
+
+---
