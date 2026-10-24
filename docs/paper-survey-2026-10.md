@@ -964,10 +964,9 @@ quantized softmax 研究、整数-only 推論系。
   32-bit fixed-point。HTP ではなく PIM 前提だが低bit KV / weight-act quant の SOTA 対照。
 - [Faster Superword Tokenization（arXiv:2604.05192）](https://arxiv.org/abs/2604.05192) —
   BPE tokenization の高速化（4.7 CPU日→600 CPU秒）。アプリ内で tokenizer/cache を
-  端末生成する「アプリ単体化」課題の工敷削減に使える可能性。
-- [Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）](https://arxiv.org/abs/2610.11214)
-  — KV 量子化と linear attention の統一理論。P3 の KV 系と Phase 14 の接続部。
-  要確認。
+  端末生成する「アプリ単体化」課題のコスト削減に使える可能性。
+- Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）は
+  クラスタ F-3 に詳細あり（RAM-Net 統一 + weight migration）。
 - MELTing point（EuroSys 2025）はクラスタ B-4 参照。評価engine（NOW 1番）への
   直接の外部文献は薄いが、serving 系の設計が最も近い実務参照:
   [Multi-Bin Batching（ACM 2026-08）](https://dl.acm.org/doi/10.1145/3843225)
