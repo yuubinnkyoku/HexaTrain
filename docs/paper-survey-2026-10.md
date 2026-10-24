@@ -647,6 +647,18 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   data pipeline identity を checkpoint に結ぶ現行運用（Reproducible Data Pipeline）の
   方向性と整合。将来的に corpus を増やす場合の resampling 設計の参照。
 - **次に読む**: data mixing ratio の公開表（Phase 13 の stable multi-source mix 設計の参照）。
+  → **【2026-10-25 精読済み】**: data pipeline の核心は
+  (a) **leave-one-out ablation**（Code/Math/Knowledge の capability probing set 上の
+  NLL delta）、(b) **influence score**（AutoMixer 系の Hessian-free 近似で
+  self / cross influence を算出し dataset 単位の sampling weight へ集約）、
+  (c) mid-training での**影響度正の sample だけ残して再 mix する
+  iterative data-model co-evolution**。140M/360M/950M の3 size、QK-norm 採用、
+  **input/output embedding の weight sharing（tied）で parameter efficiency**。
+  SFT 蒸留 data が小規模 model の直接 RL より勝つという結果も。
+  HexaTrain との対比: tied embedding を採る sub-B 系（MobileLLM-R1）と
+  untied が勝つ speedrun 系（J-1）が対立しており、**tied/untied は規模・data 依存**
+  の判断。influence-score 系の data 評価は Phase 13 の候補手法として参照価値が高い
+  （ただし HexaTrain の corpus 規模では leave-one-out の費用対効果は要検討）。
 
 ### E-7. survey・その他
 
