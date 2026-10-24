@@ -709,7 +709,8 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
    Phase 4 は Muown 単体ではなく、**row 制御の位置（parameterization vs post-NS normalize vs
    per-neuron moment）を分離する3-4 arm 比較**へ拡張する情報的価値が高い。
    深掘り後の整理として、適応の **granularity 軸**で並べると
-   「Muon（適応なし）→ Muon+（row/col L2・stateless）→ NorMuon（row RMS EMA・m scalar）→
+   「Muon（適応なし）→ Muon+（row/col L2・stateless）→ NAMO（scalar adaptive stepsize）→
+   NorMuon / NAMO-D（row RMS EMA・m scalar / neuron-wise diagonal）→
    AdaMuon（element-wise second moment・mn scalar）」の spectrum になり、
    それぞれの state 増分と引き換えに得る適応粒度が読み取れる。
    Muown は spectrum の外側（weight 側の parameterization）に位置する。
