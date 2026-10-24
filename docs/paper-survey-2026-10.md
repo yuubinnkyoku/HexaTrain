@@ -1132,6 +1132,7 @@ Loss Curriculum」への文献裏付けを探した。
 | Training Memory Planner（Phase 9） | Adacc / MODeL が同一問題の外部先行例（G-1, G-3） | 高 |
 | Softmax 高精度残置の想定 | softmax 自体の低bit化は「学習時に慣らす」必要があるという結果（H-3）。Kellogg の LN weight 除外（A-2）とも整合 | 中 |
 | Cross-Layer Reuse 診断 → Value Residual（NOW 5 / P1 pool） | Depth-Attention が parameter ゼロ・KV 中立の cross-layer value mixing を 360M から検証（E-3） | 中 |
+| Training Stability Stress Harness（P0 共通基盤） | Wortsman の小規模 proxy 手法論（A-7 追記）が同一指標系（update norm・logit growth）で規模間予測を実証 | 中 |
 
 ## 2. この調査で新しく見えた設計軸（repo にまだ無いもの）
 
