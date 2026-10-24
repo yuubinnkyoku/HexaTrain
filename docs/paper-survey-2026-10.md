@@ -241,7 +241,30 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   A-3/A-8 の recipe と整合する。
 - **次に読む**: rotation 対応 2段階最適化の分離基準（rotated / unrotated tensor）。
 
-### クラスタAの統合所見（2026-10-25時点、A-8/A-9 追記後更新）
+### A-10. Full-Stack FP4 — optimizer state まで FP4 化（2026-10-25 追加・重要）
+
+- [arXiv:2607.04422](https://arxiv.org/abs/2607.04422) / [AlphaXiv](https://www.alphaxiv.org/abs/2607.04422)
+  — Ding, Ma, Tong, Xing, Wang, Li、2026-07（v2 2026-08）。
+- **要約**: NVFP4 量子化を線形層から **optimizer state と attention まで拡張**。
+  (1) AdamW momentum の NVFP4 保存を **sqrt / tile-mean / Hadamard 変換の
+  順序付き pipeline** で安定化、(2) **Muon 系（Root 反復）の計算自体も NVFP4 で実行**
+  （shape 依存係数と clipping で直接 FP4 Root 反復を安定化）、
+  (3) LoRA-SVD で小さい BF16 部分空間を残し loss gap を 1.40% → 0.61% に削減。
+  3B / 64B token で BF16 比 loss gap 0.838%、zero-shot PPL ほぼ tie。
+  RTX 5090 で **Root optimizer 2.50〜2.83x 高速化・AdamW peak memory
+  37.9〜42.5% 減**。
+- **HexaTrain との関連**: repo の P2「Quantized Adam / optimizer-state 低bit化」の
+  最新・最強 instance。特に **Muon（Root/NS 反復）自体の低bit化**は
+  HVX FP32 Muon の wall time 問題（約55〜59 ms/update）への
+  「反復を低bit tensor core で回す」方向の存在証明になる。
+  HexaTrain では HVX に FP4 tensor core はないが、
+  (a) momentum 保存の低bit化（sqrt/tile-mean/Hadamard pipeline）は
+  HVX/CPU 実装に直接移植可能、(b) **NS 反復の数値安定化は QNN HTP NS 再試行の
+  precision gate 条件を満たす新経路**（A-3 の forward 高精度残置との対比で、
+  「反復側を安定化する」アプローチ）。
+- **次に読む**: FP4 Root 反復の clipping 係数の決め方（NS 係数との関係）。
+
+### クラスタAの統合所見（2026-10-25時点、A-8〜A-10 追記後更新）
 ---
 
 1. **MX 系 block-scaled 学習は「何を高精度に残すか」で決まる。** Kempner の結果は
@@ -259,6 +282,10 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
 4. **NPU は fully static な量子化 parameter を要求する**（A-9）。
    動的な activation scale 計算を前提にした手法は HTP graph に載らない。
    Phase 12 の候補は最初から「静的 scale（学習中に更新・graph へ焼き込み）」で設計する。
+5. **低bit化の対象は optimizer state まで及んだ**（A-10）。
+   Muon 系 Root 反復自体の FP4 実行が成立しており、
+   「momentum 保存の低bit化」は HVX/CPU 実装に移植可能、
+   「反復側の安定化」は QNN HTP NS 再試行の新たな precision gate 経路になる。
 
 ---
 
@@ -1018,6 +1045,9 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   low-disruption migration との親和性を示す例。
 - [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
+- [LeapQuant（arXiv:2609.38166）](https://arxiv.org/abs/2609.38166)（2026-09）—
+  **linear attention（GDN / Kimi 系）の量子化**。Phase 14 の GDN 導入と
+  Phase 12 の低精度化が交差する地点の先行例。要確認。
 - [Erase-then-Delta Attention（arXiv:2606.26560）](https://arxiv.org/abs/2606.26560) /
   [AlphaXiv](https://www.alphaxiv.org/abs/2606.26560)
   — Li, Zhang, Luo ほか（Alibaba 系）、2026-06。
