@@ -255,6 +255,31 @@ exact backprop で回している公開文献は見つからなかった。** He
   framework 側で未対応。**「NPU 上の学習」が framework 標準から出ていない**という状況は
   HexaTrain の直接 QNN op 構築路線の妥当性（と独自性）の傍証。
 
+### B-5. mobile NPU inference の計測系（2026-10-25 追加）
+
+- [Is Your NPU Ready for LLMs?（arXiv:2607.05475）](https://arxiv.org/abs/2607.05475) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2607.05475)
+  — Cai, Tian, Yang ほか、2026-07（v2 2026-10、**SIGMETRICS 2027 採録**）。
+- **要約**: 5 framework × CPU/GPU/NPU backend の横断計測（PowerBench による
+  backend 別 energy 帰属）。主要発見は (1) framework 間で NPU 性能が最大10倍違う
+  （offload 戦略・演算子の HW 活用・activation 量子化戦略の差）、
+  (2) **NPU は compute-bound の prefill で勝ち、memory-bound の decode では
+  CPU が全 backend を上回る**（NPU は大きい固定 shape 向けで、decode は小さい
+  動的 kernel だから）、(3) scheduling 無駄（thread 設定・NPU sleep latency・
+  CPU polling）が energy を食い、CPU 周波数調整だけで最大 39.7% 削減。
+  energy-oriented 設定で NPU backend の energy を最大 53.2% 削減。
+- [T-MAN（arXiv:2511.11248）](https://arxiv.org/abs/2511.11248) — 低bit LLM の
+  NPU end-to-end 推論。Qualcomm QNN を industry SOTA として llm.npu と比較する視点。
+- **HexaTrain との関連**: 「NPU decode は弱い」という計測は、
+  P1「Incremental KV-cache generation」の設計に直接影響する。
+  1-token decode を HTP 固定 graph で回すか、decode だけ CPU/HVX に置くかの
+  backend placement 判断（7層共同最適化の Backend Placement）に
+  外部計測からの根拠が加わった。HexaTrain の rolling T32 再計算方式は
+  「固定 shape を保つ」方向で NPU 特性には合っているが、per-token 固定費が
+  大きいという別問題を持つ。
+- **次に読む**: decode の kernel size と NPU 効率の関係（incremental KV cache の
+  shape 設計の参照）。
+
 ### クラスタBの統合所見（2026-10-25時点）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
