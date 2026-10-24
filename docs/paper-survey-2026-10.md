@@ -557,7 +557,27 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   「CPU reference 1-step cost」から測るのが現実的。
 - **次に読む**: Alice の low-dimensional subspace 推定（HexaTrain の 64x64 行列群への適合性）。
 
-### C-5. 索引
+### C-5. Polar Express（repo 参照の直接確認、2026-10-25）
+
+- [arXiv:2505.16932](https://arxiv.org/abs/2505.16932) / [AlphaXiv](https://www.alphaxiv.org/abs/2505.16932)
+  — Amsel, Persson, Musco, Gower（NYU Courant 系）、2025-05（v5 2026-05）。repo 参照済み。
+- **要約（確認要点）**: Newton–Schulz と同じ matmul-only 構成を保ちつつ、
+  **各 iteration の多項式更新則を minimax 最適化で適応決定**
+  （Chen & Chow、Nakatsukasa & Freund 系）。固定係数 NS と違い
+  early phase・漸近の両方で worst-case optimal に収束するため、
+  同一 accuracy に対し必要 iteration 数が減る。**有限精度演算（bfloat16 級）での
+  解析もあり**、GPT-2 / 1〜10B token で一貫した loss 改善。
+- **HexaTrain との関連**: Phase 5 の「Muon Orthogonalization Accuracy lane」
+  （NS5 固定 / Polar Express 系係数 / NS8 相当の同一 budget 比較）の一方の pole。
+  重要な含意は「**係数適応化で iteration 数を削れる**」ことで、
+  HVX FP32 では NS5 より少ない matmul で同等精度が狙える可能性があり、
+  Muon update の wall time 直接低減候補になる。
+  また QNN HTP NS 再試行の条件（backend precision gate）を満たす別経路としても
+  記録価値がある。
+- **次に読む**: minimax 係数の計算 cost（offline 事前計算で済むか、
+  毎 step 必要か）。
+
+### C-6. 索引
 
 - **【2026-10-25 直接確認済み】Muown 原論文**:
   [arXiv:2605.10797](https://arxiv.org/abs/2605.10797) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.10797)
