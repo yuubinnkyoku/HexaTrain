@@ -318,6 +318,13 @@ exact backprop で回している公開文献は見つからなかった。** He
   評価軸（温度と throughput の履歴を scheduling 入力にする）は
   HexaTrain の thermal telemetry を活かす placement 判断の参照になる。
 - **次に読む**: thermal-aware の報酬設計（thermal throttle をどう cost 化するか）。
+  → **【2026-10-25 書誌確認済み】**: Tan et al., *Thermal-Aware Scheduling for Deep
+  Learning on Mobile Devices With NPU*, **IEEE TMC 23(12), 2024-12**。
+  DNN op を subgraph へ分割し GPU/NPU 間で thermal throttle を避けるよう配分。
+  後続に IceEdge（ACM 2026, [dl.acm.org/doi/full/10.1145/3801093](https://dl.acm.org/doi/full/10.1145/3801093)）、
+  OPTiC（CPU-GPU collaborative, thermal constraint）がある。
+  HexaTrain では thermal telemetry を placement 判断へ入れる際の
+  先行評価軸として参照。本文の cost 設計は IEEE 有料壁のため未確認。
 
 ### クラスタBの統合所見（2026-10-25時点）
 
