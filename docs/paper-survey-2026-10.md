@@ -781,10 +781,19 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   — BFP mantissa 幅を学習中に可変にする。FP→BFP 変換の gradient に SR を使う。
 - [BiE: Bi-Exponent Block Floating-Point（ICML 2024, PMLR 235:62978）](https://proceedings.mlr.press/v235/zou24d.html)
   — Zou ほか（CUHK）。
-  **【2026-10-25 確認済み】**: 6-bit BFP が有望だが activation の outlier 悪化が課題、
-  という動機で、**coarse block exponent + fine exponent の2本の共有指数**で
-  通常値と outlier の両方を扱う表現。推論側量子化（training は対象外）。
-  2-exponent の割当規則の詳細は PDF 本文要確認。
+  **【2026-10-25 全文精読済み】**: 6-bit BFP が有望だが activation の outlier 悪化が課題、
+  という動機。**block（16要素・行方向）ごとに2本の共有指数** `e_n`（|x|≤T の正常部）と
+  `e_o`（|x|>T の outlier 部）を持ち、要素ごとに 1-bit type flag で所属を区別。
+  threshold `T` は **tensor ごとに offline で Bayesian 最適化**
+  （GP + Matérn 5/2 kernel + Expected Improvement、探索空間は |x| 分布の
+  75〜95 percentile に剪定）。W4A4 で OPT-66B WikiText2 9.82（FP16 9.12、
+  BFP-W4A4 は 14.16 と崩壊）。hardware は comparator tree 追加 + bit shifter で
+  BFP とほぼ同 throughput（FP16 比 3.51x）。**OPT-125m〜2.7B の小規模でも
+  BiE > BFP が一貫**（125m: FP16 27.50 → BiE W4A4 28.20 vs BFP 30.17）で、
+  HexaTrain 規模寄りの検証もある。推論 PTQ 専用（Softmax/LayerNorm は FP16 残置）。
+  HexaTrain との関連は「outlier 分離 family の block 内2指数版」として、
+  RHT（変換で分散）・Adacc Z-score（channel 分離）と対になる
+  「分離位置」の第3の選択肢（block 内 value 分離）。
 - [F-BFQ（arXiv:2510.13401, LG-ARC@ISCA 2025）](https://arxiv.org/abs/2510.13401) —
   Haris, Cano。**【2026-10-25 確認済み】**: BFP 量子化 LLM のための edge 用
   hardware accelerator。layer ごとに異なる BFP variant が混在する前提で
