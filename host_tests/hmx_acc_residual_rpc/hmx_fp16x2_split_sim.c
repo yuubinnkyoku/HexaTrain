@@ -1945,6 +1945,156 @@ static void t8_sign_split(void) {
          g_fail == fail_before ? "none" : "unexpected");
 }
 
+/* R2: the same 1,024-cell G8 tile through the stateful two-convert order.
+ *
+ *   convert #1: bias set 0, shape 0, scale 64, bo 0, ACC retained
+ *   store #1  : positive buffer
+ *   convert #2: bias set 1, shape 4, scale 64, bo 0, no feedback
+ *   store #2  : negative buffer
+ *   HVX       : positive - negative
+ *
+ * t8_split_store() is the G9 encoding function; this section applies it in
+ * the R2 order and reports the full comparison set. The only device inputs
+ * remain the E-3D four slots and the measured negative clamp. These are
+ * CPU-model facts, not device evidence. */
+static int t8_is_subnormal(uint16_t bits) {
+  return ((bits >> 10) & 31u) == 0u && (bits & 1023u) != 0u;
+}
+static int t8_is_inf(uint16_t bits) {
+  return ((bits >> 10) & 31u) == 31u && (bits & 1023u) == 0u;
+}
+static int t8_is_nan(uint16_t bits) {
+  return ((bits >> 10) & 31u) == 31u && (bits & 1023u) != 0u;
+}
+
+static void t8_r2_metrics(void) {
+  const long nn = T8_CELLS;
+  const long fail_before = g_fail;
+  long i;
+  long p_bits_diff = 0, b_bits_diff = 0;
+  long p_num_diff = 0, b_num_diff = 0;
+  long p_negzero = 0, b_negzero = 0;
+  long sub_p = 0, sub_b = 0, overflow = 0, inf = 0, nan = 0;
+  long both_nonzero = 0, one_sided = 0, both_zero = 0;
+  /* A cell where both halves carry a rounded value is the only place the
+   * second convert can see an intermediate RN16 result from the first. With
+   * bo=0 the two halves are mutually exclusive, so this must stay 0. */
+  long intermediate_rounding = 0;
+  long improved = 0, equal = 0, worsened = 0;
+  long matches_g9 = 0;
+  double pmean, pmed, pp95, pmax, prmse;
+  double bmean, bmed, bp95, bmax, brmse;
+  double ratio;
+
+  for (i = 0; i < nn; ++i) {
+    uint16_t p0, p4, b0, b4;
+    const uint16_t pr = t8_split_store(gT8P[i], &p0, &p4);
+    const uint16_t br = t8_split_store(gT8B[i], &b0, &b4);
+
+    if (pr != gT8Ps[i]) ++p_bits_diff;
+    if (br != gT8Bs[i]) ++b_bits_diff;
+    if (fp16_to_double(pr) != fp16_to_double(gT8Ps[i])) ++p_num_diff;
+    if (fp16_to_double(br) != fp16_to_double(gT8Bs[i])) ++b_num_diff;
+    if ((pr == 0x0000u && gT8Ps[i] == 0x8000u) ||
+        (pr == 0x8000u && gT8Ps[i] == 0x0000u))
+      ++p_negzero;
+    if ((br == 0x0000u && gT8Bs[i] == 0x8000u) ||
+        (br == 0x8000u && gT8Bs[i] == 0x0000u))
+      ++b_negzero;
+    if (t8_is_subnormal(gT8Ps[i])) ++sub_p;
+    if (t8_is_subnormal(gT8Bs[i])) ++sub_b;
+    if (t8_is_inf(gT8Ps[i]) || t8_is_inf(gT8Bs[i])) ++inf;
+    if (t8_is_nan(gT8Ps[i]) || t8_is_nan(gT8Bs[i])) ++nan;
+    if (fabs(64.0 * gT8P[i]) > 65520.0 || fabs(64.0 * gT8B[i]) > 65520.0)
+      ++overflow;
+    if (p0 != 0u && p4 != 0u) {
+      ++both_nonzero;
+      ++intermediate_rounding;
+    }
+    if ((p0 != 0u) != (p4 != 0u)) ++one_sided;
+    if (p0 == 0u && p4 == 0u) ++both_zero;
+    if (pr == gT8Sp[i] && br == gT8Sb[i]) ++matches_g9;
+  }
+
+  for (i = 0; i < nn; ++i)
+    gT8E[i] = fabs(t8_descale(gT8Sp[i]) - gT8Yt[i]);
+  abs_error_stats(gT8E, nn, &pmean, &pmed, &pp95, &pmax, &prmse);
+  for (i = 0; i < nn; ++i)
+    gT8E[i] = fabs(t8_descale(gT8Sb[i]) - gT8Yt[i]);
+  abs_error_stats(gT8E, nn, &bmean, &bmed, &bp95, &bmax, &brmse);
+
+  for (i = 0; i < nn; ++i) {
+    const double ap = fabs(t8_descale(gT8Sp[i]) - gT8Yt[i]);
+    const double ab = fabs(t8_descale(gT8Sb[i]) - gT8Yt[i]);
+    if (ap - ab > G7_TIE_TOL) {
+      ++improved;
+    } else if (ab - ap > G7_TIE_TOL) {
+      ++worsened;
+    } else {
+      ++equal;
+    }
+  }
+  ratio = (bmean > 0.0) ? pmean / bmean : 0.0;
+
+  printf("r2_g9 cells=%ld plain_direct_mean_abs=%.6e "
+         "plain_direct_max_abs=%.6e b3_direct_mean_abs=%.6e "
+         "b3_direct_max_abs=%.6e b3_r2_mean_abs=%.6e b3_r2_max_abs=%.6e "
+         "plain_over_b3=%.6f improved=%ld equal=%ld worsened=%ld "
+         "plain_bit_match=%.6f b3_bit_match=%.6f "
+         "plain_numeric_match=%.6f b3_numeric_match=%.6f "
+         "neg_zero_diff_plain=%ld neg_zero_diff_b3=%ld "
+         "subnormal_plain=%ld subnormal_b3=%ld overflow=%ld inf=%ld nan=%ld "
+         "both_nonzero=%ld one_sided=%ld both_zero=%ld "
+         "intermediate_rounding=%ld r2_state_matches_g9=%ld\n",
+         nn, pmean, pmax, bmean, bmax, bmean, bmax, ratio, improved, equal,
+         worsened, 1.0 - (double)p_bits_diff / (double)nn,
+         1.0 - (double)b_bits_diff / (double)nn,
+         1.0 - (double)p_num_diff / (double)nn,
+         1.0 - (double)b_num_diff / (double)nn, p_negzero, b_negzero, sub_p,
+         sub_b, overflow, inf, nan, both_nonzero, one_sided, both_zero,
+         intermediate_rounding, matches_g9);
+
+  ++g_checks;
+  if (p_bits_diff != 0 || b_bits_diff != 0) {
+    ++g_fail;
+    printf("FAIL r2_g9.bits plain=%ld b3=%ld\n", p_bits_diff, b_bits_diff);
+  }
+  ++g_checks;
+  if (p_num_diff != 0 || b_num_diff != 0) {
+    ++g_fail;
+    printf("FAIL r2_g9.numeric plain=%ld b3=%ld\n", p_num_diff, b_num_diff);
+  }
+  ++g_checks;
+  if (both_nonzero != 0) {
+    ++g_fail;
+    printf("FAIL r2_g9.both_nonzero=%ld\n", both_nonzero);
+  }
+  ++g_checks;
+  if (!(ratio > 1.80 && ratio < 1.90)) {
+    ++g_fail;
+    printf("FAIL r2_g9.ratio=%.6f\n", ratio);
+  }
+  ++g_checks;
+  if (sub_p == 0) {
+    ++g_fail;
+    printf("FAIL r2_g9.subnormal_band_not_exercised\n");
+  }
+  ++g_checks;
+  if (overflow != 0 || inf != 0 || nan != 0) {
+    ++g_fail;
+    printf("FAIL r2_g9.specials overflow=%ld inf=%ld nan=%ld\n", overflow,
+           inf, nan);
+  }
+  ++g_checks;
+  if (matches_g9 != nn) {
+    ++g_fail;
+    printf("FAIL r2_g9.state_mismatch=%ld/%ld\n", matches_g9, nn);
+  }
+  printf("r2_g9_verdict=%s accuracy_change=%s\n",
+         g_fail == fail_before ? "R2_STATE_ENCODING_PRESERVED" : "FAIL",
+         g_fail == fail_before ? "none_vs_b3_direct" : "unexpected");
+}
+
 /* E-3C0 decision line. PASS requires ALL of:
  *   (a) b3 full-tile stored mean-abs < plain (fp32carried),
  *   (b) every pinned cell assert + layout-distinctness assert passes,
@@ -1981,6 +2131,7 @@ static void t8_run(void) {
   t8_metrics();
   t8_grid_preserve();
   t8_sign_split();
+  t8_r2_metrics();
   t8_gate();
 }
 

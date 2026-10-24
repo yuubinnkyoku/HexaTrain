@@ -271,6 +271,803 @@ static uint16_t quantize_down(double v) {
 #define RS_FB_DEST_SCALE 0x0008u
 #define RS_BIAS_SEL(n) (((uint32_t)(n) & 3u) << 12)
 
+// ---------------------------------------------------------------------------
+// 12. R2 state machine: one MMA, two converts over a retained ACC.
+//
+// PRM basis (80-N2040-62 Rev AA):
+//   * 2.2.3 p.9-10: a pair of 32x32x37-bit accumulators; a multiply writes the
+//     primary; a following convert may optionally clear and swap it; the
+//     convert instructions are the only way to access the accumulators.
+//   * 2.3 p.11-12: the convert reads every ACC cell, applies the bias-row
+//     equation and writes the convert state; it then optionally clears the ACC.
+//   * 2.3.1 p.13: four bias sets of 32 per-channel 64-bit cells; a convert
+//     selects one set; the bias load can precede the multiply or sit between
+//     the multiply and the convert.
+//   * Fig.17/Table 6 p.15: Rs[13:12] = bias set; Rs[0]=1 retains the ACC,
+//     Rs[0]=0 clears and swaps; no-feedback converts leave all other bits 0.
+//   * 2.4 p.17: the store reads the convert state and does not modify it.
+//
+// The model is deliberately stateful (ACC bank/valid, convert state, previous
+// convert state, bias sets, two output regions) so that a broken ACC, a missed
+// bias-set switch, an unexpectedly enabled feedback path or overlapping stores
+// cannot silently produce the expected bits. It models the PRM equation plus
+// the measured negative-value clamp as a separate, labelled law.
+//
+// CPU arithmetic assumptions: IEEE binary16 RN-even helpers from fp16_util.h,
+// double intermediates, no FMA contraction (the runner passes
+// -ffp-contract=off), no FTZ/DAZ. HVX subtraction is modelled as IEEE FP16
+// RN-even; the separate HVX caveat is documented, not hidden here.
+// ---------------------------------------------------------------------------
+
+#define R2_NS 32
+#define R2_NO 32
+#define R2_CELLS (R2_NS * R2_NO)
+#define R2_BIAS_SETS 4
+#define R2_REGIONS 2
+
+typedef struct {
+  uint16_t scale_bits;
+  uint16_t obias_bits;
+  unsigned shape;
+} r2_bias_cell;
+
+typedef struct {
+  double scale;
+  double obias;
+  unsigned shape;
+} r2_bias_value;
+
+typedef struct {
+  double acc[2][R2_CELLS]; /* two banks, primary/secondary */
+  int primary;
+  int acc_valid;
+
+  double cvt[R2_CELLS];        /* current convert state, pre-RN16 unless
+                                * clamp_in_convert is set */
+  uint16_t cvt_bits[R2_CELLS]; /* current convert state, RN16 bits */
+  double cvt_prev[R2_CELLS];   /* previous convert state for feedback */
+  uint16_t cvt_prev_bits[R2_CELLS];
+  int cvt_valid;
+  int cvt_prev_valid;
+
+  r2_bias_cell bias[R2_BIAS_SETS][R2_NO];
+  int bias_loaded[R2_BIAS_SETS];
+
+  uint16_t mem[R2_REGIONS][R2_CELLS];
+  int mem_written[R2_REGIONS];
+  long store_count;
+
+  double acc_read[2][R2_CELLS]; /* snapshot per convert for the reuse check */
+  int acc_read_count;
+
+  long mma_count;
+  long convert_count;
+  int last_bias_sel;
+  int last_fb_dest;
+  int last_retain;
+
+  /* Fault-injection switches. All default to the registered R2 behaviour. */
+  int clamp_in_convert;     /* 0 = clamp at store (E-3D leaves the stage open) */
+  int rounding_mode;        /* 0 = RN-even, 1 = toward +inf, 2 = toward -inf */
+  int force_bias_sel;       /* -1 = use Rs[13:12], else override lookup */
+  int force_feedback_dest;  /* -1 = use Rs[3:2], else override */
+  int force_feedback_op;    /* used with force_feedback_dest */
+  int bias_missing;
+  int store_oob;
+} r2_state;
+
+static int r2_store_index(unsigned s, unsigned o) {
+  return (int)((s >> 1) * 64u + o * 2u + (s & 1u));
+}
+
+static double r2_shape_value(double x, unsigned shape) {
+  switch (shape & 7u) {
+    case 0: return x;
+    case 1: return x < 0.0 ? x : 0.0;
+    case 2: return x > 0.0 ? x : 0.0;
+    case 3: return fabs(x);
+    case 4: return -x;
+    case 5: return -(x < 0.0 ? x : 0.0);
+    case 6: return -(x > 0.0 ? x : 0.0);
+    case 7: return -fabs(x);
+    default: return x;
+  }
+}
+
+static void r2_bias_fill(r2_state *st, unsigned set, uint16_t scale_bits,
+                         unsigned shape, uint16_t obias_bits) {
+  for (unsigned o = 0; o < R2_NO; ++o) {
+    st->bias[set][o].scale_bits = scale_bits;
+    st->bias[set][o].obias_bits = obias_bits;
+    st->bias[set][o].shape = shape;
+  }
+  st->bias_loaded[set] = 1;
+}
+
+static r2_bias_value r2_bias_decode(const r2_bias_cell *cell) {
+  r2_bias_value v;
+  v.scale = fp16_to_double(cell->scale_bits);
+  v.obias = bias20_decode_out_bias(cell->obias_bits, 0u);
+  v.shape = cell->shape;
+  return v;
+}
+
+static void r2_init(r2_state *st) {
+  memset(st, 0, sizeof(*st));
+  st->primary = 0;
+  st->acc_valid = 0;
+  st->cvt_valid = 0;
+  st->cvt_prev_valid = 0;
+  st->acc_read_count = 0;
+  st->clamp_in_convert = 0;
+  st->rounding_mode = 0;
+  st->force_bias_sel = -1;
+  st->force_feedback_dest = -1;
+  st->force_feedback_op = 0;
+  st->bias_missing = 0;
+  st->store_oob = 0;
+  /* Registered R2 rows. Set 0: +64, shape 0, bo 0. Set 1: +64, shape 4,
+   * bo 0. Set 2 is the retention/bias-switch control row (+32, shape 0). */
+  r2_bias_fill(st, 0u, 0x5400u, 0u, 0x0000u);
+  r2_bias_fill(st, 1u, 0x5400u, 4u, 0x0000u);
+  r2_bias_fill(st, 2u, 0x5000u, 0u, 0x0000u);
+}
+
+static void r2_mma_begin(r2_state *st) {
+  for (int i = 0; i < R2_CELLS; ++i) st->acc[st->primary][i] = 0.0;
+}
+
+static void r2_mma_cell(r2_state *st, unsigned s, unsigned o, double value) {
+  st->acc[st->primary][s * R2_NO + o] = value;
+}
+
+static void r2_mma_end(r2_state *st) {
+  st->acc_valid = 1;
+  ++st->mma_count;
+}
+
+static uint16_t r2_round_value(const r2_state *st, double raw) {
+  if (st->rounding_mode == 1) return quantize_up(raw);
+  if (st->rounding_mode == 2) return quantize_down(raw);
+  return double_to_fp16(raw);
+}
+
+/* One convert transfer. Writes the whole 1024-cell convert state. Feedback is
+ * an explicitly modelled fault-injection path; the registered R2 Rs values
+ * have Rs[3:2]=0. */
+static void r2_convert(r2_state *st, unsigned rs) {
+  const unsigned bias_sel = (rs >> 12) & 3u;
+  const int retain = (int)(rs & 1u);
+  unsigned fb_dest = (rs >> 2) & 3u;
+  unsigned fb_op = (rs >> 4) & 1u;
+  unsigned lookup = bias_sel;
+
+  if (st->force_bias_sel >= 0) lookup = (unsigned)st->force_bias_sel;
+  if (st->force_feedback_dest >= 0) {
+    fb_dest = (unsigned)st->force_feedback_dest;
+    fb_op = (unsigned)st->force_feedback_op;
+  }
+  if (!st->bias_loaded[lookup]) st->bias_missing = 1;
+
+  if (st->acc_read_count < 2) {
+    for (int i = 0; i < R2_CELLS; ++i)
+      st->acc_read[st->acc_read_count][i] =
+          st->acc_valid ? st->acc[st->primary][i] : 0.0;
+  }
+  ++st->acc_read_count;
+
+  for (int i = 0; i < R2_CELLS; ++i) {
+    const unsigned o = (unsigned)i & (R2_NO - 1u);
+    const r2_bias_value bv = r2_bias_decode(&st->bias[lookup][o]);
+    const double acc = st->acc_valid ? st->acc[st->primary][i] : 0.0;
+    double scale = bv.scale;
+    double obias = bv.obias;
+
+    if (fb_dest != 0u && st->cvt_prev_valid) {
+      const double fb = st->cvt_prev[i];
+      if (fb_dest == 1u) {
+        obias = fb_op ? fmax(obias, fb) : fmin(obias, fb);
+      } else if (fb_dest == 2u) {
+        scale = fb_op ? fmax(scale, fb) : fmin(scale, fb);
+      }
+    }
+
+    const double raw = scale * r2_shape_value(acc, bv.shape) + obias;
+    uint16_t bits = r2_round_value(st, raw);
+    double state_value = raw;
+    if (st->clamp_in_convert) {
+      bits = empirical_negative_clamp(bits);
+      state_value = fp16_to_double(bits);
+    }
+    st->cvt[i] = state_value;
+    st->cvt_bits[i] = bits;
+  }
+
+  for (int i = 0; i < R2_CELLS; ++i) {
+    st->cvt_prev[i] = st->cvt[i];
+    st->cvt_prev_bits[i] = st->cvt_bits[i];
+  }
+  st->cvt_valid = 1;
+  st->cvt_prev_valid = 1;
+  ++st->convert_count;
+  st->last_bias_sel = (int)bias_sel;
+  st->last_fb_dest = (int)fb_dest;
+  st->last_retain = retain;
+
+  if (!retain) {
+    /* The PRM clears the accumulator values and swaps the primary bank. Clear
+     * the bank that was read, then swap; the old secondary becomes primary and
+     * is stale, so acc_valid=0 prevents a convert from using it without a new
+     * MMA. */
+    for (int i = 0; i < R2_CELLS; ++i) st->acc[st->primary][i] = 0.0;
+    st->primary ^= 1;
+    st->acc_valid = 0;
+  }
+}
+
+/* The store reads the current convert state and applies the measured clamp to
+ * each FP16 word. It does not modify the ACC or the convert state. */
+static void r2_store(r2_state *st, unsigned region) {
+  if (region >= R2_REGIONS) {
+    st->store_oob = 1;
+    return;
+  }
+  /* Write in the PRM store layout (2 spatials per vector, output channel
+   * fastest), not in the logical (s,o) order. This is the layout the future
+   * host readback and the HVX subtract both see. */
+  for (unsigned s = 0; s < R2_NS; ++s)
+    for (unsigned o = 0; o < R2_NO; ++o)
+      st->mem[region][r2_store_index(s, o)] =
+          empirical_negative_clamp(st->cvt_bits[s * R2_NO + o]);
+  ++st->mem_written[region];
+  ++st->store_count;
+}
+
+static uint16_t r2_recon_cell(const r2_state *st, unsigned pos_region,
+                              unsigned neg_region, int cell) {
+  return double_to_fp16(fp16_to_double(st->mem[pos_region][cell]) -
+                        fp16_to_double(st->mem[neg_region][cell]));
+}
+
+static void r2_force_acc_destroy(r2_state *st) {
+  for (int b = 0; b < 2; ++b)
+    for (int i = 0; i < R2_CELLS; ++i) st->acc[b][i] = 0.0;
+  st->acc_valid = 0;
+}
+
+/* S2 tile: spatial 0 = +x, spatial 1 = -x, spatial 2 = 0, output channel 0.
+ * All other cells are exact zero. */
+static void r2_build_sign_tile(r2_state *st, double pos_x, double neg_x) {
+  r2_init(st);
+  r2_mma_begin(st);
+  r2_mma_cell(st, 0u, 0u, pos_x);
+  r2_mma_cell(st, 1u, 0u, neg_x);
+  r2_mma_cell(st, 2u, 0u, 0.0);
+  r2_mma_end(st);
+}
+
+/* S1 tile: spatial 0 = +x only. */
+static void r2_build_control_tile(r2_state *st, double x) {
+  r2_init(st);
+  r2_mma_begin(st);
+  r2_mma_cell(st, 0u, 0u, x);
+  r2_mma_end(st);
+}
+
+static void r2_run_sign_tile_variant(r2_state *st, unsigned rs2) {
+  r2_convert(st, 0x0001u); /* set 0, retain */
+  r2_store(st, 0u);        /* positive buffer */
+  r2_convert(st, rs2);     /* set 1, registered 0x1000 or retain 0x1001 */
+  r2_store(st, 1u);        /* negative buffer */
+}
+
+static void r2_run_sign_tile(r2_state *st) {
+  r2_run_sign_tile_variant(st, 0x1000u);
+}
+
+static void r2_run_control_tile(r2_state *st) {
+  r2_convert(st, 0x0001u); /* set 0, retain */
+  r2_store(st, 0u);        /* first store: +64x */
+  r2_convert(st, 0x2000u); /* set 2 (+32), clear */
+  r2_store(st, 1u);        /* second store: +32x */
+}
+
+/* ---------------------------------------------------------------------------
+ * R2 future-decision procedure (CPU model only).
+ *
+ * The labels below are pre-registered future device verdicts. This section
+ * tests the procedure by simulated observation; it does NOT establish a
+ * device result. The oracle prints r2_device_verdict=NOT_RUN unconditionally.
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+  R2_ACC_REUSE_SUPPORTED = 0,
+  R2_ACC_DESTROYED,
+  R2_BIAS_SWITCH_FAILED,
+  R2_STORE_INTERFERENCE,
+  R2_ROUNDING_MISMATCH,
+  R2_UNEXPECTED_OUTPUT,
+  R2_HOST_CONTRACT_FAILED
+} r2_verdict_t;
+
+static const char *r2_verdict_name(r2_verdict_t verdict) {
+  switch (verdict) {
+    case R2_ACC_REUSE_SUPPORTED: return "R2_ACC_REUSE_SUPPORTED";
+    case R2_ACC_DESTROYED: return "R2_ACC_DESTROYED";
+    case R2_BIAS_SWITCH_FAILED: return "R2_BIAS_SWITCH_FAILED";
+    case R2_STORE_INTERFERENCE: return "R2_STORE_INTERFERENCE";
+    case R2_ROUNDING_MISMATCH: return "R2_ROUNDING_MISMATCH";
+    case R2_UNEXPECTED_OUTPUT: return "R2_UNEXPECTED_OUTPUT";
+    case R2_HOST_CONTRACT_FAILED: return "R2_HOST_CONTRACT_FAILED";
+  }
+  return "R2_HOST_CONTRACT_FAILED";
+}
+
+typedef struct {
+  /* S1: retention + bias-set-selection control. */
+  uint16_t s1_first;
+  uint16_t s1_second;
+  /* S2: sign-separated two-convert tile. */
+  uint16_t s2_pos[3];
+  uint16_t s2_neg[3];
+  uint16_t s2_recon[3];
+  /* Host contract: two subcases, one MMA + two converts + two stores each. */
+  int mma_count;
+  int convert_count;
+  int store_count;
+  int trials;
+  int hmx_executed;
+  int pos_region_writes;
+  int neg_region_writes;
+  unsigned rs_first;
+  unsigned rs_second;
+  unsigned bias_sel_first;
+  unsigned bias_sel_second;
+} r2_observation_t;
+
+typedef struct {
+  r2_verdict_t verdict;
+  const char *name;
+  const char *cause;
+} r2_report_t;
+
+static r2_report_t r2_classify(const r2_observation_t *o) {
+  r2_report_t r;
+  r.verdict = R2_UNEXPECTED_OUTPUT;
+  r.name = r2_verdict_name(r.verdict);
+  r.cause = "unmatched";
+
+  /* 1. Host contract: the registered recipe and only that recipe. A feedback
+   *    bit in Rs[3:2], a third MMA or a missing convert/store fails closed. */
+  if (o->mma_count != 2 || o->convert_count != 4 || o->store_count != 4 ||
+      o->trials != 2 || o->hmx_executed != 1 || o->rs_first != 0x0001u ||
+      (o->rs_second != 0x1000u && o->rs_second != 0x1001u) ||
+      o->bias_sel_first != 0u || o->bias_sel_second != 1u) {
+    r.verdict = R2_HOST_CONTRACT_FAILED;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "counts_or_rs";
+    return r;
+  }
+
+  /* 2. Both stores must have landed in their registered, distinct regions. */
+  if (o->pos_region_writes != 2 || o->neg_region_writes != 2) {
+    r.verdict = R2_STORE_INTERFERENCE;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "region_write_count";
+    return r;
+  }
+
+  /* 3. Registered one-ULP alternatives are a rounding finding, not a generic
+   *    unexpected value. 0x5421 = ceil(66.015625), 0x5021 = ceil(33.0078125). */
+  if (o->s1_second == 0x5021u || o->s2_pos[0] == 0x5421u ||
+      o->s2_neg[1] == 0x5421u) {
+    r.verdict = R2_ROUNDING_MISMATCH;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "one_ulp_ceiling";
+    return r;
+  }
+
+  /* 4. S1 isolates ACC retention from the shape-4 path: the second convert
+   *    selects a different bias set with a different positive scale. */
+  if (o->s1_first != 0x5420u) {
+    r.cause = "s1_first_anchor";
+    return r;
+  }
+  if (o->s1_second == 0x0000u) {
+    r.verdict = R2_ACC_DESTROYED;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "s1_second_zero_after_retained_convert";
+    return r;
+  }
+  if (o->s1_second == 0x5420u) {
+    r.verdict = R2_BIAS_SWITCH_FAILED;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "s1_second_used_set0";
+    return r;
+  }
+  if (o->s1_second != 0x5020u) {
+    r.cause = "s1_second_unexpected";
+    return r;
+  }
+
+  /* 5. S2: each sign must appear in exactly one buffer. */
+  if (o->s2_pos[0] == 0x0000u && o->s2_pos[1] == 0x5420u) {
+    r.verdict = R2_STORE_INTERFERENCE;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "first_store_overwritten_by_second";
+    return r;
+  }
+  if (o->s2_pos[0] != 0x5420u) {
+    r.cause = "positive_half";
+    return r;
+  }
+  /* The negative-ACC lane must not leak into the positive buffer. This is a
+   * separate check from the first-store-overwrite pattern above: a non-zero
+   * value here with a correct s2_pos[0] is an unexpected export, not an
+   * interference signature. */
+  if (o->s2_pos[1] != 0x0000u) {
+    r.cause = "positive_buffer_negative_lane";
+    return r;
+  }
+  if (o->s2_neg[0] != 0x0000u) {
+    r.verdict = R2_BIAS_SWITCH_FAILED;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = "shape4_not_applied";
+    return r;
+  }
+  if (o->s2_neg[1] == 0x0000u) {
+    r.cause = "negative_half_missing";
+    return r;
+  }
+  if (o->s2_neg[1] != 0x5420u) {
+    r.cause = "negative_half_unexpected";
+    return r;
+  }
+  if (o->s2_pos[2] != 0x0000u || o->s2_neg[2] != 0x0000u) {
+    r.cause = "zero_acc_lane";
+    return r;
+  }
+  if (o->s2_recon[0] != 0x5420u || o->s2_recon[1] != 0xd420u ||
+      o->s2_recon[2] != 0x0000u) {
+    r.cause = "reconstruction";
+    return r;
+  }
+
+  r.verdict = R2_ACC_REUSE_SUPPORTED;
+  r.name = r2_verdict_name(r.verdict);
+  r.cause = "all_registered_cells_match";
+  return r;
+}
+
+static void r2_observe(const r2_state *s1, const r2_state *s2,
+                       r2_observation_t *o) {
+  static const int idx[3] = {0, 1, 64}; /* (s0,o0), (s1,o0), (s2,o0) */
+  memset(o, 0, sizeof(*o));
+  o->s1_first = s1->mem[0][0];
+  o->s1_second = s1->mem[1][0];
+  for (int k = 0; k < 3; ++k) {
+    o->s2_pos[k] = s2->mem[0][idx[k]];
+    o->s2_neg[k] = s2->mem[1][idx[k]];
+    o->s2_recon[k] = r2_recon_cell(s2, 0u, 1u, idx[k]);
+  }
+  o->mma_count = (int)(s1->mma_count + s2->mma_count);
+  o->convert_count = (int)(s1->convert_count + s2->convert_count);
+  o->store_count = (int)(s1->store_count + s2->store_count);
+  o->trials = 2;
+  o->hmx_executed = 1;
+  o->pos_region_writes = s1->mem_written[0] + s2->mem_written[0];
+  o->neg_region_writes = s1->mem_written[1] + s2->mem_written[1];
+  o->rs_first = 0x0001u;
+  o->rs_second = 0x1000u;
+  o->bias_sel_first = 0u;
+  o->bias_sel_second = 1u;
+}
+
+static void r2_state_model_tests(void) {
+  static r2_state s1, s2;
+  r2_observation_t obs;
+  r2_report_t rep;
+  r2_report_t r_nominal, r_acc, r_bias, r_store, r_round, r_unexpected, r_contract;
+  const long checks_before = checks;
+  const double a = 1.0 + ldexp(1.0, -6);
+  const double x = a * a;
+  const int i0 = r2_store_index(0u, 0u);
+  const int i1 = r2_store_index(1u, 0u);
+  const int i2 = r2_store_index(2u, 0u);
+
+  /* 12.1 Positive ACC: only the shape-0 buffer is non-zero. */
+  r2_build_sign_tile(&s2, x, 0.0);
+  r2_run_sign_tile(&s2);
+  check_bits("r2.pos.pos_s0", s2.mem[0][i0], 0x5420u);
+  check_bits("r2.pos.neg_s0", s2.mem[1][i0], 0x0000u);
+  check_bits("r2.pos.recon_s0", r2_recon_cell(&s2, 0u, 1u, i0), 0x5420u);
+  check_bits("r2.pos.pos_s1", s2.mem[0][i1], 0x0000u);
+  check_bits("r2.pos.neg_s1", s2.mem[1][i1], 0x0000u);
+
+  /* 12.2 Negative ACC: only the shape-4 buffer is non-zero. */
+  r2_build_sign_tile(&s2, 0.0, -x);
+  r2_run_sign_tile(&s2);
+  check_bits("r2.neg.pos_s1", s2.mem[0][i1], 0x0000u);
+  check_bits("r2.neg.neg_s1", s2.mem[1][i1], 0x5420u);
+  check_bits("r2.neg.recon_s1", r2_recon_cell(&s2, 0u, 1u, i1), 0xd420u);
+  check_bits("r2.neg.pos_s0", s2.mem[0][i0], 0x0000u);
+  check_bits("r2.neg.neg_s0", s2.mem[1][i0], 0x0000u);
+
+  /* 12.3 Zero ACC: both buffers zero, reconstruction +0. */
+  r2_build_sign_tile(&s2, 0.0, 0.0);
+  r2_run_sign_tile(&s2);
+  check_bits("r2.zero.pos_s2", s2.mem[0][i2], 0x0000u);
+  check_bits("r2.zero.neg_s2", s2.mem[1][i2], 0x0000u);
+  check_bits("r2.zero.recon_s2", r2_recon_cell(&s2, 0u, 1u, i2), 0x0000u);
+
+  /* 12.4 Retention success model: both converts read the same 1024-cell ACC,
+   *      and the ACC is untouched by either store. */
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  check_u32("r2.reuse.acc_read_count", (uint32_t)s2.acc_read_count, 2u);
+  check_true("r2.reuse.same_acc",
+             memcmp(s2.acc_read[0], s2.acc_read[1],
+                    sizeof(s2.acc_read[0])) == 0);
+  check_u32("r2.reuse.mma_count", (uint32_t)s2.mma_count, 1u);
+  check_u32("r2.reuse.convert_count", (uint32_t)s2.convert_count, 2u);
+  check_u32("r2.reuse.store_count", (uint32_t)s2.store_count, 2u);
+  check_u32("r2.reuse.regions", (uint32_t)s2.mem_written[0], 1u);
+  check_u32("r2.reuse.regions_neg", (uint32_t)s2.mem_written[1], 1u);
+  check_true("r2.reuse.no_bias_missing", s2.bias_missing == 0);
+  check_true("r2.reuse.no_store_oob", s2.store_oob == 0);
+  check_true("r2.reuse.cleared_after_second", s2.acc_valid == 0);
+
+  /* 12.5 The second convert may retain (0x1001) instead of clear (0x1000);
+   *      the stored values must be identical. Only the post-convert ACC
+   *      state differs. */
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile_variant(&s2, 0x1001u);
+  check_bits("r2.retain.neg_s1", s2.mem[1][i1], 0x5420u);
+  check_bits("r2.retain.recon_s1", r2_recon_cell(&s2, 0u, 1u, i1), 0xd420u);
+  check_true("r2.retain.acc_valid", s2.acc_valid == 1);
+
+  /* 12.6 S1 control: a positive second store distinguishes retention from ACC
+   *      destruction and bias-set selection from a default-to-set-0 failure. */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  check_bits("r2.ctrl.first", s1.mem[0][i0], 0x5420u);
+  check_bits("r2.ctrl.second", s1.mem[1][i0], 0x5020u);
+  check_true("r2.ctrl.same_acc",
+             memcmp(s1.acc_read[0], s1.acc_read[1],
+                    sizeof(s1.acc_read[0])) == 0);
+
+  /* 12.7 Decision-procedure nominal case (simulated; not a device result). */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  rep = r2_classify(&obs);
+  r_nominal = rep;
+  check_true("r2.cpu.nominal", rep.verdict == R2_ACC_REUSE_SUPPORTED);
+
+  /* 12.8 Fault injection: ACC destroyed after the first store. */
+  r2_build_control_tile(&s1, x);
+  r2_convert(&s1, 0x0001u);
+  r2_store(&s1, 0u);
+  r2_force_acc_destroy(&s1);
+  r2_convert(&s1, 0x2000u);
+  r2_store(&s1, 1u);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  r2_force_acc_destroy(&s2);
+  r2_convert(&s2, 0x1000u);
+  r2_store(&s2, 1u);
+  r2_observe(&s1, &s2, &obs);
+  check_bits("r2.destroyed.ctrl_second", s1.mem[1][i0], 0x0000u);
+  check_bits("r2.destroyed.neg_s1", s2.mem[1][i1], 0x0000u);
+  rep = r2_classify(&obs);
+  r_acc = rep;
+  check_true("r2.destroyed.verdict", rep.verdict == R2_ACC_DESTROYED);
+
+  /* 12.9 Fault injection: Rs selects set 1 but the hardware silently uses
+   *      set 0. The S1 control exposes the switch failure with a positive
+   *      second word (0x5420 instead of 0x5020). */
+  r2_build_control_tile(&s1, x);
+  r2_convert(&s1, 0x0001u);
+  r2_store(&s1, 0u);
+  s1.force_bias_sel = 0;
+  r2_convert(&s1, 0x2000u);
+  r2_store(&s1, 1u);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  s2.force_bias_sel = 0;
+  r2_convert(&s2, 0x1000u);
+  r2_store(&s2, 1u);
+  r2_observe(&s1, &s2, &obs);
+  check_bits("r2.biasfail.ctrl_second", s1.mem[1][i0], 0x5420u);
+  check_bits("r2.biasfail.neg_s0", s2.mem[1][i0], 0x5420u);
+  check_bits("r2.biasfail.neg_s1", s2.mem[1][i1], 0x0000u);
+  rep = r2_classify(&obs);
+  r_bias = rep;
+  check_true("r2.biasfail.verdict", rep.verdict == R2_BIAS_SWITCH_FAILED);
+
+  /* 12.10 Fault injection: both stores target region 0. The second store
+   *       overwrites the first, and the negative buffer is never written. */
+  r2_build_control_tile(&s1, x);
+  r2_convert(&s1, 0x0001u);
+  r2_store(&s1, 0u);
+  r2_convert(&s1, 0x2000u);
+  r2_store(&s1, 0u);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  r2_convert(&s2, 0x1000u);
+  r2_store(&s2, 0u);
+  r2_observe(&s1, &s2, &obs);
+  check_u32("r2.store.pos_writes", (uint32_t)obs.pos_region_writes, 4u);
+  check_u32("r2.store.neg_writes", (uint32_t)obs.neg_region_writes, 0u);
+  check_bits("r2.store.overwritten_pos", s2.mem[0][i0], 0x0000u);
+  rep = r2_classify(&obs);
+  r_store = rep;
+  check_true("r2.store.verdict", rep.verdict == R2_STORE_INTERFERENCE);
+
+  /* 12.11 Fault injection: one-ULP ceiling rounding instead of RN16. */
+  r2_build_control_tile(&s1, x);
+  s1.rounding_mode = 1;
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  s2.rounding_mode = 1;
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  check_bits("r2.round.ctrl_second", s1.mem[1][i0], 0x5021u);
+  check_bits("r2.round.pos_s0", s2.mem[0][i0], 0x5421u);
+  check_bits("r2.round.neg_s1", s2.mem[1][i1], 0x5421u);
+  rep = r2_classify(&obs);
+  r_round = rep;
+  check_true("r2.round.verdict", rep.verdict == R2_ROUNDING_MISMATCH);
+
+  /* 12.12 Fault injection: non-zero output bias on the shape-4 row. */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_bias_fill(&s2, 1u, 0x5400u, 4u, 0x4400u); /* bo = +4 */
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  check_bits("r2.bo.neg_s1", s2.mem[1][i1], 0x5460u);
+  rep = r2_classify(&obs);
+  r_unexpected = rep;
+  check_true("r2.bo.verdict", rep.verdict == R2_UNEXPECTED_OUTPUT);
+
+  /* 12.13 Feedback: (a) an Rs with fb_dest != 0 fails the host contract before
+   *       any output interpretation; (b) a hypothetical hardware feedback leak
+   *       with the registered Rs is caught by the output when the clamp is at
+   *       the store. If the clamp is inside the convert, the output detector is
+   *       masked; the Rs contract remains the robust guard. That limitation is
+   *       recorded explicitly, not patched away. */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  r2_convert(&s2, 0x1005u); /* set 1, fb_dest=1, min, clear */
+  r2_store(&s2, 1u);
+  r2_observe(&s1, &s2, &obs);
+  obs.rs_second = 0x1005u;
+  rep = r2_classify(&obs);
+  r_contract = rep;
+  check_true("r2.fb.rs_contract", rep.verdict == R2_HOST_CONTRACT_FAILED);
+
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  s2.force_feedback_dest = 1;
+  s2.force_feedback_op = 0;
+  r2_convert(&s2, 0x1000u);
+  r2_store(&s2, 1u);
+  r2_observe(&s1, &s2, &obs);
+  /* The feedback state is 20-bit (FP16 + extra bits), and Rs[8] selects the
+   * precision; this oracle does not calibrate that payload. What it does
+   * assert is that enabling feedback changes the registered output. */
+  check_true("r2.fb.leak_differs", s2.mem[1][i1] != 0x5420u);
+  printf("r2_feedback_leak_observed=0x%04x registered=0x5420\n",
+         (unsigned)s2.mem[1][i1]);
+  rep = r2_classify(&obs);
+  check_true("r2.fb.leak_verdict", rep.verdict == R2_UNEXPECTED_OUTPUT);
+
+  r2_build_sign_tile(&s2, x, -x);
+  s2.clamp_in_convert = 1;
+  r2_convert(&s2, 0x0001u);
+  r2_store(&s2, 0u);
+  s2.force_feedback_dest = 1;
+  s2.force_feedback_op = 0;
+  r2_convert(&s2, 0x1000u);
+  r2_store(&s2, 1u);
+  check_bits("r2.fb.clamp_masks_output", s2.mem[1][i1], 0x5420u);
+  printf("r2_feedback_output_detector=%s (clamp_in_convert=1 masks the "
+         "difference; Rs contract still guards)\n",
+         s2.mem[1][i1] == 0x5420u ? "MASKED_AS_EXPECTED" : "DETECTED");
+
+  /* 12.14 Corrupted word and host-contract failures. */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  s2.mem[1][i1] ^= 0x0100u; /* 0x5420 -> 0x5520, not a rounding neighbour */
+  r2_observe(&s1, &s2, &obs);
+  rep = r2_classify(&obs);
+  check_true("r2.corrupt.verdict", rep.verdict == R2_UNEXPECTED_OUTPUT);
+
+  /* 12.14b A negative-ACC lane leaked into the positive buffer while the
+   *        positive anchor is still correct. This must not be mistaken for
+   *        the first-store-overwrite pattern (which has s2_pos[0]=0). */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  obs.s2_pos[1] = 0x5420u;
+  rep = r2_classify(&obs);
+  check_true("r2.posleak.verdict", rep.verdict == R2_UNEXPECTED_OUTPUT);
+
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  obs.mma_count = 3;
+  rep = r2_classify(&obs);
+  check_true("r2.contract.mma", rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r2_observe(&s1, &s2, &obs);
+  obs.convert_count = 3;
+  rep = r2_classify(&obs);
+  check_true("r2.contract.convert", rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r2_observe(&s1, &s2, &obs);
+  obs.store_count = 3;
+  rep = r2_classify(&obs);
+  check_true("r2.contract.store", rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r2_observe(&s1, &s2, &obs);
+  obs.rs_second = 0x1004u; /* feedback destination set */
+  rep = r2_classify(&obs);
+  check_true("r2.contract.feedback_rs",
+             rep.verdict == R2_HOST_CONTRACT_FAILED);
+
+  /* 12.15 VTCM layout: two 2-KiB-aligned output regions, two 256-B-aligned
+   *       bias rows, no overlap, and a 1024-cell store bijection. */
+  {
+    const unsigned pos_off = 2u * 2048u;
+    const unsigned neg_off = 3u * 2048u;
+    const unsigned b0_off = 4u * 2048u;
+    const unsigned b1_off = b0_off + 256u;
+    check_true("r2.layout.pos_aligned", (pos_off % 2048u) == 0u);
+    check_true("r2.layout.neg_aligned", (neg_off % 2048u) == 0u);
+    check_true("r2.layout.bias0_aligned", (b0_off % 256u) == 0u);
+    check_true("r2.layout.bias1_aligned", (b1_off % 256u) == 0u);
+    check_true("r2.layout.disjoint",
+               pos_off + 2048u <= neg_off && neg_off + 2048u <= b0_off &&
+                   b0_off + 256u <= b1_off && b1_off + 256u <= 12288u);
+    uint8_t hit[1024];
+    memset(hit, 0, sizeof(hit));
+    unsigned dup = 0;
+    for (unsigned s = 0; s < R2_NS; ++s)
+      for (unsigned o = 0; o < R2_NO; ++o) {
+        const unsigned idx = (unsigned)r2_store_index(s, o);
+        if (idx >= 1024u || hit[idx]) ++dup;
+        else hit[idx] = 1;
+      }
+    check_u32("r2.layout.store_bijection_dup", dup, 0u);
+  }
+
+  printf("r2_cpu_model nominal=%s acc_destroyed=%s bias_switch=%s "
+         "store_interference=%s rounding=%s unexpected=%s contract=%s\n",
+         r_nominal.name, r_acc.name, r_bias.name, r_store.name, r_round.name,
+         r_unexpected.name, r_contract.name);
+  printf("r2_cpu_model_checks=%ld\n", checks - checks_before);
+  /* This line is deliberately unconditional. No device was contacted and the
+   * nominal label is a decision-procedure test, not an established result. */
+  printf("r2_device_verdict=NOT_RUN (R2_ACC_REUSE_SUPPORTED above is a "
+         "CPU-model classifier test only)\n");
+}
+
 int main(void) {
   // -------------------------------------------------------------------------
   // 1. Previous session's PRM cases (unchanged expectations).
@@ -989,6 +1786,11 @@ int main(void) {
     check_true("split04.neg_zero_numeric",
                fp16_to_double(rec) == fp16_to_double(direct));
   }
+
+  // -------------------------------------------------------------------------
+  // 12. R2 state machine, fault injection and future decision procedure.
+  // -------------------------------------------------------------------------
+  r2_state_model_tests();
 
   printf("hmx_signed_output_oracle checks=%ld fail=%d\n", checks, failures);
   if (failures) {
