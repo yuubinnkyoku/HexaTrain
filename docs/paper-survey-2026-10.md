@@ -1001,6 +1001,18 @@ H-3（学習時慣らし）・H-4（整数 pipeline）の周辺系統を整理�
   T32 / H2 では per-head calibration の固定費が問題になるため、
   head 共有 calibration からの簡略化が HexaTrain 向けの最初の変形になる。
 - **次に読む**: HCCS の clipped linear の clip 点決定規則。
+  → **【2026-10-25 精読済み】**: max 減算後の距離 `δ_i = min(max_j x_j − x_i, D_max,h)`
+  （`D_max,h ≤ 127`、int8 範囲に収める）を clip し、surrogate score は
+  単調減少の線形形 `s_i = B_h − S_h δ_i`（非負性は calibration 制約で保証）。
+  正規化は Z = Σs_i、ρ = ⌊T/Z⌋ の**整数除算のみ**（leading-bit 近似で int8 版は
+  最大 15.1x 高速化）。per-head parameter `θ_h = (B_h, S_h, D_max,h)` は
+  64 sample の代表 data で KL divergence を grid search 最小化して offline 決定。
+  **head-wise granularity が per-layer / global を大きく上回る**（MNLI 0.723 vs 0.545）。
+  QAT retraining 必須（なしでは −20.6 pt 級、ありなら −0.3〜1.9 pt）。
+  HexaTrain T32 では per-head calibration 3 scalar × 38 head で済み、
+  QNN graph では「max 減算 + min + 乗減算 + 総和 + 整数除算」の要素演算列で構成できる。
+  head-wise 優位の観察は「head 共有 calibration からの簡略化」より
+  最初から per-head で試すべきことを示唆。
 
 ---
 
