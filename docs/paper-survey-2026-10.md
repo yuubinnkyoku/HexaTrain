@@ -137,15 +137,44 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   scale granularity 探索の整理枠。
 - MX+（ACM 2025-10）: MX format 自体の拡張。HMX の format 拡張候補を考える際の参照。
 
-### クラスタAの統合所見（2026-10-25時点）
+### A-8. FP4 training recipe の起源系（AlphaXiv related 推薦から追加、2026-10-25）
+
+AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recipe の起源論文**を確認した。
+
+- [Training LLMs with MXFP4（arXiv:2502.20586）](https://arxiv.org/abs/2502.20586) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2502.20586)
+  — Tseng, Yu, Park、2025-02（引用55+）。
+- **要約**: MXFP4 による 4-bit 学習で高精度学習と ほぼ同等（near-lossless）を達成。
+  32要素 group を max magnitude で scale し rounding。ablation で
+  **SR と RHT の両方が不可欠**と示し、SR+RHT の分散 bound の理論的正当化も提示。
+  適用は **RHT を3種の training GEMM 全部へ、SR は dY（weight gradient）のみ**へ絞る。
+- [Quartet（arXiv:2505.14669）](https://arxiv.org/abs/2505.14669) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2505.14669) / code: `IST-DASLab/Quartet`
+  — Castro, Panferov, Tabesh, Sieberling, Chen, Nikdan, Ashkboos, Alistarh
+  （IST Austria DASLab）、2025-05（NeurIPS 2025 採録、v4 2026-01）。
+- **要要約**: 線形層の主要計算をすべて hardware FP4 で実行する end-to-end FP4 学習。
+  bit 幅と性能を結ぶ**低精度 scaling law** を Llama 系で同定。FP16/FP8 学習の
+  competitive alternative となることを主張。NVFP4 論文（A-3）が採用した
+  Hadamard + SR 系技術の直接の先行・並行研究。
+- **HexaTrain との関連**: P2「stochastic rounding」の設計粒度がここで確定する。
+  すなわち (1) RHT は forward/backward の MatMul 全般、(2) **SR は weight gradient
+  （dY）だけ**で near-lossless になる。HexaTrain が SR を試す場合、
+  全 gradient ではなく dY（Wq〜W2 の 114 行列分）だけが第一候補になる。
+  また AlphaXiv ページ上の人的議論はまだ無いが、related 推薦 graph が
+  系譜追跡に有効なことを確認した。
+- **次に読む**: MXFP4 論文の SR 分散 bound（A-5 の理論と接続するか）。
+
+### クラスタAの統合所見（2026-10-25時点、A-8 追記後更新）
 
 1. **MX 系 block-scaled 学習は「何を高精度に残すか」で決まる。** Kempner の結果は
    LayerNorm affine weight 除外・activation 高精度維持・forward のみ量子化という
    段階的緩和で FP8 相当まで回復する。HexaTrain の Phase 12 は
    「全 tensor 一括低精度化」ではなく、最初から tensor 除外表を作って始めるべき。
-2. **NVFP4 recipe = RHT + 2D scale + SR + 高精度 layer 選択 のセット。** HexaTrain の
-   P2 候補（Hadamard 系 reparam / SR / op-wise precision search）は個別の候補としてではなく
-   1つの recipe として扱う方が文献と整合する。
+2. **FP4 recipe = RHT + (2D) scale + SR + 高精度 layer 選択 のセット**で、
+   起源は Tseng et al.（MXFP4, A-8）→ Quartet（A-8）→ NVFP4（A-3）の系譜。
+   SR の適用先は **dY（weight gradient）のみ**で near-lossless になる点が設計上重要。
+   HexaTrain の P2 候補（Hadamard 系 reparam / SR / op-wise precision search）は
+   個別の候補としてではなく 1つの recipe として扱う方が文献と整合する。
 3. **SR × batch size の相互作用**（A-5）は Phase 6 の accumulation 設計と結合する独立研究課題。
    B8 固定の HexaTrain では SR の恩恵が理論上小さくなる可能性があり、accumulation を
    変えない SR 単体の A/B は情報量が低いかもしれない。
