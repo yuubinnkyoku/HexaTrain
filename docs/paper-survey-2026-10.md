@@ -947,6 +947,18 @@ quantized softmax 研究、整数-only 推論系。
   (b) domain 特化 vs 汎用 tokenizer の差の定量化、という
   Phase 10 の評価項目を先取りしている。
 - **次に読む**: warm start の具体的手続き。
+  → **【2026-10-25 精読済み】**: warm start は **Fast Vocabulary Transfer（FVT）**
+  （既存 model の embedding 空間へ新 vocabulary を写像）で行う。FVT なしでは
+  HumanEval Pass@1 が 20.5% → 18.4% に劣化。tokenizer 交換は
+  **fine-tuning data が ~50B token 以上**ある場合にのみ推奨（それ以下では
+  baseline に届かない）。tokenizer 交換後、embedding 以外を凍結する方法は無効。
+  また「最も圧縮の良い tokenizer（Identity pre-tokenization）は明確に性能を害する」
+  「GPT-4 pre-tokenization regex が圧縮と性能のバランス最良」
+  「vocab size 増は圧縮を指数的に飽和改善、コード性能への影響は弱い」
+  「**inference-optimal と memory-optimal の vocab size は別々に定式化できる**
+  （embedding params vs attention cache の trade。GQA はこれを変える）」
+  という設計指針の数々は、HexaTrain の V1024/V2048/V4096 掃引
+  （Phase 10）の評価軸（bpb・RAM・推論時間）と一致する形でそのまま使える。
 
 ### H-2. Byte Language Models — scaling・emergent abstraction
 
