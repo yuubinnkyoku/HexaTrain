@@ -1035,12 +1035,26 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
 ### F-3. 索引（簡易記載・主要項目は本文確認済み）
 
 - [Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）](https://arxiv.org/abs/2610.11214)
-  — 2026-10。KV cache 量子化（entry 圧縮・全保持）と linear attention
-  （multi-KV を固定 size state へ集約）を RAM-Net の soft address assignment で
-  統一する理論。**pretrained weight からの移行経路**（soft-quantized 中間段階）を持ち、
-  0.3B〜7B の 9 model で 500M token の budget で teacher gain の 87.1% を回復。
-  要確認だが、HexaTrain の low-disruption migration protocol と同じ
-  「既存 weight を壊さず移行」の設計思想を持つ。
+  — 2026-10。**【2026-10-25 全文精読済み】**:
+  RAM-Net は **product-softmax による soft address assignment**
+  （U=5 factor × d_p=4 code の離散 address 空間、Top-K=32）と
+  **Gated Sparse Update による連続 slot state**（per-slot mass と write-weighted mean、
+  忘却 scalar γ）の組み合わせ。Theorem 1 は
+  **circular codebook + rank-2 projection の局所 regime で
+  address overlap が exp の dot-product kernel を近似する**こと
+  （`log κ_A ≈ (β²/2)qᵀk`、最適集中度 `β*=√(2/τ)`）を示し、
+  hard-write 極限で nearest-code VQ（quantized attention）、
+  分離性から recurrent slot 集約（linear attention）を回収する。
+  **移行 protocol は3段階**（低rank adapter + positional alignment →
+  circular soft quantization の fold-in → staged recovery
+  （head NMSE → attention block → 全 model、固定 500M token budget））で、
+  9 teacher（0.3B〜7B）で teacher gain の平均 87.1% を回復。
+  HexaTrain との関連: **low-disruption migration protocol（P1〜P2）の
+  別分野実装例**であり、(a) 移行 class を段階分けする設計、
+  (b) 固定 token budget 内での staged recovery、
+  (c) attention map KL での calibration、が HexaTrain の
+  `exact_identity` / `weight_preserving_non_identity` 区分と対応する。
+  Phase 14 の SimpleGDN migration 設計の参照として有用。
 - [Native Hybrid Attention（arXiv:2510.07019）](https://arxiv.org/abs/2510.07019) /
   code: `JusenD/NHA` — Du, Hu, Zhang, Sun, Cheng、**ACL 2026**。
   **【2026-10-25 確認済み】**: linear RNN で更新する長期 KV slot + sliding window の
