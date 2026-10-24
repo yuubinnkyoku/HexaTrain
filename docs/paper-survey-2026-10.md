@@ -859,54 +859,6 @@ quantized softmax 研究、整数-only 推論系。
 
 ---
 
-# 全体統合（2026-10-25、クラスタ A〜H 完了時点）
-
-## 1. repo の研究方向を外部文献が独立に支持しているもの
-
-| repo の現行計画 | 外部からの裏付け | 重要度 |
-| --- | --- | --- |
-| Muown / row-geometry 制御（Phase 4） | MUON+（C-1）と NorMuon（C-2）が同一現象を指摘・修正。state ゼロの Muon+ 型が最安 arm | **高** |
-| HMX CPU model / oracle 手法（R2 周辺） | bit-accurate tensor core model 構築が GPU 側で確立分野（D-1） | 高 |
-| Text Representation Search・bpb 指標（Phase 10） | byte 基準 compute-optimal tokenization が 988 model 規模で確立（H-1, H-2） | **高** |
-| Training Memory Planner（Phase 9） | Adacc / MODeL が同一問題の外部先行例（G-1, G-3） | 高 |
-| Softmax 高精度残置の想定 | softmax 自体の低bit化は「学習時に慣らす」必要があるという結果（H-3）。Kellogg の LN weight 除外（A-2）とも整合 | 中 |
-| Cross-Layer Reuse 診断 → Value Residual（NOW 5 / P1 pool） | Depth-Attention が parameter ゼロ・KV 中立の cross-layer value mixing を 360M から検証（E-3） | 中 |
-
-## 2. この調査で新しく見えた設計軸（repo にまだ無いもの）
-
-1. **gate の入力側（E-2 VGA）**: 現行 G1 は input embedding 側。V 側 gate の理論的優位が
-   示された。G1 variant 探索に安い追加 arm。
-2. **MTP の horizon を entropy で可変化（E-5 AdaMTP）**: adapter 構造不改変で
-   loss 掛ける位置を選択するだけの拡張。future-mixture supervision とも接続。
-3. **optimizer state の group 単位 exponent（D-3 integer-only training）**:
-   低bit化の対象を optimizer まで広げる具体的手法。
-4. **post-NS row normalization（C-1）**: Muown と同問題への state ゼル対処。
-   HVX Muon への変更が最小（NS5 後に 1 演算）。
-5. **K-interval softmax（H-3）**: QNN softmax を要素演算の grid 近似へ替え、
-   学習から慣らす。Attention Normalizer Search と統合。
-
-## 3. 外部動向として記録すべき構造変化
-
-- **FP4 pretraining が 10T token 規模で FP8 並みに到達**（A-3）。recipe の中核は
-  RHT + 2D scale + SR + 高精度 layer 選択の set。HexaTrain の P2 候補は個別ではなく
-  recipe として設計すべき。
-- **「NPU 上の exact-BP 学習」は公開文献に存在しない**（B）。HexaTrain の
-  scratch training 構成の独自性は fine-tuning 系先行例と区別して主張できる。
-- **linear attention 系の理論統一**（F-1 TTT ≡ linear attention）。
-  HTP 実装は attention graph 部品の再構成として設計できる。
-
-## 4. すぐ読むべき論文の優先順位（本文精読リスト）
-
-1. **MUON+（2602.21545）** — Muown lane の比較 arm 設計に直結。挿入する normalization の
-   正確な形を確認する必要がある。
-2. **Compute Optimal Tokenization（2605.01188）** — Phase 10 の設計を compression rate
-   掃引へ寄せるかの判断材料。最適 rate の回帰式。
-3. **VGA（2510.09017）** — G1 variant の V-gate arm。gate の関数形と backward cost。
-4. **Quantized Softmax（2609.33591）** — QNN softmax 置換候補の実装可能性
-   （grid 構成・K の感度）。
-5. **Depth-Attention（2606.05014）** — Value Residual lane の別実装。
-   どの layer から key/value を取るかの設計。
-
 ## I. Data curriculum（difficulty-aware sampling の外部証拠）
 
 **調査日: 2026-10-25（追加クラスタ）。** P2「Difficulty-Aware Sampling /
@@ -984,6 +936,54 @@ Loss Curriculum」への文献裏付けを探した。
   それぞれ効くか）。
 
 ---
+
+# 全体統合（2026-10-25、クラスタ A〜J 完了時点）
+
+## 1. repo の研究方向を外部文献が独立に支持しているもの
+
+| repo の現行計画 | 外部からの裏付け | 重要度 |
+| --- | --- | --- |
+| Muown / row-geometry 制御（Phase 4） | MUON+（C-1）と NorMuon（C-2）が同一現象を指摘・修正。state ゼロの Muon+ 型が最安 arm | **高** |
+| HMX CPU model / oracle 手法（R2 周辺） | bit-accurate tensor core model 構築が GPU 側で確立分野（D-1） | 高 |
+| Text Representation Search・bpb 指標（Phase 10） | byte 基準 compute-optimal tokenization が 988 model 規模で確立（H-1, H-2） | **高** |
+| Training Memory Planner（Phase 9） | Adacc / MODeL が同一問題の外部先行例（G-1, G-3） | 高 |
+| Softmax 高精度残置の想定 | softmax 自体の低bit化は「学習時に慣らす」必要があるという結果（H-3）。Kellogg の LN weight 除外（A-2）とも整合 | 中 |
+| Cross-Layer Reuse 診断 → Value Residual（NOW 5 / P1 pool） | Depth-Attention が parameter ゼロ・KV 中立の cross-layer value mixing を 360M から検証（E-3） | 中 |
+
+## 2. この調査で新しく見えた設計軸（repo にまだ無いもの）
+
+1. **gate の入力側（E-2 VGA）**: 現行 G1 は input embedding 側。V 側 gate の理論的優位が
+   示された。G1 variant 探索に安い追加 arm。
+2. **MTP の horizon を entropy で可変化（E-5 AdaMTP）**: adapter 構造不改変で
+   loss 掛ける位置を選択するだけの拡張。future-mixture supervision とも接続。
+3. **optimizer state の group 単位 exponent（D-3 integer-only training）**:
+   低bit化の対象を optimizer まで広げる具体的手法。
+4. **post-NS row normalization（C-1）**: Muown と同問題への state ゼル対処。
+   HVX Muon への変更が最小（NS5 後に 1 演算）。
+5. **K-interval softmax（H-3）**: QNN softmax を要素演算の grid 近似へ替え、
+   学習から慣らす。Attention Normalizer Search と統合。
+
+## 3. 外部動向として記録すべき構造変化
+
+- **FP4 pretraining が 10T token 規模で FP8 並みに到達**（A-3）。recipe の中核は
+  RHT + 2D scale + SR + 高精度 layer 選択の set。HexaTrain の P2 候補は個別ではなく
+  recipe として設計すべき。
+- **「NPU 上の exact-BP 学習」は公開文献に存在しない**（B）。HexaTrain の
+  scratch training 構成の独自性は fine-tuning 系先行例と区別して主張できる。
+- **linear attention 系の理論統一**（F-1 TTT ≡ linear attention）。
+  HTP 実装は attention graph 部品の再構成として設計できる。
+
+## 4. すぐ読むべき論文の優先順位（本文精読リスト）
+
+1. **MUON+（2602.21545）** — Muown lane の比較 arm 設計に直結。挿入する normalization の
+   正確な形を確認する必要がある。
+2. **Compute Optimal Tokenization（2605.01188）** — Phase 10 の設計を compression rate
+   掃引へ寄せるかの判断材料。最適 rate の回帰式。
+3. **VGA（2510.09017）** — G1 variant の V-gate arm。gate の関数形と backward cost。
+4. **Quantized Softmax（2609.33591）** — QNN softmax 置換候補の実装可能性
+   （grid 構成・K の感度）。
+5. **Depth-Attention（2606.05014）** — Value Residual lane の別実装。
+   どの layer から key/value を取るかの設計。
 
 ## 5. 本調査の限界（2026-10-25 時点）
 
