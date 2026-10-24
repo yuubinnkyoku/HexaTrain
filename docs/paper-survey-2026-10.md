@@ -1450,6 +1450,9 @@ Loss Curriculum」への文献裏付けを探した。
    「softcap 単体 → QK-norm 単体 → 併用」の最初の arm になる。
 7. **難易度指標を bytes/token 系と言語統計へ拡張（I-1）**: loss EMA 案と並べて
    compression ratio / readability を candidate 指標に加える。
+8. **checkpoint averaging（J-4）**: 高 LR 学習ほど averaging の恩恵が大きいという
+   外部観察があり、G1 LR stress grid の checkpoint 群を averaging A/B へ
+   流用できる。LR decay を merging で置き換える変種も候補。
 
 ## 3. 外部動向として記録すべき構造変化
 
