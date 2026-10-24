@@ -603,6 +603,25 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   また G1 fusion lane（`1-G` / `G(1-G)` 等の intermediate 削減）の
   候補リストを algebraic reparameterization の観点で見直す材料。
 - **次に読む**: epilogue primitive の完全リストと、吸収できなかった演算の理由分類。
+  → **【2026-10-25 精読済み】**: primitive は5 class —
+  (1) elementwise/pairwise map（residual・activation・RoPE・SwiGLU gate）、
+  (2) vector load/store（row/col broadcast）、
+  (3) tile load/store（residual stream・saved activation・backward 中間）、
+  (4) tile 還元（部分 row/col sum を小 kernel で合流）、
+  (5) stateful transform（online log-sum-exp / CE 統計）。
+  forward は `GEMM→residual→RMSNorm→GEMM` を中核に、**RMSNorm の row scale を
+  次の GEMM の向こう側へ代数的に移す**。backward は **Theorem 1:
+  tile-local な forward epilogue は tile-local な backward epilogue を誘導する**
+  （fusion が勾配生成側 GEMM へ反転する）。RMSNorm backward の行統計は
+  `s = (1/d)Σcols(∇y⊙y)` で GEMM 境界を越えられる。
+  吸収不可: 大域 reduction・attention・embedding。
+  **LayerNorm（mean 減算あり）は明示的に扱っていない**（LLaMA 系 RMSNorm のみ）。
+  HexaTrain への含意: (a) 現行 LayerNorm→RMSNorm 移行（P1）は
+  品質以外に **HMX epilogue 吸収可能性を解放する**副次効果を持つ、
+  (b) Theorem 1 の原則は手書き QNN backward にも適用でき
+  「勾配生成 MatMul の convert 段に要素演算を付ける」設計指針になる
+  （R2 の retained-ACC と同型の発想）、(c) CE の stateful transform は
+  CCE（H-7）と同じ lse 統計方式で、vocab chunk 逐次処理と組み合わせられる。
 
 ### D-3. Memory-Efficient Integer-Only Training of Deep Neural Networks
 
