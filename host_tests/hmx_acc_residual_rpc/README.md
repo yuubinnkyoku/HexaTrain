@@ -1298,3 +1298,102 @@ slots only; no full 32×32 accuracy, signed-store law or throughput claim.
   (user-approved E-3C1 experiment). Mode 43 (E-3C1R) was approved
   separately on 2026-10-22 and executed; any further layout/identifier
   or B3-expansion mode would need its own explicit authorization.
+
+## Phase E-3D: signed-FP16 store discriminator (pre-registration, CPU only)
+
+Pre-registered 2026-10-24, **not implemented and not executed**: no DSP
+mode, no build, no device contact. The frozen design, expectations and
+decision procedure are in
+`docs/hmx-v81-signed-fp16-discriminator-prereg.md`; the cause
+classification that motivates it is in
+`docs/hmx-v81-signed-output-cause-analysis.md`.
+
+The open question: every recorded negative convert result stores as
+`0x0000`, but no trial has ever read a cell whose expected negative value
+is produced by the shaping function from a **positive** accumulator, so
+"the store keeps the sign" and "the store clamps" remain both consistent
+with the record. Mode 16 is the only datum that a final-value clamp
+cannot explain (`-64x+128 = +61.984375`, which RN16-rounds to `0x53C0`
+(62.0); the device stored `0x0000`), which points at a separate
+negative-scale defect rather than at the store.
+
+Design: ONE MMA packet, ONE convert, ONE store, four returned cells, on
+the same instruction path as mode 43 (so the only changes are VTCM
+contents and the four returned indices). The bias row is programmed
+per output channel — cell 0 `shape 0`, cell 1 `shape 4` — which the PRM
+permits (p.13) and which no earlier mode has exercised.
+
+| slot | cell | ACC | shape | expected (signed) |
+| --- | --- | --- | --- | --- |
+| `out[0]` | `(s0,o0)` | `+x` | 0 | `0x5420` |
+| `out[1]` | `(s1,o0)` | `-x` | 0 | `0xD420` |
+| `out[2]` | `(s0,o1)` | `+2x` | 4 | `0xD820` |
+| `out[3]` | `(s1,o1)` | `-2x` | 4 | `0x5820` |
+
+`x = a²`, `a = 1+2^-6 = 0x3C10`, `64x = 66.015625`, `128x = 132.03125`;
+both sit exactly 0.25 ULP above an FP16 grid point, so the same four cells
+also separate RN from ceiling/floor rounding. `out[2]` is the decisive
+cell: its ACC is positive, so a negative result cannot be explained by an
+ACC clamp. `out[1]` is a replication of mode 43's slot 1, not new
+evidence. `out[3]` separates "shape applied, then clamped" from "shape not
+applied per channel".
+
+Variants and authorisation: the table above is variant B (`W(o1) = +2a`),
+recommended for its four distinct cells. The authorised execution variant is
+**A** (`W(o1) = +a = 0x3C10`, user decision 2026-10-24): the four fixed slots
+become `out[0..3] = [0x5420, 0xD420, 0xD420, 0x5420]` with
+`[0x5420, 0x0000, 0x0000, 0x5420]` (`LATE_CLAMP`) as the registered
+alternative; `Rs = 1`, `bo = 0`, one MMA/convert/store, trials `= 1`. A cannot
+see a slot1/slot2 swap, and a tuple that differs only that way is
+`E3D_INCONCLUSIVE_UNMATCHED`, not a result. B is pre-registered but not built.
+
+Variant A is the literal fixture (`W(o1)=+a`): `[0x5420, 0xD420, 0xD420,
+0x5420]`, which is symmetric under a slot-1/slot-2 transposition. Variant B
+(`W(o1)=+2a=0x4010`) is recommended because all four expected cells are
+distinct; it costs the same one MMA/convert/store. The other frozen
+patterns (late clamp `[0x5420,0,0,0x5820]`, early clamp
+`[0x5420,0,0,0]`, per-channel shape ignored `[0x5420,0,0x5820,0]`,
+ceiling/floor, and two signed-store variants) are listed in the
+pre-registration and are pairwise distinct.
+
+CPU-only evidence (2026-10-24, no device): `hmx_signed_output_oracle.c`
+via `scripts/run_hmx_signed_output_oracle.ps1` reports
+`hmx_signed_output_oracle checks=107 fail=0` / `signed_oracle=PASS` on gcc
+15.2.0 and clang 22.1.8, and is wired into the host Fast contract. It
+pins the five existing PRM convert cases and their device regression
+bits, fixture exactness, the VTCM bijections, the per-channel bias row,
+both variants, the ten outcome patterns (pairwise distinct for B and for
+the authorised A), `Rs` Table 6 semantics, the
+two-convert split reconstruction (2176 cases, bit-identical to a signed
+RN16 store, `shape 6` unusable) and the mode 16/17 regression.
+
+Fast gate status (2026-10-24), two attempts, both recorded literally:
+
+1. First attempt, volume full (0 B free): `verify.ps1 -Profile Fast`
+   exited 1 for **environment** reasons — `PASS=8 FAIL=2 SKIP=21` at
+   57.7s, with paths elided:
+   `.../build/pr-gate-policy-selftest/multi-commit-push/.git/refs/tags:
+   No space left on device` (pr-gate self-test, `git init failed`), and
+   `Fatal error: can't create
+   ...build\host-test-objects\standalone-contract\objects\<sha>.o: No
+   such file or directory` (host contract suite). The new oracle step
+   was wired in before the Fast early return, but the failed suite never
+   reached it.
+2. Retry after the volume was expanded, no code change between attempts:
+   `verify.ps1 -Profile Fast` **PASS**, exit 0,
+   `verify-local-fast PASS 112.5s`, `total 111.8s PASS=10 FAIL=0 SKIP=21`.
+   `host-fast-contract PASS 68.4s` ran the wired-in oracle step and
+   reported `hmx_signed_output_oracle=PASS checks=104 fail=0`
+   (`signed_oracle=PASS`, gcc 15.2.0 and clang 22.1.8), so the oracle is
+   now covered by the Fast gate rather than only by a standalone run.
+
+The first attempt is kept as evidence that the gate was run before the
+disk was fixed; it is not retroactively a code failure, and the retry is
+not a substitute for the pending `Host`/`Qnn`/`Device` gates.
+
+Status carry-over: `B2_THREE_PRODUCT_CONFIRMED`,
+`E3C1R_LAYOUT_CONFIRMED_CLAMP`,
+`BLOCKED_SIGNED_OUTPUT_FOR_CURRENT_CONVERT_PATH`, Path B
+`CONDITIONALLY_POSSIBLE`, real-tile accuracy `INSUFFICIENT_EVIDENCE`,
+E-3C2 `UNTRIGGERED`. E-3D needs its own explicit authorization; this
+section is a pre-registration, not approval.

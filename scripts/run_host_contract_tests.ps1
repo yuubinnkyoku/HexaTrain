@@ -100,6 +100,13 @@ Invoke-PhoneLmHostPwshScript -Label "FP16x2 split precision sim" `
 Invoke-PhoneLmHostPwshScript -Label "HMX PRM layout / mode43 contract" `
     -ScriptPath (Join-Path $Root "scripts\run_prm_layout_sim.ps1")
 
+# CPU-only E-3D signed-output discriminator model: per-output-channel bias
+# cells, the four pre-registered store cells (variants A/B), the rounding-mode
+# and cause-model pattern separation, Rs table-6 semantics and the two-convert
+# split reconstruction. No device, no SDK; ~1 s.
+Invoke-PhoneLmHostPwshScript -Label "HMX signed-output discriminator oracle" `
+    -ScriptPath (Join-Path $Root "scripts\run_hmx_signed_output_oracle.ps1")
+
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
     # Remaining product contracts stay in Suite All (Host / Formal / PrGate).
