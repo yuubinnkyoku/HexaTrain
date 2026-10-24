@@ -107,9 +107,9 @@ Three 256-byte bias rows are loaded once at the start of the invocation:
 
 | set | address | all 32 channels |
 | --- | --- | --- |
-| 0 | `base + 8192` | scale `0x5400` (+64), shape 0, bi 0, bo 0 |
-| 1 | `base + 8448` | scale `0x5400` (+64), shape 4, bi 0, bo 0 |
-| 2 | `base + 8704` | scale `0x5000` (+32), shape 0, bi 0, bo 0 |
+| 0 | `base + 10240` | scale `0x5400` (+64), shape 0, bi 0, bo 0 |
+| 1 | `base + 10496` | scale `0x5400` (+64), shape 4, bi 0, bo 0 |
+| 2 | `base + 10752` | scale `0x5000` (+32), shape 0, bi 0, bo 0 |
 
 The per-channel cell encoding is the PRM Figure 15 / Table 4 layout:
 
