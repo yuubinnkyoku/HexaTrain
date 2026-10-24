@@ -264,11 +264,13 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
 ## B. on-device / NPU training systems
 
 **調査日: 2026-10-25。** 「smartphone / edge で NN の学習を回す」系の文献は
-fine-tuning 前提のものが多く、**scratch 言語モデル pretraining を accelerator 上の
-exact backprop で回している公開文献は見つからなかった。** HexaTrain の
-「QNN HTP Forward/Backward + HVX optimizer + CPU Aux の scratch training」という構成は、
-公開文献の範囲では近隣が存在しない位置にある。したがってこのクラスタは
-「直接の競合」ではなく、**Gradient Strategy（P2）と memory planner の設計参照**として読む。
+fine-tuning 前提のものが多く、**QNN HTP graph 上の exact-BP 言語モデル scratch
+training を行っている公開文献は見つからなかった**（DSP offload による
+mixed-precision DNN 学習の先行例 Mandheling は B-7 に追加済み）。
+HexaTrain の「QNN HTP Forward/Backward + HVX optimizer + CPU Aux の scratch
+training」という構成は、公開文献の範囲では近隣が存在しない位置にある。
+したがってこのクラスタは「直接の競合」ではなく、**Gradient Strategy（P2）と
+memory planner の設計参照**として読む。
 
 ### B-1. PockEngine: Sparse and Efficient Fine-tuning in a Pocket
 
@@ -407,7 +409,42 @@ exact backprop で回している公開文献は見つからなかった。** He
   [Qualcomm FastRPC GitHub](https://github.com/qualcomm/fastrpc) が最も詳しい。
   HexaTrain の RPC 境界・pack/unpack 最適化も公開文献上の空白であることを記録。
 
-### クラスタBの統合所見（2026-10-25時点）
+### B-7. Mandheling — DSP offload による mixed-precision 端末学習（2026-10-25 追加・重要）
+
+- [arXiv:2206.07509](https://arxiv.org/abs/2206.07509) / [AlphaXiv](https://www.alphaxiv.org/abs/2206.07509)
+  — Daliang Xu, Mengwei Xu, Wang, Wang, Ma, Huang, Huang, Jin, Xuanzhe Liu
+  （北大 / Mengwei Xu group、LLM.npu / Quant.npu と同 group）、2022（引用91）。
+- **要約**: **on-chip DSP offload と mixed-precision 学習を組み合わせた
+  端末学習 system の最初のもの**とされる。4技術:
+  (1) DSP が不得意な operator の **CPU-DSP co-scheduling**、
+  (2) backprop の dynamic rescaling cost を減らす **self-adaptive rescaling**、
+  (3) DSP cache 効率を上げる batch-splitting、
+  (4) DSP 準備 overhead を減らす **DSP-compute subgraph reuse**。
+  TFLite / MNN 比で per-batch 学習時間 5.5x 減・energy 8.9x 減、
+  end-to-end で最大 10.7x 高速収束・13.1x 省energy、精度劣化 1.9〜2.7%。
+  workload は vision DNN（言語モデル学習は対象外）。
+- **HexaTrain との関連**: **HexaTrain に最も近い公開学習 system 文献**。
+  ただし (a) vision DNN 中心で LM ではない、(b) HTP/QNN graph ではなく
+  DSP 直接 offload、(c) mixed-precision（FP32 対比精度劣化あり）で
+  exact-BP scratch LM 学習ではない、の3点で HexaTrain の構成とは別物。
+  特に (2) self-adaptive rescaling は低精度 backprop の dynamic scaling 問題への
+  先行対処であり、Phase 12 の静的 scale 設計（A-9 の制約）と対になる知見。
+  (4) subgraph reuse は QNN graph 再利用設計と同型。
+- **クラスタB冒頭の主張の修正**: 「accelerator 上の exact-BP 学習は文献に存在しない」は
+  「**HTP/QNN graph 上の exact-BP 言語モデル scratch 学習**は存在しない」へ
+  限定して正確化する。DSP offload による mixed-precision DNN 学習は
+  Mandheling が先行する。
+
+### B-8. Hexagon-MLIR — Hexagon 向け AI compile stack（2026-10-25 追加）
+
+- [arXiv:2602.19762](https://arxiv.org/abs/2602.19762)（2026-02）—
+  **Triton kernel を Hexagon DSP 向けに compile・実行する AI compilation stack**。
+- **HexaTrain との関連**: HVX kernel（Muon 等）を現在は手書き intrinsics で
+  書いている HexaTrain に対し、中期的に「Triton 記述 → Hexagon compile」の
+  経路が公開された意味で大きい。QNN/HVX Superoptimization（P1）の
+  backend 候補として記録。要詳細確認。
+
+### クラスタBの統合所見（2026-10-25時点、B-7 追記後修正）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
    調査範囲で存在せず、近隣（PockEngine / MeBP / ZO 系）はすべて fine-tuning 前提。
