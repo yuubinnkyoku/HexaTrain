@@ -654,6 +654,12 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   約160論文の SLM 系 survey。architecture / data / efficiency の地図として保持。
 - [Matryoshka Language Model Suites（arXiv:2608.09703）](https://arxiv.org/abs/2608.09703) —
   共有学習で model suite を作る方向。MatFormer / elastic model 系（P1〜P2）の近縁。
+- **XSA（arXiv:2603.09078, repo 参照済み）の追跡状況（2026-10-25）**:
+  Apple（Shuangfei Zhai）による二次資料（EmergentMind / 著者 X 投稿）の確認では、
+  XSA の gain は** sequence length とともに増大**するとされる。
+  T32 の HexaTrain では gain が小さい可能性が高く、repo の
+  「長文脈論文の gain を外挿しない」原則と整合する方向。
+  明確な follow-up 論文はまだ無し。
 
 ### クラスタEの統合所見（2026-10-25時点）
 
