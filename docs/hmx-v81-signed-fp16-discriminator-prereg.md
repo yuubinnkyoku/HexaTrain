@@ -295,17 +295,20 @@ Variant A (only if the literal fixture is authorised):
 0x5420 0xD421 0xD421 0x5420    ROUND_FLOOR
 ```
 
-## 9. Decision procedure (frozen)
+## 9. Decision procedure (frozen; order corrected in §16 before measurement)
 
-1. **Precondition.** If `out[0] != 0x5420`, the run is `E3D_INCONCLUSIVE_TILE`
-   and no statement is made about signedness. Record all four slots anyway.
-   If `out[0] == 0xD420` and `out[2] == 0x5420`, the bias row was applied with
-   shape 4 on channel 0 (or read from the wrong cell): record the tuple with
-   the annotation `bias_shape_misapplied`. That is still
-   `E3D_INCONCLUSIVE_TILE` for the signedness question, but it is a direct
-   observation about the row.
-2. **Exact match.** Compare the 4-tuple against §8 for the variant that was
-   actually built. On a match, report the verdict and the raw slots.
+1. **Exact match (evaluated first).** Compare the 4-tuple against §8 for the
+   variant that was actually built. On a match, report the verdict and the raw
+   slots. Matching precedes the anchor precondition because the registered
+   `ROUND_CEIL` row legitimately has `out[0] = 0x5421`; a precondition-first
+   order made that row unreachable (see §16).
+2. **Precondition.** If no row matched and `out[0] != 0x5420`, the run is
+   `E3D_INCONCLUSIVE_TILE` and no statement is made about signedness. Record
+   all four slots anyway. If `out[0] == 0xD420` and `out[2] == 0x5420`, the
+   bias row was applied with shape 4 on channel 0 (or read from the wrong
+   cell): record the tuple with the annotation `bias_shape_misapplied`. That
+   is still `E3D_INCONCLUSIVE_TILE` for the signedness question, but it is a
+   direct observation about the row.
 3. **Single-cell fallback (pre-registered).** If the tuple matches nothing but
    `out[2] != 0x0000` and `(out[2] & 0x8000) != 0`, report
    `E3D_SIGNED_STORE_WITH_UNREGISTERED_ANOMALY`: the store preserved a negative
@@ -441,3 +444,30 @@ Two consequences are recorded in advance, not discovered afterwards:
 
 This section selects a scope; it does not edit an expectation. No variant-A
 tuple in §8 changed after this point.
+
+## 16. Correction record: decision order (2026-10-24, before measurement)
+
+A defect was found while implementing the mode-44 host classifier, before any
+build and before any device contact.
+
+§8 registers `ROUND_CEIL = [0x5421, 0xD420, 0xD420, 0x5421]` (variant A; the
+variant-B row has the same `out[0] = 0x5421`), but §9 step 1 as originally
+written short-circuits **any** tuple with `out[0] != 0x5420` to
+`E3D_INCONCLUSIVE_TILE`. The registered row was therefore unreachable: a
+genuine round-toward-`+inf` device result would have been recorded as
+inconclusive rather than as `E3D_ROUNDING_NOT_RN16`.
+
+Evidence: the literal §9 order was implemented in `hmx_mode44_classify()` and
+the CPU contract test failed with
+`e3d.classify[8] verdict=E3D_INCONCLUSIVE_TILE matched=0`
+(125 checks, 1 failure, gcc 15.2.0 and clang 22.1.8).
+
+Correction (user-approved, before measurement): evaluate the ten registered
+rows **first**; apply the anchor precondition only to tuples that match no row.
+No expectation in §8 changed, no row was added or removed, and no threshold
+moved. All ten registered outcomes, including both rounding rows, are now
+reachable; a tuple with a broken anchor (`out[0] = 0x0000` and the like) still
+ends at `E3D_INCONCLUSIVE_TILE` unless it exactly equals a registered row.
+
+This is a protocol correction, not a retune. It is committed separately from
+the mode-44 implementation so the change is auditable on its own.
