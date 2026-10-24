@@ -151,3 +151,88 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
    変えない SR 単体の A/B は情報量が低いかもしれない。
 
 ---
+
+## B. on-device / NPU training systems
+
+**調査日: 2026-10-25。** 「smartphone / edge で NN の学習を回す」系の文献は
+fine-tuning 前提のものが多く、**scratch 言語モデル pretraining を accelerator 上の
+exact backprop で回している公開文献は見つからなかった。** HexaTrain の
+「QNN HTP Forward/Backward + HVX optimizer + CPU Aux の scratch training」という構成は、
+公開文献の範囲では近隣が存在しない位置にある。したがってこのクラスタは
+「直接の競合」ではなく、**Gradient Strategy（P2）と memory planner の設計参照**として読む。
+
+### B-1. PockEngine: Sparse and Efficient Fine-tuning in a Pocket
+
+- [arXiv:2310.17752](https://arxiv.org/abs/2310.17752) / [AlphaXiv](https://www.alphaxiv.org/abs/2310.17752)
+  — Zhu, Hu, Lin, …, Gan, Song Han（MIT Han Lab）、**MICRO 2023**。
+- **要約**: edge 端末上の fine-tuning 用 compact training framework。
+  (1) **compile-time に forward/backward/optimizer graph を生成**し runtime overhead を削減、
+  (2) sparse backpropagation（backward graph の枝刈り + sparse update）、
+  (3) operator reordering / backend switching。Raspberry Pi で最大 15x 高速化、
+  Jetson AGX Orin で backprop memory 5.6x 削減、LLaMAv2-7B fine-tune を 550 token/s。
+- **HexaTrain との関連**: 「training graph を compile time に固定する」という設計は
+  HexaTrain の明示的 QNN op 構築と同型。また「backward graph の枝刈り」は
+  Gradient Strategy の segmented BP / hybrid BP+ZO（Phase 11）と連続的な中間解で、
+  「exact BP か ZO か」の二択ではなく gradient の枝を選ぶ設計が成立する実例。
+  HexaTrain で backward の一部 op（例えば gate 系の小 MatMul）だけ ZO 化する場合の
+  先行例として位置づけられる。
+- **次に読む**: sparse backprop の精度評価（どの枝を刈れるかの分類）。
+
+### B-2. MeBP — Memory-Efficient Backpropagation for Fine-Tuning LLMs on Mobile
+
+- [arXiv:2510.03425](https://arxiv.org/abs/2510.03425) — Song, Tang（Apple）、2025-10。
+  code: `apple/ml-mebp`。repo の P2 にも参照済み。
+- **要約**: mobile 上の LLM fine-tuning 向け memory-efficient backprop。
+  ZO は memory は軽いが 10〜100x step を要するため、その中間を狙う。
+  iPhone 15 Pro Max で 0.5B〜4B model を 1GB 未満の memory で fine-tune。
+- **HexaTrain との関連**: repo 側の segmentation 設計（per-layer graph / spill / mmap）の
+  一次参照として既に採用済み。追記事項として、Apple 系の mobile ML 論文は
+  memory 削減手法と on-device scheduler の記述が細かいので、Phase 9（memory / data movement）の
+  実装設計時に本文を読み直す価値がある。
+- **次に読む**: layer 分割と activation 保持の粒度（Phase 9 direct）。
+
+### B-3. ZO / forward-only 系の最新動向（MeZO follow-ups）
+
+- 原典: [MeZO (arXiv:2305.17333)](https://arxiv.org/abs/2305.17333) —
+  in-place ZO-SGD、memory footprint = inference と同一。
+- benchmark: [Revisiting ZO for LLM Fine-tuning (arXiv:2402.11592)](https://www.alphaxiv.org/abs/2402.11592)。
+- 新しい系譜（2024-2026）:
+  - [LOZO (arXiv:2410.07698)](https://arxiv.org/abs/2410.07698) — gradient の low-rank 構造を
+    ZO estimator で利用
+  - Sparse MeZO（NeurIPS 2025）— 更新対象 parameter の部分選択
+  - LOREN（AAAI 2026）— curvature adaptation + variance reduction を持つ ZO optimizer
+  - ZO-Finetuner（ICML 2026, [OpenReview](https://openreview.net/forum?id=2Dn4yHYLQJ)）—
+    layer ごとの perturbation scale を学習
+  - [Activation-Guided ZO (arXiv:2601.17261)](https://arxiv.org/abs/2601.17261) —
+    activation 統計で perturbation を案内
+  - Bio-FO（MLSys 2025）— biologically-plausible な forward-only on-device learning
+- **HexaTrain との関連**: repo の QZO-FF（sign-m-SPSA）/ Addax（P2）はこの系譜の端点。
+  LOZO の「gradient の low-rank 構造」は GaLore 系と同じ観察に由来するため、
+  ZO × low-rank × HexaTrain の手書き backward の組み合わせ（一部 layer だけ exact BP、
+  残りを low-rank ZO）は Phase 11 の設計空間として文献の裏付けが付いた。
+  特に activation-guided 系は、QNN graph から activation 統計を安く観測できる
+  HexaTrain 構成と相性が良い。
+- **次に読む**: LOREN（curvature を ZO に入れる具体法。Muon との組み合わせ可能性）。
+
+### B-4. その他の周辺システム
+
+- [MELTing point（EuroSys 2025, arXiv:2403.12844）](https://arxiv.org/abs/2403.12844) —
+  Android / iOS / Jetson 上の LLM 推論 benchmark 基盤。headless 実行・energy 計測の
+  infrastructure 設計は、HexaTrain の device runner / 評価engine の参照になる（学習は対象外）。
+- PocketLLM（PrivateNLP 2024）— derivative-free な on-device fine-tuning。
+  OPPO Reno で OPT-1.3B 級。QZO-FF との比較対照。
+- LiteRT (TFLite) の on-device training 公式経路は CPU/GPU 中心で、NPU training は
+  framework 側で未対応。**「NPU 上の学習」が framework 標準から出ていない**という状況は
+  HexaTrain の直接 QNN op 構築路線の妥当性（と独自性）の傍証。
+
+### クラスタBの統合所見（2026-10-25時点）
+
+1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
+   調査範囲で存在せず、近隣（PockEngine / MeBP / ZO 系）はすべて fine-tuning 前提。
+   対外説明では「fine-tuning 系の先行例と区別した scratch training」という表現が正確。
+2. **Gradient Strategy の設計空間が広がっている。** exact BP ↔ ZO の二択でなく、
+   low-rank ZO / sparse ZO / curvature ZO / activation-guided ZO / sparse backprop が
+   2024-2026 に集中している。Phase 11 は MeBP / QZO-FF だけでなく
+   LOZO・LOREN 型の選択肢も含めて再設計する価値がある。
+
+---
