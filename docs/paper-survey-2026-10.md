@@ -1601,7 +1601,41 @@ Loss Curriculum」への文献裏付けを探した。
 5. **Depth-Attention（2606.05014）** — Value Residual lane の別実装。
    どの layer から key/value を取るかの設計。
 
-## 5. 本調査の限界（2026-10-25 時点）
+## 5. 研究優先順位への反映提案（2026-10-25 時点・提案のみで verdict 変更なし）
+
+`research-priorities.md` の管理者向けの素材。採否・順位は既存の運用規則
+（NOW 最大5件・昇格時の入れ替え決定・preregistration）に従って判断されるべきもので、
+本節は何も変更しない。
+
+1. **Phase 4（Muown 比較）へ post-NS row-normalization arm の追加検討**（根拠: C-1
+   MUON+ が state なし・overhead ≤2% で LLaMA 全規模に有効、C-2 NorMuon、
+   repo row-geometry audit）。**Muon+ 型（`row_col` L2 norm）が最安の初手**。
+   Muown Algorithm 1 の CPU reference と同時進行可能。
+2. **G1 gate variant に V 入力 gate の追加検討**（根拠: E-2 VGA の gradient 解析 +
+   E-1 原著 G2）。既存 G1 graph からの差分が projection 入力だけで
+   `PROMOTE_G1_GATE_VARIANTS` の継続探索と整合。
+3. **P1 Candidate Pool の Value Residual に Depth-Attention 型を併記**
+   （根拠: E-3。parameter ゼロ・KV 中立・L19 では stride 9 で source ≤4 層。
+   J-1 speedrun の value embeddings 36% gain も傍証）。
+   ただし backward は未解析で cross-layer gradient accumulation が必要。
+4. **Phase 12 開始条件として tensor 除外表を先に作成**（根拠: A-2 Kempner
+   FFN 側 norm 优先除外、A-3 NVFP4 の先頭2+末尾8 block 残置、A-5 SR 理論の
+   weight bias floor、A-9 静的 scale 制約）。
+5. **QNN softmax 置換候補に K-interval grid を追加**（根拠: H-3。
+   FWM(τ=6) + Weight-STE + K=16 で +0.004 nats。Attention Normalizer Search と統合）。
+6. **学習安定化候補へ OEC（μ-centering）と logit softcap の追加検討**
+   （根拠: J-3, J-2。いずれも graph 変更最小。QK-norm は softcap と置換関係）。
+7. **Phase 6 に SR × accumulation 掃引を結合**（根拠: A-5。
+   1 bit ↔ 4x batch（実測2x）の補償則。B8 固定での SR 単体 A/B は情報量小）。
+8. **Muon+WD arm の位置づけ明確化**（根拠: C-6 Moonshot。
+   WD+RMS 整列は大規模で必須だった修正。HexaTrain 規模では
+   「不要で済むか」の検証として意義づけ可能）。
+9. **G1 LR stress grid checkpoint 群の averaging A/B 流用**（根拠: J-4。
+   高 LR ほど averaging の恩恵大という外部観察。新規 run 不要で試せる）。
+10. **VGA の quantization fidelity 改善観察を Phase 12 との交差検証に**
+    （根拠: E-2。8-bit PTQ 劣化最小。G1 導入済み model で低bit化耐性を測る意義）。
+
+## 6. 本調査の限界（2026-10-25 時点）
 
 - abstract ベースの要約が中心。数値の詳細（特に A-3 の高精度 layer 内訳、
   C-2 の second moment update 則）は本文未確認。ただし精読リスト上位5本
