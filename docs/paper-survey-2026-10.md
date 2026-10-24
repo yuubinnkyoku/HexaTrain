@@ -650,7 +650,7 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 - **次に読む**: minimax 係数の計算 cost（offline 事前計算で済むか、
   毎 step 必要か）。
 
-### C-7. NAMO / NAMO-D — Adam Improves Muon（2026-10-25 追加・AlphaXiv 推薦経由）
+### C-5b. NAMO / NAMO-D — Adam Improves Muon（2026-10-25 追加・AlphaXiv 推薦経由）
 
 - [arXiv:2602.17080](https://arxiv.org/abs/2602.17080) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.17080)
   — Minxin Zhang, Yuxuan Liu, Hayden Schaeffer（UCLA）、2026-02（引用11）。
