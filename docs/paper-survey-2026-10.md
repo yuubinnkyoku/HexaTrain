@@ -895,13 +895,54 @@ quantized softmax 研究、整数-only 推論系。
   直接の外部文献は少なく、vLLM / SGLang 系の serving 設計（continuous batching /
   persistent kernel）が最も近い実務参照。
 
-### クラスタHの統合所見（2026-10-25時点）
+### H-6. softmax 代替・量子化の系譜（2026-10-25 追加）
+
+H-3（学習時慣らし）・H-4（整数 pipeline）の周辺系統を整理する。
+
+- [Taming the Exponential: HCCS（arXiv:2604.02292）](https://arxiv.org/abs/2604.02292) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2604.02292)
+  — Danopoulos, Lupi, Kagan, Pierini（CERN 系）、2026-04。
+- **要約**: softmax の exp を**max-centered logit への clipped linear 写像**で置換
+  （有界・単調で順序保存、非負分布が安定）。per-head calibration parameter を
+  offline で最適化。AMD Versal AI Engine の int8 MAC 向けに実装し、
+  bfloat16/LUT 依存の reference 実装を大きく上回る速度。
+  **quantization-aware retraining が必要**と明記。
+- [EXAQ（OpenReview）](https://openreview.net/pdf?id=AuJ6gDjcZK) — softmax 入力の
+  最適 clipping 値を解析的に決め sub-4-bit 量子化。exp 計算と累積 phase を分離。
+- **IndexSoftmax**: H-4 IntAttention（2511.21513）の softmax 成分の名称。
+  LUT ベース・整数実行互換の softmax 近似 + 整数 normalization。
+- **HexaTrain との関連**: HexaTrain の Attention Normalizer Search 候補
+  （Softmax / Sigmoid / ReLU 系）に加え、
+  「max-centered clipped linear（HCCS）」「K-interval grid（H-3）」が加わり、
+  softmax 代替の選択肢は計5系統になった。いずれも**学習時（または
+  quantization-aware retraining）での慣らしが前提**で、
+  学習 graph を自前で持つ HexaTrain では導入障壁が相対的に低い。
+  T32 / H2 では per-head calibration の固定費が問題になるため、
+  head 共有 calibration からの簡略化が HexaTrain 向けの最初の変形になる。
+- **次に読む**: HCCS の clipped linear の clip 点決定規則。
+
+---
 
 1. **byte 基準の tokenizer スケーリング則が確立しつつある（H-1, H-2）。**
    HexaTrain の bpb 指標設計はこの潮流と整合しており、Phase 10 の compression rate
    掃引に理論的 Anchorage ができた。小 compute 側の外挿は HexaTrain 自身が測る価値がある。
 2. **softmax の低bit化は「学習時に慣らす」流れが出てきた（H-3）。**
    QNN softmax 精度問題への新しい解決方向であり、Attention Normalizer Search と
+   統合した候補表に加えるべき。
+3. 評価engine 高速化（NOW 1番）に直結する学術文献は薄い。serving 系の実務設計
+   （batching / graph reuse）の借用が現実的。
+
+---
+
+### クラスタHの統合所見（2026-10-25時点、H-6 追記後更新）
+
+1. **byte 基準の tokenizer スケーリング則が確立しつつある（H-1, H-2）。**
+   HexaTrain の bpb 指標設計はこの潮流と整合しており、Phase 10 の compression rate
+   掃引に理論的 Anchorage ができた。小 compute 側の外挿は HexaTrain 自身が測る価値がある。
+2. **softmax の低bit化・代替は「学習時に慣らす」が前提の流れ（H-3, H-6）。**
+   選択肢は Softmax / Sigmoid / ReLU 系（repo 既存）に
+   K-interval grid と max-centered clipped linear が加わり計5系統。
+   QNN softmax 精度問題への解決方向であり、Attention Normalizer Search と
    統合した候補表に加えるべき。
 3. 評価engine 高速化（NOW 1番）に直結する学術文献は薄い。serving 系の実務設計
    （batching / graph reuse）の借用が現実的。
