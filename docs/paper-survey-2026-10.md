@@ -490,6 +490,14 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   （Microsoft）— SWAN 動機の stateless optimizer 設計framework。repo 参照済み。
 - [RACS / Alice (arXiv:2502.07752)](https://arxiv.org/abs/2502.07752)（ICLR 2026）—
   structured Fisher approximation。Alice は Adam 比 2x 収束を主張。repo の P2 名称对照を確認。
+  **【2026-10-25 確認済み】**: Gong, Scetbon, Chao Ma, Meeds。
+  optimizer 設計を **Fisher information matrix の構造付き近似**として統一定式化し、
+  既存の効率 optimizer を構造仮定の違いとして整理。
+  **RACS = Row and Column Scaled SGD**（row/col 構造で SGD を scale、SGD 並みの memory）、
+  **Alice = 低次元部分空間で構造を保持**（memory 低減、Adam 比 2x 収束）。
+  LLaMA pretraining 1B まで検証。
+  repo の「Muon 系 row 構造」と同じ FIM 視点の系譜上にあり、
+  row/col scale が NorMuon・Muon+ と同型の操作である点が接続点。
 - [AdaMuon (arXiv:2507.11005)](https://arxiv.org/abs/2507.11005)（v3 2025-12）—
   element-wise second moment を Muon へ統合。
   **【2026-10-25 確認済み】**: (a) orthogonalized update への element-wise second moment、
