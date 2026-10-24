@@ -982,6 +982,20 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   候補に spill (DDR/UFS) と backend 移動（HVX/CPU で再計算）が入る点。
   MILP による大域 scheduling は Phase 9 の heuristic からの出発点として参照できる。
 - **次に読む**: tensor 特徴量（どの統計で recompute/compress を予測するか）の設計。
+  → **【2026-10-25 精読済み】**: 設計の要点は
+  (1) per-tensor 決定指標は **「optimization bandwidth」= 単位時間あたり節約 memory**。
+  tensor size・再計算時間・圧縮/解凍時間・圧縮率から算出、
+  (2) MILP は Boolean 変数 `R_i ∈ {recompute, compress, retain}`、
+  目的 = 総 overhead 最小、制約 = memory 容量 + **layer 先頭 op は retain/compress
+  固定**（checkpoint 役割）。**同一構造の Transformer block を利用して
+  1 block 分だけ解いて全 layer へ適用**（PuLP で 0.5 秒未満）—
+  HexaTrain の L19 同一 block 構成にそのまま流用できる最適化、
+  (3) 圧縮は **outlier 分離方式**: channel-wise Z-score>3 の outlier channel は
+  生値 + index で保存し、残りを FP16→INT4 対称量子化（group scale）。
+  RHT（A-3/A-8）・BiE（D-4）・mean-center と同じ「outlier 分離」family の別実装、
+  (4) policy は学習中に**指数 backoff 間隔（1,2,...,2^n iter）で統計を再評価**して
+  MILP を解き直す。naive 一括量子化は精度 -39% かつ収束不能になり得るため、
+  tensor 適応 policy が本質的であることも実証済み。
 
 ### G-2. CompAct — 低ランク射影による activation 圧縮
 
