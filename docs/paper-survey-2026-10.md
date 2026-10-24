@@ -28,6 +28,7 @@
 | F | Linear / recurrent・sparse attention | Phase 14-15 |
 | G | Training memory / recompute / activation 圧縮 | Training Memory Planner / Phase 9 |
 | H | その他（評価engine・data・tokenizer・推論） | 評価engine高速化 / Data / 推論側 |
+| I | Data curriculum（difficulty-aware sampling） | Difficulty-Aware Sampling / Phase 13 |
 
 （各クラスタの節は調査進行に合わせて追記される。まだ調査していないクラスタは空。）
 
@@ -880,14 +881,45 @@ quantized softmax 研究、整数-only 推論系。
 5. **Depth-Attention（2606.05014）** — Value Residual lane の別実装。
    どの layer から key/value を取るかの設計。
 
-## 5. 本調査の限界
+## I. Data curriculum（difficulty-aware sampling の外部証拠）
+
+**調査日: 2026-10-25（追加クラスタ）。** P2「Difficulty-Aware Sampling /
+Loss Curriculum」への文献裏付けを探した。
+
+### I-1. Beyond Random Sampling: Efficient Pretraining via Curriculum Learning
+
+- [arXiv:2506.11300](https://arxiv.org/abs/2506.11300) / [AlphaXiv](https://www.alphaxiv.org/abs/2506.11300)
+  — Zhang, Mohamed, Abdine, Shang, Vazirgiannis、2025-06（v2 2026-01）。
+- **要約**: LLM pretraining における curriculum learning の最初の体系的調査とされる。
+  **200+ model / 最大 100B token**で、(a) easy-to-hard の vanilla curriculum、
+  (b) pacing-based sampling、(c) interleaved curricula を random sampling と比較。
+  difficulty 指標は言語学的・情報理論的6種で、**compression ratio / lexical diversity
+  (MTLD) / readability (Flesch) が最良**。結果は早期〜中盤で 18〜45% step 削減、
+  **warmup-then-random の形だと最後まで +3.5% 持続**。data ordering は
+  既存の data selection 手法と orthogonal。
+- **HexaTrain との関連**: 現行 P2 設計は「直近 model の loss EMA で easy/medium/hard を
+  分ける」案だが、本論文の効く指標は**モデル非依存の言語統計**（compression ratio 含む）
+  だった。HexaTrain では loss EMA と bytes/token（bpb 測定で既に持っている量）の
+  両方を難易度指標候補として並べる根拠になる。「uniform 成分を残す」設計（20/50/30）は
+  warmup-then-random と同じ方向で文献整合的。
+- **次に読む**: continual training scenario の結果（resume が多い HexaTrain 運用に近い）。
+
+---
+
+## 5. 本調査の限界（2026-10-25 時点）
 
 - abstract ベースの要約が中心。数値の詳細（特に A-3 の高精度 layer 内訳、
-  C-2 の second moment update 則）は本文未確認。
-- 「AlphaXiv」は paper page の引用元として使ったが、AlphaXiv 上の議論
-  （AI summary / comment）は未読。深掘りで補完する。
+  C-2 の second moment update 則）は本文未確認。ただし精読リスト上位5本
+  （MUON+ / tokenization / VGA / K-interval softmax / Depth-Attention）は
+  本文確認済みで「次に読む」に追記済み。
+- 「AlphaXiv」は paper page（AI overview / related 推薦 graph）として利用した。
+  人的 discussion は主要論文（MUON+ / NVFP4）で空だったため、
+  議論内容の参照はまだ無い。related 推薦経由で FP4 recipe 起源論文（A-8）を発見。
 - 検索は英語圏・US 検索経由。中国語圏の model card / blog 記事は repo 側参照と
   重なるため本調査では省いた。
 - 実機での検証は一切行っていない。すべて文献ベースの候補整理である。
+- Qualcomm HMX 自体の学術論文・Hot Chips 詳細記事は公開されておらず、
+  正式な情報源は V81 HMX PRM（repo が既に使用）のみ。HMX 内部構造の外部文献
+  对照は現状不可能で、repo の CPU model 手法が唯一の公開検証経路。
 
 ---
