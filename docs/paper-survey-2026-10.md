@@ -146,10 +146,15 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   scale granularity 探索の整理枠。
 - MX+（ACM 2025-10）: MX format 自体の拡張。HMX の format 拡張候補を考える際の参照。
 - **【2026-10-25 AlphaXiv 推薦経由で追加】**:
-  - *Small-scale proxies for large-scale Transformer training instabilities*
-    （Wortsman et al.）— **小規模 proxy で大規模の不安定化を予測する**方法論。
-    HexaTrain の存在意義（小規模での診断）と同じ手法論の大規模側からの裏付け。
-    要 arXiv ID 確認。
+  - [Small-scale proxies for large-scale Transformer training instabilities
+    （arXiv:2309.14322）](https://arxiv.org/abs/2309.14322) /
+    [AlphaXiv](https://www.alphaxiv.org/abs/2309.14322)
+    — Wortsman et al.（Google DeepMind）、ICLR 2024（引用220+）。
+    **小規模 model で大規模の学習不安定化（attention logit growth・loss divergence）を
+    再現・予測する**手法論。LR と安定性の関係、max update size・attention logit growth
+    等の指標で規模間予測。HexaTrain の stress harness（P0 共通基盤）の
+    指標設計（update norm / update-to-parameter ratio / logit max）と同じ指標系で、
+    「小規模診断の結果をどう読むか」の参照になる。
   - *Scaling FP8 Training to Trillion-Token LLMs*（Fishman et al.）—
     trillion-token 級 FP8 学習の安定化。Phase 12 の大規模側参照。要確認。
 
