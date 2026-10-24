@@ -260,6 +260,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   「row-norm 制御に state が要るか」を分離できる。
 - **次に読む**: 挿入する normalization の正確な形（RMS 系か max-norm 系か）と
   HexaTrain の `keller_original_64560829_fp32` との差分。
+  → **【2026-10-25 精読済み】**: normalization は **row / column 単位の L2 norm による除算**
+  （`D_col^{-1}` / `D_row^{-1}`、双方逐適用の `col_row` / `row_col` が最良）。
+  挿入位置は NS の直後・`η√(m/n)` scale の前。hyperparameter は eps=1e-8 のみ、
+  state 追加なし。LLaMA-350M で Muon 14.02 → col_row 13.41。**全 polar 系
+  （You / Jordan / PolarExpress）で有効で exact SVD でも 29.17 → 27.90。**
+  LR はほぼ不変で、Frobenius norm を match しても gain が残るため
+  暗黙の LR rescale ではない。runtime overhead ≤ 2%。HexaTrain の HVX Muon
+  （NS5 後）への追加は小変更で、**semantic fan-out row 方向（`row_col` 相当）から
+  試すのが自然**。
 
 ### C-2. NorMuon — neuron-wise adaptive + orthogonalization
 
@@ -469,6 +478,15 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   graph 変更が小さく理論的動機が明確な候補。quantization fidelity の観察は
   Phase 12 と G1 の相互作用（gate が低bit化を楽にするか）という新規軸。
 - **次に読む**: gate の関数形（sigmoid か softplus か）とパラメタ数。
+  → **【2026-10-25 精読済み】**: gate は `g = σ(V W_g)`（`W_g ∈ R^{d×h}`、head 数出力）で
+  **attention 出力へ乗算** `O' = g ⊙ O`。HexaTrain G1 との差は**gate 入力が `LN1(X)` か
+  `V` かだけ**（構造はほぼ同一、param 追加も同等）。理論は
+  sink token で `α→1, g→0` のとき gradient が両経路で消えて
+  attention weight と gradient magnitude の decoupling が起きる点。
+  実験は BERT / OPT-125m（小規模・HexaTrain に近い帯域）で IGA（=Gated Attention）を
+  上回り、**8-bit PTQ での劣化も最小**（BERT +0.12）。大規模検証は未実施と明記。
+  HexaTrain では G1 parent 配下の variant として
+  「gate 入力を V へ替える」だけで既存 graph 資産をほぼ再利用できる。
 
 ### E-3. Depth-Attention — Cross-Layer Value Mixing
 
@@ -484,6 +502,17 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   収まるか実測する価値がある。Cross-Layer Attention Reuse 診断（NOW 5 番）とも同じ
   「layer 間で何を共有するか」の問いで、reuse 診断の延長として natural に試せる。
 - **次に読む**: depth-attention の key/value はどの layer から取る設計か（全層 or 直近のみ）。
+  → **【2026-10-25 精読済み】**: source は** stride s=L/2 の疎集合**
+  （layer ℓ は自身 + {0, s, 2s, ...}）。mixed value は再帰伝播
+  `ṽ_ℓ = α_ℓℓ v_ℓ + Σ α_ℓj ṽ_j` で、**通常の V を ṽ で in-place 置換**するのみ
+  （KV cache 形状不変・GQA では KV-head 解像度で動作）。overhead は
+  FLOPs +0.004%、学習 wall +9〜11%（未 fusion の PyTorch）、推論 +1.18%。
+  DenseFormer / Attention Residuals / mHC の +48〜321% と比べると最小級。
+  **backward は未解析**（著者明記）で、HexaTrain が手書き backward で最初に
+  設計する部分になる。再帰伝播により早期 layer の V へ gradient が戻るため、
+  HySparse2 系と同じ cross-layer gradient accumulation が必要。
+  L19 なら stride 9 で source ≤ 4 層、QNN graph には per-token の
+  微小 attention（要素数 ≤4）として載る。
 
 ### E-4. GateSkip — residual gate による layer skip
 
@@ -681,6 +710,14 @@ quantized softmax 研究、整数-only 推論系。
   V1024 byte-BPE 固定ではなく、日本語 corpus での bytes/token 分布と
   compression rate の掃引を作る意義が体系的に裏付けられた。
 - **次に読む**: 最適 rate の回帰式（50M 近傍の外挿に使えるか）。
+  → **【2026-10-25 精読済み】**: 最適 compression は `T* = T₀ / C^δ`
+  （subword: T₀=1577, δ=0.129 / latent: T₀=18.2, δ=0.035）。検証範囲は
+  C ≈ 5e18〜2e21 FLOPs で、その下端ですでに T*≈4〜4.5（BPE 並み）。
+  **HexaTrain の compute（〜1e13 FLOPs 級）は fit 範囲より5桁以上小さい**ため
+  定量的外挿は不可能だが、方向としては「より大きい bytes/token（高圧縮）側」が
+  最適になりうる。多言語では parity と T* が相関し（English 3.71 / Russian 5.67 /
+  Hindi 8.09）、**既存 tokenizer は高資源言語を過圧縮する**との指摘は日本語 V1024
+  byte-BPE の位置づけ検討に直接関係する。
 
 ### H-2. Byte Language Models — scaling・emergent abstraction
 
@@ -717,6 +754,16 @@ quantized softmax 研究、整数-only 推論系。
   Attention Normalizer Search（sigmoid / ReLU 系）と同じ「softmax を演算器に合わせて
   変形する」設計空間に属する。
 - **次に読む**: grid 構成（等間隔か log 間隔か）と K の感度曲線。
+  → **【2026-10-25 精読済み】**: grid は row 単位 calibration で (a) **MinMax**（行 min-max 全域を
+  K+1 等分）か (b) **FWM: 行 max から τ=6 nats の固定窓**（窓外は 0）。再構成は
+  LERP 補間か Nearest 丸め。STE は正規化前（Weight-STE）か正規化後（Prob-STE）。
+  **MinMax + Weight-STE + K=4 は +0.89 nats と大きく劣化**するが、
+  **FWM と surrogate 位置のどちらかを直すだけで大半が解消**し、
+  **FWM + Weight-STE + K=16 で +0.004 nats**。劣化は grid 間隔 h と
+  相関（Spearman +0.95）で、calibration gradient（行 max 依存経路）を切ると
+  forward 不変でも 25〜30M token 後に発散する。hardware motivation は
+  **exp の LUT 化（2〜3 bit table read）**で、HexaTrain の QNN softmax
+  （softmax を高精度演算に残す現状）への直接的な置換候補。
 
 ### H-4. IntAttention — fully integer attention pipeline
 
