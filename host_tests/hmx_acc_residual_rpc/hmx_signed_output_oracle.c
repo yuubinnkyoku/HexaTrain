@@ -29,6 +29,9 @@
 //   7. Rs encoding (bias set / acc behavior / rnd / fb) semantics.
 //   8. Two-convert split reconstruction: y = max(y,0) - max(-y,0).
 //   9. mode 16/17 regression (PRM math vs recorded device values).
+//  10. mode-44 (E-3D) host contract classifier: every registered pattern,
+//      the precondition, the single-cell fallback, the unmatched case and
+//      the one-trial contract.
 
 #include <math.h>
 #include <stdint.h>
@@ -37,6 +40,7 @@
 
 #include "bias20.h"
 #include "fp16_util.h"
+#include "hmx_mode44.h"
 
 static int failures = 0;
 static long checks = 0;
@@ -724,6 +728,109 @@ int main(void) {
   check_bits("mode17.device_recorded", 0x53c0u, 0x53c0u);
   check_true("mode16_prm_positive_but_device_zero",
              (prm_convert_rn16(x, 0.0, 0u, -64.0, 128.0) & 0x8000u) == 0u);
+
+  // -------------------------------------------------------------------------
+  // 10. mode-44 (E-3D) host contract classifier.
+  //     probe_host.c and this oracle must execute the same decision
+  //     procedure; a mismatch here is a contract bug, not a device result.
+  // -------------------------------------------------------------------------
+  {
+    const int pats[10][4] = {
+        {0x5420, 0xd420, 0xd420, 0x5420}, /* signed (expected) */
+        {0x5420, 0x0000, 0x0000, 0x5420}, /* late clamp */
+        {0x5420, 0x0000, 0x0000, 0x0000}, /* early clamp */
+        {0x5420, 0x0000, 0x5420, 0x0000}, /* shape ignored */
+        {0x5420, 0xd420, 0x5420, 0xd420}, /* shape ignored, signed store */
+        {0x5420, 0x0000, 0xd420, 0x8000}, /* ACC clamp + signed store */
+        {0x5420, 0x5420, 0x5420, 0x5420}, /* magnitude store */
+        {0x5420, 0xfbff, 0xfbff, 0x5420}, /* negative maxnorm */
+        {0x5421, 0xd420, 0xd420, 0x5421}, /* round toward +inf */
+        {0x5420, 0xd421, 0xd421, 0x5420}}; /* round toward -inf */
+    const hmx_mode44_verdict_t want[10] = {
+        HMX_MODE44_SIGNED_STORE_CONFIRMED,
+        HMX_MODE44_CLAMP_DOWNSTREAM_OF_SHAPE,
+        HMX_MODE44_CLAMP_AT_ACC_BEFORE_SHAPE,
+        HMX_MODE44_SHAPE_NOT_APPLIED_PER_CHANNEL,
+        HMX_MODE44_SHAPE_NOT_APPLIED_PER_CHANNEL,
+        HMX_MODE44_SIGNED_STORE_WITH_ACC_CLAMP,
+        HMX_MODE44_MAGNITUDE_STORE,
+        HMX_MODE44_NEGATIVE_MAXNORM,
+        HMX_MODE44_ROUNDING_NOT_RN16,
+        HMX_MODE44_ROUNDING_NOT_RN16};
+    const char *want_names[10] = {
+        "E3D_SIGNED_STORE_CONFIRMED", "E3D_CLAMP_DOWNSTREAM_OF_SHAPE",
+        "E3D_CLAMP_AT_ACC_BEFORE_SHAPE", "E3D_SHAPE_NOT_APPLIED_PER_CHANNEL",
+        "E3D_SHAPE_NOT_APPLIED_PER_CHANNEL",
+        "E3D_SIGNED_STORE_WITH_ACC_CLAMP", "E3D_MAGNITUDE_STORE",
+        "E3D_NEGATIVE_MAXNORM", "E3D_ROUNDING_NOT_RN16",
+        "E3D_ROUNDING_NOT_RN16"};
+    for (int p = 0; p < 10; ++p) {
+      const hmx_mode44_report_t r =
+          hmx_mode44_classify(pats[p], HMX_MODE44_TRIALS, 1);
+      ++checks;
+      if (!r.matched || r.verdict != want[p] ||
+          strcmp(r.verdict_name, want_names[p]) != 0) {
+        ++failures;
+        printf("FAIL e3d.classify[%d] verdict=%s matched=%d\n", p,
+               r.verdict_name, r.matched);
+      }
+    }
+
+    /* One-trial contract: 2 trials or no HMX execution must fail closed. */
+    {
+      const hmx_mode44_report_t ok =
+          hmx_mode44_classify(pats[0], HMX_MODE44_TRIALS, 1);
+      const hmx_mode44_report_t two = hmx_mode44_classify(pats[0], 2, 1);
+      const hmx_mode44_report_t none = hmx_mode44_classify(pats[0], 0, 0);
+      check_true("e3d.contract_ok", ok.contract_ok == 1);
+      check_true("e3d.contract_rejects_two_trials", two.contract_ok == 0);
+      check_true("e3d.contract_rejects_no_hmx", none.contract_ok == 0);
+      check_true("e3d.expected_trials_is_one", ok.expected_trials == 1);
+    }
+
+    /* Precondition: out[0] must be the positive anchor. */
+    {
+      const int bad0[4] = {0x0000, 0xd420, 0xd420, 0x5420};
+      const hmx_mode44_report_t r =
+          hmx_mode44_classify(bad0, HMX_MODE44_TRIALS, 1);
+      check_true("e3d.precondition_rejects_bad_out0",
+                 r.verdict == HMX_MODE44_INCONCLUSIVE_TILE &&
+                     r.out0_expected == 0);
+    }
+
+    /* Pre-registered bias_shape_misapplied observation: shape 4 landed on
+     * channel 0 and swapped slots 0/2. Still INCONCLUSIVE_TILE. */
+    {
+      const int swap[4] = {0xd420, 0xd420, 0x5420, 0x5420};
+      const hmx_mode44_report_t r =
+          hmx_mode44_classify(swap, HMX_MODE44_TRIALS, 1);
+      check_true("e3d.bias_shape_misapplied",
+                 r.bias_shape_misapplied == 1 &&
+                     r.verdict == HMX_MODE44_INCONCLUSIVE_TILE);
+    }
+
+    /* Single-cell fallback: a negative out[2] that matches no row still
+     * proves a sign-preserving store, because out[2]'s ACC is positive. */
+    {
+      const int anomaly[4] = {0x5420, 0x0000, 0xd123, 0x5420};
+      const hmx_mode44_report_t r =
+          hmx_mode44_classify(anomaly, HMX_MODE44_TRIALS, 1);
+      check_true("e3d.single_cell_fallback",
+                 r.verdict ==
+                         HMX_MODE44_SIGNED_STORE_WITH_UNREGISTERED_ANOMALY &&
+                     r.matched == 0);
+    }
+
+    /* Anything else is recorded verbatim and NOT interpreted. */
+    {
+      const int other[4] = {0x5420, 0x0000, 0x0000, 0x8000};
+      const hmx_mode44_report_t r =
+          hmx_mode44_classify(other, HMX_MODE44_TRIALS, 1);
+      check_true("e3d.unmatched_is_inconclusive",
+                 r.verdict == HMX_MODE44_INCONCLUSIVE_UNMATCHED &&
+                     r.matched == 0);
+    }
+  }
 
   printf("hmx_signed_output_oracle checks=%ld fail=%d\n", checks, failures);
   if (failures) {

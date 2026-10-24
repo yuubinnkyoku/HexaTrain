@@ -1358,14 +1358,17 @@ pre-registration and are pairwise distinct.
 
 CPU-only evidence (2026-10-24, no device): `hmx_signed_output_oracle.c`
 via `scripts/run_hmx_signed_output_oracle.ps1` reports
-`hmx_signed_output_oracle checks=107 fail=0` / `signed_oracle=PASS` on gcc
+`hmx_signed_output_oracle checks=125 fail=0` / `signed_oracle=PASS` on gcc
 15.2.0 and clang 22.1.8, and is wired into the host Fast contract. It
 pins the five existing PRM convert cases and their device regression
 bits, fixture exactness, the VTCM bijections, the per-channel bias row,
 both variants, the ten outcome patterns (pairwise distinct for B and for
 the authorised A), `Rs` Table 6 semantics, the
 two-convert split reconstruction (2176 cases, bit-identical to a signed
-RN16 store, `shape 6` unusable) and the mode 16/17 regression.
+RN16 store, `shape 6` unusable), the mode 16/17 regression, and the
+mode-44 host classifier (all ten rows, the one-trial contract, the anchor
+precondition, the `bias_shape_misapplied` case, the single-cell fallback
+and the unmatched case).
 
 Fast gate status (2026-10-24), two attempts, both recorded literally:
 
@@ -1397,3 +1400,37 @@ Status carry-over: `B2_THREE_PRODUCT_CONFIRMED`,
 `CONDITIONALLY_POSSIBLE`, real-tile accuracy `INSUFFICIENT_EVIDENCE`,
 E-3C2 `UNTRIGGERED`. E-3D needs its own explicit authorization; this
 section is a pre-registration, not approval.
+
+### E-3D mode 44 implementation (2026-10-24, user-authorised, one build/one run)
+
+`hmx_mode44.h` is the single shared contract: fixture bits, VTCM indices,
+the ten variant-A patterns and the pure classifier used by both
+`probe_host.c` and the CPU oracle. The DSP handler
+`run_mode44_one_trial()` executes exactly `mxclracc`, **one** MMA packet,
+**two** bias loads, **one** convert (`Rs = 0x00000001`) and **one** store,
+then returns four cells. The instruction sequence is byte-identical to
+mode 43; only VTCM contents and the returned indices differ.
+
+* tile: `A(s0,i0)=+a`, `A(s1,i0)=-a`, `W(o0,i0)=+a`, `W(o1,i0)=+a`
+  (variant A, `a = 0x3C10`), all other cells zero;
+* bias set 0 row: channel 0 `scale=+64, bo=+0, shape 0`; channel 1
+  `scale=+64, bo=+0, shape 4`; channels 2..31 programmed to the same
+  safe default (never left as the `0xA5` prefill);
+* readback: `results[0..3] = out[0..3] = 0x5420, 0xD420, 0xD420, 0x5420`
+  (signed) — `LATE_CLAMP` is `0x5420, 0x0000, 0x0000, 0x5420`;
+* host contract: `metadata[7]=1`, `metadata[8]=1`, and the run fails
+  closed if either changes; `slot_layout=four_store_cells`.
+
+Decision order was corrected **before any measurement** (commit
+`10ca037`, prereg §16): the ten registered rows are matched first, then
+the anchor precondition applies to unmatched tuples. The literal
+precondition-first order made the registered `ROUND_CEIL` row
+(`out[0]=0x5421`) unreachable; the CPU classifier test caught it
+(`e3d.classify[8]`, 125 checks 1 fail) and now pins the corrected order.
+
+Device protocol (authorised): one stamped build from clean HEAD, one
+`-DeployAndRun` session, no retry, `-strict-build-id`. Raw slots,
+`e3d_verdict`, `metadata[3..8]`, build id, device identity and cleanup
+status are recorded verbatim. An unexpected tuple is recorded and
+reported as `E3D_INCONCLUSIVE_*` — never retried, never re-tuned, and
+never used to claim Path B, real-tile accuracy, or an E-3C2 result.

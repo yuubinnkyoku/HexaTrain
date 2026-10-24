@@ -24,6 +24,7 @@
 
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
+#include "hmx_mode44.h"
 #include "bias20.h"
 #include "fp16_util.h" /* E-3C1: shared RN16 / fp16<->double helpers */
 
@@ -47,7 +48,7 @@ enum {
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 43, /* E-3C1R highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
+  MODE_MAX = 44, /* E-3D highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
 };
 
 typedef struct probe_context {
@@ -799,6 +800,90 @@ static void run_mode43_one_trial(uint8_t *base, int *results) {
   results[3] = (int)out[32];
 }
 
+/* E-3D (mode 44): signed-FP16 store discriminator.
+ *
+ * ONE 32x32x32 K32 tile, ONE MMA packet, ONE convert, ONE store, four read
+ * cells. The instruction sequence is byte-identical to mode 43 (mxclracc,
+ * one activation/weight load, two bias loads, one convert at Rs=1, one
+ * store); only the VTCM CONTENTS and the four returned store indices change.
+ * That is what makes a difference in the four cells attributable to the
+ * convert/store sign behaviour rather than to a different packet shape.
+ *
+ * Tile (all other act/wgt cells are zero):
+ *   A(s0,i0) = +a = 0x3C10   A(s1,i0) = -a = 0xBC10
+ *   W(o0,i0) = +a            W(o1,i0) = +a            (variant A)
+ * => ACC(s0,o0)=+x, ACC(s1,o0)=-x, ACC(s0,o1)=+x, ACC(s1,o1)=-x.
+ *
+ * Bias row (PRM p.13: cells 0..31 are per output channel):
+ *   cell 0: scale +64 (0x5400), bo +0, shape 0
+ *   cell 1: scale +64,          bo +0, shape 4   <- only channel 1 differs
+ *   cells 2..31: scale +64, bo +0, shape 0 (programmed, not left as 0xA5)
+ *
+ * Readback (store_u16(s,o) = (s>>1)*64 + o*2 + (s&1)):
+ *   results[0]=out[0]=(s0,o0)=0x5420   results[1]=out[1]=(s1,o0)=0xD420
+ *   results[2]=out[2]=(s0,o1)=0xD420   results[3]=out[3]=(s1,o1)=0x5420
+ * out[2] is decisive: a positive ACC shaped to -x can only be stored
+ * negative by a sign-preserving store.
+ *
+ * Expectations are frozen in hmx_mode44.h and the pre-registration; this
+ * handler must not be re-tuned after a measurement. */
+static void run_mode44_one_trial(uint8_t *base, int *results) {
+  uint16_t *act = (uint16_t *)(base + 0 * TILE_BYTES);
+  uint16_t *wgt = (uint16_t *)(base + 1 * TILE_BYTES);
+  uint32_t *bias0 = (uint32_t *)(base + 4 * TILE_BYTES);
+  uint32_t *bias1 = (uint32_t *)((uint8_t *)bias0 + BIAS_BYTES);
+  uint16_t *out = (uint16_t *)(base + 5 * TILE_BYTES);
+
+  /* One non-zero input channel only: every other product is exactly zero,
+   * so the ACC holds x (or -x) with no intermediate rounding. */
+  memset(act, 0, TILE_BYTES);
+  memset(wgt, 0, TILE_BYTES);
+  act[hmx_mode44_act_index(0, 0)] = HMX_MODE44_A_BITS;
+  act[hmx_mode44_act_index(1, 0)] = HMX_MODE44_NEG_A_BITS;
+  wgt[hmx_mode44_wgt_index(0, 0)] = HMX_MODE44_A_BITS;
+  wgt[hmx_mode44_wgt_index(1, 0)] = HMX_MODE44_A_BITS; /* variant A */
+
+  /* Bias set 0: one row, per-channel shapes; set 1 stays zero (loaded to
+   * keep the instruction sequence identical to mode 43). */
+  init_bias(bias0, HMX_MODE44_SCALE_BITS, 0, HMX_MODE44_SHAPE_CH0);
+  bias0[32 + 1] = bias20_hi_cell(HMX_MODE44_SHAPE_CH1, 0u, 0u);
+  init_bias(bias1, 0, 0, 0);
+  memset(out, 0xa5, TILE_BYTES);
+  {
+    const uintptr_t bias0_reg = (uintptr_t)bias0;
+    const uintptr_t bias1_reg = ((uintptr_t)bias1) | 1u;
+    const uintptr_t act_reg = (uintptr_t)act;
+    const uintptr_t wgt_reg = (uintptr_t)wgt;
+    const uintptr_t out_reg = (uintptr_t)out;
+    const uint32_t spatial_mask = (14u << 7);
+    const uint32_t act_rt = spatial_mask | (31u << 2);
+    const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+    const uint32_t wr_rt = spatial_mask;
+
+    asm volatile("mxclracc.hf\n" ::: "memory");
+    /* ONE packet, deliberately the only MMA in this mode. */
+    asm volatile(
+        "{ activation.hf = mxmem(%0, %1)\n"
+        "  weight.hf = mxmem(%2, %3) }\n"
+        : : "r"(act_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+        : "memory");
+
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+    asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
+    /* ONE convert (bias set 0, IEEE, no feedback, retain: Rs = 1), ONE
+     * FP16 store. A second convert would invalidate the trial count. */
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(HMX_MODE44_RS) : "memory");
+    asm volatile("mxmem(%0, %1) = cvt\n"
+                 : : "r"(out_reg), "r"(wr_rt) : "memory");
+  }
+
+  results[0] = (int)out[hmx_mode44_store_index(0, 0)];
+  results[1] = (int)out[hmx_mode44_store_index(1, 0)];
+  results[2] = (int)out[hmx_mode44_store_index(0, 1)];
+  results[3] = (int)out[hmx_mode44_store_index(1, 1)];
+}
+
 int hexatrain_hmx_acc_residual_open(const char *uri, remote_handle64 *handle) {
   (void)uri;
   if (!handle) return HMX_ERR_ARG;
@@ -844,6 +929,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
    * that fixture/packet and is likewise bound to q=6. */
   if (mode == 42 && q != 6) return HMX_ERR_ARG;
   if (mode == 43 && q != 6) return HMX_ERR_ARG;
+  /* E-3D (mode 44) uses a fixed fixture independent of q; the host mirrors
+   * q=6 like modes 18/22/40/41/42/43. */
+  if (mode == 44 && q != 6) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;
@@ -971,6 +1059,12 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
               run_mode43_one_trial(vtcm, results);
               metadata[7] = 1;
               metadata[8] = HMX_MODE43_TRIALS;
+            } else if (mode == 44) {
+              /* E-3D is genuinely ONE trial: one MMA, one convert, one
+               * store, four cells. Reporting two trials would be false. */
+              run_mode44_one_trial(vtcm, results);
+              metadata[7] = 1;
+              metadata[8] = HMX_MODE44_TRIALS;
             } else {
               run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
               run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);

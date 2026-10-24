@@ -15,12 +15,13 @@
 #include "bias20.h"
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
+#include "hmx_mode44.h"
 
 /* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
  * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c
- * (43 = E-3C1R, 42 = E-3C1, 41 = B-2, 40 = B-1). */
+ * (44 = E-3D, 43 = E-3C1R, 42 = E-3C1, 41 = B-2, 40 = B-1). */
 enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
-       HMX_PROBE_MODE_MAX = 43 };
+       HMX_PROBE_MODE_MAX = 44 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -182,20 +183,22 @@ int main(int argc, char **argv) {
   }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..42] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..44] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
    * mirror that gate host-side before touching any device state.
-   * B-1 (mode 40), B-2 (mode 41), E-3C1 (mode 42) and E-3C1R (mode 43)
-   * are bound to q=6 like modes 18/22 (fixed operands/fixtures/tile). */
+   * B-1 (mode 40), B-2 (mode 41), E-3C1 (mode 42), E-3C1R (mode 43) and
+   * E-3D (mode 44) are bound to q=6 like modes 18/22
+   * (fixed operands/fixtures/tile). */
   if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
        q != 8) ||
       (mode == 40 && q != 6) || (mode == 41 && q != 6) ||
-      (mode == 42 && q != 6) || (mode == 43 && q != 6)) {
+      (mode == 42 && q != 6) || (mode == 43 && q != 6) ||
+      (mode == 44 && q != 6)) {
     fprintf(stderr,
-            "phase D modes 31..38 require q=8 and modes 40, 41, 42 and 43 "
+            "phase D modes 31..38 require q=8 and modes 40, 41, 42, 43 and 44 "
             "require q=6 (got q=%d mode=%d)\n",
             q, mode);
     return exit_with(2);
@@ -355,6 +358,14 @@ int main(int argc, char **argv) {
            "store=bias0_scale64_plain_rn16 expected_out0=0x5400 "
            "expected_out1=0xd400_or_clamp0x0000 expected_out2=0x5400 "
            "expected_out32=0x55e3\n",
+           q);
+  } else if (mode == 44) {
+    printf("q=%d mode=44 e3d_signed_store_probe=1 tile=32x32x32_K32 "
+           "variant=A trials=1 mma=1 convert=1 store=1 scale=64 "
+           "shape_per_channel=0,4 out_bias=0 rs=0x00000001 "
+           "readback=out[0]_out[1]_out[2]_out[3] expected_out0=0x5420 "
+           "expected_out1=0xd420 expected_out2=0xd420 expected_out3=0x5420 "
+           "late_clamp_alternative=0x5420,0x0000,0x0000,0x5420\n",
            q);
   } else {
     printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
@@ -691,11 +702,12 @@ int main(int argc, char **argv) {
            oracle_selfcheck_literal, derived);
   }
 
-  /* Mode 43 is a genuine ONE-trial mode. Every other executing mode still
-   * runs two trials (metadata[8]=2); a mode-43 run that reports anything
-   * else violates the host contract and must fail closed. */
+  /* Modes 43 (E-3C1R) and 44 (E-3D) are genuine ONE-trial modes. Every
+   * other executing mode still runs two trials (metadata[8]=2); a run that
+   * reports anything else violates the host contract and must fail closed. */
   const int expected_trials =
-      (mode == 43) ? HMX_MODE43_TRIALS : 2;
+      (mode == 43) ? HMX_MODE43_TRIALS
+                   : ((mode == 44) ? HMX_MODE44_TRIALS : 2);
   int pass = status == 0 && meta[0] == HMX_IDENTITY_MAGIC &&
              meta[1] == HMX_IDENTITY_EXPECTED_ARCH && meta[4] == 0 &&
              meta[6] == 0 && meta[7] == 1 && meta[8] == expected_trials;
@@ -718,6 +730,10 @@ int main(int argc, char **argv) {
      * distinct store cells from ONE converted plain tile. */
     printf("slot_layout=four_store_cells "
            "slots=out[0],out[1],out[2],out[32] trials=1\n");
+  } else if (mode == 44) {
+    /* E-3D: four distinct store cells from ONE MMA/convert/store. */
+    printf("slot_layout=four_store_cells "
+           "slots=out[0],out[1],out[2],out[3] trials=1\n");
   } else if (single_convert) {
     /* Output legend: single-CVT modes force the second result slot to 0 on
      * the DSP; it is not a residual and is labelled accordingly. */
@@ -772,7 +788,7 @@ int main(int argc, char **argv) {
       pass = 0;
     }
     if (!math_ok_readback) math_all = 0;
-  } else if (mode != 43) {
+  } else if (mode != 43 && mode != 44) {
   for (int trial = 0; trial < 2; ++trial) {
     const uint16_t hi_bits = (uint16_t)result[2 * trial];
     const uint16_t slot2_bits = (uint16_t)result[2 * trial + 1];
@@ -1088,6 +1104,39 @@ int main(int argc, char **argv) {
     /* A pre-registered RESIDUAL_MISMATCH is a valid scientific outcome,
      * not a harness failure. Only a contract violation fails closed. */
     if (!host_contract_ok) pass = 0;
+  }
+
+  if (mode == 44) {
+    /* E-3D classification. The ten variant-A patterns, the decision order
+     * and the one-trial contract live in hmx_mode44.h so this host gate
+     * and hmx_signed_output_oracle.c run the exact same procedure. */
+    const hmx_mode44_report_t r44 =
+        hmx_mode44_classify(result, trials_flag, hmx_executed_flag);
+    printf("e3d_out0_bits=0x%04x e3d_out1_bits=0x%04x "
+           "e3d_out2_bits=0x%04x e3d_out3_bits=0x%04x\n",
+           (unsigned)r44.out[0], (unsigned)r44.out[1],
+           (unsigned)r44.out[2], (unsigned)r44.out[3]);
+    printf("e3d_out0_expected=%d bias_shape_misapplied=%d pattern=%s "
+           "matched=%d matched_store_signed=%d\n",
+           r44.out0_expected, r44.bias_shape_misapplied, r44.matched_name,
+           r44.matched, r44.matched_store_signed);
+    printf("e3d_host_contract=%s expected_trials=%d observed_trials=%d "
+           "hmx_executed=%d\n",
+           r44.contract_ok ? "PASS" : "FAIL", r44.expected_trials,
+           r44.observed_trials, hmx_executed_flag);
+    if (status == 0 && r44.contract_ok) {
+      printf("e3d_verdict=%s\n", r44.verdict_name);
+    } else if (status != 0) {
+      printf("e3d_verdict=NOT_EVALUATED_RPC_STATUS_%d\n", status);
+    } else {
+      printf("e3d_verdict=NOT_EVALUATED_HOST_CONTRACT\n");
+    }
+    printf("e3d_scope=one_mma_one_convert_one_store_four_cells "
+           "no_real_tile_accuracy_claim no_path_b_claim\n");
+    /* An inconclusive or unmatched verdict is a pre-registered scientific
+     * outcome and is recorded verbatim; only a contract violation (or an
+     * RPC failure, which already zeroed pass) fails closed. */
+    if (!r44.contract_ok) pass = 0;
   }
 
   const char *observed_verdict =
