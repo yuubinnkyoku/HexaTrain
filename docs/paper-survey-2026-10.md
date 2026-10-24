@@ -829,6 +829,15 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   low-disruption migration との親和性を示す例。
 - [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
+- [Decoupling Erase and Write Addresses in Delta-Rule（arXiv:2606.26560）](https://arxiv.org/abs/2606.26560)
+  — 2026-06。GDN 系 delta-rule の erase/write address を分離する拡張
+  （channel-wise gated / DPLR 設定）。Phase 14 の GDN 詳細化時の候補。要確認。
+- **FlashQLA の出典確認（2026-10-25）**:
+  [Qwen blog（2026-04）](https://qwen.ai/blog?id=flashqla) +
+  [fla-org/flash-linear-attention](https://github.com/fla-org/flash-linear-attention)
+  の FlashQLA backend。GDN chunked prefill の forward/backward を
+  hardware-friendly に代数再定式化した kernel 群。repo 参照済みだが、
+  **F-2 の chunkwise 分解と同じ source** であることを確認。
 - [Awesome-State-Space-Models](https://github.com/radarFudan/Awesome-state-space-models) —
   追跡用 index。
 
