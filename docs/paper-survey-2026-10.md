@@ -962,6 +962,11 @@ Loss Curriculum」への文献裏付けを探した。
    HVX Muon への変更が最小（NS5 後に 1 演算）。
 5. **K-interval softmax（H-3）**: QNN softmax を要素演算の grid 近似へ替え、
    学習から慣らす。Attention Normalizer Search と統合。
+6. **logit softcap（J-2）**: `tanh(x/cap)*cap` による最終 logits の抑制。
+   CE graph への変更が最小で、QK-norm 未導入の HexaTrain では
+   「softcap 単体 → QK-norm 単体 → 併用」の最初の arm になる。
+7. **難易度指標を bytes/token 系と言語統計へ拡張（I-1）**: loss EMA 案と並べて
+   compression ratio / readability を candidate 指標に加える。
 
 ## 3. 外部動向として記録すべき構造変化
 
