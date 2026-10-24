@@ -327,3 +327,108 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
    P2 の Polar Express / NS8 比較lane と QNN HTP NS の再試行条件の設計に使える。
 
 ---
+
+## D. Accumulator / GEMM kernel 数値（bit-accurate model・epilogue fusion・整数学習）
+
+**調査日: 2026-10-25。** HMX ACC residual feedback（R2）と G1 fusion lane に対応する、
+「行列演算器の数値を model で再現する」「accumulator / epilogue 上で要素演算を吸収する」
+「整数演算だけで学習する」の3系統。
+
+### D-1. Accurate Models of NVIDIA Tensor Cores
+
+- [arXiv:2512.07004](https://arxiv.org/abs/2512.07004) / [AlphaXiv](https://www.alphaxiv.org/abs/2512.07004)
+  — 2025-12。V100/A100/H100 系 tensor core の inner product 挙動を
+  **bit-accurate に再現する software model** を構築・公開。
+- **要約**: 低精度・混合精度の matrix multiplier の丸め・accumulator 挙動を test vector で
+  特徴づけし、数値解析・debug・algorithm 設計に使える正確な emulator を作る研究。
+  GPU tensor core の rounding mode / accumulator bit 幅 / 正規化位置が
+  仕様公開されないまま実装依存で残る問題への対処。
+- **HexaTrain との関連**: **HexaTrain の HMX CPU model / oracle 手法と同型の研究 programme。**
+  `hmx_signed_output_oracle.c` 等の「PRM 記載を test vector で device 実挙動と突き合わせ、
+  CPU model で再現する」進め方の GPU 側対抗馬であり、(1) 手法の正統性の外部事例、
+  (2) model 検証に使う discriminating vector の設計パターン、の両方を参照できる。
+  HMX PRM (80-N2040-62) の記述が曖昧な項目（convert の丸め・bias set 挙動）を
+  どう特徴づけるかの設計参照にする価値が高い。
+- **次に読む**: 論文中の「仕様未記載挙動の特定に使った test vector 設計」の節。
+
+### D-2. CODA — Rewriting Transformer Blocks as GEMM-Epilogue Programs
+
+- [arXiv:2605.19269](https://arxiv.org/abs/2605.19269) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.19269)
+  — Guo, Zhang, Menon, Guessous, Thakkar, Kim, Tri Dao（MIT / NVIDIA 系）、2026-05。
+- **要約**: norm・activation・residual update・reduction 等の memory-bound 演算を
+  **代数的に再 parameter化し、GEMM 出力 tile が on-chip に留まっている間（epilogue で）実行**する
+  GPU kernel abstraction。scaling / reduction / pairwise / accumulation の小さな
+  epilogue primitive を組合せ、標準 Transformer block の forward/backward の
+  非attention計算のほぼ全部を GEMM+epilogue 形へ書き直す。
+- **HexaTrain との関連**: R2「retained ACC を使い切ってから store する」という発想の
+  GPU 側一般形。HMX では epilogue に相当する convert/stage 命令の自由度が違うが、
+  「どの演算なら ACC / 変換段に吸収できるか」の分類表はそのまま HMX 版の設計問いになる。
+  また G1 fusion lane（`1-G` / `G(1-G)` 等の intermediate 削減）の
+  候補リストを algebraic reparameterization の観点で見直す材料。
+- **次に読む**: epilogue primitive の完全リストと、吸収できなかった演算の理由分類。
+
+### D-3. Memory-Efficient Integer-Only Training of Deep Neural Networks
+
+- [arXiv:2610.16298](https://arxiv.org/abs/2610.16298) / [AlphaXiv](https://www.alphaxiv.org/abs/2610.16298)
+  — Shalby, Pittorino, Roveri、**2026-10-12（13日前の新着）**。
+- **要約**: weights / gradients / activations / optimizer velocity を**すべて INT8 で保存し、
+  forward / backward / weight update / optimizer update をすべて整数演算で実行**する学習法。
+  符号付き整数 mantissa + 2の冪 exponent の表現で、積・和・定数除算・非線形・weight update の
+  5つの整数-only building block に分解。**velocity は group 単位の独立 exponent 追跡**で
+  neuron/channel 間の magnitude 差を保持。ResNet/MobileNet/ViT で FP32 と競合する精度、
+  学習 memory は約 1/4。
+- **HexaTrain との関連**: P2「INT8/INT4/ternary training baseline」「Quantized Adam /
+  optimizer-state 低bit化」の最新対照。特に「velocity の per-group exponent 追跡」は
+  Muon momentum / Adam v を低bit化する場合の granularity 設計に直接使える考え方。
+  HMX が整数 MMA を基本とする構成と相性が良い（HexaTrain は FP16 系だが
+  HTA/整数経路の検討時に一次参照）。
+- **次に読む**: 非線形（GELU/softmax）の整数近似の誤差評価（HexaTrain の
+  QNN sigmoid/softmax 相当演算の低bit化と比較できる）。
+
+### D-4. Block floating point (BFP) 系
+
+- [FAST: DNN Training Under Variable Precision Block Floating Point（HPCA 2022）](https://www.eecs.harvard.edu/htk/static/files/2022-hpca-zhang-mcdanel-kung.pdf)
+  — BFP mantissa 幅を学習中に可変にする。FP→BFP 変換の gradient に SR を使う。
+- [BiE: Bi-Exponent Block Floating-Point（ICML 2024）](http://www.cse.cuhk.edu.hk/~byu/papers/C229-ICML2024-BiE.pdf)
+  — block 内に 2本の exponent を持たせ精度/效率を改善。
+- [F-BFQ（arXiv:2510.13401）](https://arxiv.org/abs/2510.13401) — LLM matmul 向けの
+  flexible BFP quantization。
+- Drumond et al.（EPFL）— end-to-end BFP 学習 accelerator（TETRIS 系譜）。
+- **HexaTrain との関連**: MX が shared exponent 1本/k=32 に対し、BFP 系は
+  「block 内 exponent 構成の自由度」を探索する系統。HMX の block scale 実装が
+  固定のとき、**scale を固定したまま mantissa 側表現を変える**候補の理論的整理に使える。
+- **次に読む**: BiE の 2-exponent 割当規則（outlier 1要素だけ特別扱いする類の話か）。
+
+### D-5. 整数学習の古典
+
+- WAGE（arXiv:1803.04483, ICLR 2018）— W/A/G/E すべて整数の学習の出発点。
+- [NITI（TPDS 2022, arXiv:2009.13108）](https://arxiv.org/abs/2009.13108) — integer-only 学習の
+  実装体系。INT8 parameter / ≤5bit gradient。
+- [Is Integer Arithmetic Enough for Deep Learning Training?（NeurIPS 2022）](https://proceedings.neurips.cc/paper_files/paper/2022/file/af835bd1b5b689c3f9d075ae5a15bf3e-Paper-Conference.pdf)
+  — ResNet-50/ImageNet を integer-only で学習。
+- **HexaTrain との関連**: Phase 12 の INT 系 baseline を組むときの再現対照。
+  HexaTrain 規模（758k）なら WAGE 級の再現実験も CPU oracle で現実的。
+
+### D-6. 周辺参照
+
+- [Fasi et al., Numerical Behavior of NVIDIA Tensor Cores（2021）](https://pmc.ncbi.nlm.nih.gov/articles/PMC7959640/)
+  — tensor core 数値挙動の canonical reference。
+- Block FMA（Blanchard, Higham, Mary ら）— tensor core matmul の rounding error 解析。
+- CUTLASS [EVT（Epilogue Visitor Tree）](https://research.colfax-intl.com/epilogue_visitor_tree) /
+  [vLLM fusion passes](https://docs.vllm.ai/en/latest/design/fusions) —
+  実運用での epilogue fusion（residual+RMSNorm 等）の実装例。HMX 側で同種の fusion を
+  設計するときの「何を fusion するのが普通か」の相場観。
+
+### クラスタDの統合所見（2026-10-25時点）
+
+1. **「accelerator 行列演算器の bit-accurate CPU model 構築」は GPU 側で確立した研究分野**
+   （D-1）。HexaTrain の HMX model / oracle / discriminator 手法は孤立した工作ではなく
+   この系統の Hexagon 版として位置づけられ、test vector 設計の外部参照が得られた。
+2. **CODA（D-2）は R2 の一般形を与える。** 「ACC/tile が on-chip にあるうちに
+   何を吸収できるか」を演算分類で考える枠組みは、R2 の signed 出力（convert 2回）だけでなく
+   G1 backward fusion・LayerNorm 逆伝搬の HMX 吸収候補の整理に再利用できる。
+3. **整数-only 学習（D-3, D-5）は velocity 含む全 state の低bit化に到達した。**
+   HexaTrain の P2 低精度化は weight/activation に片寄っているため、
+   「optimizer state の group 単位 exponent」を独立候補として足す検討価値がある。
+
+---
