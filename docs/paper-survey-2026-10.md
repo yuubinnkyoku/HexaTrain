@@ -435,14 +435,22 @@ memory planner の設計参照**として読む。
   限定して正確化する。DSP offload による mixed-precision DNN 学習は
   Mandheling が先行する。
 
-### B-8. Hexagon-MLIR — Hexagon 向け AI compile stack（2026-10-25 追加）
+### B-8. Hexagon-MLIR — Hexagon NPU 向け AI compile stack（2026-10-25 追加・確認済み）
 
 - [arXiv:2602.19762](https://arxiv.org/abs/2602.19762)（2026-02）—
-  **Triton kernel を Hexagon DSP 向けに compile・実行する AI compilation stack**。
-- **HexaTrain との関連**: HVX kernel（Muon 等）を現在は手書き intrinsics で
-  書いている HexaTrain に対し、中期的に「Triton 記述 → Hexagon compile」の
-  経路が公開された意味で大きい。QNN/HVX Superoptimization（P1）の
-  backend 候補として記録。要詳細確認。
+  Absar, Baskaran, …, Lethin ほか25名（Qualcomm 系）。
+  **【2026-10-25 確認済み】**: MLIR ベースの **open-source** compile stack で、
+  **Triton kernel と PyTorch 2.0 model の双方を Hexagon NPU 向け binary へ
+  自動 lowering** する。中心最適化は **TCM（tightly coupled memory）上の
+  data locality を最大化する mega-kernel 生成**（library call 構成より
+  bandwidth 瓶颈を減らす）。work-in-progress と明記。
+  注意: 対象は Hexagon **NPU**（HVX ベクタ命令の直接 compile ではない）。
+- **HexaTrain との関連**: (a) 手書き QNN graph と同じ「固定 graph + locality 最大化」
+  方向を compiler が担う路線であり、QNN/HVX Superoptimization（P1）の
+  将来的な自動化 backend 候補、(b) mega-kernel / TCM locality の設計思想は
+  HMX retained-ACC（R2）や Memory Planner（Phase 9）と同型の
+  「on-chip に留める」原則の compile 側実装、(c) open source のため
+  中期的な検証材料になる。
 
 ### クラスタBの統合所見（2026-10-25時点、B-7 追記後修正）
 
