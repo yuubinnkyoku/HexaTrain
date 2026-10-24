@@ -1249,7 +1249,26 @@ H-3（学習時慣らし）・H-4（整数 pipeline）の周辺系統を整理�
 
 ---
 
-### クラスタHの統合所見（2026-10-25時点、H-6 追記後更新）
+### H-8. KV cache 低bit化の学術的錨（2026-10-25 追加）
+
+repo の P3「KV low-bit storage + dequantize-before-attention」が参照する
+Prism/PrismML の mean-centering は blog level の情報で arXiv 論文としては見つからない。
+**学術的な対応物（錨）**は次の系譜:
+
+- [KVQuant（arXiv:2401.18079, NeurIPS 2024）](https://arxiv.org/abs/2401.18079) —
+  非 uniform 量子化 + pre-layer rotation で sub-4-bit KV。
+- KIVI — per-channel outlier 処理（mean/median centering 相当）の 4-bit KV。
+  **PrismML 系 mean-centering の学術的最近縁**。
+- [RotateKV（arXiv:2501.16383）](https://arxiv.org/abs/2501.16383) —
+  rotation による 2-bit KV。[Kitty（arXiv:2511.18643）](https://arxiv.org/abs/2511.18643)
+  も 2-bit。
+- [SAW-INT4（arXiv:2604.19157, 2026-04）](https://arxiv.org/abs/2604.19157) —
+  system 制約下で成立する 4-bit KV 手法の最小集合を特定。
+- **HexaTrain との関連**: incremental KV-cache decode が成立した後の
+  low-bit KV lane（P3）の比較 anchor。HexaTrain の KV は H2/T32 と小さいため
+  粒度（per-channel vs per-token）の固定費比が大規模系と逆転する点に注意。
+
+### クラスタHの統合所見（2026-10-25時点、H-6/H-8 追記後更新）
 
 1. **byte 基準の tokenizer スケーリング則が確立しつつある（H-1, H-2）。**
    HexaTrain の bpb 指標設計はこの潮流と整合しており、Phase 10 の compression rate
