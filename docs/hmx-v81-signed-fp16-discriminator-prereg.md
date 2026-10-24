@@ -471,3 +471,62 @@ ends at `E3D_INCONCLUSIVE_TILE` unless it exactly equals a registered row.
 
 This is a protocol correction, not a retune. It is committed separately from
 the mode-44 implementation so the change is auditable on its own.
+
+## 17. Result (2026-10-24, one authorised run; expectations unchanged)
+
+Execution: one stamped build from clean HEAD
+`f28ccea245cb1ce4667d21a1b9252dec56194050`, build id `0xf28ccea2` passed to
+both the DSP and the HLOS build, one `-DeployAndRun` session with
+`-DeployRetries 1` and `-strict-build-id`, variant A. There was no build-level
+or run-level retry.
+
+Device and run facts. The endpoint and the stable device identifier are kept
+only in the private provenance file
+(`build/hmx_evidence/b_provenance_20261024_194847.txt`); the target was a
+single physical SM8850 handset, not an emulator, `raw_arch=0x8081`.
+
+| field | value |
+| --- | --- |
+| build | hexagon `exit=0`, android `exit=0` |
+| host / DSP build id | `0xf28ccea2` / `0xf28ccea2`, `build_id_status=MATCH` |
+| RPC | `rpc_status=0`, `dsp_status=OK` |
+| `metadata[3..8]` | `kernel_us=440`, `power=0`, `modeA_lock=0`, `modeB_lock=0`, `hmx_executed=1`, `trials=1` |
+| cleanup | `close_status=0`, `RESOURCE_CLEANUP_OK=PASS` |
+| observed slots | `0x5420 0x0000 0x0000 0x5420` |
+| matched row | `late_clamp` (`matched=1`, `matched_store_signed=0`) |
+| host contract | `PASS` (expected 1 trial, observed 1) |
+| verdict | **`E3D_CLAMP_DOWNSTREAM_OF_SHAPE`** |
+
+Artifact SHA-256: stub
+`49f8b77ba9d3e375dc5d2553ecdfa257703bf6835f6aaecd4eedd88e627ae508`, skel
+`e20a49c0f7d5f96b880a74d98fecda4c6a5c31605fd6f8d60564e55a092402ec`, host
+`1b92040329c193d800d22be8bb252bc74363064d29fb4d064983d41222ffa90b`.
+
+Reading, against §7 and §8:
+
+* `out[0] = 0x5420` satisfies the anchor: the tile, the `+64` scale, `bo=0`,
+  the `shape 0` row and store index 0 all behaved.
+* `out[1] = 0x0000` replicates mode 43 at the same store cell (negative ACC);
+  it is not new evidence on its own.
+* `out[2] = 0x0000` is the decisive cell. Its ACC is **positive** (`+x`) and
+  channel 1 carries `shape 4`; had the shape not been applied, the cell would
+  read `0x5420`. The negation therefore happened, and the resulting negative
+  value was then stored as `0x0000`.
+* `out[3] = 0x5420` is the ACC `-x` lane: `shape 4` turns it positive and it is
+  stored normally. This excludes `EARLY_CLAMP` (a clamp at the ACC input).
+
+Conclusion: the loss of sign is **downstream of the shaping function**. It is
+neither an accumulator that cannot hold the value nor a channel-1 shape that
+failed to apply. This single experiment cannot separate a clamp inside the
+convert from a clamp at the store; both are downstream of shape. A
+sign-preserving store was **not** observed, so
+`BLOCKED_SIGNED_OUTPUT_FOR_CURRENT_CONVERT_PATH` is unchanged.
+
+Non-claims: Path B remains `CONDITIONALLY_POSSIBLE`; real-tile accuracy remains
+`INSUFFICIENT_EVIDENCE`; E-3C2 remains `UNTRIGGERED`. No B3 work, no performance
+measurement, no production QNN/Muon change, no push.
+`B2_THREE_PRODUCT_CONFIRMED` and `E3C1R_LAYOUT_CONFIRMED_CLAMP` are unaffected.
+
+No expectation, row or threshold in §8 was edited after the measurement, and
+there was no second run. The disk-full Fast log and the successful Fast log are
+retained under `build/hmx-e3d/` together with the raw device log.

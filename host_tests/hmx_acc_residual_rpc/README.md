@@ -1299,10 +1299,10 @@ slots only; no full 32×32 accuracy, signed-store law or throughput claim.
   separately on 2026-10-22 and executed; any further layout/identifier
   or B3-expansion mode would need its own explicit authorization.
 
-## Phase E-3D: signed-FP16 store discriminator (pre-registration, CPU only)
+## Phase E-3D: signed-FP16 store discriminator (pre-registered, implemented, one authorised run)
 
-Pre-registered 2026-10-24, **not implemented and not executed**: no DSP
-mode, no build, no device contact. The frozen design, expectations and
+Pre-registered 2026-10-24; the mode-44 implementation and the single authorised
+device run are recorded below. The frozen design, expectations and
 decision procedure are in
 `docs/hmx-v81-signed-fp16-discriminator-prereg.md`; the cause
 classification that motivates it is in
@@ -1350,7 +1350,7 @@ see a slot1/slot2 swap, and a tuple that differs only that way is
 Variant A is the literal fixture (`W(o1)=+a`): `[0x5420, 0xD420, 0xD420,
 0x5420]`, which is symmetric under a slot-1/slot-2 transposition. Variant B
 (`W(o1)=+2a=0x4010`) is recommended because all four expected cells are
-distinct; it costs the same one MMA/convert/store. The other frozen
+distinct; it costs the same one MMA/convert/store. The other variant-B frozen
 patterns (late clamp `[0x5420,0,0,0x5820]`, early clamp
 `[0x5420,0,0,0]`, per-channel shape ignored `[0x5420,0,0x5820,0]`,
 ceiling/floor, and two signed-store variants) are listed in the
@@ -1434,3 +1434,51 @@ Device protocol (authorised): one stamped build from clean HEAD, one
 status are recorded verbatim. An unexpected tuple is recorded and
 reported as `E3D_INCONCLUSIVE_*` — never retried, never re-tuned, and
 never used to claim Path B, real-tile accuracy, or an E-3C2 result.
+
+#### E-3D device result (2026-10-24, one build, one run, no retry)
+
+Raw slots returned by the single authorised run:
+
+```text
+out[0] out[1] out[2] out[3]
+0x5420 0x0000 0x0000 0x5420    -> late_clamp
+e3d_host_contract=PASS expected_trials=1 observed_trials=1
+e3d_verdict=E3D_CLAMP_DOWNSTREAM_OF_SHAPE
+```
+
+Run facts: HEAD `f28ccea245cb1ce4667d21a1b9252dec56194050`, build id
+`0xf28ccea2` (host and DSP `MATCH`), hexagon build exit 0, android build
+exit 0, `rpc_status=0`, `metadata[3..8] = 440, 0, 0, 0, 1, 1`
+(`kernel_us=440`, `power=0`, `modeA_lock=0`, `modeB_lock=0`,
+`hmx_executed=1`, `trials=1`), `close_status=0`. Both HMX lock stages
+returned 0, so no HMX resource contention was present at execution. One
+physical SM8850 handset, not an emulator, `raw_arch=0x8081`; its endpoint
+and stable identifier are kept only in the private provenance
+`build/hmx_evidence/b_provenance_20261024_194847.txt`. No `phonelm` or
+probe process was running before or after the run.
+
+Interpretation. `out[2]` has a **positive** ACC (`+x`) and channel 1
+carries `shape 4`: without the shape it would read `0x5420`, and with a
+sign-preserving store it would read `0xD420`. It read `0x0000`, while
+`out[3]` (ACC `-x`, shape 4 -> `+x`) read `0x5420`. The negation was
+therefore applied and the resulting negative value was destroyed
+downstream of shape. That excludes an ACC clamp (`EARLY_CLAMP` would
+give `0x0000` at `out[3]`) and excludes a missing per-channel shape
+(`SHAPE_IGNORED` would give `0x5420` at `out[2]`). It does not separate a
+clamp inside the convert from a clamp at the store. A sign-preserving
+store was not observed, so
+`BLOCKED_SIGNED_OUTPUT_FOR_CURRENT_CONVERT_PATH` stands, Path B remains
+`CONDITIONALLY_POSSIBLE`, real-tile accuracy remains
+`INSUFFICIENT_EVIDENCE`, and E-3C2 remains `UNTRIGGERED`.
+
+Gate and evidence retention:
+
+* Fast after the DSP implementation: `verify-local-fast PASS`, exit 0,
+  inner summary `total 85.3s PASS=10 FAIL=0 SKIP=21`
+  (`hmx_signed_output_oracle checks=125 fail=0`). The Hexagon build was
+  the first compile of the mode-44 handler and succeeded
+  (`probe_dsp.c.obj`, 3/3 targets).
+* Logs kept (ignored, not committed): `build/hmx-e3d/fast-2026-10-24.log`
+  (disk-full failure), `build/hmx-e3d/fast-mode44-success-20261024.log`
+  (successful Fast), `build/hmx-e3d/e3d-device-run-20261024.log` (raw
+  device session).
