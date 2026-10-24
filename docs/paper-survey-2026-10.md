@@ -933,6 +933,21 @@ quantized softmax 研究、整数-only 推論系。
   Hindi 8.09）、**既存 tokenizer は高資源言語を過圧縮する**との指摘は日本語 V1024
   byte-BPE の位置づけ検討に直接関係する。
 
+### H-1b. Getting the Most Out of Your Tokenizer（2026-10-25 追加）
+
+- [arXiv:2402.01035](https://arxiv.org/abs/2402.01035) / code: `gautierdag/tokenizer-bench`
+  — Dagan, Synnaeve, Rozière（Meta FAIR）、ICML 2024。
+- **要約**: pretraining / domain adaptation における tokenizer 選択を
+  **average bytes per token**（UTF-8 byte ÷ token 数）を主指標に比較。
+  domain 特化の tokenizer 学習とその initialization が、通常想定より
+  学習効率に大きく効くことを示した。
+- **HexaTrain との関連**: HexaTrain の bpb 指標と同じ bytes/token 視点の先行研究。
+  Nicopedia domain 特化 V1024 byte-BPE という現行設計に対して、
+  (a) tokenizer の初期化（既存 BPE からの warm start）の効果、
+  (b) domain 特化 vs 汎用 tokenizer の差の定量化、という
+  Phase 10 の評価項目を先取りしている。
+- **次に読む**: warm start の具体的手続き。
+
 ### H-2. Byte Language Models — scaling・emergent abstraction
 
 - [arXiv:2610.05978](https://arxiv.org/abs/2610.05978) / [AlphaXiv](https://www.alphaxiv.org/abs/2610.05978)
