@@ -654,3 +654,104 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
    memory 階層。外部論文の cost model にこの2つを足すのが設計の本体。
 
 ---
+
+## H. Text representation・softmax 数値・整数推論（評価/推論側）
+
+**調査日: 2026-10-25。** HexaTrain の bpb（bits/original UTF-8 byte）指標と
+直接同じ土俵に立つ tokenizer スケーリング研究、QNN softmax 精度に直結する
+quantized softmax 研究、整数-only 推論系。
+
+### H-1. Compute Optimal Tokenization
+
+- [arXiv:2605.01188](https://arxiv.org/abs/2605.01188) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.01188)
+  — Limisiewicz, Pagnoni, Iyer, Lewis, Mehta, Liu, Li, Ghosh, Zettlemoyer（Meta）、2026-05。
+  code: `facebookresearch/compute-optimal-tokenization`。OpenReview 2026-09。
+- **要約**: BLT の latent tokenization で compression rate（平均 bytes/token）を連続制御し、
+  **50M〜7B・988 model**を学習して tokenizer の compute-optimality を測定。
+  (1) compute-optimal 設定では parameter は** byte 測りの data size に対して**scale する
+  （token 測りの Chinchill 流儀と矛盾）、(2) **最適 compression rate は compute 増に対して
+  低下する**（大規模ほど細かい token が最適）、(3) 結果は subword tokenizer と
+  非英語にも一般化。
+- **HexaTrain との関連**: HexaTrain は評価を bits/original-byte で行っており、
+  この研究と同じ byte 基準の尺度に立っている。**HexaTrain の compute budget（端末）は
+  この実験の最小域（50M）よりさらに小さい**ため、理論外挿上は「より高い compression
+  （大きい bytes/token = より少数の dense token）側」が最適になりうる。
+  Phase 10 の Text Representation Search（V512/V1024/V2048, GBST, BLT）で
+  「compression rate を compute budget の関数として扱う」設計根拠になる。
+  V1024 byte-BPE 固定ではなく、日本語 corpus での bytes/token 分布と
+  compression rate の掃引を作る意義が体系的に裏付けられた。
+- **次に読む**: 最適 rate の回帰式（50M 近傍の外挿に使えるか）。
+
+### H-2. Byte Language Models — scaling・emergent abstraction
+
+- [arXiv:2610.05978](https://arxiv.org/abs/2610.05978) / [AlphaXiv](https://www.alphaxiv.org/abs/2610.05978)
+  — Wang, Luo, Zhang, Wu、2026-10-05（3週間前）。
+- **要約**: byte 直接入力 Transformer について、token-superposition training + hash embedding
+  で subword Transformer を規模とともに逆転できること、byte model が
+  外部 tokenizer 相当の局所抽象を創発すること（中間層の最大25%をその局所表現に
+  制限しても性能維持）、生成の不確実性が構造境界近傍に集中すること
+  （speculative decoding で subword 比 3.4x の受理）を報告。
+- **HexaTrain との関連**: Phase 10 の raw byte 候補（V256）に必要な技術要素
+  （superposition training / hash embedding）の最新処方。「byte は固定費が大きい」という
+  HexaTrain の暫定見立てに対して、「学習法を変えれば scale で逆転する」反例。
+  また「entropy が構造境界に集中」は AdaMTP（E-5）と独立に同じ観察をしており、
+  HexaTrain の difficulty-aware sampling（P2）設計の裏付けが2系統揃った。
+- **次に読む**: token-superposition training の学習則（QNN graph で実装可能な形か）。
+
+### H-3. Pretraining Transformers with Quantized Softmax in Attention
+
+- [arXiv:2609.33591](https://arxiv.org/abs/2609.33591) / [AlphaXiv](https://www.alphaxiv.org/abs/2609.33591)
+  — Zhu, Hu, Kozlowski（Hugging Face 系）、2026-09（v2 2026-10-16）。
+- **要要約**: attention softmax の exp を **K+1 点の grid（K-interval attention）で近似**し、
+  scratch pretraining から学習。行ごとの calibration（min-max vs 固定窓）、
+  補間 vs hard rounding、straight-through surrogate を正規化の前後どこへ置くかを系統掃引し、
+  backward 則（calibration 微分含む）を導出。124M / 2.5B token で
+  **K=16・pre-normalization surrogate なら exact softmax 比 +0.004 nats**。
+  一方 surrogate 位置と calibration の組み合わせを誤ると大きく劣化
+  （detached row extrema は forward 不変でも遅れて loss 悪化）。
+- **HexaTrain との関連**: **QNN HTP softmax の演算コスト・精度問題（qnn-htp-softmax 系）へ
+  最も直結する文献。** Attention MatMul は低bit化が進む一方 softmax が高精度に残る、
+  という状況認識は HexaTrain の「Softmax / LM head は高precision残置」という
+  想定と同一。K-interval 化は QNN graph 上では要素演算（grid 参照 + 補間）で構成でき、
+  HMX/HTP 側で softmax を近似する選択肢の1つになる。
+  Attention Normalizer Search（sigmoid / ReLU 系）と同じ「softmax を演算器に合わせて
+  変形する」設計空間に属する。
+- **次に読む**: grid 構成（等間隔か log 間隔か）と K の感度曲線。
+
+### H-4. IntAttention — fully integer attention pipeline
+
+- [arXiv:2511.21513](https://arxiv.org/abs/2511.21513) — Zhong ほか（SUSTech）、
+  **MLSys 2026**。code: `WanliZhong/IntAttention`。
+- **要約**: attention の全 pipeline を整数演算化（integer softmax 含む）。
+  edge 推論で約 3.7x の効率改善を報告。softmax 近似の頑健性 ablation あり。
+- **HexaTrain との関連**: H-3 が「学習時に softmax を量子化して慣らす」、
+  IntAttention は「推論 pipeline 全体を整数化する」。HexaTrain は学習側なので H-3 が主だが、
+  学習済み checkpoint を HMX 整数経路で推論するときの対照。
+- **次に読む**: integer softmax の丸め設計（H-3 の K-interval との比較）。
+
+### H-5. その他の索引
+
+- [P3-LLM（arXiv:2511.06838）](https://arxiv.org/abs/2511.06838) — NPU-PIM 統合 accelerator、
+  32-bit fixed-point。HTP ではなく PIM 前提だが低bit KV / weight-act quant の SOTA 対照。
+- [Faster Superword Tokenization（arXiv:2604.05192）](https://arxiv.org/abs/2604.05192) —
+  BPE tokenization の高速化（4.7 CPU日→600 CPU秒）。アプリ内で tokenizer/cache を
+  端末生成する「アプリ単体化」課題の工敷削減に使える可能性。
+- [Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）](https://arxiv.org/abs/2610.11214)
+  — KV 量子化と linear attention の統一理論。P3 の KV 系と Phase 14 の接続部。
+  要確認。
+- MELTing point（EuroSys 2025）はクラスタ B-4 参照。評価engine（NOW 1番）への
+  直接の外部文献は少なく、vLLM / SGLang 系の serving 設計（continuous batching /
+  persistent kernel）が最も近い実務参照。
+
+### クラスタHの統合所見（2026-10-25時点）
+
+1. **byte 基準の tokenizer スケーリング則が確立しつつある（H-1, H-2）。**
+   HexaTrain の bpb 指標設計はこの潮流と整合しており、Phase 10 の compression rate
+   掃引に理論的 Anchorage ができた。小 compute 側の外挿は HexaTrain 自身が測る価値がある。
+2. **softmax の低bit化は「学習時に慣らす」流れが出てきた（H-3）。**
+   QNN softmax 精度問題への新しい解決方向であり、Attention Normalizer Search と
+   統合した候補表に加えるべき。
+3. 評価engine 高速化（NOW 1番）に直結する学術文献は薄い。serving 系の実務設計
+   （batching / graph reuse）の借用が現実的。
+
+---
