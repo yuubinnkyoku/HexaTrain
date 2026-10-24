@@ -705,6 +705,13 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
 
 ### F-3. 索引（未検証・要確認）
 
+- [Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）](https://arxiv.org/abs/2610.11214)
+  — 2026-10。KV cache 量子化（entry 圧縮・全保持）と linear attention
+  （multi-KV を固定 size state へ集約）を RAM-Net の soft address assignment で
+  統一する理論。**pretrained weight からの移行経路**（soft-quantized 中間段階）を持ち、
+  0.3B〜7B の 9 model で 500M token の budget で teacher gain の 87.1% を回復。
+  要確認だが、HexaTrain の low-disruption migration protocol と同じ
+  「既存 weight を壊さず移行」の設計思想を持つ。
 - [Native Hybrid Attention（arXiv:2510.07019）](https://arxiv.org/abs/2510.07019) —
   検索結果では recall-intensive / commonsense で transformer 系 hybrid を上回るとの由。
   要 abstract 確認。
@@ -905,8 +912,12 @@ quantized softmax 研究、整数-only 推論系。
   — KV 量子化と linear attention の統一理論。P3 の KV 系と Phase 14 の接続部。
   要確認。
 - MELTing point（EuroSys 2025）はクラスタ B-4 参照。評価engine（NOW 1番）への
-  直接の外部文献は少なく、vLLM / SGLang 系の serving 設計（continuous batching /
-  persistent kernel）が最も近い実務参照。
+  直接の外部文献は薄いが、serving 系の設計が最も近い実務参照:
+  [Multi-Bin Batching（ACM 2026-08）](https://dl.acm.org/doi/10.1145/3843225)
+  （出力長での group 化 batching）、[Sarathi-Serve（OSDI 2024）](https://www.usenix.org/conference/osdi24/presentation/agrawal)
+  （chunked prefill による throughput-latency 制御）、vLLM の continuous batching /
+  PagedAttention。HexaTrain の評価は同型 window（T32 固定）なので可変長対応が不要で、
+  「window 単位の batch 化 + graph 再利用」に絞れば serving 系より単純な設計で済む。
 
 ### H-6. softmax 代替・量子化の系譜（2026-10-25 追加）
 
