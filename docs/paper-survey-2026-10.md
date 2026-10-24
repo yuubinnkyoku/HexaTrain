@@ -188,7 +188,27 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   系譜追跡に有効なことを確認した。
 - **次に読む**: MXFP4 論文の SR 分散 bound（A-5 の理論と接続するか）。
 
-### クラスタAの統合所見（2026-10-25時点、A-8 追記後更新）
+### A-9. Quant.npu — NPU 向け fully static 量子化（2026-10-25 追加）
+
+- [arXiv:2605.20295](https://arxiv.org/abs/2605.20295) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.20295)
+  — Zhang, Xu, Wang, …, Mengwei Xu, Huang（北大系）、2026-05。
+- **要約**: mobile NPU 上の LLM 推論向け integer-only・**fully static** 量子化。
+  通常の PTQ が activation 量子化 parameter を runtime で動的再計算するのに対し、
+  NPU は**完全に静的な量子化 parameter** を要求するという制約に対処。
+  learnable な静的量子化 parameter + rotation matrix、rotation 対応の
+  2段階選択的最適化、sensitivity-guided mixed precision。
+  実機 NPU で SOTA PTQ と同等精度、latency 最大 15.1% 削減。
+- **HexaTrain との関連**: Phase 12 の HTP 向け量子化設計に直接響く制約の明文化。
+  QNN HTP graph も固定 shape・静的 parameter 前提なので、
+  「runtime で量子化 parameter を計算する方式は HTP に載らない」。
+  HexaTrain の学習は自前 graph なので学習中に scale を更新する余地はあるが、
+  推論 graph（FORWARD_ONLY / prepared generation）へ持ち込む量子化は
+  静的 parameter 化が前提になる。rotation 系（Hadamard/RHT）との併用も
+  A-3/A-8 の recipe と整合する。
+- **次に読む**: rotation 対応 2段階最適化の分離基準（rotated / unrotated tensor）。
+
+### クラスタAの統合所見（2026-10-25時点、A-8/A-9 追記後更新）
+---
 
 1. **MX 系 block-scaled 学習は「何を高精度に残すか」で決まる。** Kempner の結果は
    LayerNorm affine weight 除外・activation 高精度維持・forward のみ量子化という
@@ -202,6 +222,9 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
 3. **SR × batch size の相互作用**（A-5）は Phase 6 の accumulation 設計と結合する独立研究課題。
    B8 固定の HexaTrain では SR の恩恵が理論上小さくなる可能性があり、accumulation を
    変えない SR 単体の A/B は情報量が低いかもしれない。
+4. **NPU は fully static な量子化 parameter を要求する**（A-9）。
+   動的な activation scale 計算を前提にした手法は HTP graph に載らない。
+   Phase 12 の候補は最初から「静的 scale（学習中に更新・graph へ焼き込み）」で設計する。
 
 ---
 
