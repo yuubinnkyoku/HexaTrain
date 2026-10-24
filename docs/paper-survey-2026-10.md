@@ -388,6 +388,20 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 
 ### C-5. 索引
 
+- **【2026-10-25 直接確認済み】Muown 原論文**:
+  [arXiv:2605.10797](https://arxiv.org/abs/2605.10797) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.10797)
+  — Lion, Hübler, Li, Orvieto, He（ETH 系）、2026-05。
+  spectral norm を **row-magnitude factor と row-coherence factor へ分解**し、
+  drift の主因は row-magnitude 側だと特定。row-magnitude は
+  **explicit optimizer variable として分解が誘導する ℓ∞ geometry で更新**し、
+  direction は Muon 不変（repo の Algorithm 1 読みでは `g/r/m_g/v_g` state）。
+  124M〜2.7B で Muon / SOAP / AdamW / Lion を上回り、**near-optimal LR plateau を拡大**、
+  weight-decay 感度を低減。理論は non-convex 収束 rate + stochastic noise 係数が
+  Muon より小さいことを示す。
+  → row 制御3案（Muown = weight parameterization / Muon+ = post-NS L2 norm /
+  NorMuon = update RMS EMA）のうち、**Muown だけが LR plateau 拡大と WD 感度低減を
+  明示的に主張**しており、Phase 6（LR×batch×optimizer）との接続が最も強い。
+
 - [Awesome-Muon](https://github.com/zhanghualin0/Awesome-Muon)（2026-06 更新）—
   Muon 系の網羅 list。以後の追跡はこれを定期確認するのが最も安い。
 - repo 参照済み: Muown 2本（2605.10797 / 2606.23637）、Muon is Scalable（2502.16982）、
