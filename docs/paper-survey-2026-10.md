@@ -31,7 +31,8 @@
 | I | Data curriculum（difficulty-aware sampling） | Difficulty-Aware Sampling / Phase 13 |
 | J | 小規模学習 recipe の系譜（modded-nanogpt speedrun） | Muon identity / 低コスト候補の收割順 |
 
-（各クラスタの節は調査進行に合わせて追記される。まだ調査していないクラスタは空。）
+（全クラスタA〜Jの第一 pass を 2026-10-25 に完了。以後の追記は
+「精読済み」注記・追加論文・新着掃描の形式で行う。）
 
 ---
 
