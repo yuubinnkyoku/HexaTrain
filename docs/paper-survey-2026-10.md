@@ -123,6 +123,20 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   HexaTrain の現行 B8 はこの理論で不利な側（batch が小さい）なので、SR 導入時は
   accumulation との同時設計が必須という読み。
 - **次に読む**: gradient variance の理論式（どの tensor の量子化が効くかの予測に使える）。
+  → **【2026-10-25 精読済み】**: 理論の要点は
+  (1) RTN は QAT 目的に対して**有biased**、SR は unbiased、
+  (2) **weight 量子化の bias `B_W ∝ L√d Δ_W` は batch size で消えない**
+  （weight は batch 全体で共有され丸めが1回だから誤差 floor になる）、
+  (3) activation/gradient の SR noise は per-sample i.i.d. で `T^Q ∝ (1/b)·2^(-2B)`。
+  **1 bit 落とすと variance が4倍 → batch 4倍で相殺**（実測では約2倍で足りる）。
+  収束 bound は `4(L(w0)−L*)/ηT + (2+4ηL)B_W² + 2ηL(σ_S²+σ_Q²)/b`。
+  実験は WideResNet / Llama-3.2-3B SFT / BERT-GLUE で E4M0〜E4M2 × batch 8〜32。
+  **forward は高精度維持・backward だけ量子化**が前提。
+  また SR の hardware cost は LFSR で FMA 比無視できる規模（66 register 級）と試算。
+  HexaTrain 適用の含意: (a) B8 固定では `1/b` 項が効かないため SR 導入は
+  **accumulation 増とセット**が理論上必須、(b) weight 側低bit化は
+  batch で救えない bias floor を作るため Phase 12 では activation/gradient 側から、
+  (c) backward のみ量子化方針は Kempner（A-2）の緩和策と一致。
 
 ### A-6. A Stochastic Rounding-Enabled Low-Precision Floating-Point Training
 
