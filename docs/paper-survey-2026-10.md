@@ -1068,9 +1068,24 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   low-disruption migration との親和性を示す例。
 - [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
-- [LeapQuant（arXiv:2609.38166）](https://arxiv.org/abs/2609.38166)（2026-09）—
-  **linear attention（GDN / Kimi 系）の量子化**。Phase 14 の GDN 導入と
-  Phase 12 の低精度化が交差する地点の先行例。要確認。
+- [LeapQuant（arXiv:2609.38166）](https://arxiv.org/abs/2609.38166)
+  （2026-09）— **【2026-10-25 全文精読済み】**:
+  **linear attention（GDN / KDA）の recurrent state 行列**を量子化する
+  training-free 手法（推論時のみ、vLLM + TileLang 実装）。
+  課題は (1) **step ごとの再量子化誤差が再帰的に蓄積**する
+  （per-step BF16 でも Qwen3.5-9B AIME 87.9% → 72.1%、INT8 は 7.1% に崩壊）、
+  (2) state の outlier が少数 row/col に集中（中央値の最大176倍）。
+  手法は (a) **per-window 量子化**（window p=16 ごとに state を量子化し直し、
+  窓内は高精度 rank-1 update を buffer）、(b) **compensator tokens**
+  （支配的な rank-1 outlier 構造を FP16 で保持し通常 token と同じ経路で処理）、
+  (c) diagonal residual smoothing。8-bit で FP32 と完全一致（75.5% avg）、
+  6-bit で 72.4%（baseline は 29.6〜31.9% に崩壊）、kernel 2.05〜3.70x。
+  HexaTrain との関連: Phase 14 の GDN 導入時、
+  **recurrent state の保存精度が誤差蓄積の主戦場になる**ことの存在証明。
+  HexaTrain は学習時に state を HTP graph 内で保持するため per-step 更新が
+  再量子化に当たるが、「窓境界でだけ低bit化・窓内は高精度」という
+  per-window 原理は Memory Planner（Phase 9）の KEEP/低bit KEEP 設計と
+  同型でそのまま転用可能。
 - [Erase-then-Delta Attention（arXiv:2606.26560）](https://arxiv.org/abs/2606.26560) /
   [AlphaXiv](https://www.alphaxiv.org/abs/2606.26560)
   — Li, Zhang, Luo ほか（Alibaba 系）、2026-06。
