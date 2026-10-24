@@ -1042,6 +1042,15 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   そのまま再利用する形」で設計できる可能性がある。SimpleGDN weight-preserving
   migration の数式変形を考える際の理論的整理枠。
 - **次に読む**: reduction の仮定（chunk 境界・gate 形式）と HexaTrain SimpleGDN 設計の対応。
+  → **【2026-10-25 AlphaXiv AI overview 経由で追記】**: 6-step ablation で
+  LaCT / ViTTT を standard linear attention まで帰着させた具体的な簡約手順を提示。
+  反直観的観察として **inner-loop step 増は inner-loop fit を良くするが
+  下流指標を悪化させる**（1→64 step で PSPR 低下・PPL 上昇）。
+  機構は「最終層が bias-free linear だと更新が outer-product として state に
+  蓄積され query が読む = learned linear attention」。
+  parallel 化には static feature map + weight normalization 除去が必要で、
+  推論 4.0x / 学習 1.19x。**「内部最適化の深さ」と「下流品質」が乖離する**
+  可能性は HexaTrain の GDN/T Titans 系（P3）を評価する際の注意点になる。
 
 ### F-2. chunkwise parallel 系の実装基盤
 
