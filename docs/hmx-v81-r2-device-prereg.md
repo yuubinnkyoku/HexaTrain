@@ -4,14 +4,19 @@ Status: **PRE-REGISTERED, NOT AUTHORISED**, 2026-10-24.
 Revision 2 (2026-10-25): ambiguous S1/S2 observations now map to
 `R2_CAUSE_INCONCLUSIVE` on the device path; the `Rs=0x0001` no-feedback
 composition is called out as the main residual spec risk; the 11-slot host
-contract is re-checked. No DSP code has been added, no build has been made,
-no device has been contacted. This document fixes the fixture, the expected
+contract is re-checked. Revision 3 (2026-10-25): slots 8..10 are fixed as
+DSP-authored HVX results in a third VTCM region, the bias rows move to make
+room for it, and instruction counts require a DSP counter plus a static
+disassembly audit of the same build. No DSP code has been added, no build has
+been made, no device has been contacted. This document fixes the fixture, the expected
 raw bits and the decision procedure **before** any measurement. After the
 first run the expectations in §6 may not be edited; a mismatch is a result,
 not a reason to retune.
 
 This pre-registration follows the CPU-only feasibility study
-[`hmx-v81-r2-acc-reuse-feasibility.md`](hmx-v81-r2-acc-reuse-feasibility.md).
+[`hmx-v81-r2-acc-reuse-feasibility.md`](hmx-v81-r2-acc-reuse-feasibility.md)
+and the implementation plan
+[`hmx-v81-r2-device-implementation-plan.md`](hmx-v81-r2-device-implementation-plan.md).
 The feasibility verdict is `R2_SPEC_FEASIBLE`; this document is the device
 gate that would turn it into (or refute) `R2_ACC_REUSE_SUPPORTED`.
 
@@ -157,13 +162,15 @@ the device run must not be skipped on the grounds that ACC retention is
 | `wgt` | `+2048` | 2048 B | 2 KiB |
 | `out_pos` | `+4096` | 2048 B | 2 KiB |
 | `out_neg` | `+6144` | 2048 B | 2 KiB |
-| `bias` set 0 | `+8192` | 256 B | 256 B |
-| `bias` set 1 | `+8448` | 256 B | 256 B |
-| `bias` set 2 | `+8704` | 256 B | 256 B |
-| total | | 8960 B | of 12288 B |
+| `out_recon` | `+8192` | 2048 B | 2 KiB |
+| `bias` set 0 | `+10240` | 256 B | 256 B |
+| `bias` set 1 | `+10496` | 256 B | 256 B |
+| `bias` set 2 | `+10752` | 256 B | 256 B |
+| total | | 11008 B | of 12288 B |
 
-`out_pos` and `out_neg` are distinct and both 2 KiB aligned. Before each
-store, fill the destination with `0xA5`; a readback of `0xA5A5` means the
+`out_pos`, `out_neg` and `out_recon` are distinct and all 2 KiB aligned.
+`out_recon` is written by the DSP HVX loop, not by a convert store. Before
+each store, fill the destination with `0xA5`; a readback of `0xA5A5` means the
 store did not execute. The all-1024-cell store bijection is
 `store_u16(s,o) = (s>>1)*64 + o*2 + (s&1)`.
 
@@ -182,13 +189,15 @@ store u16 indices.
 | 5 | S2 | `(s0,o0)` | negative buffer | `0x0000` |
 | 6 | S2 | `(s1,o0)` index 1 | negative buffer | `0x5420` |
 | 7 | S2 | `(s2,o0)` index 64 | negative buffer | `0x0000` |
-| 8 | S2 | `(s0,o0)` | HVX recon | `0x5420` |
-| 9 | S2 | `(s1,o0)` index 1 | HVX recon | `0xD420` |
-| 10 | S2 | `(s2,o0)` index 64 | HVX recon | `0x0000` |
+| 8 | S2 | `(s0,o0)` | DSP `out_recon` (+8192) | `0x5420` |
+| 9 | S2 | `(s1,o0)` index 1 | DSP `out_recon` (+8192) | `0xD420` |
+| 10 | S2 | `(s2,o0)` index 64 | DSP `out_recon` (+8192) | `0x0000` |
 
-The HVX recon is computed on the DSP, not on the host, so the run also
-exercises `vsub.hf` and the pos/neg buffer read path. A host-side subtraction
-is a fallback analysis only; it must be labelled separately.
+The HVX recon is computed on the DSP in `out_recon`, not on the host, so the
+run also exercises `vsub.hf` and the pos/neg buffer read path. A host-side
+subtraction is a fallback analysis only: `recon_source` must be `DSP_HVX`
+for `R2_ACC_REUSE_SUPPORTED`. The DSP must not overwrite `out_pos` or
+`out_neg`; the run checks that both inputs are unchanged after the HVX loop.
 
 The expected pattern is frozen:
 
@@ -209,9 +218,21 @@ slot:   0      1      2      3      4      5      6      7      8      9      10
 | bias loads | 3 (sets 0, 1, 2; once at the start) |
 | converts | 4 (2 per subcase) |
 | stores | 4 (2 per subcase) |
+| HVX recon loops | 2 (one per subcase) |
 | returned slots | 11 |
 | `metadata[7]` HMX executed | 1 |
 | `metadata[8]` trials | 2 |
+
+This minimal test uses **one MMA packet per subcase** (a single dot in S1, three
+spatial lanes in S2). It is not a B3 accuracy run: the 3-packet B3 synthesis
+and the 1,024-cell comparison are CPU-only evidence in the companion document.
+The static audit therefore must not accept a third packet, and the R2 cost
+model's 3 packets refer to the B3 accuracy path, not to this test.
+
+S1 also runs the HVX recon loop even though slots 0..1 come from the two
+convert buffers. The loop is part of the measured sequence: it checks that the
+recon writer leaves `out_pos` and `out_neg` unchanged. Only S2's recon values
+are registered as slots 8..10.
 
 The current host result buffer is four slots. The future implementation must
 widen it to 11; the RPC IDL already uses an unbounded `sequence<long>`, so no
@@ -227,12 +248,16 @@ Fail closed before interpreting any slot if any of the following holds:
 * `rpc_status != 0` or `dsp_status != OK`;
 * `hmx_executed != 1`;
 * `trials != 2`;
-* `mma_count != 2`, `convert_count != 4`, `store_count != 4`, or
-  `bias_loads != 3`;
+* `mma_count != 2`, `convert_count != 4`, `store_count != 4`,
+  `bias_loads != 3`, or `recon_loops != 2`;
 * `Rs` values are not the four registered values (`0x0001`, `0x2000`,
-  `0x0001`, `0x1000`);
-* `out_pos` and `out_neg` are not distinct 2 KiB-aligned regions;
-* any slot is `0xA5A5` (the store did not execute);
+  `0x0001`, `0x1000`), or the DSP `Rs` echo is absent/mismatched;
+* `out_pos`, `out_neg` and `out_recon` are not distinct 2 KiB-aligned regions;
+* `recon_source != DSP_HVX` (a host-side subtraction is not accepted);
+* the count evidence is host-planned, or the DSP counter and static
+  disassembly audit do not both exist and agree;
+* the store sentinel did not change, or any slot is `0xA5A5`;
+* any of the 11 slots is not zero-extended 16-bit;
 * close status is non-zero or resource cleanup fails.
 
 A fail-closed condition is `R2_HOST_CONTRACT_FAILED` or an infrastructure
@@ -250,8 +275,10 @@ Evaluate in this order. The labels are the pre-registered future verdicts.
    `R2_ROUNDING_MISMATCH`. Do not adjust the expectation.
 4. **S1 retention/bias control.** Slot 0 must be `0x5420`; otherwise
    `R2_UNEXPECTED_OUTPUT` (the first-convert anchor itself failed).
-   * slot 1 = `0x5020` -> S1 passes (retention + set 2 selection + positive
-     second store);
+   * slot 1 = `0x5020` -> S1 passes: under the registered instruction
+     sequence, the output is consistent with ACC reuse and Bias set 2
+     selection. This is **not** a bit-level proof that all 37 ACC bits were
+     retained or that the internal bank state is unchanged;
    * slot 1 = `0x0000` -> `R2_CAUSE_INCONCLUSIVE`. Candidate causes: retain
      bit ignored in a no-feedback convert, physical ACC loss, bias load
      failure, convert not executed, or store anomaly. Do **not** report
@@ -285,6 +312,34 @@ Evaluate in this order. The labels are the pre-registered future verdicts.
 `R2_ACC_REUSE_SUPPORTED` must not be returned from S2 alone, from a run
 without S1, or from a run with a second MMA / feedback bit. S1 is the
 same-ACC evidence; S2 is the sign-split evidence.
+
+### 8.1 What S1 success means
+
+Slot 1 = `0x5020` is a strong output-consistency result: the registered
+sequence (one MMA, convert `0x0001`, store, convert `0x2000`, store) produced
+the value expected from the same ACC with Bias set 2. It is not a bit-level
+proof of the 37-bit ACC contents, and it does not prove that the internal
+bank pointer or all 1,024 cells are unchanged. The IMPLICATION is "consistent
+with ACC reuse and the registered bias selection", not "ACC retention is
+proven". The same qualification applies to the S2 sign split.
+
+### 8.2 Evidence provenance: counters and disassembly are separate facts
+
+| source | what it establishes | limitation |
+| --- | --- | --- |
+| Host-planned counts | intended recipe only | no execution evidence |
+| DSP instruction counters | the instrumented path executed | self-reported; not an instruction-identity proof |
+| Static disassembly of the built binary | the registered instruction sequence exists | does not prove it ran |
+| DSP `Rs` echo | the reported `Rs` values match | self-reported |
+| Store sentinel | a store wrote the region | no count/order by itself |
+| 11 result slots | the numerical output | not bitwise ACC retention |
+
+The verdict requires the result pattern, sentinel change, build-id match,
+`Rs` echo, DSP counters, and a static disassembly audit of the same build.
+The counter counts and the static-audit counts must agree; a mismatch or a
+missing source is `R2_HOST_CONTRACT_FAILED`, not a success. Host-displayed
+planned values are never evidence. The CPU-only `r2.evidence.*` tests model
+this contract; they do not produce device evidence.
 
 ## 9. Registered failure predictions
 

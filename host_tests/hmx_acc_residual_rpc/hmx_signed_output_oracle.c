@@ -303,7 +303,8 @@ static uint16_t quantize_down(double v) {
 #define R2_NO 32
 #define R2_CELLS (R2_NS * R2_NO)
 #define R2_BIAS_SETS 4
-#define R2_REGIONS 2
+/* Region 0 = positive, 1 = negative, 2 = DSP-authored HVX recon. */
+#define R2_REGIONS 3
 
 typedef struct {
   uint16_t scale_bits;
@@ -508,7 +509,7 @@ static void r2_convert(r2_state *st, unsigned rs) {
 /* The store reads the current convert state and applies the measured clamp to
  * each FP16 word. It does not modify the ACC or the convert state. */
 static void r2_store(r2_state *st, unsigned region) {
-  if (region >= R2_REGIONS) {
+  if (region > 1u) { /* only the two convert stores use this path */
     st->store_oob = 1;
     return;
   }
@@ -527,6 +528,15 @@ static uint16_t r2_recon_cell(const r2_state *st, unsigned pos_region,
                               unsigned neg_region, int cell) {
   return double_to_fp16(fp16_to_double(st->mem[pos_region][cell]) -
                         fp16_to_double(st->mem[neg_region][cell]));
+}
+
+/* DSP-authored reconstruction: the HVX loop reads the positive and negative
+ * buffers and writes a third 2-KiB region. It does not modify either input.
+ * This is the only source accepted for the device slots 8..10. */
+static void r2_hvx_recon(r2_state *st) {
+  for (int i = 0; i < R2_CELLS; ++i)
+    st->mem[2][i] = r2_recon_cell(st, 0u, 1u, i);
+  ++st->mem_written[2];
 }
 
 static void r2_force_acc_destroy(r2_state *st) {
@@ -559,6 +569,7 @@ static void r2_run_sign_tile_variant(r2_state *st, unsigned rs2) {
   r2_store(st, 0u);        /* positive buffer */
   r2_convert(st, rs2);     /* set 1, registered 0x1000 or retain 0x1001 */
   r2_store(st, 1u);        /* negative buffer */
+  r2_hvx_recon(st);        /* DSP HVX subtract -> region 2 */
 }
 
 static void r2_run_sign_tile(r2_state *st) {
@@ -623,6 +634,14 @@ typedef struct {
   int sentinel_hits;
   int build_id_match;
   int close_ok;
+  /* Evidence provenance. 0 = host planned, 1 = DSP counter only,
+   * 2 = static audit only, 3 = counter and static audit cross-checked. */
+  int counts_source;
+  int dsp_counter_ok;
+  int static_audit_ok;
+  int rs_echo_ok;
+  int sentinel_changed;
+  int recon_source; /* 0 = host subtraction, 1 = DSP HVX */
   int pos_region_writes;
   int neg_region_writes;
   unsigned rs_first;
@@ -656,6 +675,8 @@ static r2_report_t r2_classify_mode(const r2_observation_t *o, int device) {
   if (o->mma_count != 2 || o->convert_count != 4 || o->store_count != 4 ||
       o->trials != 2 || o->hmx_executed != 1 || o->slot_count != 11 ||
       o->sentinel_hits != 0 || !o->build_id_match || !o->close_ok ||
+      o->counts_source != 3 || !o->dsp_counter_ok || !o->static_audit_ok ||
+      !o->rs_echo_ok || !o->sentinel_changed || o->recon_source != 1 ||
       o->rs_first != 0x0001u || o->rs_s1_second != 0x2000u ||
       (o->rs_second != 0x1000u && o->rs_second != 0x1001u) ||
       o->bias_loads != 3 || o->bias_sel_first != 0u ||
@@ -779,7 +800,7 @@ static void r2_observe(const r2_state *s1, const r2_state *s2,
   for (int k = 0; k < 3; ++k) {
     o->s2_pos[k] = s2->mem[0][idx[k]];
     o->s2_neg[k] = s2->mem[1][idx[k]];
-    o->s2_recon[k] = r2_recon_cell(s2, 0u, 1u, idx[k]);
+    o->s2_recon[k] = s2->mem[2][idx[k]]; /* DSP-authored region */
   }
   o->mma_count = (int)(s1->mma_count + s2->mma_count);
   o->convert_count = (int)(s1->convert_count + s2->convert_count);
@@ -790,6 +811,12 @@ static void r2_observe(const r2_state *s1, const r2_state *s2,
   o->sentinel_hits = 0;
   o->build_id_match = 1;
   o->close_ok = 1;
+  o->counts_source = 3;
+  o->dsp_counter_ok = 1;
+  o->static_audit_ok = 1;
+  o->rs_echo_ok = 1;
+  o->sentinel_changed = 1;
+  o->recon_source = 1;
   o->pos_region_writes = s1->mem_written[0] + s2->mem_written[0];
   o->neg_region_writes = s1->mem_written[1] + s2->mem_written[1];
   o->rs_first = 0x0001u;
@@ -888,6 +915,26 @@ static void r2_state_model_tests(void) {
   check_true("r2.ctrl.same_acc",
              memcmp(s1.acc_read[0], s1.acc_read[1],
                     sizeof(s1.acc_read[0])) == 0);
+
+  /* 12.6b The DSP HVX loop writes a third region and does not modify either
+   *       input buffer. The recon slots are read from this region, not from a
+   *       host-side subtraction. */
+  {
+    static uint16_t pos_before[R2_CELLS], neg_before[R2_CELLS];
+    r2_build_sign_tile(&s2, x, -x);
+    r2_run_sign_tile(&s2);
+    memcpy(pos_before, s2.mem[0], sizeof(pos_before));
+    memcpy(neg_before, s2.mem[1], sizeof(neg_before));
+    r2_hvx_recon(&s2);
+    check_true("r2.recon.pos_unchanged",
+               memcmp(pos_before, s2.mem[0], sizeof(pos_before)) == 0);
+    check_true("r2.recon.neg_unchanged",
+               memcmp(neg_before, s2.mem[1], sizeof(neg_before)) == 0);
+    check_bits("r2.recon.s0", s2.mem[2][i0], 0x5420u);
+    check_bits("r2.recon.s1", s2.mem[2][i1], 0xd420u);
+    check_bits("r2.recon.s2", s2.mem[2][i2], 0x0000u);
+    check_u32("r2.recon.region_writes", (uint32_t)s2.mem_written[2], 2u);
+  }
 
   /* 12.7 Decision-procedure nominal case (simulated; not a device result). */
   r2_build_control_tile(&s1, x);
@@ -1131,15 +1178,20 @@ static void r2_state_model_tests(void) {
   {
     const unsigned pos_off = 2u * 2048u;
     const unsigned neg_off = 3u * 2048u;
-    const unsigned b0_off = 4u * 2048u;
+    const unsigned recon_off = 4u * 2048u;
+    const unsigned b0_off = 5u * 2048u;
     const unsigned b1_off = b0_off + 256u;
+    const unsigned b2_off = b1_off + 256u;
     check_true("r2.layout.pos_aligned", (pos_off % 2048u) == 0u);
     check_true("r2.layout.neg_aligned", (neg_off % 2048u) == 0u);
+    check_true("r2.layout.recon_aligned", (recon_off % 2048u) == 0u);
     check_true("r2.layout.bias0_aligned", (b0_off % 256u) == 0u);
     check_true("r2.layout.bias1_aligned", (b1_off % 256u) == 0u);
+    check_true("r2.layout.bias2_aligned", (b2_off % 256u) == 0u);
     check_true("r2.layout.disjoint",
-               pos_off + 2048u <= neg_off && neg_off + 2048u <= b0_off &&
-                   b0_off + 256u <= b1_off && b1_off + 256u <= 12288u);
+               pos_off + 2048u <= neg_off && neg_off + 2048u <= recon_off &&
+                   recon_off + 2048u <= b0_off && b0_off + 256u <= b1_off &&
+                   b1_off + 256u <= b2_off && b2_off + 256u <= 12288u);
     uint8_t hit[1024];
     memset(hit, 0, sizeof(hit));
     unsigned dup = 0;
@@ -1191,6 +1243,32 @@ static void r2_state_model_tests(void) {
     obs.close_ok = 0;
     check_true("r2.host.close",
                r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.recon_source = 0; /* host-side subtraction only */
+    check_true("r2.evidence.host_recon",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.counts_source = 0; /* host-planned counts only */
+    check_true("r2.evidence.host_counts",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.counts_source = 1; /* DSP counter only, no static audit */
+    obs.static_audit_ok = 0;
+    check_true("r2.evidence.counter_only",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.counts_source = 2; /* static audit only, no DSP counter */
+    obs.dsp_counter_ok = 0;
+    check_true("r2.evidence.static_only",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.rs_echo_ok = 0;
+    check_true("r2.evidence.rs_echo",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.sentinel_changed = 0;
+    check_true("r2.evidence.sentinel",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
   }
 
   printf("r2_cpu_model nominal=%s acc_destroyed=%s bias_switch=%s "
@@ -1202,6 +1280,8 @@ static void r2_state_model_tests(void) {
          r_dev_nominal.name, r_dev_acc.name, r_dev_bias.name,
          r_dev_store.name, r_dev_round.name, r_dev_contract.name);
   printf("r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS\n");
+  printf("r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit "
+         "rs_echo=yes sentinel=yes\n");
   printf("r2_cpu_model_checks=%ld\n", checks - checks_before);
   /* This line is deliberately unconditional. No device was contacted and the
    * nominal label is a decision-procedure test, not an established result. */

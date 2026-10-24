@@ -10,6 +10,13 @@ classification (`R2_CAUSE_INCONCLUSIVE`), the `Rs=0x0001` no-feedback
 composition caveat, and the 11-slot host readback contract after review. The
 verdict is unchanged.
 
+**Revision 3 (2026-10-25):** fixed the DSP-authored HVX reconstruction as the
+only source of slots 8..10, added a third VTCM output region, separated
+execution counters from host-planned values (DSP counter + static-audit
+cross-check), and froze the S1 meaning as output consistency rather than
+bitwise ACC proof. The minimal S1/S2 test uses one MMA packet per subcase; the
+3-packet B3 synthesis is the separate accuracy path. The verdict is unchanged.
+
 **Verdict: `R2_SPEC_FEASIBLE`.** The PRM specifies the operations R2 needs:
 the ACC can be retained across converts, a convert reads the ACC and writes
 the convert state without consuming the ACC when `Rs[0]=1`, a second convert
@@ -21,8 +28,11 @@ verified. A CPU-model PASS is not the basis of the verdict; the PRM text and
 the existing recorded device modes are (§2, §3).
 
 The device question is pre-registered separately in
-[`hmx-v81-r2-device-prereg.md`](hmx-v81-r2-device-prereg.md). It is **not
-authorised** by this document.
+[`hmx-v81-r2-device-prereg.md`](hmx-v81-r2-device-prereg.md), with the frozen
+implementation shape (VTCM map, 11 slots, DSP/Host diff outline, evidence
+provenance) in
+[`hmx-v81-r2-device-implementation-plan.md`](hmx-v81-r2-device-implementation-plan.md).
+None of it is **authorised** by this document.
 
 ## 0. Scope and non-claims
 
@@ -397,13 +407,13 @@ None of these is a spec contradiction. They are device-verification items.
 
 ### 4.1 Bias rows
 
-Two 256-byte rows are prepared in VTCM:
+Three 256-byte rows are prepared in VTCM:
 
 | set | address | scale | shape | input bias | output bias | use |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `base + 8192` | `0x5400` (+64) | 0 (`x`) | 0 | 0 | convert #1, positive half |
-| 1 | `base + 8448` | `0x5400` (+64) | 4 (`-x`) | 0 | 0 | convert #2, negative half |
-| 2 | `base + 8704` | `0x5000` (+32) | 0 (`x`) | 0 | 0 | S1 control only |
+| 0 | `base + 10240` | `0x5400` (+64) | 0 (`x`) | 0 | 0 | convert #1, positive half |
+| 1 | `base + 10496` | `0x5400` (+64) | 4 (`-x`) | 0 | 0 | convert #2, negative half |
+| 2 | `base + 10752` | `0x5000` (+32) | 0 (`x`) | 0 | 0 | S1 control only |
 
 The per-channel cell for every output channel is identical inside a set:
 
@@ -508,8 +518,13 @@ destruction and `0x5420` is the injected set-0 fallback. On a device, those
 bit patterns are **not** cause-identifying: a zero can also come from a
 failed bias load, a convert that did not execute, or a store anomaly, and
 `0x5420` can also come from a missing set-2 row or an ignored `Rs`. The device
-classifier therefore maps both to `R2_CAUSE_INCONCLUSIVE`; S1 narrows the
-possibilities but does not by itself prove the cause.
+classifier therefore maps both to `R2_CAUSE_INCONCLUSIVE`.
+
+S1 success (`0x5020`) means the registered sequence produced an output
+consistent with ACC reuse and Bias set 2 selection. It does **not** prove that
+all 37 bits of the ACC were retained bit-for-bit, nor that the internal bank
+swap state is unchanged. It is strong evidence for the R2 mechanism, not a
+bit-level ACC dump. The same caveat applies to the S2 sign split.
 
 ## 6. CPU state model and tests
 
@@ -538,8 +553,8 @@ registered conditions.
 
 ### 6.2 Required cases
 
-Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 81 R2 checks pass, and
-the full oracle is 236 checks / 0 failures.
+Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 95 R2 checks pass, and
+the full oracle is 250 checks / 0 failures.
 
 | case | model result | detector result |
 | --- | --- | --- |
@@ -556,6 +571,11 @@ the full oracle is 236 checks / 0 failures.
 | corrupted word | `0x5420 -> 0x5520` | `R2_UNEXPECTED_OUTPUT` |
 | host contract (extra MMA/convert/store, wrong Rs) | counters or Rs differ | `R2_HOST_CONTRACT_FAILED` |
 | negative-ACC lane leaked into the positive buffer | `s2_pos[1]=0x5420` with a correct `s2_pos[0]` | `R2_UNEXPECTED_OUTPUT` |
+| DSP HVX recon region | pos/neg unchanged; `out_recon` matches the three registered lanes | `R2_ACC_REUSE_SUPPORTED` (simulated) |
+| host-only recon | `recon_source=0` | `R2_HOST_CONTRACT_FAILED` |
+| host-planned counts | `counts_source=0` | `R2_HOST_CONTRACT_FAILED` |
+| counter only / static audit only | one provenance source missing | `R2_HOST_CONTRACT_FAILED` |
+| `Rs` echo or sentinel evidence missing | `rs_echo_ok=0` or `sentinel_changed=0` | `R2_HOST_CONTRACT_FAILED` |
 
 `R2_ACC_DESTROYED` and `R2_BIAS_SWITCH_FAILED` in that table are **CPU
 fault-injection classifications**: the model knows which fault was injected.
@@ -588,7 +608,8 @@ r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
              rounding=R2_ROUNDING_MISMATCH
              contract=R2_HOST_CONTRACT_FAILED
 r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
-r2_cpu_model_checks=81
+r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit rs_echo=yes sentinel=yes
+r2_cpu_model_checks=95
 r2_device_verdict=NOT_RUN
 ```
 
@@ -708,15 +729,16 @@ The existing 12 KiB probe layout already fits R2 without resizing:
 | `wgt` | `+2048` | 2048 B | 2 KiB | weight crouton |
 | `out_pos` | `+4096` | 2048 B | 2 KiB | convert #1 store |
 | `out_neg` | `+6144` | 2048 B | 2 KiB | convert #2 store |
-| `bias` set 0 | `+8192` | 256 B | 256 B | scale +64, shape 0, bo 0 |
-| `bias` set 1 | `+8448` | 256 B | 256 B | scale +64, shape 4, bo 0 |
-| `bias` set 2 | `+8704` | 256 B | 256 B | S1 control: scale +32, shape 0 |
-| total used (S1 with set 2) | | 8960 B | | 3328 B free of 12288 B |
-| S2-only (sets 0/1) | | 8704 B | | 3584 B free of 12288 B |
+| `out_recon` | `+8192` | 2048 B | 2 KiB | DSP HVX `vsub.hf` result |
+| `bias` set 0 | `+10240` | 256 B | 256 B | scale +64, shape 0, bo 0 |
+| `bias` set 1 | `+10496` | 256 B | 256 B | scale +64, shape 4, bo 0 |
+| `bias` set 2 | `+10752` | 256 B | 256 B | S1 control: scale +32, shape 0 |
+| total used | | 11008 B | | 1280 B free of 12288 B |
 
 All store addresses are 2 KiB aligned (`Rs[31:11]` address, Table 8). All bias
-addresses are 256 B aligned (Table 3). The two output regions are disjoint;
-the oracle §12.15 checks the offsets/alignment/disjointness and the 1,024-cell
+addresses are 256 B aligned (Table 3). The three 2 KiB output regions are
+disjoint; `out_recon` is written by the DSP HVX loop, not by a convert store.
+The oracle §12.15 checks the offsets/alignment/disjointness and the 1,024-cell
 store bijection.
 
 ### 8.1.1 Host readback: 11 slots and the fail-closed contract
@@ -724,19 +746,23 @@ store bijection.
 The current host result buffer is four slots. The first R2 device test needs
 11 slots in this fixed order:
 
-| slot | subcase | buffer | lane | expected |
-| --- | --- | --- | --- | --- |
-| 0 | S1 | first | `(s0,o0)` | `0x5420` |
-| 1 | S1 | second | `(s0,o0)` | `0x5020` |
-| 2 | S2 | positive | `(s0,o0)` | `0x5420` |
-| 3 | S2 | positive | `(s1,o0)` | `0x0000` |
-| 4 | S2 | positive | `(s2,o0)` | `0x0000` |
-| 5 | S2 | negative | `(s0,o0)` | `0x0000` |
-| 6 | S2 | negative | `(s1,o0)` | `0x5420` |
-| 7 | S2 | negative | `(s2,o0)` | `0x0000` |
-| 8 | S2 | recon | `(s0,o0)` | `0x5420` |
-| 9 | S2 | recon | `(s1,o0)` | `0xD420` |
-| 10 | S2 | recon | `(s2,o0)` | `0x0000` |
+| slot | subcase | buffer | lane | source | expected |
+| --- | --- | --- | --- | --- | --- |
+| 0 | S1 | first | `(s0,o0)` | S1 convert store | `0x5420` |
+| 1 | S1 | second | `(s0,o0)` | S1 convert store | `0x5020` |
+| 2 | S2 | positive | `(s0,o0)` | convert store | `0x5420` |
+| 3 | S2 | positive | `(s1,o0)` | convert store | `0x0000` |
+| 4 | S2 | positive | `(s2,o0)` | convert store | `0x0000` |
+| 5 | S2 | negative | `(s0,o0)` | convert store | `0x0000` |
+| 6 | S2 | negative | `(s1,o0)` | convert store | `0x5420` |
+| 7 | S2 | negative | `(s2,o0)` | convert store | `0x0000` |
+| 8 | S2 | recon | `(s0,o0)` | DSP `out_recon` (+8192) | `0x5420` |
+| 9 | S2 | recon | `(s1,o0)` | DSP `out_recon` (+8192) | `0xD420` |
+| 10 | S2 | recon | `(s2,o0)` | DSP `out_recon` (+8192) | `0x0000` |
+
+Slots 8..10 are read from the DSP-written `out_recon` region, not computed on
+the host. A host-side subtraction is a fallback analysis only and does not
+satisfy the registered contract: `recon_source` must be `DSP_HVX`.
 
 The future host must widen its result buffer from 4 to 11. The RPC IDL already
 uses an unbounded `sequence<long>`, so no IDL change is needed. The CPU-side
@@ -751,12 +777,34 @@ Before interpreting any slot, the host must fail closed on all of:
   `hmx_executed=1`;
 * the four `Rs` values are the registered `0x0001`, `0x2000`, `0x0001`,
   `0x1000`;
-* `out_pos` and `out_neg` are distinct and 2 KiB aligned;
+* `out_pos`, `out_neg` and `out_recon` are distinct and 2 KiB aligned;
+* `recon_source == DSP_HVX`; a host-only subtraction is rejected;
+* `counts_source == COUNTER+STATIC_AUDIT`, both `dsp_counter_ok` and
+  `static_audit_ok`, plus `rs_echo_ok` and `sentinel_changed`;
 * host/DSP build id match, RPC status 0, close status 0.
 
 Any failure is `R2_HOST_CONTRACT_FAILED`; the slots are not interpreted. The
-oracle's `r2.host.*` checks toggle the slot count, sentinel count, build-id
-match and close status to prove the fail-closed path on CPU.
+oracle's `r2.host.*` and `r2.evidence.*` checks toggle the slot count,
+sentinel count, build-id match, close status, recon source, count provenance,
+Rs echo and sentinel change to prove the fail-closed path on CPU.
+
+### 8.1.2 Evidence provenance: counters are not proof by themselves
+
+| source | what it shows | what it does not show |
+| --- | --- | --- |
+| Host-planned counts | the intended recipe | anything about execution |
+| DSP instruction counters | the instrumented path executed | that the static instruction stream matches |
+| Static disassembly | the built binary contains the registered sequence | that the path ran |
+| `Rs` echo | the DSP reports the registered `Rs` values | independent confirmation |
+| Store sentinel | a store executed | how many stores or in what order |
+| Result slots | the numerical output | bitwise retention of all 37 ACC bits |
+
+The device verdict requires **all** of: result pattern, sentinel changed,
+build-id match, `Rs` echo, DSP counters, and a static disassembly audit of the
+same build. The counter and static-audit counts must agree; a disagreement is
+`R2_HOST_CONTRACT_FAILED`, not a success. Host-displayed planned values are
+never evidence. The CPU model simulates the counter/static-audit/echo fields
+(`r2.evidence.*`); it does not produce them on a device.
 
 ### 8.2 Store layout is an activation crouton
 
@@ -774,10 +822,12 @@ act_u16(s,i)   = (s >> 1) * 64 + i * 2 + (s & 1)
 
 They are the same formula with the channel index renamed. Therefore the
 32x32 signed result produced by the HVX subtract is already in the layout the
-next MMA expects for a 32-input-channel activation crouton. The result can be
-written in place over `out_pos` (or to a third 2 KiB buffer) and fed to the
-next layer without a repack. This is an implementation advantage of the
-32-channel tile, not a numerical claim.
+next MMA expects for a 32-input-channel activation crouton. The result is
+written to the third `out_recon` region and fed to the next layer without a
+repack. Do not overwrite `out_pos` or `out_neg`; the registered test reads all
+three regions and checks that the recon step left the two inputs unchanged.
+This is an implementation advantage of the 32-channel tile, not a numerical
+claim.
 
 ### 8.3 HVX `vsub.hf`
 
@@ -878,6 +928,12 @@ select, store non-modification) are explicitly specified. The remaining gaps
 are device behaviour, the `Rs=0x0001` no-feedback composition (§4.2.1), and
 one unspecified ordering detail, not missing specification of ACC reuse.
 
+The device verdict requires more than a matching bit pattern: slots 8..10
+must be DSP-authored HVX results, and the instruction counts/Rs must be a
+cross-check of DSP counters and a static disassembly audit, not host-planned
+values. S1 success (`0x5020`) is output consistency with ACC reuse and set 2
+selection; it is not a bitwise proof that all 37 ACC bits were retained.
+
 The verdict is **not** based on the CPU model's PASS. The CPU model only
 shows that the decision procedure can distinguish success from the registered
 failure modes. The PRM text and the existing device modes are the basis.
@@ -926,6 +982,15 @@ failure modes. The PRM text and the existing device modes are the basis.
    32-channel ACC limit and avoids duplicating the weight tile. R1 may still
    be simpler if a duplicated-channel layout is already available, but it
    pays 2x MMA. No timing or real-tile accuracy comparison exists.
+9. **DSP-authored recon and command evidence.** Slots 8..10 must come from
+   the DSP `out_recon` region (+8192), and the counts/Rs must be a cross-check
+   of DSP counters and a static disassembly audit. Host-planned counts and a
+   host-side subtraction are not evidence. See §8.1.1–§8.1.2 and the
+   implementation plan.
+10. **S1 success semantics.** `0x5020` means the registered sequence produced
+    an output consistent with ACC reuse and Bias set 2 selection. It does not
+    prove bit-level retention of the 37-bit ACC or an unchanged internal bank
+    state.
 
 ## 12. Reproduction
 
@@ -952,9 +1017,10 @@ r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
              rounding=R2_ROUNDING_MISMATCH
              contract=R2_HOST_CONTRACT_FAILED
 r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
-r2_cpu_model_checks=81
+r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit rs_echo=yes sentinel=yes
+r2_cpu_model_checks=95
 r2_device_verdict=NOT_RUN
-hmx_signed_output_oracle checks=236 fail=0
+hmx_signed_output_oracle checks=250 fail=0
 hmx_signed_output_oracle=PASS
 
 r2_g9 cells=1024 plain_direct_mean_abs=1.307244e-03 ...
@@ -970,32 +1036,34 @@ The oracle and split-sim runners compile with gcc 15.2.0 (MSYS2 UCRT64,
 
 ## 13. Fast gate and repository state
 
-At the time of this audit:
+At the time of this revision:
 
 * branch: `experiment/hmx-acc-residual-feedback`;
-* pre-change HEAD: `cb41b7c` (`test(hmx): evaluate shape-0/4 sign-separated
-  output on CPU`), 7 commits ahead of
+* pre-change HEAD: `b152523` (`test(hmx): classify ambiguous R2 device
+  failures as inconclusive`), 9 commits ahead of
   `origin/experiment/hmx-acc-residual-feedback`;
-* `cb41b7c` and `b0b7edf` were present and untouched;
+* `cb41b7c`, `b0b7edf`, `abe37ed` and `b152523` were present and untouched;
 * working tree was clean at the start;
-* revision 2 was prepared on top of `abe37ed` and is committed separately;
-  no push;
-* `scripts/verify.ps1 -Profile Fast` was run after the revision-2 code
-  changes: **PASS**, 534.7 s, `PASS=10 FAIL=0 SKIP=21`, exit 0. The run
-  includes the R2 oracle (`checks=236 fail=0`, `r2_cpu_model_checks=81`),
-  the split sim (`fp16x2_split_sim=PASS cases=115573`), and
-  `host-fast-contract PASS` (68.2 s). The Gradle `unit-tests` step (428.3 s)
-  dominated the runtime; the 1–3 minute target assumes a warm cache, and the
-  longer runtime here is not a test failure. No required step was skipped or
-  converted into a PASS.
+* revision 3 is prepared on top of `b152523` and committed separately; no
+  push;
+* `scripts/verify.ps1 -Profile Fast` was run after the revision-3 changes:
+  **PASS**, 462.3 s, `PASS=10 FAIL=0 SKIP=21`, exit 0. The run includes the R2
+  oracle (`checks=250 fail=0`, `r2_cpu_model_checks=95`), the split sim
+  (`fp16x2_split_sim=PASS cases=115573`), `host-fast-contract PASS` (211.2 s)
+  and `unit-tests PASS` (234.6 s). The 1–3 minute target assumes a warm cache;
+  the longer runtime here is not a test failure. No required step was skipped
+  or converted into a PASS.
 
 Changed files for this study:
 
 * `host_tests/hmx_acc_residual_rpc/hmx_signed_output_oracle.c` — R2 state
-  machine, fault injection, decision procedure;
+  machine, fault injection, decision procedure, DSP-authored recon region and
+  evidence-provenance checks;
 * `host_tests/hmx_acc_residual_rpc/hmx_fp16x2_split_sim.c` — G9 R2 metrics;
 * `docs/hmx-v81-r2-acc-reuse-feasibility.md` — this document;
-* `docs/hmx-v81-r2-device-prereg.md` — future device pre-registration.
+* `docs/hmx-v81-r2-device-prereg.md` — future device pre-registration;
+* `docs/hmx-v81-r2-device-implementation-plan.md` — frozen CPU-only
+  implementation shape for the future S1/S2 device change.
 
 No DSP source, production QNN/Muon code, APK, checkpoint, logcat, device
 identifier, or private corpus is part of this change. No push, no merge, no
