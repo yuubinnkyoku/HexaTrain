@@ -98,6 +98,20 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
  独立 factor ではなく一つの recipe として共同設計するべきだという示唆。
 - **次に読む**: どの layer を高精度に残したかの内訳（HexaTrain の
   Operation/Tensor-Wise Precision Search の初期候補表になる）。
+  → **【2026-10-25 精読済み】**: 高精度残置の内訳は
+  (1) **最初の2 block + 最後の8 block を BF16**（線形層の約16%。ablation では
+  最後の4 block だけでも安定）、(2) embedding / 出力 projection head /
+  normalization / 非線形 / **attention の softmax・QK・score-value GEMM**、
+  (3) 主要 weight・weight gradient・optimizer state は FP32。
+  RHT は **Wgrad 入力のみ**に適用（Fprop/Dgrad 入力への適用はむしろ有害）、
+  tile は 16x16、**乱数 sign は全 layer 共通の固定 seed 1本**。
+  2D scale は weight を 16x16 block（入出力双方）にして
+  **forward と backward で同一の量子化表現を保証**するのが目的
+  （無いと backprop の転置で scale 次元が変わり chain rule が壊れる）。
+  SR は gradient（Dgrad+Wgrad）のみ。**forward tensor への SR は divergence した**。
+  12B/10T で FP8 比の相対 loss 誤差は安定期 <1%、LR decay 後 ~1.5%。
+  vs MXFP4 は同 loss に 36% 多い token が必要。
+  HexaTrain の tensor 除外表（Phase 12 初手）としてほぼそのまま使える構成。
 
 ### A-4. Optimizing Large Language Model Training Using FP4 Quantization
 
@@ -201,6 +215,11 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   また AlphaXiv ページ上の人的議論はまだ無いが、related 推薦 graph が
   系譜追跡に有効なことを確認した。
 - **次に読む**: MXFP4 論文の SR 分散 bound（A-5 の理論と接続するか）。
+  → **【2026-10-25 NVFP4 精読との対比で注記】**: RHT の適用範囲について、
+  Tseng ら MXFP4（本 entry）は「3種の training GEMM 全部」、NVFP4（A-3）は
+  「Wgrad 入力のみ（他は有害）」と**逆向きの結論**。規模・format 差
+  （MXFP4 の k=32 vs NVFP4 の 16x16 2D scale）依存の可能性があり、
+  HexaTrain では RHT 適用範囲を独立 factor として掃引する根拠になる。
 
 ### A-9. Quant.npu — NPU 向け fully static 量子化（2026-10-25 追加）
 
