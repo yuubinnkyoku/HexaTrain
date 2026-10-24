@@ -1054,6 +1054,29 @@ Loss Curriculum」への文献裏付けを探した。
   QNN graph 追加 node が小さく短 A/B 向き。
 - **次に読む**: Rybakov et al. の「段階が違う」主張の内容（どの phase に
   それぞれ効くか）。
+  → **【2026-10-25 確認済み】**: [Rybakov et al.（arXiv:2410.16682）](https://arxiv.org/abs/2410.16682)
+  （NVIDIA、2024-10）は QK-norm × soft-capping × z-loss の組合せを体系比較し、
+  **QK-norm + (softcap / z-loss) で LR を 1.5x まで上げても diverge しない**ことを示した。
+  なお QK FC norm（全結合 variant）は plain QK-norm を上回らなかった。
+
+### J-3. Output Embedding Centering（OEC）— z-loss の代替（2026-10-25 追加）
+
+- [arXiv:2601.02031](https://arxiv.org/abs/2601.02031) / [AlphaXiv](https://www.alphaxiv.org/abs/2601.02031)
+  — Stollenwerk, Lokrantz, Hertzberg、2026-01（v3 2026-09）。
+- **要約**: 学習終盤の **output logit divergence** の原因を output embedding の
+  anisotropy と特定。z-loss / softcap は対症療法と位置づけ、
+  (a) **μ-centering**: output embedding を中心化する決定論的操作、
+  (b) **μ-loss**: 中心化を促す正則化項、の2 variant を提案。
+  安定性で z-loss を上回り、softcap と同等。**weight tying の有無両方で動作**し、
+  μ-loss は z-loss より hyperparameter 感度が低い。
+- **HexaTrain との関連**: repo の Z-Loss diagnostic（P1）と同問題への
+  より安価な対照候補。`output_projection`（65,536 params）の行平均を引く
+  μ-centering は QNN graph への追加 node が小さく、
+  **logit 系 telemetry（Z-Loss / attention logit max）と同じ計測枠で A/B できる**。
+  weight decay との相互作用の実験が v3 で追加されており、
+  Muon+WD lane との併存確認にも使える。
+- **次に読む**: μ-centering の実装詳細（logits から引くか embedding を前処理するか）と
+  実験規模。
 
 ---
 
