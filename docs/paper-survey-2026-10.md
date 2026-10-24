@@ -375,8 +375,12 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   （Microsoft）— SWAN 動機の stateless optimizer 設計framework。repo 参照済み。
 - [RACS / Alice (arXiv:2502.07752)](https://arxiv.org/abs/2502.07752)（ICLR 2026）—
   structured Fisher approximation。Alice は Adam 比 2x 収束を主張。repo の P2 名称对照を確認。
-- [AdaMuon (arXiv:2507.11005)](https://arxiv.org/abs/2507.11005) — element-wise second moment を
-  Muon へ統合。
+- [AdaMuon (arXiv:2507.11005)](https://arxiv.org/abs/2507.11005)（v3 2025-12）—
+  element-wise second moment を Muon へ統合。
+  **【2026-10-25 確認済み】**: (a) orthogonalized update への element-wise second moment、
+  (b) orthogonalization 前の momentum への sign 変換、(c) Adam と update magnitude を
+  揃える RMS-aligned rescaling（既存 LR schedule を再利用可能）の3構成。
+  「Adam 比 40% 効率改善」を主張。
 - [Mousse (arXiv:2603.09697)](https://arxiv.org/abs/2603.09697)（2026-03）—
   Muon へ structural curvature を明示統合。
 - [ARO（arXiv:2602.09006）](https://arxiv.org/abs/2602.09006) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.09006)
@@ -426,6 +430,11 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 1. **「post-NS row norm 不均衡」が独立3系統（HexaTrain audit / Muon+ / NorMuon）で確認された。**
    Phase 4 は Muown 単体ではなく、**row 制御の位置（parameterization vs post-NS normalize vs
    per-neuron moment）を分離する3-4 arm 比較**へ拡張する情報的価値が高い。
+   深掘り後の整理として、適応の **granularity 軸**で並べると
+   「Muon（適応なし）→ Muon+（row/col L2・stateless）→ NorMuon（row RMS EMA・m scalar）→
+   AdaMuon（element-wise second moment・mn scalar）」の spectrum になり、
+   それぞれの state 増分と引き換えに得る適応粒度が読み取れる。
+   Muown は spectrum の外側（weight 側の parameterization）に位置する。
 2. **Muon+ は state 追加ゼロの one-line fix**なので、HexaTrain の HVX Muon 実装への
    変更が最小（NS5 の後に row normalize を 1 演算）であり、最初の arm として最も安い。
 3. 理論（C-3）は「NS 係数の妥協が常に致命的とは限らない」ことを示唆し、
