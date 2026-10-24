@@ -396,6 +396,17 @@ exact backprop で回している公開文献は見つからなかった。** He
   HexaTrain では thermal telemetry を placement 判断へ入れる際の
   先行評価軸として参照。本文の cost 設計は IEEE 有料壁のため未確認。
 
+- **FastRPC 周辺の学術文献は希薄（2026-10-25 掃描）**: ML 推論を Hexagon DSP へ
+  offload する際の FastRPC overhead を分析した論文（faster host CPU で
+  orchestration overhead が 10〜29% 減という観察）、DSPBooster
+  （アプリの DSP offload の power-performance 最適化）程度で、
+  **学習 workload での FastRPC 境界設計を扱う公開研究は見つからない**。
+  FastRPC 内部構造の公開資料としては
+  [Checkpoint の Pwn2Own Qualcomm DSP 解析](https://research.checkpoint.com/2021/pwn2own-qualcomm-dsp)
+  （FastRPC / QuRT RTOS の内部）と
+  [Qualcomm FastRPC GitHub](https://github.com/qualcomm/fastrpc) が最も詳しい。
+  HexaTrain の RPC 境界・pack/unpack 最適化も公開文献上の空白であることを記録。
+
 ### クラスタBの統合所見（2026-10-25時点）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
