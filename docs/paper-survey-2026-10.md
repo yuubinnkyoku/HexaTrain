@@ -1096,6 +1096,21 @@ Loss Curriculum」への文献裏付けを探した。
   warmup-then-random と同じ方向で文献整合的。
 - **次に読む**: continual training scenario の結果（resume が多い HexaTrain 運用に近い）。
 
+### H-7. Cut Cross-Entropy（CCE）— logits 非実体化（2026-10-25 追加）
+
+- [Cut Your Losses in Large-Vocabulary LLMs（arXiv:2411.09009）](https://arxiv.org/abs/2411.09009) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2411.09009)
+  — Wijmans ほか（Apple）、2024-11。code: `unslothai/cut-cross-entropy`。
+- **要約**: CE loss 計算で全 vocabulary の logits を global memory へ実体化しない
+  （vocabulary chunk ごとの逐次計算）。大語彙（128K）では CE が学習 memory の
+  最大90%を占め得る問題へ、Gemma 2 で数 GB → 20 MB 未満、数値 parity 維持。
+- **HexaTrain との関連**: 現行 V1024/T32/B8 では logits は 8×32×1024 ≈ 1 MB（FP32）
+  で memory 動機は小さい。ただし (a) Phase 10 で V2048/V4096 へ伸ばす場合、
+  (b) MicroEngram で出力側が増える場合、(c) CE backward `dlogits=(P-Y)/N` を
+  future-mixture で再利用する設計、の3点で chunked CE の原理が
+  QNN graph 構成の選択肢になる。HMX 逐次 vocab chunk 処理は
+  retained-ACC 手法（R2）との組合せ余地もある。
+
 ---
 
 ## J. 小規模学習 recipe の系譜（modded-nanogpt speedrun）
