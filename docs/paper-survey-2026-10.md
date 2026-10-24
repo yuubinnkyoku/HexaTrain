@@ -543,3 +543,57 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
    loss 掛ける位置の entropy-based 選択だけを先に試せる。
 
 ---
+
+## F. Linear / recurrent attention（GDN 系の理論統一と実装基盤）
+
+**調査日: 2026-10-25。** repo は Gated DeltaNet / KDA / SimpleGDN migration を
+Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention の理論的統一、
+(2) chunkwise 並列実装の共通基盤が library 化している点。edge 整数 attention 系の
+収穫はクラスタ D/H へ回した。
+
+### F-1. Test-Time Training with KV Binding Is Secretly Linear Attention
+
+- [arXiv:2602.21204](https://arxiv.org/abs/2602.21204) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.21204)
+  — Liu, Elflein, Litany, Li, Gojcic（NVIDIA Research ほか）、**ICML 2026**。
+- **要約**: TTT（test-time training）+ KV binding 系の広い class が
+  **learned linear attention 演算と数学的に等価**であることを系統的な reduction で証明。
+  「TTT は test-time の暗記ではなく、表現力の高い linear attention である」と再解釈し、
+  逐次 test-time loop を回避する fully parallel 形式と principled な構造簡略化を導出。
+- **HexaTrain との関連**: Phase 14 の Hybrid Sequence Operator Search に対して、
+  「GDN / KDA / TTT 系は同じ数理的土台の上の variant」という整理を与える。
+  HexaTrain が独自に「HTP専用 Delta Attention」（P3）を設計するとき、
+  この等価性を経由して「既存 attention graph の部品（MatMul / elementwise / gate）を
+  そのまま再利用する形」で設計できる可能性がある。SimpleGDN weight-preserving
+  migration の数式変形を考える際の理論的整理枠。
+- **次に読む**: reduction の仮定（chunk 境界・gate 形式）と HexaTrain SimpleGDN 設計の対応。
+
+### F-2. chunkwise parallel 系の実装基盤
+
+- [flash-linear-attention（GitHub, fla-org）](https://github.com/fla-org/flash-linear-attention) —
+  GLA / DeltaNet / GDN 等の Triton 実装を集めた共通 library。chunkwise algorithm の
+  参照実装として、QNN graph へ落とすときの「演算単位の切り出し」に使える。
+- GLA（arXiv:2312.06635）/ GDN（arXiv:2412.06464, repo 参照済み）の chunkwise 形式は
+  「sequence を chunk C に割り、intra-chunk は MatMul、inter-chunk state は
+  小さい再帰」に分解する。**この分解は HTP 向き**（MatMul 主体、state が小さい）で、
+  HexaTrain の SimpleGDN 実装計画の前提と整合する。
+- **次に読む**: GDN の Triton kernel 1個分の演算粒度（QNN node 数の見積り材料）。
+
+### F-3. 索引（未検証・要確認）
+
+- [Native Hybrid Attention（arXiv:2510.07019）](https://arxiv.org/abs/2510.07019) —
+  検索結果では recall-intensive / commonsense で transformer 系 hybrid を上回るとの由。
+  要 abstract 確認。
+- [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
+  — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
+- [Awesome-State-Space-Models](https://github.com/radarFudan/Awesome-state-space-models) —
+  追跡用 index。
+
+### クラスタFの統合所見（2026-10-25時点）
+
+1. **linear attention 系は理論統一（F-1）と実装共通化（F-2）が同時に進んだ。**
+   HexaTrain が SimpleGDN を作るとき、「独自改造」より「chunkwise 分解を QNN graph に
+   忠実に落とす」第一歩の妥当性が上がった。
+2. TTT 等価性は「HTP での recurrent operator = attention 部品の再構成」という
+   実装戦略を正当化する。Phase 14 の graph 設計言語として使える。
+
+---
