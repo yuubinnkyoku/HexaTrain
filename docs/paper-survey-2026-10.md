@@ -29,6 +29,7 @@
 | G | Training memory / recompute / activation 圧縮 | Training Memory Planner / Phase 9 |
 | H | その他（評価engine・data・tokenizer・推論） | 評価engine高速化 / Data / 推論側 |
 | I | Data curriculum（difficulty-aware sampling） | Difficulty-Aware Sampling / Phase 13 |
+| J | 小規模学習 recipe の系譜（modded-nanogpt speedrun） | Muon identity / 低コスト候補の收割順 |
 
 （各クラスタの節は調査進行に合わせて追記される。まだ調査していないクラスタは空。）
 
@@ -928,6 +929,41 @@ Loss Curriculum」への文献裏付けを探した。
   両方を難易度指標候補として並べる根拠になる。「uniform 成分を残す」設計（20/50/30）は
   warmup-then-random と同じ方向で文献整合的。
 - **次に読む**: continual training scenario の結果（resume が多い HexaTrain 運用に近い）。
+
+---
+
+## J. 小規模学習 recipe の系譜（modded-nanogpt speedrun）
+
+**調査日: 2026-10-25（追加クラスタ）。** HexaTrain の Original Muon optimizer identity
+（`keller_original_64560829_fp32`）の系譜元である modded-nanogpt speedrun の
+現状と技術内訳を確認した。
+
+### J-1. modded-nanogpt speedrun（124M / FineWeb / 8xH100）
+
+- [KellerJordan/modded-nanogpt](https://github.com/kellerJordan/modded-nanogpt) —
+  2026-10 時点の record は **90秒**（1年前は 8.2分）。
+  [Speedrun Optimization Writeup（discussion #211）](https://github.com/KellerJordan/modded-nanogpt/discussions/211)
+  / [LessWrong 記事](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/) /
+  [Prime Intellect auto-speedrun](https://www.primeintellect.ai/auto-nanogpt)（AI agent が
+  speedrun 改善を競う benchmark）。
+- **要約（writeup の伸び内訳）**: Muon 77.5% > FlexAttention 54.5%（後に FA3 へ） >
+  初期値・LR tuning 46.1% > architecture 現代化（RoPE / QK-norm / zero-init projection /
+  ReLU²）45.2% > **U-Net skip + value embeddings 36.5%** > logit softcap 15 + offset
+  logits 20.9% > untied embeddings 11.1% > bf16 activation + fp8 head 8.0%。
+  speedup は規模依存という注意が共同作業者から明示されている。
+- **HexaTrain との関連**:
+  - **U-Net skip + value embeddings が36%級の巨大 gain**という記録は、P1 pool の
+    Value Residual / Depth-Attention（E-3）を優先する傍証（124M と HexaTrain の中間規模）。
+  - **logit softcap 15 は HexaTrain が未検討の低コスト候補**。CE graph への
+    変更が小さく（logits の clamp + offset）、学習安定化（attention logit 系 telemetry）
+    との関連で short A/B に向く。
+  - untied > tied という speedrun 側の観察は、P1「tied embedding」候補の
+    期待値を相対的に下げる方向（repo も Modded-NanoGPT の untied 事例は注記済み）。
+  - ReLU² が効いたという speedrun 記録と HexaTrain の ReLU² 否定（matched A/B）の
+    差は「規模・data・他技術との相互作用」の問題であり、speedrun 記録の
+    直接移植可能性が低いことの実例。
+- **次に読む**: momentum warmup と分散 overhead 削減の具体的形
+  （HVX Muon の W8 構成への流用可否）。
 
 ---
 
