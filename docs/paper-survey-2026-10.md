@@ -840,6 +840,14 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   T32 の HexaTrain では gain が小さい可能性が高く、repo の
   「長文脈論文の gain を外挿しない」原則と整合する方向。
   明確な follow-up 論文はまだ無し。
+- **KV head 構造の潮流（2026-10-25 追記）**: 業界整理は
+  MQA（最大共有・品質低下あり）→ GQA（現行主流）→ **MLA / low-rank / latent 圧縮**
+  （2025-2026 の中心）。[LoRKVA（low-rank KV attention）](https://fin.ai/research/low-rank-key-value-attention-reducing-kv-cache-memory-and-maintaining-head-diversity)
+  は MQA/GQA の head 多様性低下を避けつつ KV を削る方向。
+  [MLTA（arXiv:2505.13544）](https://arxiv.org/abs/2505.13544) は latent 時間圧縮。
+  HexaTrain の Hq2/Hkv1 MQA A/B（P1）に対しては、H2 と head 数が少なく
+  MQA での head 多様性低下が相対的に大きいため、**low-rank K/V を
+  比較 arm に加える意義**が出る（D64 なら rank 16 など）。
 
 ### クラスタEの統合所見（2026-10-25時点）
 
