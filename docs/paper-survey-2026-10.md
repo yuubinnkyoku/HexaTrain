@@ -843,9 +843,14 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   low-disruption migration との親和性を示す例。
 - [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
-- [Decoupling Erase and Write Addresses in Delta-Rule（arXiv:2606.26560）](https://arxiv.org/abs/2606.26560)
-  — 2026-06。GDN 系 delta-rule の erase/write address を分離する拡張
-  （channel-wise gated / DPLR 設定）。Phase 14 の GDN 詳細化時の候補。要確認。
+- [Erase-then-Delta Attention（arXiv:2606.26560）](https://arxiv.org/abs/2606.26560) /
+  [AlphaXiv](https://www.alphaxiv.org/abs/2606.26560)
+  — Li, Zhang, Luo ほか（Alibaba 系）、2026-06。
+  **【2026-10-25 確認済み】**: delta-rule の corrective write は現在の write address
+  しか訂正できないため、別場所の stale data が消えない問題へ、
+  **learned erase direction に沿った erase step を write と分離して追加**。
+  dense 2.5B / MoE 25B で pretraining、4k〜128k long-context でも最良。
+  Phase 14 の GDN 後続拡張候補として索引。
 - **FlashQLA の出典確認（2026-10-25）**:
   [Qwen blog（2026-04）](https://qwen.ai/blog?id=flashqla) +
   [fla-org/flash-linear-attention](https://github.com/fla-org/flash-linear-attention)
