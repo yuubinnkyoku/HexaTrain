@@ -1380,6 +1380,43 @@ Loss Curriculum」への文献裏付けを探した。
 - **次に読む**: μ-centering の実装詳細（logits から引くか embedding を前処理するか）と
   実験規模。
 
+### J-4. checkpoint merging 系譜（P2「Model Merging during Pre-training」の外部動向、2026-10-25 追加）
+
+- [Model Merging in Pre-training of LLMs / PMA（arXiv:2505.12082）](https://arxiv.org/abs/2505.12082)
+  — pretraining 中の model merging の最初の包括調査とされる（ByteDance Seed 系）。
+- [Practical Guidelines for Model Merging in LLM Pre-Training（ACL 2026 Industry）](https://aclanthology.org/2026.acl-industry.105)
+  — training phase 横断の checkpoint merging。**単純平均が一貫して改善**。
+- [Early Weight Averaging meets High Learning Rates（OpenReview, 引用42）](https://openreview.net/forum?id=IA8CWtTnUr)
+  — **高 LR 学習ほど checkpoint averaging の恩恵が大きい**。
+- NeurIPS 2025 tutorial では **decay-free LR schedule を merging で代替**する
+  方向も紹介。
+- **HexaTrain との関連**: repo の P2「Model Merging during Pre-training」と
+  端末間疎結合 merge 応用の外部裏付け。特に「高 LR × averaging」の相互作用は
+  G1 LR stress lane（1.0x〜2.0x grid）の観測と直結し、
+  **stress grid の checkpoint 群をそのまま averaging A/B に流用できる**。
+  LR decay schedule の設計空間（S4000 凍結 control との関係）にも
+  「decay を merging で置き換える」変種が加わる。
+- **次に読む**: PMA の merge timing（どの phase 間で merge したか）。
+
+---
+
+- [arXiv:2601.02031](https://arxiv.org/abs/2601.02031) / [AlphaXiv](https://www.alphaxiv.org/abs/2601.02031)
+  — Stollenwerk, Lokrantz, Hertzberg、2026-01（v3 2026-09）。
+- **要約**: 学習終盤の **output logit divergence** の原因を output embedding の
+  anisotropy と特定。z-loss / softcap は対症療法と位置づけ、
+  (a) **μ-centering**: output embedding を中心化する決定論的操作、
+  (b) **μ-loss**: 中心化を促す正則化項、の2 variant を提案。
+  安定性で z-loss を上回り、softcap と同等。**weight tying の有無両方で動作**し、
+  μ-loss は z-loss より hyperparameter 感度が低い。
+- **HexaTrain との関連**: repo の Z-Loss diagnostic（P1）と同問題への
+  より安価な対照候補。`output_projection`（65,536 params）の行平均を引く
+  μ-centering は QNN graph への追加 node が小さく、
+  **logit 系 telemetry（Z-Loss / attention logit max）と同じ計測枠で A/B できる**。
+  weight decay との相互作用の実験が v3 で追加されており、
+  Muon+WD lane との併存確認にも使える。
+- **次に読む**: μ-centering の実装詳細（logits から引くか embedding を前処理するか）と
+  実験規模。
+
 ---
 
 # 全体統合（2026-10-25、クラスタ A〜J 完了時点）
