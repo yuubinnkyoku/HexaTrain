@@ -504,8 +504,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   (b) orthogonalization 前の momentum への sign 変換、(c) Adam と update magnitude を
   揃える RMS-aligned rescaling（既存 LR schedule を再利用可能）の3構成。
   「Adam 比 40% 効率改善」を主張。
-- [Mousse (arXiv:2603.09697)](https://arxiv.org/abs/2603.09697)（2026-03）—
-  Muon へ structural curvature を明示統合。
+- [Mousse (arXiv:2603.09697)](https://arxiv.org/abs/2603.09697)（2026-03）
+  — Zhang, Xing, Huang, Lv, Zhou, Qiu, Guo, Chen（上海 AI Lab 系）。
+  **【2026-10-25 確認済み】**: Muon の Stiefel manifold 制約が
+  「等方的な landscape」を暗黙仮定し、heavy-tail な curvature spectrum と
+  不整合である点を指摘。**Shampoo 系 Kronecker 因子統計で whitened 座標系を
+  作り、その中で spectral steepest descent（異方的 trust region）**を解く。
+  更新は whitened gradient の polar decomposition。160M〜800M で Muon 比
+  約12% step 削減、overhead 小。
+  「NS5 を hung する」HexaTrain HVX 構成への置換候補として、
+  NS5 自体を替える系統（Polar Express lane と同列）の代表例。
 - [ARO（arXiv:2602.09006）](https://arxiv.org/abs/2602.09006) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.09006)
   （2026-02、Gong, …, Chao Ma）— **gradient rotation を第一設計原理**とする
   matrix optimizer。orthogonalization を「回転座標系での normed steepest descent」の
