@@ -303,6 +303,22 @@ exact backprop で回している公開文献は見つからなかった。** He
 - **次に読む**: decode の kernel size と NPU 効率の関係（incremental KV cache の
   shape 設計の参照）。
 
+### B-6. heterogeneous co-execution scheduling（2026-10-25 追加）
+
+- 代表例: [Band（MobiCom 系 2022, 多-DNN を mobile processor 間で調整）](https://snu.elsevierpure.com/en/publication/band-coordinated-multi-dnn-inference-on-mobile-proc)、
+  Thermal-Aware Scheduling for DL on Mobile with NPU（2026,
+  [ResearchGate](https://www.researchgate.net/publication/379297343_Thermal-Aware_Scheduling_for_Deep_Learning_on_Mobile_Devices_With_NPU)）、
+  fine-grained CPU-GPU partitioning（2026, USC, [PDF](https://qed.usc.edu/paolieri/papers/2026_epew_mobile_inference_cpu_gpu.pdf)）。
+- **要約**: mobile の CPU/GPU/NPU co-execution は **推論側**で確立した領域。
+  subgraph 分割・thermal-aware な配置・real-time graph 解析に基づく適応 scheduling、
+  線形 op の fine-grained co-execution で最大 1.89x 等の結果がある。
+- **HexaTrain との関連**: repo の「Heterogeneous Training Backend Planner」は
+  これらの**学習版**に相当し、やはり公開文献に直接の先行例がない
+  （cluster B の統合所見と同じ構図）。thermal-aware scheduling の
+  評価軸（温度と throughput の履歴を scheduling 入力にする）は
+  HexaTrain の thermal telemetry を活かす placement 判断の参照になる。
+- **次に読む**: thermal-aware の報酬設計（thermal throttle をどう cost 化するか）。
+
 ### クラスタBの統合所見（2026-10-25時点）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
@@ -752,7 +768,7 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   HexaTrain の SimpleGDN 実装計画の前提と整合する。
 - **次に読む**: GDN の Triton kernel 1個分の演算粒度（QNN node 数の見積り材料）。
 
-### F-3. 索引（未検証・要確認）
+### F-3. 索引（簡易記載・主要項目は本文確認済み）
 
 - [Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）](https://arxiv.org/abs/2610.11214)
   — 2026-10。KV cache 量子化（entry 圧縮・全保持）と linear attention
