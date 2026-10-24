@@ -495,6 +495,11 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   この group の新論文を追うのが低 state optimizer 系追跡の最短経路。
 - [Gradient Multi-Normalization (arXiv:2502.06742)](https://arxiv.org/abs/2502.06742)
   （Microsoft）— SWAN 動機の stateless optimizer 設計framework。repo 参照済み。
+  **【2026-10-25 確認済み】**: Scetbon, Chao Ma, Gong, Meeds（SWAN と同 group）。
+  複数の norm で同時に gradient を正規化する交替 scheme の一般枠組みで
+  **SWAN は特定の norm 選択の特殊例**と示される。SWAN の whitening は
+  大規模で高コストなため、性質を緩めた安価な variant を導出。
+  交替法の不動点収束理論あり。LLaMA 1B までで Adam 比 3x 学習高速化。
 - [RACS / Alice (arXiv:2502.07752)](https://arxiv.org/abs/2502.07752)（ICLR 2026）—
   structured Fisher approximation。Alice は Adam 比 2x 収束を主張。repo の P2 名称对照を確認。
   **【2026-10-25 確認済み】**: Gong, Scetbon, Chao Ma, Meeds。
