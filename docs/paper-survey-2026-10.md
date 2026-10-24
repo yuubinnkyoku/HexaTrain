@@ -650,6 +650,27 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 - **次に読む**: minimax 係数の計算 cost（offline 事前計算で済むか、
   毎 step 必要か）。
 
+### C-7. NAMO / NAMO-D — Adam Improves Muon（2026-10-25 追加・AlphaXiv 推薦経由）
+
+- [arXiv:2602.17080](https://arxiv.org/abs/2602.17080) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.17080)
+  — Minxin Zhang, Yuxuan Liu, Hayden Schaeffer（UCLA）、2026-02（引用11）。
+- **要約**: orthogonalized momentum と Adam 型 noise adaptation の
+  **原理的統合**を標榜する2 optimizer。
+  **NAMO** は orthogonalized update へ element-wise 適応を付けず
+  **単一の adaptive stepsize（scalar）**でスケール
+  （直交性を保存したまま Muon を改善、追加 cost は無視できる程度）。
+  **NAMO-D** は clamping 付き diagonal 行列を右から掛け
+  neuron-wise 適応を入れる（block-diagonal Hessian 構造に整合）。
+  決定的設定で最適収束 rate、確率的設定で noise level に適応する保証。
+  GPT-2 pretraining で NAMO-D > NAMO > Muon / AdamW。
+- **HexaTrain との関連**: 適応 granularity spectrum を埋める中間点。
+  「**element-wise 適応は直交性を壊す**」という設計判断が
+  AdaMuon（element-wise）との対立軸を明示的にしており、
+  HexaTrain の row 制御 lane に **scalar adaptive stepsize arm**（最安）を
+  加える根拠になる。spectrum は
+  Muon（なし）→ Muon+（stateless norm）→ **NAMO（scalar adaptive）** →
+  NorMuon/NAMO-D（neuron-wise）→ AdaMuon（element-wise）へ拡張。
+
 ### C-6. 索引
 
 - **【2026-10-25 直接確認済み】Muown 原論文**:
