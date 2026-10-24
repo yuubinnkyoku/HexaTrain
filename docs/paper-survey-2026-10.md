@@ -340,6 +340,19 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   入れるか」の分解実験として自然に設計できる。HexaTrain の 8,512 row 規模なら
   CPU reference で全案を安く試せる。
 - **次に読む**: per-neuron second moment の update 則（Aux Adam との共存方法）。
+  → **【2026-10-25 精読済み】**: Algorithm 1 の正確な形は
+  (1) `M = β1 M + (1-β1) G`、(2) `O = NS5(M)`、
+  (3) **`v = β2 v + (1-β2) mean_cols(O⊙O)`**（NS 後の update 自身の行 RMS を EMA）、
+  (4) `Ô = O / (√V + ε)` で row-normalize、(5) `η̂ = 0.2 η √(mn)/‖Ô‖_F`、
+  (6) `W ← W − ηλW − η̂ Ô`（decoupled weight decay 内蔵）。
+  **state は行列あたり m scalar のみ**（Muon の ~1/n 増、Adam 比で半減以下）。
+  β1=β2=0.95。1.1B/5.4B で Muon の step 削減 10.4%→21.7% / 6.1%→13.9% に倍増。
+  step 時間 overhead 2.9%。HexaTrain 向けの要点は、**gradient でなく
+  orthogonalized update 自身の行統計を持つ**点で、Muown の
+  「weight 側 g/r state」とは state の持ち方が根本的に違う。
+  3案比較（Muon+ = stateless L2 norm / NorMuon = update RMS EMA / Muown =
+  weight parameterization）が row 制御 lane の自然な設計になる。
+  code: `zichongli5/NorMuon`。
 
 ### C-3. Preconditioning Benefits of Spectral Orthogonalization in Muon
 
@@ -672,6 +685,28 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
 - [Awesome-State-Space-Models](https://github.com/radarFudan/Awesome-state-space-models) —
   追跡用 index。
+
+### F-4. Native Top-k 学習の予備研究・UNIQUE（2026-10-25 追加）
+
+- [A Preliminary Study on Native Top-k Sparse Attention（arXiv:2512.03494）](https://arxiv.org/abs/2512.03494)
+  / [AlphaXiv](https://www.alphaxiv.org/abs/2512.03494)
+  — Xiu, Tang, Rong ほか（Meituan 系）、2025-12。
+- **要約**: (1) 推論時の exact Top-k context は full attention と同等以上
+  （HELMET / LongBench v2）、(2) **学習時から Top-k attention でやる
+  （train/inference 一致）と性能がさらに伸びる**、(3) 近似 Top-k の
+  fidelity と下流性能は正相関、(4) Top-k は低-entropy 状態と相性が良い、
+  という entropy 解析。DeepSeek-V3.2-Exp の Lightning Indexer 精度の統計評価も。
+- [UNIQUE（arXiv:2605.27740）](https://arxiv.org/abs/2605.27740) —
+  training-free deploy と sparsity-aware pretraining の両対応を1つの
+  top-k framework で扱う後続研究（2026-05）。
+- **HexaTrain との関連**: repo の sparse 実装順序
+  （oracle sparse simulator → microbenchmark → 最小 block → Full teacher A/B）に対し、
+  「近似 fidelity ↔ 品質の正相関」と「native 学習の增益」は
+  診断の評価軸としてそのまま使える。また低-entropy 状態との相性は
+  H-2（byte LM）・E-5（AdaMTP）の「entropy が構造境界に集中」観察と
+  同じ entropy 視点の系譜で、sparse 選択・MTP horizon・curriculum が
+  同じ entropy 地図を共有するという統一的読みが可能。
+- **次に読む**: k の選び方と model 規模（HexaTrain の T32 診断に近い条件があるか）。
 
 ### クラスタFの統合所見（2026-10-25時点）
 
