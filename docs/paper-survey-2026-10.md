@@ -379,6 +379,19 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   Muon へ統合。
 - [Mousse (arXiv:2603.09697)](https://arxiv.org/abs/2603.09697)（2026-03）—
   Muon へ structural curvature を明示統合。
+- [ARO（arXiv:2602.09006）](https://arxiv.org/abs/2602.09006) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.09006)
+  （2026-02、Gong, …, Chao Ma）— **gradient rotation を第一設計原理**とする
+  matrix optimizer。orthogonalization を「回転座標系での normed steepest descent」の
+  特殊例と位置づけ直し、residual stream の回転対称性を意識した rotation policy。
+  8B までで orthogonalization 系比 1.1〜1.15x / AdamW 比 1.3〜1.35x。
+- **Sinkhorn 系との接続**: repo 参照の GMN（2502.06742）と同じ番号だが、
+  SinkGD として読むと **Sinkhorn algorithm の square-root iterate を
+  stateless optimizer として正確に復元する**ことが示されている
+  （[ARO 文中の related 紹介](https://arxiv.org/html/2602.09006v1) 経由で確認）。
+  これは repo の2課題、V4.1 系 **Sinkhorn-balanced embedding update**（HOLD中:
+  scale 非保存が問題）と stateless optimizer 設計が**同じ理論的土台**に乗る
+  ことを示す。scale-preserving Sinkhorn の再設計は SinkGD 系の理論から
+  借りられる可能性がある。
 - **HexaTrain との関連**: 端末 RAM 上、optimizer state は Adam m+v が最大の固定費。
   Muown 導入の動機の一つ（embedding/head の 512 KiB 削減）と同型の削減が
   stateless 系では全行列対象になり得る。ただし whitening / Fisher 系の演算が
