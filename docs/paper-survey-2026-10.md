@@ -485,7 +485,14 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 ### C-4. 低 state / stateless optimizer 系
 
 - [SWAN (arXiv:2412.13148)](https://arxiv.org/abs/2412.13148)（ICML 2025）—
-  GradNorm + whitening 前処理のみの stateless SGD。Adam と同品質、SGD と同 memory。
+  **【2026-10-25 確認済み】**: Ma, Gong, Scetbon, Meeds。
+  gradient へ (1) normalization（分布安定化）と (2) whitening（局所 curvature 相殺）を
+  **stateless に per-step 適用**して SGD で更新。LLaMA 350M/1.3B で
+  Adam と同等以上の perplexity を **2x token efficiency**（半分の token で同 perplexity）、
+  end-to-end memory 約50%減。Adam と同品質、SGD と同 memory。
+  なお **SWAN / GMN / RACS / Alice / ARO は Gong・Chao Ma ら同一グループの
+  系統的研究**（stateless・FIM 構造・回転設計）であり、
+  この group の新論文を追うのが低 state optimizer 系追跡の最短経路。
 - [Gradient Multi-Normalization (arXiv:2502.06742)](https://arxiv.org/abs/2502.06742)
   （Microsoft）— SWAN 動機の stateless optimizer 設計framework。repo 参照済み。
 - [RACS / Alice (arXiv:2502.07752)](https://arxiv.org/abs/2502.07752)（ICLR 2026）—
