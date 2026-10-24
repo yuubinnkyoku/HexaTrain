@@ -965,6 +965,24 @@ Loss Curriculum」への文献裏付けを探した。
 - **次に読む**: momentum warmup と分散 overhead 削減の具体的形
   （HVX Muon の W8 構成への流用可否）。
 
+### J-2. logit softcap の系譜と QK-norm との関係
+
+- [Gemma 2（arXiv:2408.00118）](https://arxiv.org/abs/2408.00118) —
+  `tanh(x/cap)*cap`（attention cap=30 / 最終層 cap=50）で logit 成長を抑え
+  学習安定化・蒸留可能性を確保した原典。
+- 後継（Gemma 3 / Qwen3 / OLMo 2）は softcap をやめて **QK-norm へ置換**した流れ
+  （hardware-friendly な理由）。[QK-norm + soft-capping の段階的併用を提案する研究
+  （OpenReview, Rybakov et al.）](https://openreview.net/pdf?id=RL6R5ryuL5) もある。
+  Karpathy nanochat でも「softcap を外して QK-norm だけにする」議論
+  （[issue #362](https://github.com/karpathy/nanochat/issues/362)）が行われている。
+- **HexaTrain との関連**: repo の学習安定化候補（QK Norm / Z-Loss / QK-Clip）は
+  この系譜の上にある。HexaTrain は QK-norm 未導入なので
+  「softcap 単体 → QK-norm 単体 → 併用」の順序が文献上自然。
+  logit softcap は CE graph の logits への小変更（tanh + scale）で、
+  QNN graph 追加 node が小さく短 A/B 向き。
+- **次に読む**: Rybakov et al. の「段階が違う」主張の内容（どの phase に
+  それぞれ効くか）。
+
 ---
 
 ## 5. 本調査の限界（2026-10-25 時点）
