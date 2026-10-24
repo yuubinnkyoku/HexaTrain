@@ -236,3 +236,94 @@ exact backprop で回している公開文献は見つからなかった。** He
    LOZO・LOREN 型の選択肢も含めて再設計する価値がある。
 
 ---
+
+## C. Optimizer（Muon 系・低 state・理論）
+
+**調査日: 2026-10-25。** Muon 系は 2025 後半〜2026 前半に
+「orthogonalization 後の row/column norm 不均衡」を直接的に直す variant が集中している。
+これは HexaTrain の row-geometry audit（corr≈0.99 の norm drift）と
+Muown lane の前提を**独立系統から裏付ける**動向であり、Phase 4 の比較設計に直接反映すべき情報。
+
+### C-1. MUON+ — One Additional Normalization Step
+
+- [arXiv:2602.21545](https://arxiv.org/abs/2602.21545) / [AlphaXiv](https://www.alphaxiv.org/abs/2602.21545)
+  — Zhang ほか、2026-02（v3 2026-05）。
+- **要約**: Newton–Schulz polar iteration は特異値 spectrum を 1 へ潰しても
+  **row/column 単位の norm 不均衡は解消しない**（むしろ実用 polar step では悪化し得る）と指摘し、
+  「post-polar imbalanced update problem」と命名。**orthogonalization の後に
+  1 回だけ normalization を挿入する one-line fix** を提案。optimizer state を追加しない。
+  GPT / LLaMA 系 60M〜7B、token-to-parameter 比 ~200 までで Muon を一貫して上回る。
+- **HexaTrain との関連**: row-geometry audit が観測した「row norm / spectral norm の同期 drift」
+  と同一現象への**state 不要**の対処。Phase 4 の比較（Original Muon / Muon+WD / Muown）に
+  **Muon+ 型の post-NS row normalization arm を加える**価値が高い。Muown Algorithm 1 は
+  `g/r/m_g/v_g` state を追加するのに対し、Muon+ は state ゼロで同種の問題に当たるため、
+  「row-norm 制御に state が要るか」を分離できる。
+- **次に読む**: 挿入する normalization の正確な形（RMS 系か max-norm 系か）と
+  HexaTrain の `keller_original_64560829_fp32` との差分。
+
+### C-2. NorMuon — neuron-wise adaptive + orthogonalization
+
+- [arXiv:2510.05491](https://arxiv.org/abs/2510.05491) / [OpenReview](https://openreview.net/forum?id=m1IRWFAMsa)
+  — Li, Liu, Liang, Chen, Zhao、2025-10。
+- **要約**: Muon update の neuron（row）norm が不均一で一部の neuron が学習を支配する問題へ、
+  **per-neuron second moment 統計を持ち、orthogonalization 後に row-wise normalization を適用**。
+  1.1B pretraining で Adam 比 21.74% / Muon 比 11.31% 効率改善。state は Muon と同程度
+  （row 単位の second moment を追加）。
+- **HexaTrain との関連**: Muown（row magnitude を Adam、direction を Muon へ分離）と
+  問題設定が同じで解き方が違う系統。**Muown vs NorMuon vs Muon+ の3点比較**は、
+  「row 制御をどの位置（weight parameterization / post-NS normalization / per-neuron 2nd moment）で
+  入れるか」の分解実験として自然に設計できる。HexaTrain の 8,512 row 規模なら
+  CPU reference で全案を安く試せる。
+- **次に読む**: per-neuron second moment の update 則（Aux Adam との共存方法）。
+
+### C-3. Preconditioning Benefits of Spectral Orthogonalization in Muon
+
+- [arXiv:2601.13474](https://arxiv.org/abs/2601.13474) — Ma, Huang, Chi, Chen（CMU 系）、2026-01。
+- **要要約**: simplified Muon の理論解析。matrix factorization と linear transformer の
+  in-context learning で、spectral domain に dynamics が独立な scalar 列へ decouple し、
+  **condition number に依存しない iteration complexity** で linear convergence することを証明。
+  GD / Adam を理論上上回る。
+- **HexaTrain との関連**: 「Muon が効く条件 = ill-conditioning がボトルネックの matrix 最適化」
+  という理論的把握。HexaTrain の 758k 規模で Muon が Adam を -0.066 bpb 下回った実測の
+  解釈枠になる。また P2「Muon Orthogonalization Accuracy / Polar Express」lane で
+  NS 係数を変える意味の理論的文脈になる（完全な NS でなくても preconditioning として成立する）。
+- **次に読む**: linear transformer 設定の assumptions（T32/D64 の現行モデルとの距離）。
+
+### C-4. 低 state / stateless optimizer 系
+
+- [SWAN (arXiv:2412.13148)](https://arxiv.org/abs/2412.13148)（ICML 2025）—
+  GradNorm + whitening 前処理のみの stateless SGD。Adam と同品質、SGD と同 memory。
+- [Gradient Multi-Normalization (arXiv:2502.06742)](https://arxiv.org/abs/2502.06742)
+  （Microsoft）— SWAN 動機の stateless optimizer 設計framework。repo 参照済み。
+- [RACS / Alice (arXiv:2502.07752)](https://arxiv.org/abs/2502.07752)（ICLR 2026）—
+  structured Fisher approximation。Alice は Adam 比 2x 収束を主張。repo の P2 名称对照を確認。
+- [AdaMuon (arXiv:2507.11005)](https://arxiv.org/abs/2507.11005) — element-wise second moment を
+  Muon へ統合。
+- [Mousse (arXiv:2603.09697)](https://arxiv.org/abs/2603.09697)（2026-03）—
+  Muon へ structural curvature を明示統合。
+- **HexaTrain との関連**: 端末 RAM 上、optimizer state は Adam m+v が最大の固定費。
+  Muown 導入の動機の一つ（embedding/head の 512 KiB 削減）と同型の削減が
+  stateless 系では全行列対象になり得る。ただし whitening / Fisher 系の演算が
+  HVX/CPU でどこまで低コストかは未検証なので、Phase 11 の candidate として
+  「CPU reference 1-step cost」から測るのが現実的。
+- **次に読む**: Alice の low-dimensional subspace 推定（HexaTrain の 64x64 行列群への適合性）。
+
+### C-5. 索引
+
+- [Awesome-Muon](https://github.com/zhanghualin0/Awesome-Muon)（2026-06 更新）—
+  Muon 系の網羅 list。以後の追跡はこれを定期確認するのが最も安い。
+- repo 参照済み: Muown 2本（2605.10797 / 2606.23637）、Muon is Scalable（2502.16982）、
+  Polar Express（2505.16932）、Can Muon Fine-tune Adam-Pretrained（2605.10468）。
+  本調査で新規に重要と判断したのは MUON+ / NorMuon / スペクトル理論の3点。
+
+### クラスタCの統合所見（2026-10-25時点）
+
+1. **「post-NS row norm 不均衡」が独立3系統（HexaTrain audit / Muon+ / NorMuon）で確認された。**
+   Phase 4 は Muown 単体ではなく、**row 制御の位置（parameterization vs post-NS normalize vs
+   per-neuron moment）を分離する3-4 arm 比較**へ拡張する情報的価値が高い。
+2. **Muon+ は state 追加ゼロの one-line fix**なので、HexaTrain の HVX Muon 実装への
+   変更が最小（NS5 の後に row normalize を 1 演算）であり、最初の arm として最も安い。
+3. 理論（C-3）は「NS 係数の妥協が常に致命的とは限らない」ことを示唆し、
+   P2 の Polar Express / NS8 比較lane と QNN HTP NS の再試行条件の設計に使える。
+
+---
