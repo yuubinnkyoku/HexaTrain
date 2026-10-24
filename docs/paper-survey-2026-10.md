@@ -592,6 +592,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   → row 制御3案（Muown = weight parameterization / Muon+ = post-NS L2 norm /
   NorMuon = update RMS EMA）のうち、**Muown だけが LR plateau 拡大と WD 感度低減を
   明示的に主張**しており、Phase 6（LR×batch×optimizer）との接続が最も強い。
+- **【2026-10-25 直接確認済み】Muon is Scalable（Moonshot / Kimi）**:
+  [arXiv:2502.16982](https://arxiv.org/abs/2502.16982) — Liu, Su, Yao ほか、2025-02。
+  Muon の大規模化に必要だったのは **(1) weight decay 追加、(2) per-parameter update
+  scaling の調整（RMS 整列）** の2点だけで、hyperparameter 再調整なしで
+  out-of-box に動作。3B/16B (A3B) MoE を 5.7T token で学習し、
+  scaling law 実験で AdamW 比 約2x の compute efficiency。
+  HexaTrain との関連: **WD 追加と RMS 整列が大規模化の必須条件**という観察は、
+  repo の「Original Muon+WD control」（Phase 4 比較 arm）の理論的位置づけの裏付け。
+  Muon+WD arm は大規模側で必要とされた修正そのものであり、HexaTrain 規模では
+  「効果があるか」ではなく「不要で済むか」を検証する arm と読める。
 
 - [Awesome-Muon](https://github.com/zhanghualin0/Awesome-Muon)（2026-06 更新）—
   Muon 系の網羅 list。以後の追跡はこれを定期確認するのが最も安い。
