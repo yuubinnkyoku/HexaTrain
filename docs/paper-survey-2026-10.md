@@ -76,6 +76,13 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   そのまま使える。
 - **次に読む**: synthetic student-teacher proxy の設定（HexaTrain の CPU oracle 診断と同じ型の
   実験設計として参照価値が高い）。
+  → **【2026-10-25 AlphaXiv AI overview 経由で追記】**: overflow は
+  **FFN 側 layer norm の方が attention 側より多く発生**（proxy activations の約1%・
+  OLMo activations の約0.5%が最終 bin に到達）。E4M3 では block max の 87.5% 超
+  （max normal 448）で clamp する。in-situ 介入実験（step 4500 / 5080 で
+  精度切替、divergence は 5090〜5100 近傍）では早期の backward 量子化無効化は
+  有効、直近介入は延期効果のみ。**HexaTrain の tensor 除外表作成では
+  「FFN 側 norm を最初に除外候補にする」優先順位の根拠になる**。
 
 ### A-3. Pretraining Large Language Models with NVFP4
 
@@ -138,6 +145,13 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   — FP8 導入の3段階（delayed scaling 等の granularity 設計）の整理。Phase 12 の
   scale granularity 探索の整理枠。
 - MX+（ACM 2025-10）: MX format 自体の拡張。HMX の format 拡張候補を考える際の参照。
+- **【2026-10-25 AlphaXiv 推薦経由で追加】**:
+  - *Small-scale proxies for large-scale Transformer training instabilities*
+    （Wortsman et al.）— **小規模 proxy で大規模の不安定化を予測する**方法論。
+    HexaTrain の存在意義（小規模での診断）と同じ手法論の大規模側からの裏付け。
+    要 arXiv ID 確認。
+  - *Scaling FP8 Training to Trillion-Token LLMs*（Fishman et al.）—
+    trillion-token 級 FP8 学習の安定化。Phase 12 の大規模側参照。要確認。
 
 ### A-8. FP4 training recipe の起源系（AlphaXiv related 推薦から追加、2026-10-25）
 
