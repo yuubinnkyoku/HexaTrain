@@ -541,10 +541,19 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 
 - [FAST: DNN Training Under Variable Precision Block Floating Point（HPCA 2022）](https://www.eecs.harvard.edu/htk/static/files/2022-hpca-zhang-mcdanel-kung.pdf)
   — BFP mantissa 幅を学習中に可変にする。FP→BFP 変換の gradient に SR を使う。
-- [BiE: Bi-Exponent Block Floating-Point（ICML 2024）](http://www.cse.cuhk.edu.hk/~byu/papers/C229-ICML2024-BiE.pdf)
-  — block 内に 2本の exponent を持たせ精度/效率を改善。
-- [F-BFQ（arXiv:2510.13401）](https://arxiv.org/abs/2510.13401) — LLM matmul 向けの
-  flexible BFP quantization。
+- [BiE: Bi-Exponent Block Floating-Point（ICML 2024, PMLR 235:62978）](https://proceedings.mlr.press/v235/zou24d.html)
+  — Zou ほか（CUHK）。
+  **【2026-10-25 確認済み】**: 6-bit BFP が有望だが activation の outlier 悪化が課題、
+  という動機で、**coarse block exponent + fine exponent の2本の共有指数**で
+  通常値と outlier の両方を扱う表現。推論側量子化（training は対象外）。
+  2-exponent の割当規則の詳細は PDF 本文要確認。
+- [F-BFQ（arXiv:2510.13401, LG-ARC@ISCA 2025）](https://arxiv.org/abs/2510.13401) —
+  Haris, Cano。**【2026-10-25 確認済み】**: BFP 量子化 LLM のための edge 用
+  hardware accelerator。layer ごとに異なる BFP variant が混在する前提で
+  **2つの BFP variant を再構成なしで動的切替**できる matmul を実装。
+  AMD Kria 上で Arm NEON CPU 比平均 1.4x、5.2 token/s。推論専用。
+  HexaTrain との関連は「HTP が固定 block scale を持つ状況での代替表現研究」の
+  位置づけ（HMX 直接には非適用）。
 - Drumond et al.（EPFL）— end-to-end BFP 学習 accelerator（TETRIS 系譜）。
 - **HexaTrain との関連**: MX が shared exponent 1本/k=32 に対し、BFP 系は
   「block 内 exponent 構成の自由度」を探索する系統。HMX の block scale 実装が
