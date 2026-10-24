@@ -432,3 +432,114 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
    「optimizer state の group 単位 exponent」を独立候補として足す検討価値がある。
 
 ---
+
+## E. 小規模 LM architecture（gate・value residual・MTP・sub-B recipe）
+
+**調査日: 2026-10-25。** repo が既に参照している Gated Attention / MUDDFormer / Value Residual /
+MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Residual, MTP-lite）へ
+情報を足す論文を選んだ。
+
+### E-1. Gated Attention for LLMs — NeurIPS 2025 採録版
+
+- [arXiv:2505.06708](https://arxiv.org/abs/2505.06708) / [AlphaXiv](https://www.alphaxiv.org/abs/2505.06708)
+  — Qiu ほか（HKU/UW 系）。repo 参照済みだが **NeurIPS 2025 採録・引用 390+** に到達。
+  code: `qiuzh20/gated_attention`。
+- **要約（更新点）**: head-specific sigmoid gate（HexaTrain G1 相当）に加えて
+  **G2 = value-layer gating**（V 側を gate する変種）も perplexity を改善すると明記。
+  また gate 導入による sparsity / attention sink 抑制の観察を報告。
+- **HexaTrain との関連**: G1 lane の `PROMOTE_G1_GATE_VARIANTS` 継続探索に対して、
+  「query/key 側 gate（G1）vs value 側 gate（G2 相当）」の比較が原文側でも実験されている。
+  HexaTrain の reduced-channel gate 計画と並列に、**gate を掛ける位置の分解**
+  （output 乘算位置と channel 幅の2軸）として整理するとよい。
+- **次に読む**: G2 の正確な挿入位置と backward cost。
+
+### E-2. Value-State Gated Attention（VGA）
+
+- [arXiv:2510.09017](https://arxiv.org/abs/2510.09017) / [AlphaXiv](https://www.alphaxiv.org/abs/2510.09017)
+  — Bu, Zhong, Chen, Li、2025-10（v3 2026-01）。
+- **要約**: attention sink / value-state drain は「near-zero value への attention 集中が
+  no-op 挙動を固定する」相互増強ループから生じると分析。**V 自身から計算した
+  learnable gate で attention 出力を modulate** する構成が、input embedding 側から
+  gate する既存手法より value と attention-score の credit assignment を
+  decouple できることを gradient 解析で示す。sink 抑制・value norm 安定・
+  **quantization fidelity 改善**を報告。
+- **HexaTrain との関連**: 現行 G1 は `LN1(X) W_g`（input embedding 側）から gate を
+  計算しており、VGA の理論は「V 側から gate した方が良い場合がある」ことを直接示唆する。
+  G1 parent 配下の gate variant として **V-gate（gate 入力を V へ替える）**は
+  graph 変更が小さく理論的動機が明確な候補。quantization fidelity の観察は
+  Phase 12 と G1 の相互作用（gate が低bit化を楽にするか）という新規軸。
+- **次に読む**: gate の関数形（sigmoid か softplus か）とパラメタ数。
+
+### E-3. Depth-Attention — Cross-Layer Value Mixing
+
+- [arXiv:2606.05014](https://arxiv.org/abs/2606.05014) / [AlphaXiv](https://www.alphaxiv.org/abs/2606.05014)
+  — Zeng, Hao, …, Lin、2026-06。
+- **要約**: self-attention の前に、同 token 位置で**過去 layer の key へ query が attend し
+  その value を混合**する仕組み。hidden state を跨ぐ従来の cross-layer 系と違い
+  **parameter 追加ゼロ・KV cache 以外の persistent state なし**（depth 混合済み value を
+  通常の value と置き換えるだけ）。360M〜3B で一貫改善、arithmetic FLOPs +0.01% 未満。
+- **HexaTrain との関連**: P1 Candidate Pool の **Value Residual**（`V_l' = V_l + beta_l V_0`）は
+  固定係数の足し算だが、Depth-Attention はその「attention による選択的混合」版で、
+  parameter も state も増えない。T32/L19 では depth 方向の attention が小さい固定費で
+  収まるか実測する価値がある。Cross-Layer Attention Reuse 診断（NOW 5 番）とも同じ
+  「layer 間で何を共有するか」の問いで、reuse 診断の延長として natural に試せる。
+- **次に読む**: depth-attention の key/value はどの layer から取る設計か（全層 or 直近のみ）。
+
+### E-4. GateSkip — residual gate による layer skip
+
+- [arXiv:2510.13876](https://arxiv.org/abs/2510.13876) — residual stream への gate で
+  token 単位に layer 計算を skip する枠組み。
+- **HexaTrain との関連**: Attention Skip / Mixture-of-Depths（P2）と同問いへの gate ベース接近。
+  HexaTrain では static shape を保てる構成（gate が 0 でも graph は実行）なので、
+  「品質を保ったまま HTP 実行を軽くする」のでなく「品質を保ったまま深さを増す」
+  MobileLLM 的 weight sharing との組合せで読む方が有益。
+- **次に読む**: 省略ではなく表現力としての skip gate の効果分離。
+
+### E-5. AdaMTP — Adaptive horizon の multi-token prediction
+
+- [arXiv:2608.00434](https://arxiv.org/abs/2608.00434) / [AlphaXiv](https://www.alphaxiv.org/abs/2608.00434)
+  — Cui, Shi, He ほか、2026-08。
+- **要約**: 固定 horizon の MTP は高エントロピーの semantic 境界を跨ぐ予測に
+  noisy gradient を生み、backbone 共有ゆえ本体を劣化させる。entropy-based segmentation で
+  **token ごとに prediction depth を可変化**し、境界を跨ぐ loss を動的に mask。
+  7〜12B backbone で標準 MTP を上回り speculative decoding 速も改善。
+- **HexaTrain との関連**: Horizon-Specific MTP-lite（P1）の設計に直接使える考え方。
+  HexaTrain の `t+2 adapter` は horizon が固定だが、AdaMTP の知見は
+  「t+2 予測の loss を常に掛けるのではなく、entropy 高位の位置だけ/境界を跨がない位置だけ
+  掛ける」方向に拡張できる。future-mixture supervision とも相性が良い（混合重みを
+  entropy で変調）。
+- **次に読む**: entropy threshold の決め方（base model 自身の entropy を使う再帰性）。
+
+### E-6. MobileLLM-R1 — sub-billion reasoning の open recipe
+
+- [arXiv:2509.24945](https://arxiv.org/abs/2509.24945) / [AlphaXiv](https://www.alphaxiv.org/abs/2509.24945)
+  — Zhao, Chang, Liu, …, Chandra（Meta）、**ICLR 2026**。code/data/recipe 公開。
+- **要約**: sub-billion（950M 中心）でも data curation + resampling により
+  reasoning が成立することを示す。2T token 級の高品質 pool から 4.2T を resample して
+  pretrain し標準 post-training。Qwen3-0.6B と複数 benchmark で同等以上。
+- **HexaTrain との関連**: HexaTrain（758k）とは2桁違うが、
+  「小規模では data 質・配分が token 量より支配する」ことの最新傍証。
+  data pipeline identity を checkpoint に結ぶ現行運用（Reproducible Data Pipeline）の
+  方向性と整合。将来的に corpus を増やす場合の resampling 設計の参照。
+- **次に読む**: data mixing ratio の公開表（Phase 13 の stable multi-source mix 設計の参照）。
+
+### E-7. survey・その他
+
+- [SLM survey（arXiv:2501.05465, 2026-05 更新版）](https://arxiv.org/abs/2501.05465) —
+  約160論文の SLM 系 survey。architecture / data / efficiency の地図として保持。
+- [Matryoshka Language Model Suites（arXiv:2608.09703）](https://arxiv.org/abs/2608.09703) —
+  共有学習で model suite を作る方向。MatFormer / elastic model 系（P1〜P2）の近縁。
+
+### クラスタEの統合所見（2026-10-25時点）
+
+1. **G1 lane の次の variant は「gate の入力側」が有望。** VGA（E-2）の gradient 解析は
+   input embedding 側 gate より value 側 gate の優位を理論づけ、原著（E-1）の G2 も
+   value 側 gate の改善を報告している。HexaTrain は gate 位置×channel 幅の2軸で
+   variant を整理し直すと探索が閉じやすい。
+2. **Value Residual lane に「parameter ゼロ・KV 中立」の選択肢（E-3）が加わった。**
+   固定係数 `beta_l V_0` より表現力が高く、 inference cost 増もない。
+   Cross-Layer Reuse 診断と同じ instrumentation で評価できる。
+3. **MTP-lite は horizon 可変化（E-5）が次の設計軸。** adapter 構造はそのままに、
+   loss 掛ける位置の entropy-based 選択だけを先に試せる。
+
+---
