@@ -1,10 +1,14 @@
 # R2 device pre-registration: retained-ACC two-convert export
 
-Status: **PRE-REGISTERED, NOT AUTHORISED**, 2026-10-24. No DSP code has been
-added, no build has been made, no device has been contacted. This document
-fixes the fixture, the expected raw bits and the decision procedure **before**
-any measurement. After the first run the expectations in §6 may not be edited;
-a mismatch is a result, not a reason to retune.
+Status: **PRE-REGISTERED, NOT AUTHORISED**, 2026-10-24.
+Revision 2 (2026-10-25): ambiguous S1/S2 observations now map to
+`R2_CAUSE_INCONCLUSIVE` on the device path; the `Rs=0x0001` no-feedback
+composition is called out as the main residual spec risk; the 11-slot host
+contract is re-checked. No DSP code has been added, no build has been made,
+no device has been contacted. This document fixes the fixture, the expected
+raw bits and the decision procedure **before** any measurement. After the
+first run the expectations in §6 may not be edited; a mismatch is a result,
+not a reason to retune.
 
 This pre-registration follows the CPU-only feasibility study
 [`hmx-v81-r2-acc-reuse-feasibility.md`](hmx-v81-r2-acc-reuse-feasibility.md).
@@ -129,6 +133,22 @@ S2's second convert is **not** part of this test; it is CPU-checked as
 store-equivalent in the feasibility study, but the first device run uses the
 PRM's literal no-feedback recipe `0x1000`.
 
+### 4.1 The `0x0001` no-feedback composition
+
+PRM §2.3.3 says that for a convert without feedback, set `Rs[bias_sel]` to the
+bias index and set the rest of the register to 0. The literal set-0
+no-feedback encoding is therefore `0x0000` (clear+swap), while this test uses
+`0x0001` (retain). Chapter 5's retain example also enables feedback
+(`Rs[8]=1`, `fb_dest=2`, `fb_op=1`), so "retain + no feedback" is a
+composition of two documented behaviours, not a verbatim PRM recipe.
+
+This is the main residual spec risk. If the device treats the no-feedback
+setup rule as normative and ignores `Rs[0]=1`, convert #1 clears the ACC and
+S1's second slot is `0x0000`. That observation is
+`R2_CAUSE_INCONCLUSIVE`, not `R2_ACC_DESTROYED`. S1 is therefore mandatory;
+the device run must not be skipped on the grounds that ACC retention is
+"already in the PRM".
+
 ## 5. VTCM map
 
 | region | offset | size | alignment |
@@ -200,6 +220,8 @@ part of the future authorised work, not this CPU-only study.
 
 Fail closed before interpreting any slot if any of the following holds:
 
+* `results.size() != 11`, or a slot is not a zero-extended 16-bit value
+  (`0..0xFFFF`);
 * build id mismatch between host and DSP, or either id is unavailable when
   the run claims to be stamped;
 * `rpc_status != 0` or `dsp_status != OK`;
@@ -207,7 +229,8 @@ Fail closed before interpreting any slot if any of the following holds:
 * `trials != 2`;
 * `mma_count != 2`, `convert_count != 4`, `store_count != 4`, or
   `bias_loads != 3`;
-* `Rs` values are not the four registered values;
+* `Rs` values are not the four registered values (`0x0001`, `0x2000`,
+  `0x0001`, `0x1000`);
 * `out_pos` and `out_neg` are not distinct 2 KiB-aligned regions;
 * any slot is `0xA5A5` (the store did not execute);
 * close status is non-zero or resource cleanup fails.
@@ -225,13 +248,21 @@ Evaluate in this order. The labels are the pre-registered future verdicts.
    region, report `R2_STORE_INTERFERENCE`.
 3. **Rounding.** If slot 1 is `0x5021`, or slot 2/slot 6 is `0x5421`, report
    `R2_ROUNDING_MISMATCH`. Do not adjust the expectation.
-4. **S1 retention/bias control.** Slot 0 must be `0x5420`.
+4. **S1 retention/bias control.** Slot 0 must be `0x5420`; otherwise
+   `R2_UNEXPECTED_OUTPUT` (the first-convert anchor itself failed).
    * slot 1 = `0x5020` -> S1 passes (retention + set 2 selection + positive
      second store);
-   * slot 1 = `0x0000` -> `R2_ACC_DESTROYED`;
-   * slot 1 = `0x5420` -> `R2_BIAS_SWITCH_FAILED` (set 2 was not selected;
-     the convert fell back to set 0);
-   * anything else -> `R2_UNEXPECTED_OUTPUT`.
+   * slot 1 = `0x0000` -> `R2_CAUSE_INCONCLUSIVE`. Candidate causes: retain
+     bit ignored in a no-feedback convert, physical ACC loss, bias load
+     failure, convert not executed, or store anomaly. Do **not** report
+     `R2_ACC_DESTROYED` from this slot alone;
+   * slot 1 = `0x5420` -> `R2_CAUSE_INCONCLUSIVE`. Candidate causes: set 2 not
+     selected, set 2 row not loaded, `Rs` ignored, or store anomaly. Do
+     **not** report `R2_BIAS_SWITCH_FAILED` from this slot alone;
+   * slot 1 = `0x5021` -> `R2_ROUNDING_MISMATCH` (the registered ceiling
+     alternative);
+   * anything else -> `R2_UNEXPECTED_OUTPUT` with the raw slot recorded; no
+     cause assertion.
 5. **S2 first-store check.** If slot 2 = `0x0000` and slot 3 = `0x5420`, the
    second store overwrote the first: `R2_STORE_INTERFERENCE`.
 6. **S2 sign split.**
@@ -239,11 +270,12 @@ Evaluate in this order. The labels are the pre-registered future verdicts.
    * slot 3 must be `0x0000`; a non-zero value here with slot 2 correct is an
      unexpected export, not the store-overwrite pattern already handled in
      step 5: `R2_UNEXPECTED_OUTPUT`;
-   * slot 5 must be `0x0000`; if it is non-zero, shape 4 was not applied and
-     set 0 was used: `R2_BIAS_SWITCH_FAILED`;
+   * slot 5 must be `0x0000`; if it is non-zero, the shape/bias/store path is
+     wrong but the slot alone does not identify which: `R2_CAUSE_INCONCLUSIVE`;
    * slot 6 must be `0x5420`; if it is `0x0000`, the negative half is
-     missing: `R2_UNEXPECTED_OUTPUT` (S1 already ruled out ACC destruction
-     and bias-switch failure, so this is a shape-4/store finding);
+     missing and the cause is not localized (shape 4, `Rs`, store, or lane
+     map): `R2_CAUSE_INCONCLUSIVE`; a different non-zero word is
+     `R2_UNEXPECTED_OUTPUT` with the raw slot recorded;
    * slots 4 and 7 must be `0x0000` (zero ACC lane);
    * slots 8..10 must match the recon pattern; otherwise
      `R2_UNEXPECTED_OUTPUT`.
@@ -256,18 +288,23 @@ same-ACC evidence; S2 is the sign-split evidence.
 
 ## 9. Registered failure predictions
 
-| injected/observed condition | prediction | verdict |
-| --- | --- | --- |
-| ACC cleared/swapped between store #1 and convert #2 | S1 slot 1 = `0x0000`; S2 slots 5/6/7 = 0 | `R2_ACC_DESTROYED` |
-| bias set is ignored; all converts use set 0 | S1 slot 1 = `0x5420`; S2 slot 5 = `0x5420`, slot 6 = `0x0000` | `R2_BIAS_SWITCH_FAILED` |
-| both stores target the same region | S1 slots 0/1 read the second store (`0x5020`); S2 positive buffer holds the negative data | `R2_STORE_INTERFERENCE` |
-| store #1 is overwritten by convert #2 before it reads the convert state | S2 slot 2 = `0x0000`, slot 3 = `0x5420` | `R2_STORE_INTERFERENCE` |
-| convert rounds toward +inf | S1 slot 1 = `0x5021`; S2 slots 2/6 = `0x5421` | `R2_ROUNDING_MISMATCH` |
-| output bias on set 1 is non-zero | S2 slot 6 = `0x5420 + bo` (for `bo=+4`, `0x5460`) | `R2_UNEXPECTED_OUTPUT` |
-| feedback enabled on convert #2 | `Rs` contract fails if `Rs[3:2]!=0`; if the hardware leaks feedback with the registered `Rs`, slot 6 changes | `R2_HOST_CONTRACT_FAILED` or `R2_UNEXPECTED_OUTPUT` |
-| shape 4 not applied | S2 slot 5 = `0x5420`, slot 6 = `0x0000` | `R2_BIAS_SWITCH_FAILED` |
-| a second MMA was executed | counts fail | `R2_HOST_CONTRACT_FAILED` |
-| an unrelated word is corrupted | slot mismatch outside the registered alternatives | `R2_UNEXPECTED_OUTPUT` |
+`R2_ACC_DESTROYED` and `R2_BIAS_SWITCH_FAILED` in the first two rows are
+**CPU fault-injection classifications**, not device conclusions. On the
+device, the same S1 patterns are `R2_CAUSE_INCONCLUSIVE`; the predictions
+below describe the expected raw bits, not a proven cause.
+
+| injected/observed condition | prediction | model verdict | device verdict |
+| --- | --- | --- | --- |
+| ACC cleared/swapped between store #1 and convert #2 | S1 slot 1 = `0x0000`; S2 slots 5/6/7 = 0 | `R2_ACC_DESTROYED` | `R2_CAUSE_INCONCLUSIVE` |
+| bias set is ignored; all converts use set 0 | S1 slot 1 = `0x5420`; S2 slot 5 = `0x5420`, slot 6 = `0x0000` | `R2_BIAS_SWITCH_FAILED` | `R2_CAUSE_INCONCLUSIVE` |
+| both stores target the same region | S1 slots 0/1 read the second store (`0x5020`); S2 positive buffer holds the negative data | `R2_STORE_INTERFERENCE` | `R2_STORE_INTERFERENCE` |
+| store #1 is overwritten by convert #2 before it reads the convert state | S2 slot 2 = `0x0000`, slot 3 = `0x5420` | `R2_STORE_INTERFERENCE` | `R2_STORE_INTERFERENCE` |
+| convert rounds toward +inf | S1 slot 1 = `0x5021`; S2 slots 2/6 = `0x5421` | `R2_ROUNDING_MISMATCH` | `R2_ROUNDING_MISMATCH` |
+| output bias on set 1 is non-zero | S2 slot 6 = `0x5420 + bo` (for `bo=+4`, `0x5460`) | `R2_UNEXPECTED_OUTPUT` | `R2_UNEXPECTED_OUTPUT` |
+| feedback enabled on convert #2 | `Rs` contract fails if `Rs[3:2]!=0`; if the hardware leaks feedback with the registered `Rs`, slot 6 changes | `R2_HOST_CONTRACT_FAILED` or `R2_UNEXPECTED_OUTPUT` | `R2_HOST_CONTRACT_FAILED` or `R2_UNEXPECTED_OUTPUT` |
+| shape 4 not applied | S2 slot 5 = `0x5420`, slot 6 = `0x0000` | `R2_BIAS_SWITCH_FAILED` | `R2_CAUSE_INCONCLUSIVE` |
+| a second MMA was executed | counts fail | `R2_HOST_CONTRACT_FAILED` | `R2_HOST_CONTRACT_FAILED` |
+| an unrelated word is corrupted | slot mismatch outside the registered alternatives | `R2_UNEXPECTED_OUTPUT` | `R2_UNEXPECTED_OUTPUT` |
 
 The feedback output detector is masked if the clamp is inside the convert
 (the previous convert state is already 0). The `Rs` contract is the robust
@@ -282,10 +319,15 @@ verdict; stop.
 * `R2_ACC_REUSE_SUPPORTED` certifies only the S1/S2 minimal configuration. It
   does not certify a full 32-output-channel tile, real-tile accuracy, HVX
   subnormal behaviour, or performance.
-* `R2_ACC_DESTROYED` or `R2_STORE_INTERFERENCE` blocks R2 on this runtime;
-  the next option is R1 or a different export path, not a retune.
-* `R2_BIAS_SWITCH_FAILED` blocks the two-preloaded-set form; the reload form
-  would need a new pre-registration.
+* `R2_STORE_INTERFERENCE` blocks R2 on this runtime; the next option is R1
+  or a different export path, not a retune.
+* `R2_CAUSE_INCONCLUSIVE` stops the decision: record the raw slots, the
+  metadata, the `Rs` echo, the bias-load status and the sentinel pattern;
+  do not assert ACC destruction or bias-switch failure. A follow-up needs a
+  new pre-registration (for example, a feedback variant that separates the
+  retain-bit composition from physical ACC loss).
+* `R2_ACC_DESTROYED` and `R2_BIAS_SWITCH_FAILED` remain **model-only**
+  labels; they are not emitted by the device classifier.
 * `R2_ROUNDING_MISMATCH` means the RN16 assumption does not hold for this
   path; record and diagnose. Do not edit §6.
 * `R2_UNEXPECTED_OUTPUT` is recorded verbatim; no after-the-fact explanation.
@@ -298,6 +340,12 @@ verdict; stop.
 * Mixed per-channel shapes: each set is uniform across 32 channels.
 * HVX subnormal, NaN or Inf behaviour; the fixture uses normal `66.0`/`33.0`.
 * `Rs=0x1001` (retain after the second convert); the run uses `0x1000`.
+* The first convert's `Rs=0x0001` as a **verbatim** no-feedback recipe: the
+  PRM's no-feedback setup rule says to zero the non-bias bits, and Chapter 5's
+  retain example uses feedback. S1 tests the composition, not a documented
+  verbatim sequence.
+* The cause of an ambiguous S1/S2 failure. The device classifier reports
+  `R2_CAUSE_INCONCLUSIVE`; it does not localize the fault.
 * The reload-between-converts bias variant.
 * Real-tile accuracy, throughput, or R1-vs-R2 cost.
 * Any production QNN/Muon path.

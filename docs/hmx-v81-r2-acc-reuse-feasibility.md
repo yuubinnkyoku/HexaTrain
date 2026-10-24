@@ -5,11 +5,18 @@ DSP change, no DSP build, no new HMX mode, no performance measurement, no
 training, no push, no PR merge. This document does not change any standing
 research verdict.
 
-**Verdict: `R2_SPEC_FEASIBLE`.** The PRM specifies every operation R2 needs:
+**Revision 2 (2026-10-25):** added the device-vs-model failure
+classification (`R2_CAUSE_INCONCLUSIVE`), the `Rs=0x0001` no-feedback
+composition caveat, and the 11-slot host readback contract after review. The
+verdict is unchanged.
+
+**Verdict: `R2_SPEC_FEASIBLE`.** The PRM specifies the operations R2 needs:
 the ACC can be retained across converts, a convert reads the ACC and writes
 the convert state without consuming the ACC when `Rs[0]=1`, a second convert
 can select a different bias set, and a store does not modify the convert
-state. Device behaviour for the exact two-convert R2 recipe is **not**
+state. One composition — using the retain bit in a no-feedback convert — is
+`SPEC_IMPLIED` rather than verbatim (§4.2.1), so the device S1 control is
+mandatory. Device behaviour for the exact two-convert R2 recipe is **not**
 verified. A CPU-model PASS is not the basis of the verdict; the PRM text and
 the existing recorded device modes are (§2, §3).
 
@@ -428,6 +435,32 @@ the rest of the register to 0". `0x0001` is the exception required by R2:
 literal recipe. `0x1001` adds only the documented retain bit. The PRM's
 warning "only the necessary bits" is satisfied by all three.
 
+### 4.2.1 The no-feedback retain composition
+
+PRM §2.3.3 says that for a convert without feedback, set `Rs[bias_sel]` to the
+bias index and set the rest of the register to 0. The literal set-0
+no-feedback encoding is therefore `0x0000` (clear+swap), not `0x0001`.
+
+`Rs[0]=1` is the documented retain bit (Table 6), and Chapter 5 uses it, but
+Chapter 5's example also enables feedback (`Rs[8]=1`, `fb_dest=2`, `fb_op=1`).
+R2 removes feedback, so "retain + no feedback" is a **composition of two
+documented behaviours**, not a verbatim PRM recipe.
+
+| claim | class |
+| --- | --- |
+| `Rs[0]=1` retains the ACC values | `SPEC_CONFIRMED` |
+| The no-feedback setup rule says to zero all non-bias bits | `SPEC_CONFIRMED` |
+| `Rs[0]=1` is effective in a no-feedback convert | `SPEC_IMPLIED` |
+| The exact R2 `0x0001` first convert works on device | `NOT_RUN` |
+
+This does not refute R2: Table 6 does not condition the retain bit on
+feedback, and the no-feedback rule is a setup recommendation rather than a
+prohibition. It does mean the S1 control cannot be skipped. If the device
+treats "set the rest to 0" as normative and ignores `Rs[0]=1`, the first
+convert clears the ACC and S1's second slot becomes `0x0000`. That
+observation is `R2_CAUSE_INCONCLUSIVE`, not `R2_ACC_DESTROYED`, because the
+cause could be the composition rather than physical ACC loss.
+
 ### 4.3 Preload both sets vs reload between converts
 
 Both are spec-legal:
@@ -470,9 +503,13 @@ post-convert ACC state differs. A later tile would need an explicit
 
 For the S1 control, convert #2 uses set 2 (`+32`, `Rs=0x2000`). The expected
 words are `0x5420` (first, `64x`) and `0x5020` (second, `32x`), both positive.
-A zero second word means the ACC was destroyed; `0x5420` means set 2 was not
-selected and the hardware fell back to set 0. This is how S1 separates the
-two failure modes without relying on a clamp.
+In the CPU fault-injection model, a zero second word is the injected ACC
+destruction and `0x5420` is the injected set-0 fallback. On a device, those
+bit patterns are **not** cause-identifying: a zero can also come from a
+failed bias load, a convert that did not execute, or a store anomaly, and
+`0x5420` can also come from a missing set-2 row or an ignored `Rs`. The device
+classifier therefore maps both to `R2_CAUSE_INCONCLUSIVE`; S1 narrows the
+possibilities but does not by itself prove the cause.
 
 ## 6. CPU state model and tests
 
@@ -501,8 +538,8 @@ registered conditions.
 
 ### 6.2 Required cases
 
-Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 63 R2 checks pass, and
-the full oracle is 218 checks / 0 failures.
+Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 81 R2 checks pass, and
+the full oracle is 236 checks / 0 failures.
 
 | case | model result | detector result |
 | --- | --- | --- |
@@ -520,6 +557,21 @@ the full oracle is 218 checks / 0 failures.
 | host contract (extra MMA/convert/store, wrong Rs) | counters or Rs differ | `R2_HOST_CONTRACT_FAILED` |
 | negative-ACC lane leaked into the positive buffer | `s2_pos[1]=0x5420` with a correct `s2_pos[0]` | `R2_UNEXPECTED_OUTPUT` |
 
+`R2_ACC_DESTROYED` and `R2_BIAS_SWITCH_FAILED` in that table are **CPU
+fault-injection classifications**: the model knows which fault was injected.
+The future device classifier does not have that knowledge, so it distinguishes
+the direct signatures from the ambiguous ones:
+
+| observed pattern | CPU fault-injection classifier | device classifier |
+| --- | --- | --- |
+| S1 second `0x0000` | `R2_ACC_DESTROYED` (known injection) | `R2_CAUSE_INCONCLUSIVE` |
+| S1 second `0x5420` | `R2_BIAS_SWITCH_FAILED` (known injection) | `R2_CAUSE_INCONCLUSIVE` |
+| S2 `neg(s0)=0x5420` | `R2_BIAS_SWITCH_FAILED` (known injection) | `R2_CAUSE_INCONCLUSIVE` |
+| S2 `neg(s1)=0x0000` | `R2_UNEXPECTED_OUTPUT` | `R2_CAUSE_INCONCLUSIVE` |
+| both stores in one region | `R2_STORE_INTERFERENCE` | `R2_STORE_INTERFERENCE` |
+| S1 second/slot 2/slot 6 = the 1-ULP ceiling word | `R2_ROUNDING_MISMATCH` | `R2_ROUNDING_MISMATCH` |
+| wrong counts, Rs, slot count, sentinel, build id or close | `R2_HOST_CONTRACT_FAILED` | `R2_HOST_CONTRACT_FAILED` |
+
 The nominal output line is:
 
 ```text
@@ -529,13 +581,22 @@ r2_cpu_model nominal=R2_ACC_REUSE_SUPPORTED acc_destroyed=R2_ACC_DESTROYED
              rounding=R2_ROUNDING_MISMATCH
              unexpected=R2_UNEXPECTED_OUTPUT
              contract=R2_HOST_CONTRACT_FAILED
-r2_cpu_model_checks=63
+r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
+             s1_zero=R2_CAUSE_INCONCLUSIVE
+             s1_set0=R2_CAUSE_INCONCLUSIVE
+             store=R2_STORE_INTERFERENCE
+             rounding=R2_ROUNDING_MISMATCH
+             contract=R2_HOST_CONTRACT_FAILED
+r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
+r2_cpu_model_checks=81
 r2_device_verdict=NOT_RUN
 ```
 
 `R2_ACC_REUSE_SUPPORTED` in that line is a **classifier test on a simulated
 observation**, not a device result. The oracle prints `r2_device_verdict=
-NOT_RUN` unconditionally so the two cannot be conflated.
+NOT_RUN` unconditionally so the two cannot be conflated. The device
+classifier is the future decision procedure; the model classifier is the
+fault-injection test oracle.
 
 ### 6.3 What the CPU model does and does not prove
 
@@ -658,6 +719,45 @@ addresses are 256 B aligned (Table 3). The two output regions are disjoint;
 the oracle §12.15 checks the offsets/alignment/disjointness and the 1,024-cell
 store bijection.
 
+### 8.1.1 Host readback: 11 slots and the fail-closed contract
+
+The current host result buffer is four slots. The first R2 device test needs
+11 slots in this fixed order:
+
+| slot | subcase | buffer | lane | expected |
+| --- | --- | --- | --- | --- |
+| 0 | S1 | first | `(s0,o0)` | `0x5420` |
+| 1 | S1 | second | `(s0,o0)` | `0x5020` |
+| 2 | S2 | positive | `(s0,o0)` | `0x5420` |
+| 3 | S2 | positive | `(s1,o0)` | `0x0000` |
+| 4 | S2 | positive | `(s2,o0)` | `0x0000` |
+| 5 | S2 | negative | `(s0,o0)` | `0x0000` |
+| 6 | S2 | negative | `(s1,o0)` | `0x5420` |
+| 7 | S2 | negative | `(s2,o0)` | `0x0000` |
+| 8 | S2 | recon | `(s0,o0)` | `0x5420` |
+| 9 | S2 | recon | `(s1,o0)` | `0xD420` |
+| 10 | S2 | recon | `(s2,o0)` | `0x0000` |
+
+The future host must widen its result buffer from 4 to 11. The RPC IDL already
+uses an unbounded `sequence<long>`, so no IDL change is needed. The CPU-side
+`r2_pack_slots()` check verifies this order and the 11 expected words; the
+actual host change is part of the future device work, not this study.
+
+Before interpreting any slot, the host must fail closed on all of:
+
+* `results.size() == 11` and every slot is zero-extended 16-bit (`0..0xFFFF`);
+* no `0xA5A5` sentinel (a store that did not execute);
+* `metadata` counts: 2 MMA, 4 convert, 4 store, 3 bias load, 2 trials,
+  `hmx_executed=1`;
+* the four `Rs` values are the registered `0x0001`, `0x2000`, `0x0001`,
+  `0x1000`;
+* `out_pos` and `out_neg` are distinct and 2 KiB aligned;
+* host/DSP build id match, RPC status 0, close status 0.
+
+Any failure is `R2_HOST_CONTRACT_FAILED`; the slots are not interpreted. The
+oracle's `r2.host.*` checks toggle the slot count, sentinel count, build-id
+match and close status to prove the fail-closed path on CPU.
+
 ### 8.2 Store layout is an activation crouton
 
 The store layout is:
@@ -755,10 +855,13 @@ Conditions and caveats:
 
 ### `R2_SPEC_FEASIBLE`
 
-The spec-side conditions are met:
+The spec-side conditions are met, with one explicitly labelled
+`SPEC_IMPLIED` composition:
 
 1. **ACC reuse:** `Rs[0]=1` retains the ACC; the PRM's Chapter 5 example runs
-   two converts over one ACC without an intervening MMA.
+   two converts over one ACC without an intervening MMA. The retain bit is
+   confirmed, but its use in a no-feedback convert is `SPEC_IMPLIED`
+   (§4.2.1) and must be checked by S1 on the device.
 2. **Bias-set switch:** four bias sets exist; `Rs[13:12]` selects one; both
    sets can be preloaded before the first convert.
 3. **Store independence:** the store reads the convert state and does not
@@ -772,8 +875,8 @@ The spec-side conditions are met:
 This is not `R2_SPEC_BLOCKED`: no PRM statement forbids any required step.
 It is not `R2_INSUFFICIENT_SPEC_EVIDENCE`: the core operations (retain, bias
 select, store non-modification) are explicitly specified. The remaining gaps
-are device behaviour and one unspecified ordering detail, not missing
-specification of ACC reuse.
+are device behaviour, the `Rs=0x0001` no-feedback composition (§4.2.1), and
+one unspecified ordering detail, not missing specification of ACC reuse.
 
 The verdict is **not** based on the CPU model's PASS. The CPU model only
 shows that the decision procedure can distinguish success from the registered
@@ -786,32 +889,40 @@ failure modes. The PRM text and the existing device modes are the basis.
   convert can only be issued once per MMA. None of those statements exists.
 * `R2_INSUFFICIENT_SPEC_EVIDENCE` if the "convert reads the primary ACC"
   reading were contradicted, or if the two-convert Chapter 5 example were
-  found not to apply to the no-feedback path. The example uses feedback, but
-  the ACC-retention mechanism is the same; the no-feedback path is a subset.
+  found not to apply to the no-feedback path, or if the no-feedback rule were
+  shown to prohibit `Rs[0]=1`. The example uses feedback, but the
+  ACC-retention mechanism is the same; the no-feedback path is a subset.
 
 ## 11. Unresolved items and recommended next gates
 
 1. **Minimal device test (pre-registered, not authorised).** S1 retention +
    bias-set control, S2 sign split. One build, one run, two subcases, 11
-   readback slots. See [`hmx-v81-r2-device-prereg.md`](hmx-v81-r2-device-prereg.md).
-2. **HVX subnormal behaviour.** Measure `vsub.hf` on subnormal inputs and
+   readback slots. S1's ambiguous `0x0000`/`0x5420` observations are
+   `R2_CAUSE_INCONCLUSIVE`, not cause verdicts. See
+   [`hmx-v81-r2-device-prereg.md`](hmx-v81-r2-device-prereg.md).
+2. **`Rs=0x0001` no-feedback composition.** The PRM's no-feedback setup rule
+   says to zero the non-bias bits, while Chapter 5's retain example uses
+   feedback. S1 is the first direct test of retain + no feedback. If it fails,
+   the cause is not automatically physical ACC loss; it may be the composition
+   itself. A follow-up that uses feedback would be a new pre-registration.
+3. **HVX subnormal behaviour.** Measure `vsub.hf` on subnormal inputs and
    results, or keep the first kernel in the normal FP16 range. Do not assume
    IEEE subnormal preservation from the current documentation.
-3. **Store/convert ordering at the R2 configuration.** Mode 22 already
+4. **Store/convert ordering at the R2 configuration.** Mode 22 already
    preserves the first store, but its second bias row is shape 0. The S2
    first-store check is the R2-specific confirmation. If the first store is
    overwritten, the verdict is `R2_STORE_INTERFERENCE`, not a numerical
    mismatch.
-4. **Clamp stage.** The clamp is downstream of shape but not localised between
+5. **Clamp stage.** The clamp is downstream of shape but not localised between
    convert and store. R2's no-feedback path does not depend on the stage: both
    halves are non-negative, and the store clamp only removes the inactive
    half. The stage matters only for the output-based feedback detector (§6.3).
-5. **Real-tile accuracy.** The 1,024-cell tile is a CPU model. Real-tile
+6. **Real-tile accuracy.** The 1,024-cell tile is a CPU model. Real-tile
    accuracy remains `INSUFFICIENT_EVIDENCE`.
-6. **Cost/throughput.** The static model says R2 uses half the MMA packets of
+7. **Cost/throughput.** The static model says R2 uses half the MMA packets of
    R1 and the same convert/store/HVX cell count. It does not say R2 is faster.
    A timed kernel remains E-3C2, `UNTRIGGERED`.
-7. **R1 vs R2 selection.** R2 is strictly better on MMA count under the
+8. **R1 vs R2 selection.** R2 is strictly better on MMA count under the
    32-channel ACC limit and avoids duplicating the weight tile. R1 may still
    be simpler if a duplicated-channel layout is already available, but it
    pays 2x MMA. No timing or real-tile accuracy comparison exists.
@@ -834,9 +945,16 @@ r2_cpu_model nominal=R2_ACC_REUSE_SUPPORTED acc_destroyed=R2_ACC_DESTROYED
              rounding=R2_ROUNDING_MISMATCH
              unexpected=R2_UNEXPECTED_OUTPUT
              contract=R2_HOST_CONTRACT_FAILED
-r2_cpu_model_checks=63
+r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
+             s1_zero=R2_CAUSE_INCONCLUSIVE
+             s1_set0=R2_CAUSE_INCONCLUSIVE
+             store=R2_STORE_INTERFERENCE
+             rounding=R2_ROUNDING_MISMATCH
+             contract=R2_HOST_CONTRACT_FAILED
+r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
+r2_cpu_model_checks=81
 r2_device_verdict=NOT_RUN
-hmx_signed_output_oracle checks=218 fail=0
+hmx_signed_output_oracle checks=236 fail=0
 hmx_signed_output_oracle=PASS
 
 r2_g9 cells=1024 plain_direct_mean_abs=1.307244e-03 ...
@@ -860,16 +978,16 @@ At the time of this audit:
   `origin/experiment/hmx-acc-residual-feedback`;
 * `cb41b7c` and `b0b7edf` were present and untouched;
 * working tree was clean at the start;
-* `scripts/verify.ps1 -Profile Fast` was run after the code changes:
-  **PASS**, 543.1 s, `PASS=10 FAIL=0 SKIP=21`, exit 0. The run includes the
-  R2 oracle (`checks=218 fail=0`, `r2_cpu_model_checks=63`), the split sim
-  (`fp16x2_split_sim=PASS cases=115573`), and `host-fast-contract PASS`
-  (60.8 s). The cold Gradle `unit-tests` step (466.4 s) dominated the
-  runtime; the 1–3 minute target assumes a warm Gradle cache, and the
-  longer runtime here is not a test failure. A duplicate confirmation run
-  was cut off by the 600 s tool limit while re-running the same host tests;
-  it did not report a failure, and the completed run above compiled and ran
-  the final oracle (218 checks).
+* revision 2 was prepared on top of `abe37ed` and is committed separately;
+  no push;
+* `scripts/verify.ps1 -Profile Fast` was run after the revision-2 code
+  changes: **PASS**, 534.7 s, `PASS=10 FAIL=0 SKIP=21`, exit 0. The run
+  includes the R2 oracle (`checks=236 fail=0`, `r2_cpu_model_checks=81`),
+  the split sim (`fp16x2_split_sim=PASS cases=115573`), and
+  `host-fast-contract PASS` (68.2 s). The Gradle `unit-tests` step (428.3 s)
+  dominated the runtime; the 1–3 minute target assumes a warm cache, and the
+  longer runtime here is not a test failure. No required step was skipped or
+  converted into a PASS.
 
 Changed files for this study:
 

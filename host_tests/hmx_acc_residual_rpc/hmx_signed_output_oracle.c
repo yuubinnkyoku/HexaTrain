@@ -586,6 +586,7 @@ typedef enum {
   R2_BIAS_SWITCH_FAILED,
   R2_STORE_INTERFERENCE,
   R2_ROUNDING_MISMATCH,
+  R2_CAUSE_INCONCLUSIVE,
   R2_UNEXPECTED_OUTPUT,
   R2_HOST_CONTRACT_FAILED
 } r2_verdict_t;
@@ -597,6 +598,7 @@ static const char *r2_verdict_name(r2_verdict_t verdict) {
     case R2_BIAS_SWITCH_FAILED: return "R2_BIAS_SWITCH_FAILED";
     case R2_STORE_INTERFERENCE: return "R2_STORE_INTERFERENCE";
     case R2_ROUNDING_MISMATCH: return "R2_ROUNDING_MISMATCH";
+    case R2_CAUSE_INCONCLUSIVE: return "R2_CAUSE_INCONCLUSIVE";
     case R2_UNEXPECTED_OUTPUT: return "R2_UNEXPECTED_OUTPUT";
     case R2_HOST_CONTRACT_FAILED: return "R2_HOST_CONTRACT_FAILED";
   }
@@ -617,10 +619,16 @@ typedef struct {
   int store_count;
   int trials;
   int hmx_executed;
+  int slot_count;
+  int sentinel_hits;
+  int build_id_match;
+  int close_ok;
   int pos_region_writes;
   int neg_region_writes;
   unsigned rs_first;
+  unsigned rs_s1_second;
   unsigned rs_second;
+  int bias_loads;
   unsigned bias_sel_first;
   unsigned bias_sel_second;
 } r2_observation_t;
@@ -631,18 +639,27 @@ typedef struct {
   const char *cause;
 } r2_report_t;
 
-static r2_report_t r2_classify(const r2_observation_t *o) {
+/* device=0 is the CPU fault-injection classifier: it knows the injected cause
+ * and may return R2_ACC_DESTROYED / R2_BIAS_SWITCH_FAILED. device=1 is the
+ * future device classifier: a bit pattern alone cannot establish those causes,
+ * so the ambiguous S1/S2 patterns return R2_CAUSE_INCONCLUSIVE instead. */
+static r2_report_t r2_classify_mode(const r2_observation_t *o, int device) {
   r2_report_t r;
   r.verdict = R2_UNEXPECTED_OUTPUT;
   r.name = r2_verdict_name(r.verdict);
   r.cause = "unmatched";
 
   /* 1. Host contract: the registered recipe and only that recipe. A feedback
-   *    bit in Rs[3:2], a third MMA or a missing convert/store fails closed. */
+   *    bit in Rs[3:2], a third MMA, a missing convert/store, a wrong slot
+   *    count, an unwritten-store sentinel, a build-id mismatch or a failed
+   *    close fails closed. */
   if (o->mma_count != 2 || o->convert_count != 4 || o->store_count != 4 ||
-      o->trials != 2 || o->hmx_executed != 1 || o->rs_first != 0x0001u ||
+      o->trials != 2 || o->hmx_executed != 1 || o->slot_count != 11 ||
+      o->sentinel_hits != 0 || !o->build_id_match || !o->close_ok ||
+      o->rs_first != 0x0001u || o->rs_s1_second != 0x2000u ||
       (o->rs_second != 0x1000u && o->rs_second != 0x1001u) ||
-      o->bias_sel_first != 0u || o->bias_sel_second != 1u) {
+      o->bias_loads != 3 || o->bias_sel_first != 0u ||
+      o->bias_sel_second != 1u) {
     r.verdict = R2_HOST_CONTRACT_FAILED;
     r.name = r2_verdict_name(r.verdict);
     r.cause = "counts_or_rs";
@@ -674,15 +691,17 @@ static r2_report_t r2_classify(const r2_observation_t *o) {
     return r;
   }
   if (o->s1_second == 0x0000u) {
-    r.verdict = R2_ACC_DESTROYED;
+    r.verdict = device ? R2_CAUSE_INCONCLUSIVE : R2_ACC_DESTROYED;
     r.name = r2_verdict_name(r.verdict);
-    r.cause = "s1_second_zero_after_retained_convert";
+    r.cause = device ? "s1_second_zero_ambiguous_acc_or_bias_or_convert_or_store"
+                     : "s1_second_zero_after_retained_convert";
     return r;
   }
   if (o->s1_second == 0x5420u) {
-    r.verdict = R2_BIAS_SWITCH_FAILED;
+    r.verdict = device ? R2_CAUSE_INCONCLUSIVE : R2_BIAS_SWITCH_FAILED;
     r.name = r2_verdict_name(r.verdict);
-    r.cause = "s1_second_used_set0";
+    r.cause = device ? "s1_second_set0_ambiguous_bias_load_or_rs_or_store"
+                     : "s1_second_used_set0";
     return r;
   }
   if (o->s1_second != 0x5020u) {
@@ -710,13 +729,17 @@ static r2_report_t r2_classify(const r2_observation_t *o) {
     return r;
   }
   if (o->s2_neg[0] != 0x0000u) {
-    r.verdict = R2_BIAS_SWITCH_FAILED;
+    r.verdict = device ? R2_CAUSE_INCONCLUSIVE : R2_BIAS_SWITCH_FAILED;
     r.name = r2_verdict_name(r.verdict);
-    r.cause = "shape4_not_applied";
+    r.cause = device ? "s2_neg_s0_nonzero_ambiguous_bias_shape_or_store"
+                     : "shape4_not_applied";
     return r;
   }
   if (o->s2_neg[1] == 0x0000u) {
-    r.cause = "negative_half_missing";
+    r.verdict = device ? R2_CAUSE_INCONCLUSIVE : R2_UNEXPECTED_OUTPUT;
+    r.name = r2_verdict_name(r.verdict);
+    r.cause = device ? "s2_negative_half_missing_ambiguous"
+                     : "negative_half_missing";
     return r;
   }
   if (o->s2_neg[1] != 0x5420u) {
@@ -739,6 +762,14 @@ static r2_report_t r2_classify(const r2_observation_t *o) {
   return r;
 }
 
+static r2_report_t r2_classify(const r2_observation_t *o) {
+  return r2_classify_mode(o, 0);
+}
+
+static r2_report_t r2_classify_device(const r2_observation_t *o) {
+  return r2_classify_mode(o, 1);
+}
+
 static void r2_observe(const r2_state *s1, const r2_state *s2,
                        r2_observation_t *o) {
   static const int idx[3] = {0, 1, 64}; /* (s0,o0), (s1,o0), (s2,o0) */
@@ -755,12 +786,32 @@ static void r2_observe(const r2_state *s1, const r2_state *s2,
   o->store_count = (int)(s1->store_count + s2->store_count);
   o->trials = 2;
   o->hmx_executed = 1;
+  o->slot_count = 11;
+  o->sentinel_hits = 0;
+  o->build_id_match = 1;
+  o->close_ok = 1;
   o->pos_region_writes = s1->mem_written[0] + s2->mem_written[0];
   o->neg_region_writes = s1->mem_written[1] + s2->mem_written[1];
   o->rs_first = 0x0001u;
+  o->rs_s1_second = 0x2000u;
   o->rs_second = 0x1000u;
+  o->bias_loads = 3;
   o->bias_sel_first = 0u;
   o->bias_sel_second = 1u;
+}
+
+/* The future host readback order. The current host buffer is four slots; the
+ * device pre-registration widens it to eleven. This function is the CPU-side
+ * contract for that order: S1 first/second, then S2 pos/neg/recon for the
+ * (s0,o0), (s1,o0), (s2,o0) lanes. */
+static void r2_pack_slots(const r2_observation_t *o, uint16_t slots[11]) {
+  slots[0] = o->s1_first;
+  slots[1] = o->s1_second;
+  for (int k = 0; k < 3; ++k) {
+    slots[2 + k] = o->s2_pos[k];
+    slots[5 + k] = o->s2_neg[k];
+    slots[8 + k] = o->s2_recon[k];
+  }
 }
 
 static void r2_state_model_tests(void) {
@@ -768,6 +819,8 @@ static void r2_state_model_tests(void) {
   r2_observation_t obs;
   r2_report_t rep;
   r2_report_t r_nominal, r_acc, r_bias, r_store, r_round, r_unexpected, r_contract;
+  r2_report_t r_dev_nominal, r_dev_acc, r_dev_bias, r_dev_store, r_dev_round,
+      r_dev_contract;
   const long checks_before = checks;
   const double a = 1.0 + ldexp(1.0, -6);
   const double x = a * a;
@@ -845,6 +898,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_nominal = rep;
   check_true("r2.cpu.nominal", rep.verdict == R2_ACC_REUSE_SUPPORTED);
+  r_dev_nominal = r2_classify_device(&obs);
+  check_true("r2.device.nominal",
+             r_dev_nominal.verdict == R2_ACC_REUSE_SUPPORTED);
 
   /* 12.8 Fault injection: ACC destroyed after the first store. */
   r2_build_control_tile(&s1, x);
@@ -865,6 +921,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_acc = rep;
   check_true("r2.destroyed.verdict", rep.verdict == R2_ACC_DESTROYED);
+  r_dev_acc = r2_classify_device(&obs);
+  check_true("r2.destroyed.device_inconclusive",
+             r_dev_acc.verdict == R2_CAUSE_INCONCLUSIVE);
 
   /* 12.9 Fault injection: Rs selects set 1 but the hardware silently uses
    *      set 0. The S1 control exposes the switch failure with a positive
@@ -888,6 +947,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_bias = rep;
   check_true("r2.biasfail.verdict", rep.verdict == R2_BIAS_SWITCH_FAILED);
+  r_dev_bias = r2_classify_device(&obs);
+  check_true("r2.biasfail.device_inconclusive",
+             r_dev_bias.verdict == R2_CAUSE_INCONCLUSIVE);
 
   /* 12.10 Fault injection: both stores target region 0. The second store
    *       overwrites the first, and the negative buffer is never written. */
@@ -908,6 +970,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_store = rep;
   check_true("r2.store.verdict", rep.verdict == R2_STORE_INTERFERENCE);
+  r_dev_store = r2_classify_device(&obs);
+  check_true("r2.store.device_interference",
+             r_dev_store.verdict == R2_STORE_INTERFERENCE);
 
   /* 12.11 Fault injection: one-ULP ceiling rounding instead of RN16. */
   r2_build_control_tile(&s1, x);
@@ -923,6 +988,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_round = rep;
   check_true("r2.round.verdict", rep.verdict == R2_ROUNDING_MISMATCH);
+  r_dev_round = r2_classify_device(&obs);
+  check_true("r2.round.device_rounding",
+             r_dev_round.verdict == R2_ROUNDING_MISMATCH);
 
   /* 12.12 Fault injection: non-zero output bias on the shape-4 row. */
   r2_build_control_tile(&s1, x);
@@ -954,6 +1022,9 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   r_contract = rep;
   check_true("r2.fb.rs_contract", rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r_dev_contract = r2_classify_device(&obs);
+  check_true("r2.fb.device_contract",
+             r_dev_contract.verdict == R2_HOST_CONTRACT_FAILED);
 
   r2_build_control_tile(&s1, x);
   r2_run_control_tile(&s1);
@@ -1009,6 +1080,20 @@ static void r2_state_model_tests(void) {
   rep = r2_classify(&obs);
   check_true("r2.posleak.verdict", rep.verdict == R2_UNEXPECTED_OUTPUT);
 
+  /* 12.14c A non-zero shape-4 buffer at the positive lane. The model knows
+   *        the injected bias failure; a device observation alone cannot
+   *        distinguish bias selection from shape or store failure. */
+  r2_build_control_tile(&s1, x);
+  r2_run_control_tile(&s1);
+  r2_build_sign_tile(&s2, x, -x);
+  r2_run_sign_tile(&s2);
+  r2_observe(&s1, &s2, &obs);
+  obs.s2_neg[0] = 0x5420u;
+  check_true("r2.s2neg0.model",
+             r2_classify(&obs).verdict == R2_BIAS_SWITCH_FAILED);
+  check_true("r2.s2neg0.device_inconclusive",
+             r2_classify_device(&obs).verdict == R2_CAUSE_INCONCLUSIVE);
+
   r2_build_control_tile(&s1, x);
   r2_run_control_tile(&s1);
   r2_build_sign_tile(&s2, x, -x);
@@ -1029,6 +1114,16 @@ static void r2_state_model_tests(void) {
   obs.rs_second = 0x1004u; /* feedback destination set */
   rep = r2_classify(&obs);
   check_true("r2.contract.feedback_rs",
+             rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r2_observe(&s1, &s2, &obs);
+  obs.rs_s1_second = 0x0000u; /* S1 second convert lost its set-2 select */
+  rep = r2_classify(&obs);
+  check_true("r2.contract.s1_second_rs",
+             rep.verdict == R2_HOST_CONTRACT_FAILED);
+  r2_observe(&s1, &s2, &obs);
+  obs.bias_loads = 2; /* one of the three prologue loads did not execute */
+  rep = r2_classify(&obs);
+  check_true("r2.contract.bias_loads",
              rep.verdict == R2_HOST_CONTRACT_FAILED);
 
   /* 12.15 VTCM layout: two 2-KiB-aligned output regions, two 256-B-aligned
@@ -1057,10 +1152,56 @@ static void r2_state_model_tests(void) {
     check_u32("r2.layout.store_bijection_dup", dup, 0u);
   }
 
+  /* 12.16 11-slot host readback and fail-closed metadata. */
+  {
+    uint16_t slots[11];
+    static const uint16_t expected[11] = {
+        0x5420u, 0x5020u, 0x5420u, 0x0000u, 0x0000u, 0x0000u,
+        0x5420u, 0x0000u, 0x5420u, 0xd420u, 0x0000u};
+    int slot_ok = 1, sentinel_ok = 1;
+    r2_build_control_tile(&s1, x);
+    r2_run_control_tile(&s1);
+    r2_build_sign_tile(&s2, x, -x);
+    r2_run_sign_tile(&s2);
+    r2_observe(&s1, &s2, &obs);
+    r2_pack_slots(&obs, slots);
+    for (int k = 0; k < 11; ++k) {
+      if (slots[k] != expected[k]) slot_ok = 0;
+      if (slots[k] == 0xa5a5u) sentinel_ok = 0;
+    }
+    check_true("r2.slots.expected", slot_ok);
+    check_true("r2.slots.no_sentinel", sentinel_ok);
+    check_u32("r2.slots.count", (uint32_t)obs.slot_count, 11u);
+    check_true("r2.slots.device_supported",
+               r2_classify_device(&obs).verdict == R2_ACC_REUSE_SUPPORTED);
+
+    r2_observe(&s1, &s2, &obs);
+    obs.slot_count = 10;
+    check_true("r2.host.slot_count",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.sentinel_hits = 1;
+    check_true("r2.host.sentinel",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.build_id_match = 0;
+    check_true("r2.host.build_id",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+    r2_observe(&s1, &s2, &obs);
+    obs.close_ok = 0;
+    check_true("r2.host.close",
+               r2_classify_device(&obs).verdict == R2_HOST_CONTRACT_FAILED);
+  }
+
   printf("r2_cpu_model nominal=%s acc_destroyed=%s bias_switch=%s "
          "store_interference=%s rounding=%s unexpected=%s contract=%s\n",
          r_nominal.name, r_acc.name, r_bias.name, r_store.name, r_round.name,
          r_unexpected.name, r_contract.name);
+  printf("r2_device_classifier nominal=%s s1_zero=%s s1_set0=%s "
+         "store=%s rounding=%s contract=%s\n",
+         r_dev_nominal.name, r_dev_acc.name, r_dev_bias.name,
+         r_dev_store.name, r_dev_round.name, r_dev_contract.name);
+  printf("r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS\n");
   printf("r2_cpu_model_checks=%ld\n", checks - checks_before);
   /* This line is deliberately unconditional. No device was contacted and the
    * nominal label is a decision-procedure test, not an established result. */
