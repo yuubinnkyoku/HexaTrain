@@ -179,8 +179,19 @@ Decision table (this is why E-3D matters):
 The standing cost caution is unchanged and independent of this document: against
 the kernel-given-input reference, the W-only variant of the current
 FP16-activation path regresses 1.4–1.5× at ~3× MMA cost, so a useful kernel has
-to justify that cost. A split that needs two converts and two stores per tile
-adds store bandwidth, not MMA work (the ACC is reused).
+to justify that cost. The CPU follow-up
+(`docs/hmx-v81-sign-separated-output-cpu.md`) refines the split cost: if the
+two shapes are carried by duplicated output channels in one pass, the split
+costs ~2× MMA per logical output (a 32-output tile then carries 16 logical
+outputs) in addition to the second convert and store. A two-pass variant that
+re-reads a retained ACC would keep 1× MMA, but that sequence is unverified.
+Neither realization has been timed.
+
+CPU evaluation (2026-10-24): the shape-0/4 pair reproduces the signed RN16
+value on all 5,632 sweep cases and on the 1,024-cell G8 tile
+(`b3_bits_diff = 0`), and carries the B3-vs-plain ratio over exactly
+(`1.845321`). It requires `bo = 0` and is a re-encoding, not a precision gain;
+it is not device-confirmed for shapes 2/5 or outside the E-3D magnitudes.
 
 ## 6. What E-3D decides, candidate by candidate
 

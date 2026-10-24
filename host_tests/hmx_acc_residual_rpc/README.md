@@ -1482,3 +1482,24 @@ Gate and evidence retention:
   (disk-full failure), `build/hmx-e3d/fast-mode44-success-20261024.log`
   (successful Fast), `build/hmx-e3d/e3d-device-run-20261024.log` (raw
   device session).
+
+#### Sign-separated reconstruction: CPU-only follow-up (2026-10-24)
+
+The E-3D result enables a candidate workaround rather than a signed store:
+duplicate each logical output into two physical channels, convert the same ACC
+with `shape 0` and `shape 4`, and subtract the two stores in HVX. CPU models
+only; no device contact, no new mode, no timing.
+
+* `hmx_signed_output_oracle.c` §11: 5,632-case band sweep (subnormal through
+  overflow), `both_nonzero = 0`, `numeric_mismatch = 0`; only `-0` differs
+  bitwise; `bo ≠ 0` failure modes and the signed-store counterfactual pinned.
+* `hmx_fp16x2_split_sim.c` G9: the 1,024-cell G8 tile is reproduced
+  bit-for-bit (`plain_bits_diff = 0`, `b3_bits_diff = 0`), so the B3-vs-plain
+  ratio is carried over exactly (`1.845321`), with
+  `improved/equal/worsened = 427/597/0` unchanged.
+* Requirement: `bo = 0`; only `bi` (pre-shape) may carry a bias. Cost is ~2×
+  MMA per logical output if the two shapes share one output tile. Not a
+  signed HMX store and not device-confirmed outside the E-3D magnitudes.
+
+Full evaluation: `docs/hmx-v81-sign-separated-output-cpu.md`. Statuses above
+are unchanged; E-3C2 remains `UNTRIGGERED`.

@@ -32,6 +32,10 @@
 //  10. mode-44 (E-3D) host contract classifier: every registered pattern,
 //      the precondition, the single-cell fallback, the unmatched case and
 //      the one-trial contract.
+//  11. Sign-separated reconstruction with the E-3D shapes:
+//      y = store(shape 0(y)) - store(shape 4(y)). Sweep, failure modes and
+//      the clamp-law validity guard. CPU-only; no device behavior beyond
+//      the E-3D four slots is assumed.
 
 #include <math.h>
 #include <stdint.h>
@@ -94,6 +98,18 @@ static uint16_t prm_convert_rn16(double acc, double bi, unsigned shape,
 // Empirical device law (README law 4, NOT PRM): negative stored value -> 0x0000.
 static uint16_t empirical_negative_clamp(uint16_t pre) {
   return (pre & 0x8000u) ? 0x0000u : pre;
+}
+
+// E-3D sign-separated store model. The same ACC is converted twice: shape 0
+// exports it and shape 4 exports its negation. Under the measured clamp law
+// exactly one of the two words survives when bo = 0, so the FP16 subtraction
+// is exact and no second rounding enters the result. Returns the
+// reconstructed bits; *s0 / *s4 receive the two stored words.
+static uint16_t split04_store(double acc, double bi, double scale,
+                              double out_bias, uint16_t *s0, uint16_t *s4) {
+  *s0 = empirical_negative_clamp(prm_convert_rn16(acc, bi, 0u, scale, out_bias));
+  *s4 = empirical_negative_clamp(prm_convert_rn16(acc, bi, 4u, scale, out_bias));
+  return double_to_fp16(fp16_to_double(*s0) - fp16_to_double(*s4));
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +846,148 @@ int main(void) {
                  r.verdict == HMX_MODE44_INCONCLUSIVE_UNMATCHED &&
                      r.matched == 0);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // 11. Sign-separated reconstruction with the E-3D-confirmed shapes:
+  //       y_rec = store(shape 0(y)) - store(shape 4(y)).
+  //
+  // This section models ENCODING only; the ACC source is not changed. A
+  // difference against a signed RN16 store here would therefore be a
+  // re-encoding defect, never an arithmetic gain.
+  //
+  // Preconditions (PRM-derived or measured):
+  //   * shape 0 = identity, shape 4 = -x     (Table 5; E-3D out[2] = 0x0000)
+  //   * negative pre-store value -> 0x0000   (E-3D four slots)
+  //   * out_bias bo = 0 on both channels     (E-3D bias row)
+  //   * both duplicated channels share one positive scale
+  //
+  // With bo = 0 exactly one half survives, so there is one RN16 rounding per
+  // output and the subtraction is exact. The method is bit-equivalent to a
+  // signed RN16 store up to +/-0 and NaN payload; the sweep below is banded
+  // (subnormal .. overflow) so a band-limited failure cannot hide.
+  // -------------------------------------------------------------------------
+  {
+    long cases = 0, both_nonzero = 0, one_sided = 0, both_zero = 0;
+    long numeric_mismatch = 0, neg_zero_bitdiff = 0;
+    for (int e = -32; e <= 11; ++e) {
+      for (int k = 0; k < 64; ++k) {
+        const double mant = 1.0 + (double)k / 64.0;
+        for (int sign = -1; sign <= 1; sign += 2) {
+          const double y = sign * ldexp(mant, e);
+          const uint16_t direct = double_to_fp16(64.0 * y);
+          uint16_t s0, s4;
+          const uint16_t recon = split04_store(y, 0.0, 64.0, 0.0, &s0, &s4);
+          if (s0 != 0u && s4 != 0u) ++both_nonzero;
+          if ((s0 != 0u) != (s4 != 0u)) ++one_sided;
+          if (s0 == 0u && s4 == 0u) ++both_zero;
+          if (fp16_to_double(recon) != fp16_to_double(direct)) {
+            ++numeric_mismatch;
+          } else if (recon != direct) {
+            // Only expected bit difference: RN16(-0) = 0x8000 on the direct
+            // path vs +0 on the split path. Numerically identical.
+            ++neg_zero_bitdiff;
+          }
+          ++cases;
+        }
+      }
+    }
+    printf("split04 sweep: cases=%ld both_nonzero=%ld one_sided=%ld "
+           "both_zero=%ld numeric_mismatch=%ld neg_zero_bitdiff=%ld\n",
+           cases, both_nonzero, one_sided, both_zero, numeric_mismatch,
+           neg_zero_bitdiff);
+    check_true("split04.sweep_nonempty", cases > 0);
+    check_u32("split04.both_nonzero", (uint32_t)both_nonzero, 0u);
+    check_u32("split04.numeric_mismatch", (uint32_t)numeric_mismatch, 0u);
+    check_true("split04.neg_zero_band_exercised", neg_zero_bitdiff > 0);
+  }
+
+  // The four E-3D slots reproduced from the measured ACC magnitudes.
+  {
+    uint16_t s0, s4;
+    const uint16_t neg = split04_store(-x, 0.0, 64.0, 0.0, &s0, &s4);
+    check_bits("split04.e3d_neg_shape0", s0, 0x0000u);
+    check_bits("split04.e3d_neg_shape4", s4, 0x5420u);
+    check_bits("split04.e3d_neg_recon", neg, 0xd420u);
+    const uint16_t pos = split04_store(x, 0.0, 64.0, 0.0, &s0, &s4);
+    check_bits("split04.e3d_pos_shape0", s0, 0x5420u);
+    check_bits("split04.e3d_pos_shape4", s4, 0x0000u);
+    check_bits("split04.e3d_pos_recon", pos, 0x5420u);
+    const uint16_t neg2 = split04_store(-2.0 * x, 0.0, 64.0, 0.0, &s0, &s4);
+    check_bits("split04.e3d_2x_shape4", s4, 0x5820u);
+    check_bits("split04.e3d_2x_recon", neg2, 0xd820u);
+  }
+
+  // Validity guard. The split is correct only while the clamp law holds: if
+  // a future mode preserved the sign, shape 0 would export -32 (not 0),
+  // shape 4 would export +32, and the subtraction would return 2y. The
+  // E-3D slots out[1] == 0x0000 and out[2] == 0x0000 are the re-test.
+  {
+    const double y = -0.5;
+    const uint16_t signed0 = double_to_fp16(64.0 * y);   // 0xd000
+    const uint16_t signed4 = double_to_fp16(-64.0 * y);  // 0x5000
+    const uint16_t recon =
+        double_to_fp16(fp16_to_double(signed0) - fp16_to_double(signed4));
+    check_bits("split04.signed_store_shape0", signed0, 0xd000u);
+    check_bits("split04.signed_store_shape4", signed4, 0x5000u);
+    check_bits("split04.signed_store_recon_is_2y", recon, 0xd400u);
+  }
+
+  // bo != 0 breaks the pair. The bias is added AFTER the shape, so it
+  // survives once (small bias -> y + bo) or twice (large bias -> 2y).
+  {
+    uint16_t s0, s4;
+    const uint16_t two_y = split04_store(-0.5, 0.0, 64.0, 64.0, &s0, &s4);
+    check_bits("split04.bo64_shape0", s0, 0x5000u);  // -32 + 64 = +32
+    check_bits("split04.bo64_shape4", s4, 0x5600u);  // +32 + 64 = +96
+    check_bits("split04.bo64_recon_is_2y", two_y, 0xd400u);
+    check_true("split04.bo64_both_nonzero", s0 != 0u && s4 != 0u);
+
+    const uint16_t y_plus = split04_store(0.5, 0.0, 64.0, 1.0, &s0, &s4);
+    check_bits("split04.bo1_positive_shape0", s0, 0x5020u);  // 32 + 1
+    check_bits("split04.bo1_positive_shape4", s4, 0x0000u);
+    check_bits("split04.bo1_positive_recon", y_plus, 0x5020u);
+    // The both-nonzero symptom does NOT cover this case, so a data-only
+    // detector would miss a one-count bias error. Only a configuration
+    // invariant (bo == 0) is sufficient.
+    check_true("split04.bo1_one_sided_undetected", s4 == 0u);
+  }
+
+  // bi is applied BEFORE the shape and cancels exactly; only the post-shape
+  // bo is forbidden.
+  {
+    uint16_t s0, s4;
+    const uint16_t rec = split04_store(-1.0, 0.5, 64.0, 0.0, &s0, &s4);
+    check_bits("split04.bi_pre_shape_cancels", rec, 0xd000u);
+  }
+
+  // Cross-check against section 8's pair. shape 2 / shape 5 give the same
+  // reconstruction with bo = 0, and also with bo != 0 because the shape
+  // zeroes the inactive half before the bias is added. That is the
+  // bias-safe variant, but it relies on PRM shape 2/5 semantics that this
+  // device configuration has not exercised (E-3D used shapes 0 and 4 only).
+  {
+    const uint16_t p = empirical_negative_clamp(
+        prm_convert_rn16(-0.5, 0.0, 2u, 64.0, 64.0));
+    const uint16_t n = empirical_negative_clamp(
+        prm_convert_rn16(-0.5, 0.0, 5u, 64.0, 64.0));
+    const uint16_t rec =
+        double_to_fp16(fp16_to_double(p) - fp16_to_double(n));
+    check_bits("split25.bo64_pos_part", p, 0x5400u);
+    check_bits("split25.bo64_neg_part", n, 0x5600u);
+    check_bits("split25.bo64_recon_is_y", rec, 0xd000u);
+  }
+
+  // Signed-zero caveat: a bitwise output comparator sees 0x8000 on the
+  // direct path and 0x0000 on the split path. Both are numerically zero.
+  {
+    uint16_t s0, s4;
+    const uint16_t direct = double_to_fp16(-0.0);
+    const uint16_t rec = split04_store(-0.0, 0.0, 64.0, 0.0, &s0, &s4);
+    check_bits("split04.neg_zero_direct", direct, 0x8000u);
+    check_bits("split04.neg_zero_recon", rec, 0x0000u);
+    check_true("split04.neg_zero_numeric",
+               fp16_to_double(rec) == fp16_to_double(direct));
   }
 
   printf("hmx_signed_output_oracle checks=%ld fail=%d\n", checks, failures);

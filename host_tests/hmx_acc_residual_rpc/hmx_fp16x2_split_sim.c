@@ -1321,6 +1321,8 @@ static uint16_t gT8Ps[T8_CELLS];  /* stored RN16(64*plain) */
 static uint16_t gT8Bs[T8_CELLS];  /* stored RN16(64*b3) */
 static uint16_t gT8Ds[T8_CELLS];  /* stored RN16(64*b3_dblbr) */
 static uint16_t gT8Ns[T8_CELLS];  /* stored RN16(64*wonly) */
+static uint16_t gT8Sp[T8_CELLS];  /* shape 0 - shape 4 split, plain acc */
+static uint16_t gT8Sb[T8_CELLS];  /* shape 0 - shape 4 split, b3 acc */
 static uint16_t gT8Os[T8_CELLS];  /* expected = RN16(64*oracle_true) */
 static double gT8E[T8_CELLS];     /* abs-error scratch (sorted in place) */
 static long gT8_pin_mismatch = 0;
@@ -1838,6 +1840,111 @@ static void t8_grid_preserve(void) {
          tile_p_break, tile_b_break, tile_hold_break);
 }
 
+/* G9: E-3D sign-separated store model on the G8 tile.
+ *
+ * Method: duplicate every logical output channel into two physical channels,
+ * convert the same ACC with shape 0 and shape 4, and rebuild
+ * y = s0 - s4 on the HVX side.
+ *
+ * Model preconditions: bo = 0 and one shared positive scale (64). Under the
+ * measured clamp law exactly one half is non-zero, so only one RN16 rounding
+ * occurs and the FP16 subtraction is exact. The split therefore cannot change
+ * the stored value: this check asserts that the published plain and b3 stored
+ * words are reproduced BIT-FOR-BIT, and that the stored-domain improvement is
+ * carried over unchanged. The tile values are CPU models; the only device
+ * inputs are the E-3D four slots (identity/negation shapes + negative clamp).
+ * NaN/Inf payloads are out of scope and do not occur on this tile. */
+static uint16_t t8_split_store(double acc, uint16_t *s0, uint16_t *s4) {
+  *s0 = double_to_fp16(64.0 * acc);
+  *s4 = double_to_fp16(-64.0 * acc);
+  *s0 = (*s0 & 0x8000u) ? 0x0000u : *s0; /* measured negative clamp */
+  *s4 = (*s4 & 0x8000u) ? 0x0000u : *s4;
+  return double_to_fp16(fp16_to_double(*s0) - fp16_to_double(*s4));
+}
+
+static void t8_sign_split(void) {
+  const long fail_before = g_fail;
+  long i;
+  long p_bits_diff = 0, b_bits_diff = 0;
+  long p_both_nonzero = 0, b_both_nonzero = 0, one_sided = 0, both_zero = 0;
+  long improved = 0, equal = 0, worsened = 0, popt = 0, bopt = 0;
+  double pm, pmed, pp95, pmax, prmse;
+  double bm, bmed, bp95, bmax, brmse;
+  double ratio;
+
+  for (i = 0; i < T8_CELLS; ++i) {
+    uint16_t p0, p4, b0, b4;
+    gT8Sp[i] = t8_split_store(gT8P[i], &p0, &p4);
+    gT8Sb[i] = t8_split_store(gT8B[i], &b0, &b4);
+    if (gT8Sp[i] != gT8Ps[i]) ++p_bits_diff;
+    if (gT8Sb[i] != gT8Bs[i]) ++b_bits_diff;
+    if (b0 != 0u && b4 != 0u) ++b_both_nonzero;
+    if (p0 != 0u && p4 != 0u) {
+      ++p_both_nonzero;
+    } else if (p0 != 0u || p4 != 0u) {
+      ++one_sided;
+    } else {
+      ++both_zero;
+    }
+  }
+
+  for (i = 0; i < T8_CELLS; ++i)
+    gT8E[i] = fabs(t8_descale(gT8Sp[i]) - gT8Yt[i]);
+  abs_error_stats(gT8E, T8_CELLS, &pm, &pmed, &pp95, &pmax, &prmse);
+  for (i = 0; i < T8_CELLS; ++i)
+    gT8E[i] = fabs(t8_descale(gT8Sb[i]) - gT8Yt[i]);
+  abs_error_stats(gT8E, T8_CELLS, &bm, &bmed, &bp95, &bmax, &brmse);
+
+  for (i = 0; i < T8_CELLS; ++i) {
+    const double ap = fabs(t8_descale(gT8Sp[i]) - gT8Yt[i]);
+    const double ab = fabs(t8_descale(gT8Sb[i]) - gT8Yt[i]);
+    if (ap - ab > G7_TIE_TOL) {
+      ++improved;
+    } else if (ab - ap > G7_TIE_TOL) {
+      ++worsened;
+    } else {
+      ++equal;
+    }
+    if (gT8Sp[i] == gT8Os[i]) ++popt;
+    if (gT8Sb[i] == gT8Os[i]) ++bopt;
+  }
+  ratio = (bm > 0.0) ? pm / bm : 0.0;
+
+  printf("sign_split_g9 cells=%ld plain_recon_mean_abs=%.6e "
+         "b3_recon_mean_abs=%.6e plain_over_b3=%.6f "
+         "plain_bits_diff=%ld b3_bits_diff=%ld plain_both_nonzero=%ld "
+         "b3_both_nonzero=%ld plain_one_sided=%ld plain_both_zero=%ld "
+         "improved=%ld equal=%ld worsened=%ld "
+         "plain_optimal_bits_frac=%.6e b3_optimal_bits_frac=%.6e\n",
+         (long)T8_CELLS, pm, bm, ratio, p_bits_diff, b_bits_diff,
+         p_both_nonzero, b_both_nonzero, one_sided, both_zero, improved,
+         equal, worsened, (double)popt / (double)T8_CELLS,
+         (double)bopt / (double)T8_CELLS);
+
+  ++g_checks;
+  if (p_bits_diff != 0 || b_bits_diff != 0) {
+    ++g_fail;
+    printf("FAIL sign_split_g9 bits_diff plain=%ld b3=%ld\n", p_bits_diff,
+           b_bits_diff);
+  }
+  ++g_checks;
+  if (p_both_nonzero != 0 || b_both_nonzero != 0) {
+    ++g_fail;
+    printf("FAIL sign_split_g9 both_nonzero plain=%ld b3=%ld\n",
+           p_both_nonzero, b_both_nonzero);
+  }
+  /* The 1.85x figure belongs to b3 vs plain on this tile; the split must
+   * carry it over, not improve or degrade it. */
+  ++g_checks;
+  if (!(ratio > 1.80 && ratio < 1.90)) {
+    ++g_fail;
+    printf("FAIL sign_split_g9 ratio=%.6f\n", ratio);
+  }
+  printf("sign_split_g9_verdict=%s accuracy_change=%s\n",
+         g_fail == fail_before ? "ENCODING_PRESERVED" : "FAIL",
+         g_fail == fail_before ? "none" : "unexpected");
+}
+
 /* E-3C0 decision line. PASS requires ALL of:
  *   (a) b3 full-tile stored mean-abs < plain (fp32carried),
  *   (b) every pinned cell assert + layout-distinctness assert passes,
@@ -1873,6 +1980,7 @@ static void t8_run(void) {
   t8_map();
   t8_metrics();
   t8_grid_preserve();
+  t8_sign_split();
   t8_gate();
 }
 
