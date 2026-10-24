@@ -155,8 +155,11 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
     等の指標で規模間予測。HexaTrain の stress harness（P0 共通基盤）の
     指標設計（update norm / update-to-parameter ratio / logit max）と同じ指標系で、
     「小規模診断の結果をどう読むか」の参照になる。
-  - *Scaling FP8 Training to Trillion-Token LLMs*（Fishman et al.）—
-    trillion-token 級 FP8 学習の安定化。Phase 12 の大規模側参照。要確認。
+  - [Scaling FP8 training to trillion-token LLMs（arXiv:2409.12517）](https://arxiv.org/abs/2409.12517) /
+    [AlphaXiv](https://www.alphaxiv.org/abs/2409.12517)
+    — Fishman, Chmiel, Banner（Intel/Habana）, Soudry（Technion）、2024-09（引用78）。
+    trillion-token 級 FP8 混合精度学習の安定化。COAT・MOSS への直接的な先行。
+    Phase 12 の大規模側参照として保持。
 
 ### A-8. FP4 training recipe の起源系（AlphaXiv related 推薦から追加、2026-10-25）
 
@@ -758,9 +761,17 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   0.3B〜7B の 9 model で 500M token の budget で teacher gain の 87.1% を回復。
   要確認だが、HexaTrain の low-disruption migration protocol と同じ
   「既存 weight を壊さず移行」の設計思想を持つ。
-- [Native Hybrid Attention（arXiv:2510.07019）](https://arxiv.org/abs/2510.07019) —
-  検索結果では recall-intensive / commonsense で transformer 系 hybrid を上回るとの由。
-  要 abstract 確認。
+- [Native Hybrid Attention（arXiv:2510.07019）](https://arxiv.org/abs/2510.07019) /
+  code: `JusenD/NHA` — Du, Hu, Zhang, Sun, Cheng、**ACL 2026**。
+  **【2026-10-25 確認済み】**: linear RNN で更新する長期 KV slot + sliding window の
+  短期 token を単一 softmax attention で併合。layer 積み上げ型の hybrid と違い
+  **全 layer を構造的に同一に保ち、sliding window size という単一 hyperparameter で
+  linear ↔ full attention を内挿**する設計。recall-intensive / commonsense で
+  transformer 系 hybrid を上回り、**pretrained LLM への retrofit
+  （structural hybridization）も可能**。
+  HexaTrain の Phase 14（Hybrid Sequence Operator Search）に対して、
+  「layer ごとの離散選択」ではなく「連続 hyperparameter で内挿する」設計軸と、
+  low-disruption migration との親和性を示す例。
 - [RNN as Linear Transformer（CVPR 2026）](https://openaccess.thecvf.com/content/CVPR2026/papers/Yang_RNN_as_Linear_Transformer_A_Closer_Investigation_into_Representational_Potentials_CVPR_2026_paper.pdf)
   — 線形 attention vs Mamba 系の表現力比較（vision 中心）。P14 の sorted 順序決めの補助資料。
 - [Awesome-State-Space-Models](https://github.com/radarFudan/Awesome-state-space-models) —
