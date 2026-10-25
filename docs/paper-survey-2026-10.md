@@ -583,6 +583,29 @@ memory planner の設計参照**として読む。
   QNN graph の precision 制約（A-9）を回避している点も設計比較の材料。
 - 次に読むこと: 精度配分の sensitivity 推定方法（§実装）、per-row range guard の
   clamp 値と HMX R2 の late-clamp 閾値の比較、V79 と V81 の性能差。
+  → **【2026-10-25 本文確認済み】**（HTML 版 §2-3 / Table 5-6）:
+  (1) **sensitivity は runtime 推定ではなく一回限りの offline 計測**: LoRA gradient の
+  FP32 参照比 relative L2 error を projection type ごとに測定し、
+  **recurrent/GDN 系 projection だけ FP16、残り Q8 に固定**。
+  根拠は「recurrent GDN state が weight 扰動を以後の全 token に運ぶ」という
+  誤差増幅の構造（uniform Q8 18.8% → GDN だけ FP16 で 9.6%）。
+  (2) **per-row range guard の実数値**: partial result が nonfinite または
+  **60,000**（FP16 max 65,504 未満に意図的な margin）に達した行を flag →
+  client が 2 の冪 scaling `c_i` で max |c_i·dY_ij| ≈ **2^12** に置いて再送、
+  retry で `c_i × 2^-8`、最大3回。**「partial result は FP32 累算の前に丸められ、
+  後段の cancellation では overflow を修理できない」**という順序依存の理屈が明記。
+  実運用ではほぼ発火しない（全 epoch で 52 行 retry）。
+  (3) **「HMX accumulates in 37-bit cells」「8 MB VTCM」の外部明記** —
+  HexaTrain の HMX PRM 解釈（37-bit accumulator）の**独立した外部確認**。
+  (4) V81 kernel: input-gradient 13.0 TFLOPS（FP16@840 token）/ 17.0（Q8@2048）、
+  V79 比で GDN qkv 5.60→5.00 ms 等 V81 が概ね優位。tile 再利用の cycle 実測
+  （activation operand 76 cycles vs weight operand 展開 152-182）。
+  → R2 系への含意: HexaTrain の late-clamp / retain bit と同じ問題（**部分和の
+  FP16 convert で overflow が修理不可**）を「margin 付き threshold + 2の冪
+  row scaling + retry」で解く実装例が実在する。R2 の閾値設計（Rs[0] retain と
+  clamp 値）はこの 60,000 / 2^12 の選択と**数値的な突き合わせができる**。
+  また (1) の「GDN state が誤差を運ぶ」は Phase 14（GDN migration）の
+  精度設計に直接の注意喚起として記録。
 
 ### B-10. 近隣 fine-tuning / 推論 追補（2026-10-25 新着掃描）
 
@@ -2209,8 +2232,9 @@ Loss Curriculum」への文献裏付けを探した。
   C-2 の second moment update 則）は本文未確認。ただし精読リスト上位5本
   （MUON+ / tokenization / VGA / K-interval softmax / Depth-Attention）は
   本文確認済みで「次に読む」に追記済み。
-  **午後追加の B-9（2610.24816）のみ HTML 本文の一部確認済み**（backend 構成・
-  実機世代まで）。B-9 の sensitivity 推定と range guard 数値は未確認。
+  **午後追加の B-9（2610.24816）は HTML 本文確認済み**（sensitivity 推定・
+  range guard 実数値・V81 kernel 数値まで）。B-9 の学習速度の end-to-end 数値は
+  abstract に載っておらず未記録。
 - 「AlphaXiv」は paper page（AI overview / related 推薦 graph）として利用した。
   人的 discussion は主要論文（MUON+ / NVFP4）で空だったため、
   議論内容の参照はまだ無い。related 推薦経由で FP4 recipe 起源論文（A-8）を発見。
