@@ -1149,7 +1149,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     → HVX Muon の momentum を低 bit 保存する場合の**方向保護が必須**という
     設計制約。μ-law companding は HVX/CPU で安価。A-10 は「計算を FP4 化」、
     MuonQ は「state を 4-bit 化」で対策の階層が違う。
-  - **Effective Quantization of Muon Optimizer States（2509.23106）**。
+  - **【2026-10-25 abstract 確認済み】Effective Quantization of Muon Optimizer States
+    （2509.23106）** — state の **blockwise 8-bit** 量子化で optimizer state を
+    62% 削減。主張: 「Muon の update 機構は**単純な linear 量子化と相性が良い**
+    （AdamW が要求する動的 scale 設計が不要）」+ 量子化 noise への頑健性の理論解析。
+    2.7B までの Chinchilla-optimal pretraining + fine-tuning で parity。
+    → **MuonQ（4-bit は方向保護が必須）との張り付き合いに注意**:
+    8-bit linear なら方向 fidelity が保てるが、4-bit に落とすと MuonQ の
+    normalization / 分離 / μ-law が要る、という2段階の整合的読み。
+    HVX Muon state の低 bit 化（P2）は「まず 8-bit blockwise」から。
   - **Achieving low-bit Muon through subspace preservation and grid quantization
     （ICLR 2026 Poster、arXiv ID 未確認）**。
   - **Error Feedback for Muon and Friends（ICLR 2026 Poster）** — 低 bit 化の
