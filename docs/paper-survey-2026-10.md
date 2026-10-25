@@ -1127,6 +1127,43 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   実運用での epilogue fusion（residual+RMSNorm 等）の実装例。HMX 側で同種の fusion を
   設計するときの「何を fusion するのが普通か」の相場観。
 
+### D-7. Bit-Accurate MMA Model / CLFP — Microsoft MMA-Sim（2026-10-25 新着掃描）
+
+- [Bit-Accurate Modeling of GPU Matrix Multiply-Accumulate（arXiv:2511.10909）](https://arxiv.org/abs/2511.10909)
+  / code: `microsoft/MMA-Sim` — 2025-11（v3 2026-09）。
+  **【2026-10-25 abstract 確認済み】**: **closed-loop feature probing (CLFP)** と名付けた
+  体系的 probing framework で、NVIDIA Volta〜RTX Blackwell 10 architecture +
+  AMD CDNA1〜3 の **全 MMA 命令**の bit-accurate 数値 model を構築（世界初と主張）。
+  未文書化の内部浮動小数点挙動を入出力 probe から逆推定し、
+  4種の precision bottleneck と 1種の **numerical asymmetry** を特定。
+  cross-vendor / cross-generation の数値差が training instability の原因になり得ると指摘。
+  html 版には FP16 subnormal 防止の入力 scale-up / 出力 scale-down の扱いもある（要本文）。
+- **HexaTrain との関連**: D-1（2512.07004）と**姉妹関係にある方法論論文**で、
+  CLFP という名前がついた体系化は HexaTrain の
+  `hmx_signed_output_oracle.c` の discriminating vector 設計に
+  **名前と構成を与える**（probe → model → closed-loop 検証）。
+  「numerical asymmetry」の分類は HMX の signed FP16 出力（R2）の
+  正負で挙動が変わり得る問題を分類する語彙になる。
+  GPU 10世代の probing 設計（どの入力分布で内部丸めを区別するか）は
+  HMX oracle の vector 拡充の参照。abstract 確認済み・本文未読。
+
+### D-8. Adaptive Block-Scaled Data Types（IF4）— block 内最大値の誤差問題（2026-10-25 新着掃描）
+
+- [Adaptive Block-Scaled Data Types（arXiv:2603.28765）](https://arxiv.org/abs/2603.28765)
+  / code: `mit-han-lab/fouroversix` — 2026-03。
+  **【2026-10-25 abstract 確認済み】**: NVFP4 の誤差が **各16値 group の
+  near-maximal 値に集中する**という診断から、group ごとに FP4 / INT4 を選択する
+  **IF4** 形式を提案（選択は NVFP4 の scale factor の **未使用 sign bit** に格納）。
+  IF3 / IF6 へ拡張、quantized training で既存 4-bit block-scaled より低 loss、
+  PTQ でも高精度。IF4 MAC unit の hardware 実装可能性も示す。
+- **HexaTrain との関連**: **MX（E8M0 power-of-2 固定 scale）は per-group の
+  FP/INT 選択を持たない**ため HMX には直接適用不可。ただし「block 内
+  near-maximal 値に誤差が集中する」診断は、HMX R2 系で signed FP16 出力が
+  最大振幅近くで飽和する挙動（B-9 の per-row range guard と同じ問題群）と
+  同根の分布論的な問題であり、HMX 側の saturation 解析の対照として参照。
+  A-13 ScaleSearch（scale 探索）と合わせて「scale / format の選択自由度」系の
+  文献群をなす。
+
 ### クラスタDの統合所見（2026-10-25時点）
 
 1. **「accelerator 行列演算器の bit-accurate CPU model 構築」は GPU 側で確立した研究分野**
@@ -1138,6 +1175,10 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 3. **整数-only 学習（D-3, D-5）は velocity 含む全 state の低bit化に到達した。**
    HexaTrain の P2 低精度化は weight/activation に片寄っているため、
    「optimizer state の group 単位 exponent」を独立候補として足す検討価値がある。
+4. **【D-7 追加後】bit-accurate MMA model の方法論には体系名（CLFP）と
+   大規模な公開実例（MMA-Sim）が揃った。** HMX oracle の設計は
+   「GPU 系の確立手法の Hexagon 版」として整理でき、
+   probe 設計・model 検証の参照が D-1 / D-7 の2本になった。
 
 ---
 
