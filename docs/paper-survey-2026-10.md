@@ -1832,6 +1832,27 @@ Loss Curriculum」への文献裏付けを探した。
   warmup-then-random と同じ方向で文献整合的。
 - **次に読む**: continual training scenario の結果（resume が多い HexaTrain 運用に近い）。
 
+### I-2. Curriculum の学習動力学解析 — 小規模ほど安定化利得（2026-10-25 新着掃描）
+
+- [Curriculum Learning for LLM Pretraining: An Analysis of Learning Dynamics（arXiv:2601.21698）](https://arxiv.org/abs/2601.21698)
+  — Elgaar, Amiri、2026-01（v2 2026-05、引用9）。
+  **【2026-10-25 abstract 確認済み】**: 14M〜1B × 300B token で、
+  Age-of-Acquisition / word frequency / Verb Variation の3 curriculum を random と比較し、
+  latent phase・**gradient noise scale (GNS)**・output head の **singular entropy** で解析。
+  主張: (1) 学習は共有の latent phase 列を辿り、curriculum は **phase 内の滞在時間を変えるだけ**,
+  (2) **random ordering は 14M〜70M で GNS が高く、160M まで singular-entropy spike**
+  （noisier gradient + output head saturation）、(3) 下降順は上行順の利得を大きく失う,
+  (4) **大規模になるほど安定性の差は縮む**。
+- **HexaTrain との関連**: **HexaTrain（0.76M）はこの解析で「安定化利得が最大」の
+  規模帯よりさらに小さい端**にいる。Phase 13（Difficulty-Aware Sampling）の
+  仮説「小規模 model では data ordering が効く」に対する直接的な外部証拠であり、
+  規模が上がるほど curriculum 利得が減るという逆相関も、
+  HexaTrain の scale 実験（Phase 0 の model suite）での予測を与える。
+  測定項目（GNS・output head singular entropy）は HexaTrain の診断 instrumentation に
+  そのまま組み込める（output head は H2 次元なので SVD コストが小さい）。
+  指標は言語学的3種で I-1 の情報理論指標と異なるため、
+  難易度指標の選択は I-1（compression ratio / MTLD / Flesch）を主、本論文を対象語彙の補助とする。
+
 ---
 
 ## J. 小規模学習 recipe の系譜（modded-nanogpt speedrun）
