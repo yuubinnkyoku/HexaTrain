@@ -671,6 +671,34 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   Muon（なし）→ Muon+（stateless norm）→ **NAMO（scalar adaptive）** →
   NorMuon/NAMO-D（neuron-wise）→ AdaMuon（element-wise）へ拡張。
 
+### C-8. Why Muon Outperforms Adam — curvature perspective（2026-10-25 追加）
+
+- [arXiv:2606.04662](https://arxiv.org/abs/2606.04662) / [AlphaXiv](https://www.alphaxiv.org/abs/2606.04662)
+  — Shuche Wang, Fengzhuo Zhang, Jiaxiang Li, Dirk Bergemann, Zhuoran Yang、2026-06。
+- **要約**: loss の 2次 Taylor 展開由来の curvature penalty を
+  **update norm の2乗 + Normalized Directional Sharpness（NDS）** に分解し、
+  同一 validation loss で Adam と Muon を比較。両者の update norm は同程度だが
+  **Muon は NDS が一貫して小さい**（より平坦で well-conditioned な領域へ収束）。
+  Zipf-PCFG data での制御実験では data imbalance が Muon の NDS 優位を増幅。
+  within/cross-layer 分解では中期〜後期の NDS 優位が within-layer curvature の
+  小ささに由来し、異質 curvature の二次問題の理論では
+  「update energy を curvature group 間で均す」ことで平均 NDS が GD より小さくなる
+  ことを証明。
+- **HexaTrain との関連**: Muon が Adam に勝つ理由の理論的説明が
+  「row norm 制御（Muown lane）」とは独立の **curvature 軸**で与えられた。
+  Phase 4 の比較で bpb 差だけでなく
+  **NDS 相当量（update 方向の曲率）を telemetry に入れる**と、
+  Muown / Muon+ / NAMO のどの arm が効いているかの帰属分析ができる。
+  また C-3（condition number 不変の収束）と合わせ、
+  Muon 系の理論面が「spectral」「curvature」の2軸で揃った。
+
+### C-9. Spectral Allocation（索引、要確認）
+
+- [arXiv:2608.25990](https://arxiv.org/abs/2608.25990)（2026-08）—
+  Muon > Adam > SGD の順位を **spectral allocation** で統一説明し、
+  Muon の uniform spectral scaling の限界を指摘する理論論文。
+  要確認（abstract 未読）。確認時に C-3 / C-8 と統合する予定。
+
 ### C-6. 索引
 
 - **【2026-10-25 直接確認済み】Muown 原論文**:
