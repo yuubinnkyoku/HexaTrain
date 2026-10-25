@@ -448,6 +448,16 @@ memory planner の設計参照**として読む。
   fallback が gain を侵食、NPU offload 増で energy が最大 51% 増える場合もある、
   という結果。**SIGMETRICS 2027 論文（NPU は prefill で勝つ）と逆向きの結論**で、
   NPU 利得が framework・SoC・workload 依存で不安定であることを示す。
+- **【2026-10-25 追加】Hexagon kernel layer 直叩き系の新着**:
+  - **ParallelPrefill（ACM, DOI 10.1145/3821725.3821806、2026-09）** —
+    LLM prefill を **Hexagon DSP kernel layer で 2D 並列化**。
+    QNN / AI Engine Direct SDK が **HMX/HVX level の制御を露出しない**ことを
+    低 layer 最適化の動機として明記。HVX Muon を手書きする HexaTrain と同じ
+    「QNN から見えない層」を突く研究で、kernel layer の並列化設計の参照。
+    ACM のみで arXiv 版未確認（詳細は要本文）。
+  - **A Systematic Study of LLM Serving on Multi-core NPUs（arXiv:2510.05632）** —
+    multi-core NPU 上の tensor parallelism 戦略の体系解析。
+    HexaTrain の単一 NPU 前提とは異なるが、HTP 内部の並列構造を扱う数少ない公開資料。
 - **HexaTrain との追加関連**: この矛盾自体が「実機 telemetry を正本とする」
   HexaTrain の運用原則（G1 runtime lane の `NO_SAFE_GAIN` 教訓）を
   外部から支持する。backend placement は graph 理論だけでなく
