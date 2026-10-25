@@ -2094,6 +2094,16 @@ Loss Curriculum」への文献裏付けを探した。
   利得が出ない（語彙が小さく softmax がボトルネックでない）ため非適用と明記する。
   (4) 非公開部分があるため「ANVIL II は Muon より完全に優る」という一般化は
   **しない**（record は 8xH100・124M・短時間設定に固有）。
+  → **【2026-10-25 追記】Track 3（step 数 benchmark）との関係**:
+  ANVIL は wallclock track の記録であり、[Track 3 README](https://github.com/KellerJordan/modded-nanogpt/blob/master/records/track_3_optimization/README.md)
+  （target val loss 3.28 を最少 step で）には現れない。Track 3 の現行 record は
+  **#46 = 2690 step**（tuned Muon baseline 3250 step から 20.8% 削減）で、
+  構成は Muon + **SOAP-Muon preconditioning** + radial brake + PowerCool LR +
+  **EMA-Nesterov wrap** + Tail-EMA readout（README 自身が「独立に利得証明済みでない」
+  と注意）。ecosystem には MUON+ / NorMuon / **Muown** / DynMuon / Contra-Muon /
+  Aurora 等が並び、C クラスタの Muon 改良系譜が community の A/B 対象に
+  なっていることの実測確認になる。EMA weight averaging（J-4/I-3）は
+  Track 3 でも #45（150-step EMA への final blend）として採用済み。
 
 ---
 
