@@ -1905,11 +1905,12 @@ Loss Curriculum」への文献裏付けを探した。
 ### J-1. modded-nanogpt speedrun（124M / FineWeb / 8xH100）
 
 - [KellerJordan/modded-nanogpt](https://github.com/kellerJordan/modded-nanogpt) —
-  2026-10 時点の record は **90秒**（1年前は 8.2分）。
+  **【2026-10-25 再確認・更新】record #92 = 0.665 分（約40秒、2026-08-30、DevenPzak）**。
+  本調査初版時点の「90秒」記載は陳腐化していた（8月末の #90〜#92 で 68秒→41秒級へ急加速）。
   [Speedrun Optimization Writeup（discussion #211）](https://github.com/KellerJordan/modded-nanogpt/discussions/211)
   / [LessWrong 記事](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/) /
   [Prime Intellect auto-speedrun](https://www.primeintellect.ai/auto-nanogpt)（AI agent が
-  speedrun 改善を競う benchmark）。
+  speedrun 改善を競う benchmark、~10k optimizer-track run）。
 - **要約（writeup の伸び内訳）**: Muon 77.5% > FlexAttention 54.5%（後に FA3 へ） >
   初期値・LR tuning 46.1% > architecture 現代化（RoPE / QK-norm / zero-init projection /
   ReLU²）45.2% > **U-Net skip + value embeddings 36.5%** > logit softcap 15 + offset
@@ -1988,24 +1989,37 @@ Loss Curriculum」への文献裏付けを探した。
   「decay を merging で置き換える」変種が加わる。
 - **次に読む**: PMA の merge timing（どの phase 間で merge したか）。
 
----
+### J-5. ANVIL II — Muon 後継 optimizer による 39.9秒 record（2026-10-25 追加）
 
-- [arXiv:2601.02031](https://arxiv.org/abs/2601.02031) / [AlphaXiv](https://www.alphaxiv.org/abs/2601.02031)
-  — Stollenwerk, Lokrantz, Hertzberg、2026-01（v3 2026-09）。
-- **要約**: 学習終盤の **output logit divergence** の原因を output embedding の
-  anisotropy と特定。z-loss / softcap は対症療法と位置づけ、
-  (a) **μ-centering**: output embedding を中心化する決定論的操作、
-  (b) **μ-loss**: 中心化を促す正則化項、の2 variant を提案。
-  安定性で z-loss を上回り、softcap と同等。**weight tying の有無両方で動作**し、
-  μ-loss は z-loss より hyperparameter 感度が低い。
-- **HexaTrain との関連**: repo の Z-Loss diagnostic（P1）と同問題への
-  より安価な対照候補。`output_projection`（65,536 params）の行平均を引く
-  μ-centering は QNN graph への追加 node が小さく、
-  **logit 系 telemetry（Z-Loss / attention logit max）と同じ計測枠で A/B できる**。
-  weight decay との相互作用の実験が v3 で追加されており、
-  Muon+WD lane との併存確認にも使える。
-- **次に読む**: μ-centering の実装詳細（logits から引くか embedding を前処理するか）と
-  実験規模。
+- [Training NanoGPT in 39.9 seconds（hyperstition.cc）](https://hyperstition.cc/training-nanogpt-in-39-9-seconds)
+  / repo の [Optimization Benchmark Track 3](https://github.com/KellerJordan/modded-nanogpt/blob/master/records/track_3_optimization/README.md)
+  — ANVIL = **Averaged, Normalized Velocity with Isotropic Lanes**（2026-08〜09）。
+  **【2026-10-25 確認済み】**: record 39.914 秒 / val loss 3.28（従来 73.889 秒から
+  46.0% 改善「過去45 record 合計を上回る削減」）。一部手法は frontier 向けとして
+  **非公開に留保**されている（「redacted methods that scale to the frontier」）。
+  公開内訳: **(1) twin momentum（fast + slow の2本）**、
+  **(2) update の singular spectrum を平坦化する 6 本の polynomial map**
+  （Polar Express 系の適応直交化と同型）、(3) **slow momentum との一致で
+  cautious weight decay を gating**、全体を **EMA-Nesterov で wrap**。
+  ablation（秒）: sampled softmax 8.41 > **n-gram table（84.6M rows、bigram+trigram）7.06** >
+  **ANVIL II 5.09** > FP8 4.95 > model 縮小 3.82 > CUDA graphs 2.99 >
+  sparse embedding updates 1.20 > layer mixing 0.49。
+  weight averaging は readout を **final 35% / EMA 65%** で blend（loss 3.2966→3.2784）。
+  sampled softmax は candidate 10,240→14,336→24,576→最終87 step で full 50,304、
+  gradient error bound 2(1−r_C)。
+- **HexaTrain との関連**:
+  (1) **ANVIL II の3要素は Muon 改良系譜（C-1/C-2/C-5）の community 実装合流点**で、
+  HVX Muon の Phase 5（直交化）・Phase 4（row 制御）の候補を速度面から支持する。
+  特に「polynomial map 6 本」は C-5 Polar Express の **NS 反復数を変えず係数を
+  変える**方向の community 側採用実績。
+  (2) **weight averaging の 35/65 readout blend** は J-4 の「高 LR × averaging」に
+  具体的な実装形（EMA 保存 + readout 時 blend）を与える。HexaTrain の
+  G1 LR stress grid checkpoint 群の averaging A/B（統合所見 9）で
+  「単純平均」対比の arm にできる。
+  (3) sampled softmax / n-gram table / FP8 は HexaTrain の V1024・T32・D64 規模では
+  利得が出ない（語彙が小さく softmax がボトルネックでない）ため非適用と明記する。
+  (4) 非公開部分があるため「ANVIL II は Muon より完全に優る」という一般化は
+  **しない**（record は 8xH100・124M・短時間設定に固有）。
 
 ---
 
