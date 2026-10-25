@@ -756,6 +756,29 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   無変更の micro 最適化候補**（ correctness は不変）。
   Dion2 の「行列を shrink する理論」単体は 64x64 では効かない（既に最小規模）。
 
+### C-11. SOAP / Muon 大規模実証 — NVIDIA Megatron 系（2026-10-25 追加・NorMuon 関連経由）
+
+- [SOAP, Muon, and Beyond: Pushing LLM Pretraining Scales（arXiv:2607.20548）](https://arxiv.org/abs/2607.20548)
+  — Khona ほか（NVIDIA / Megatron 系）、2026-07、code:
+  `NVIDIA-NeMo/Emerging-Optimizers`。**【2026-10-25 abstract 確認済み】**:
+  multi-billion param × trillion token × **batch 最大 100M token** で
+  SOAP / Muon / AdamW を比較。LR transfer は **update-RMS matching** で統一。
+  主張: SOAP と Muon がテスト全 scale で AdamW を一貫して上回り、
+  **最大 batch では Muon/SOAP が安定を保つのに対し AdamW は劣化**。
+  Muon の orthogonalization quality を経験的に評価。
+  SOAP の大 batch 不安定を特定し、**per-step QR orthogonalization** と
+  改良 preconditioning で loss spike を除去。optimizer 計算を近似しない
+  layer-wise distributed 実装（Megatron-LM 対応）でメモリ/通信を隠蔽。
+- **HexaTrain との関連**:
+  (1) **大 batch での Muon 安定性優位**は Phase 6（LR×batch）の batch 拡張 arm に
+  直接効く外部証拠（SR×batch 補償則 A-5 と同方向: batch を上げるほど
+  Muon 側の相対利点が増える）。
+  (2) **update-RMS matching による LR transfer** は Phase 6 の cross-optimizer
+  比較（Muon vs HVX Muon vs Adam aux）で使うべき測定プロトコルの規範。
+  (3) 「orthogonalization quality を経験評価する」手法自体が Phase 5
+  （Orthogonalization Accuracy lane）の測定設計の参照になる。
+  規模が 3桁以上違うため数値の直接移植は不可、プロトコル参照が主価値。
+
 ### C-7. MACRO — manifold constraint 理論（2026-10-25 追加・NorMuon 関連経由）
 
 - [Demystifying Manifold Constraints in LLM Pre-training（arXiv:2605.04418）](https://arxiv.org/abs/2605.04418)
@@ -780,6 +803,11 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 - 次に読むこと: radius 選択原理の数式（本文未読）。NuMuon（下記索引）との関係。
 
 ### C-6. 索引
+
+- **【2026-10-25 abstract 確認済み】Beyond Adam: SOAP and Muon for Label-Efficient
+  Training（arXiv:2607.02499）** — 対象は **LLM ではなく MLIP**（NequIP/Allegro）だが、
+  「Muon の利点は domain 依存で、SOAP / SOAP-Muon の方が一貫して頑健」という
+  反証データ point。Muon 汎用性の限界を測る際の対照群。abstract 確認済み・本文未読。
 
 - **【2026-10-25 abstract 確認済み】Pion（arXiv:2605.12492）** —
   **multiplicative optimizer**: weight 行列を左右の orthogonal 変換で更新し
