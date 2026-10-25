@@ -520,6 +520,23 @@ memory planner の設計参照**として読む。
 - 次に読むこと: 精度配分の sensitivity 推定方法（§実装）、per-row range guard の
   clamp 値と HMX R2 の late-clamp 閾値の比較、V79 と V81 の性能差。
 
+### B-10. 近隣 fine-tuning / 推論 追補（2026-10-25 新着掃描）
+
+- **PieBridge（ACM SenSys 2024, DOI 10.1145/3666025.3699327）** —
+  Yin, Wei, Liu ほか（北大 / B-7〜B-9 と同 group）。
+  frozen backbone を学習中 **より小さい proxy network で動的に近似**し、
+  full model を backprop しない on-device fine-tuning。
+  HexaTrain 関連は薄い（scratch training では proxy 化対象が無い）が、
+  「frozen 部分の backprop を回避する」もう一つの極（B-3 の ZO 系と同列）として記録。
+  ACM のみで arXiv 版未確認。
+- **shadowNPU / shadowAttn（arXiv:2508.16703, MobiSys'26）** — NPU-centric の
+  on-device **推論** co-design。attention の quantization sensitivity が原因で
+  attention operator が CPU/GPU へ fallback する問題を、NPU 上 pilot compute で
+  重要 token 推定を隠蔽する sparse attention で解く。
+  training 論文ではないが「quantization sensitivity による operator 落下」は
+  HexaTrain の Phase 12（低精度化が HTP graph から落ちる operator を作る問題）の
+  推論側 mirror として B-5 に並べる価値あり。abstract 確認済み・本文未読。
+
 ### クラスタBの統合所見（2026-10-25時点、B-7 追記後修正）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
