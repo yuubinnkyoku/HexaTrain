@@ -692,12 +692,30 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   また C-3（condition number 不変の収束）と合わせ、
   Muon 系の理論面が「spectral」「curvature」の2軸で揃った。
 
-### C-9. Spectral Allocation（索引、要確認）
+### C-9. Spectral Allocation / SAMuon — Muon 改善の第4系統（2026-10-25 確認済み）
 
-- [arXiv:2608.25990](https://arxiv.org/abs/2608.25990)（2026-08）—
-  Muon > Adam > SGD の順位を **spectral allocation** で統一説明し、
-  Muon の uniform spectral scaling の限界を指摘する理論論文。
-  要確認（abstract 未読）。確認時に C-3 / C-8 と統合する予定。
+- [Spectral Allocation: Why Muon Outperforms Adam, and How to Improve Muon
+  （arXiv:2608.25990）](https://arxiv.org/abs/2608.25990)
+  — Xiaodong Wu, Wenyi Yu, Chao Zhang, Philip Woodland、2026-08。
+- **要約**: momentum buffer を特異方向へ分解し方向ごとの loss-optimal step size を
+  out-of-sample 推定すると、**Edge-of-Stability で動く volatile な head 方向と
+  それよりはるかに大きい step を許容する tolerant な bulk 方向**という
+  安定した anisotropic profile が現れる。Muon > Adam > SGD の順位は
+  この profile への step size の整合度で説明でき、
+  **Muon の uniform scaling は bulk の step を使い損ねている**という限界を指摘。
+  修正案 **SAMuon** は head は Muon scale のまま bulk を static spectral prior で増幅。
+  full 版は low-rank randomized SVD、**SAMuon-lite は rank-one power iteration の
+  2段近似で persistent state 追加ゼロ・FLOPs 追加ほぼゼロ**。
+  modded-nanogpt 124M〜1B で tuned AdamW / Muon（Scion）を全設定で上回り、
+  **同 loss に 13.3〜24.0% 少ない token**。
+- **HexaTrain との関連**: row 制御（Muown / Muon+ / NorMuon）とは別軸の
+  **spectral axis 方向の Muon 改善**で、しかも SAMuon-lite は
+  「state 追加ゼロ・1 power iteration」なので HVX Muon への追加コストが
+  Muon+ 同様に最小級。Phase 4 / 5 の Orthogonalization Accuracy lane に
+  「NS 後の spectral reweighting」arm として加える選択肢が新たにできる。
+  Muon の uniform scaling の限界という指摘は、
+  HexaTrain 実測で Muon が Adam を -0.066 bpb 下回った実績の上に
+  さらに上ががあるかを測る問いを立てる根拠になる。
 
 ### C-6. 索引
 
