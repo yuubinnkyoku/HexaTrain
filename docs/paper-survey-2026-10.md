@@ -264,6 +264,54 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   「反復側を安定化する」アプローチ）。
 - **次に読む**: FP4 Root 反復の clipping 係数の決め方（NS 係数との関係）。
 
+### A-11. Quartet II — MS-EDEN、SR を超える unbiased 量子化（2026-10-25 新着掃描）
+
+- [arXiv:2601.22813](https://arxiv.org/abs/2601.22813) / code: `IST-DASLab/Quartet-II`
+  （Quartet / MXFP4 と同系、2026-01）。
+  **【2026-10-25 abstract 確認済み】**: NVFP4 全量子化 pre-training を対象に、
+  micro-scaled format 向け **unbiased 量子化 routine MS-EDEN** を提案。
+  主張: **SR より量子化 error が 2x 以上低く**、forward/backward の主要な
+  全 matrix multiply で gradient 推定が一貫して向上。
+  1.9B / 38B token で end-to-end 検証、Blackwell kernel で **BF16 比最大 4.2x**。
+- **HexaTrain との関連**: A-3（NVFP4 recipe = SR）と A-5（SR 理論）に対する
+  **第3の選択肢の出現**。SR は「unbiased だが variance が増える」、MS-EDEN は
+  「unbiased かつ error 小さい」を狙う。HexaTrain の Phase 12 で SR A/B を回すなら
+  「SR vs MS-EDEN 型 unbiased estimator」の比較設計が最新の正解系谱になる。
+  ただし MS-EDEN の演算コストが HVX に乗るかは未確認（SR は LFSR でほぼ zero-cost、
+  A-5 参照）。abstract 確認済み・本文未読。
+
+### A-12. Transposition-Invariant 2D block FP4 — 前後で scale を不変に（2026-10-25 新着掃描）
+
+- [arXiv:2607.24953](https://arxiv.org/abs/2607.24953) — Rahimifar ほか、2026-07。
+  **【2026-10-25 abstract 確認済み】**: FP4 training の不安定の原因を
+  **tensor 転置に起因する scale 不一致**と特定（1D block では forward と backward で
+  同じ weight に別の scale が付き、gradient が biased・不安定になる）。
+  **転置不変な 2D block FP4** + truncation-free scaling + SR で解決。
+  Q/K projection だけ MXFP8 に残す mixed-precision。7B dense + 30B MoE、
+  最大 100B token で BF16 比 **perplexity / downstream 1.3% 未満の劣化**。
+- **HexaTrain との関連**: A-3 の NVFP4 recipe が **weight scale を 2D (16x16) にする**
+  理由の理論化と読める。HexaTrain の V81 HMX は MX 系 1D block（32 要素）であり、
+  HMX block-scaled MMA の scale 計算が forward/backward で一致しているかは
+  **R2 系数値実験の新しい観測点**（dX と dW で同 tensor の scale が一致しない
+  構造は HexaTrain にも存在し得る）。Q/K だけ高精度残す選択は
+  Phase 12 の tensor 除外表の文献側実例がまた1つ増えたことになる。
+
+### A-13. ScaleSearch — BFP scale を max でなく探索する（2026-10-25 新着掃描）
+
+- [arXiv:2605.12464](https://arxiv.org/abs/2605.12464) — Gupta, …, Tri Dao, Fu,
+  De Sa ほか、2026-05。
+  **【2026-10-25 abstract 確認済み】**: BFP の scale を「block 最大値」でなく
+  **microscaling format の mantissa bit を使った fine-grained 探索**で選び、
+  分布ごとに量子化 error を最小化。NVFP4 で error 27% 減、
+  PTQ で MATH500 最大 +15pt（Qwen3-8B）、Llama 3.1 70B の Wikitext-2 PPL 0.77 改善。
+  ScaleSearchAttention（NVFP4 attention 高速化）も提案。
+- **HexaTrain との関連**: HexaTrain の HMX block scale は MX 系の
+  power-of-2 E8M0 共有 scale が前提で、ScaleSearch の free mantissa scale 探索は
+  **HMX hardware の制約と非互換**（scale は format で固定）。
+  適用余地は QNN graph 外の CPU/HVX 側 tensor（optimizer state 保存など）のみ。
+  「scale 選択は最適でない」という問題提起自体は Phase 12 の静的 scale 設計
+  （学習中 scale 更新の A/B）と接続する。abstract 確認済み・本文未読。
+
 ### クラスタAの統合所見（2026-10-25時点、A-8〜A-10 追記後更新）
 ---
 
@@ -286,6 +334,11 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
    Muon 系 Root 反復自体の FP4 実行が成立しており、
    「momentum 保存の低bit化」は HVX/CPU 実装に移植可能、
    「反復側の安定化」は QNN HTP NS 再試行の新たな precision gate 経路になる。
+6. **【A-11〜A-13 追加後】unbiased 量子化は SR 一強でなくなった。**
+   MS-EDEN（A-11）が SR 比 2x 低 error を主張し、Phase 12 の estimator A/B は
+   「SR vs MS-EDEN 型」に更新すべき。また forward/backward の
+   **scale 一致性**（A-12）は HexaTrain の HMX R2 数値実験の新観測点であり、
+   「scale 探索」（A-13）は HMX 固定 scale と非互換だが CPU/HVX 側 state には適用余地。
 
 ---
 
