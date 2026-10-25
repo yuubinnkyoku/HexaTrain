@@ -1137,6 +1137,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     → HexaTrain は checkpoint 保存型の学習で schedule-free 化の要請は薄いが、
     「Muon の振動 = dominant 方向 noise 増幅」は Phase 4/5 の telemetry
     （update の dominant singular 成分の揺れ）という観測軸を与える。
+  - **【2026-10-25 abstract 確認済み】HTMuon: Heavy-Tailed Spectral Correction
+    （2603.10067）** — HT-SR 理論に基づき「Muon の直交化 update は heavy-tailed
+    weight spectrum の出現を抑え、noise 支配方向を過大評価する」と診断し、
+    **より heavy-tailed な update** を作る補正を提案。
+    理論は **Schatten-q norm 制約下の最急降下**に対応（Freon の Schatten 系と同 family）。
+    LLaMA/C4 pretraining で perplexity 最大 0.98 改善、既存 Muon variant への
+    plug-in として動作。
+    → **Kaon（2605.11181「spectrum の形は無関係」）と正反対の主張**が同時期に併存。
+    Phase 5 の spectrum 設計 arm は「flat（Muon 標準）vs heavy-tailed（HTMuon）vs
+    random（Kaon）」の 3way が文献上の対立構図で、小規模 HexaTrain での優劣は未確定。
 - ★ **Phase 12（Muon 低 bit 化）方向**: A-10（Full-Stack FP4）と同主題の群。
   - **【2026-10-25 abstract 確認済み】MuonQ: Directional Fidelity Optimization
     （2605.11396、COLM 2026）** — **Muon の state は Adam より量子化に敏感**
