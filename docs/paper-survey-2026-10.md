@@ -1593,6 +1593,17 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   収まるか実測する価値がある。Cross-Layer Attention Reuse 診断（NOW 5 番）とも同じ
   「layer 間で何を共有するか」の問いで、reuse 診断の延長として natural に試せる。
 - **次に読む**: depth-attention の key/value はどの layer から取る設計か（全層 or 直近のみ）。
+  → **【2026-10-25 本文確認済み（HTML）】**: 既定は **stride s = L/2**
+  （layer ℓ は自分 + {0, s, 2s, … で ℓ 未満} の V を source にする）。
+  3B(L=48) は s=24、360M/500M(L=24) は s=12、710M(L=32) は s=16、
+  平均 source 数 ~2.5/layer。**stride ablation（500M）は inverted-U**:
+  half-depth が最良、first-layer-only は information 足りず僅劣、
+  **quarter-depth も full-source（stride 1）も僅劣**（冗長な歴史 V が混入）。
+  mixing 規則は **value-only per-head softmax 2.2115 < uniform 2.2153 < vanilla
+  2.2348 < key-only 2.2354**（key だけ混ぜると vanilla より悪い）。
+  → HexaTrain L19 への適用値は s=9（source ≤3〜4 層）で既存計画と一致し、
+  ablation は「s=9 を中心に s=4（密）と s=18 併用（疎）を外側に置く」設計を支持。
+  **mixing は value-only** を第一 arm に（key 混在は否定）。
   → **【2026-10-25 精読済み】**: source は** stride s=L/2 の疎集合**
   （layer ℓ は自身 + {0, s, 2s, ...}）。mixed value は再帰伝播
   `ṽ_ℓ = α_ℓℓ v_ℓ + Σ α_ℓj ṽ_j` で、**通常の V を ṽ で in-place 置換**するのみ
