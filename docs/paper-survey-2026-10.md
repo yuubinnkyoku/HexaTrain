@@ -163,6 +163,15 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
   対して、accumulator bit 幅 × rounding 方式の観点からアプローチする文献。R2 の signed 出力
   実験とは独立に、ACC bit 幅の妥当性を CPU model で測るときの对照枠になる。
 - **次に読む**: accumulator word length を削った具体的な実験設定。
+  → **【2026-10-25 abstract 再確認】**: 具体構成は **FP8 乗算入力 × FP12 累算**の
+  MAC unit で、swamping error を **最適化 SR（eager SR unit）で緩和**し
+  subnormal 対応を削除。CV タスク群で近 baseline 精度を維持。
+  random bit 数別の hardware/精度トレードは本文が必要。
+  → HexaTrain との対比が鮮明: **HMX の 37-bit ACC は FP12 累算 + SR の
+  数十倍の余裕**がある設計であり、「37-bit に留まる積和で十分か」の問いは
+  「FP12+SR で回る literature が存在する以上、37-bit は amplitude headroom 的に
+  過剰でない限り安全」と読める。R2 の CPU model で headroom の
+  実使用率を測ることがこの対比の数値化になる。
 
 ### A-7. 古典・補助参照
 
