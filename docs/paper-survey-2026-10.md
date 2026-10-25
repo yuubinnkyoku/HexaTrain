@@ -1506,12 +1506,37 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   「QNN HTP / HVX / CPU の3 backend と FastRPC 境界を含めた cost model」と
   「端末実測での検証」にある。
 
+### G-4. PlaneZip — lossless bit-plane 圧縮 + compression-aware planner（2026-10-25 新着掃描）
+
+- [arXiv:2610.25033](https://arxiv.org/abs/2610.25033) — 2026-10-18（1週間前の新着）。
+  **【2026-10-25 abstract 確認済み】**: GPU↔host swap 対象の training activation を
+  **lossless bit-plane codec** でオンザフライ圧縮。128-byte block ごとに
+  zero-value / delta bit-plane / bit-plane / zero-masked bit-plane の最小を選択し、
+  前反復の圧縮率で per-tensor 予測。BF16 activation 1.71x / FP32 1.39x（幾何平均）。
+  本質は **planner 側**: cost-model planner（MegTaiChi 等）が swap に「生 size 分の
+  転送時間」を課すため swap がほぼ出ないことを指摘し、**planner の転送 cost を
+  圧縮後 size 基準に変える**だけで rematerialization overhead を
+  bandwidth-aware planner 比 47%/31% 減・MegTaiChi 比 73%/54% 減（trace シミュ）。
+- **HexaTrain との関連**: **Phase 9 の planner 設計への直接的な design rule**。
+  Adacc（G-1）の MILP は {recompute, compress, retain} を選ぶが、
+  PlaneZip の教訓は「**compress 選択肢の cost は圧縮後転送量で評価しないと
+  MILP が compress をほぼ選ばない**」という objective 設計の落とし穴。
+  HexaTrain の FastRPC 境界は PCIe より帯域が細く、転送 cost 圧縮の効きはさらに大きい。
+  また bit-plane 系 lossless codec は bit 演算中心で **HVX の得意領域**であり、
+  lossy 量子化圧縮（Adacc / CompAct 系）に対する NPU 側の対抗手段候補になる。
+  対象が GPU swap であり NPU/TCM そのものではない点は注意。abstract 確認済み・本文未読。
+
 ### クラスタGの統合所見（2026-10-25時点）
 
 1. **Memory Planner は「新規概念」ではなく「確立した問題領域の HTP 版」**として設計できる。
    Adacc の MILP scheduling と policy evolution は Phase 9 の実装柱として直接参照する。
 2. HexaTrain の差別化要素は backend 異質性（HTP/HVX/CPU + RPC 境界）と spill 先の
    memory 階層。外部論文の cost model にこの2つを足すのが設計の本体。
+3. **【G-4 追加後】planner の objective は圧縮後転送量で書く。**
+   生 size 基準の cost model は compress 選択肢を構造的に過小評価する
+   （PlaneZip の MegTaiChi 批判）。Phase 9 の MILP 実装時に最初から
+   「compress 後の転送 cost」を objective に入れる。FastRPC 境界は細帯域なので
+   この設計則の効きは GPU/PCIe より大きいと予測される。
 
 ---
 
