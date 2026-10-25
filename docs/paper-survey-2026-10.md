@@ -844,6 +844,18 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   記録価値がある。
 - **次に読む**: minimax 係数の計算 cost（offline 事前計算で済むか、
   毎 step 必要か）。
+  → **【2026-10-25 本文確認済み】**: 係数は **offline で1回だけ計算し保存**する。
+  依存変数は singular value bounds (ℓ, u)・多項式次数 d・反復数 T のみで
+  **行列次元や per-step data に依存しない**（全入力で再利用）。
+  solver は SDP ではなく **Remez 型 equioscillation を 4x4 連立一次の反復解に
+  縮約したもの**（3次は closed-form、5次は `optimal_quintic` が
+  `np.linalg.solve` を反復）。**公開 code にハードコードされた係数表**
+  （`coeffs_list`、(a,b,c) 三組の列）が同梱され、online 段は低精度
+  （bf16）で実行可能、最終係数以降は NS 型 tuple (1.875, -1.25, 0.375) の
+  反復に落着する。推奨設定は d=5, T=5〜6, ℓ1=1e-3。
+  → HexaTrain 実装上の含意: **NS5 の係数を Polar Express 表に差し替える変更は
+  「定数の差し替え」だけで per-step cost はゼロ**。T=5 が NS5 と直接比較可能な
+  budget であり、Phase 5 の係数 arm は実装上最も安い部類。
 
 ### C-5b. NAMO / NAMO-D — Adam Improves Muon（2026-10-25 追加・AlphaXiv 推薦経由）
 
