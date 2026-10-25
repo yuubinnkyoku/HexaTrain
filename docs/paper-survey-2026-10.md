@@ -1749,6 +1749,10 @@ Loss Curriculum」への文献裏付けを探した。
    高 LR ほど averaging の恩恵大という外部観察。新規 run 不要で試せる）。
 10. **VGA の quantization fidelity 改善観察を Phase 12 との交差検証に**
     （根拠: E-2。8-bit PTQ 劣化最小。G1 導入済み model で低bit化耐性を測る意義）。
+11. **Muon 系理論 telemetry の追加と spectral reweighting arm**（根拠: C-8 NDS、
+    C-9 SAMuon。Phase 4/5 の評価に NDS 相当量（update 方向曲率）を入れると
+    arm 間の効き所の帰属が取れる。SAMuon-lite は state ゼロ・rank-1 power iteration
+    で Orthogonalization Accuracy lane の arm 候補）。
 
 ## 6. 本調査の限界（2026-10-25 時点）
 
