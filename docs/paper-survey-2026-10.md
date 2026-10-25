@@ -1127,6 +1127,18 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     code: `dengzhanwang/Low-rank-Muon`。
     → Phase 5 の「低 rank 近似で NS を削る」arm の**直接の実装系譜**
     （Dion=amortized power iteration / 本論文=gradient 低 rank 性の直接利用）。
+  - **【2026-10-25 abstract 確認済み】MuonEq: Lightweight Equilibration
+    （2603.28254）** — **NS 直交化の前に momentum 行列を row/column 正規化**する
+    軽量 equilibration（R variant を hidden 行列の default とする）。
+    「whitening の zero 次 surrogate」として finite-step NS が見る
+    spectrum（stable rank / condition number）を改善。理論は Muon の
+    `O(T^-1/4)` 保証を保持し **finite-step NS5 まで明示的な inexactness 定数付きで拡張**。
+    LLaMA2/C4 の 130M/350M/1B で Muon に一貫して勝つ。
+    → **row 正規化の「位置」が3つ揃った**: Muown = weight 側 parameterization、
+    **Muon+ = NS 後 post-normalization（C-1）、MuonEq = NS 前 pre-normalization**。
+    Phase 4（Muown lane）の arm 設計は「位置」を独立要因にでき、
+    MuonEq は state ゼロ・1演算系で Muon+ と同コスト帯。
+    NS5 への inexactness 定数付き保証は 2510.19933 の coupling 理論と噛み合う。
   - **【2026-10-25 abstract 確認済み】CANS: Chebyshev-type Polynomials による NS 加速
     （2506.10935、math.NA）** — 固定係数の Newton–Schulz に対し
     **Chebyshev 交互定理で 3 次の最適係数を理論導出、高次は Remez 法で計算**。
