@@ -231,8 +231,8 @@ The CPU model already covers the decision procedure and the evidence
 contract:
 
 ```text
-r2_cpu_model_checks=95
-hmx_signed_output_oracle checks=250 fail=0
+r2_cpu_model_checks=114
+hmx_signed_output_oracle checks=269 fail=0
 r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
 r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit rs_echo=yes sentinel=yes
 r2_device_verdict=NOT_RUN
@@ -244,6 +244,14 @@ recon, host-planned counts, a counter-only or static-only source, a missing
 alignment and the 1,024-cell store bijection. `r2.recon.*` checks that the
 HVX writer leaves `out_pos`/`out_neg` unchanged. The oracle is CPU-only and
 does not prove the DSP implementation.
+
+The contract facts are read back from the executed model, not typed in as
+constants: the four registered `Rs` values come from the converts that
+actually ran (`r2.contract.rs_*`, `r2.rs_model.*`, including the rejection of
+the unregistered `0x1001`), the per-subcase HVX recon loop count comes from
+the model (`r2.contract.s1_recon_*`, `r2.contract.recon_twice`), and
+`bias_loads` counts the prologue load events of the one shared bias bank that
+both subcases reuse (`r2.bias.*`).
 
 ## 9. Stop conditions and authorization
 
@@ -262,5 +270,6 @@ expectation change.
   performance.
 
 DSP implementation, a new mode, a DSP build, device execution and performance
-measurement are **not authorised**. PR #14 stays Draft. The local research
-commits are not pushed.
+measurement are **not authorised**. PR #14 stays Draft. The research commits
+through `fbe665a` (11 commits) are pushed to
+`origin/experiment/hmx-acc-residual-feedback`.

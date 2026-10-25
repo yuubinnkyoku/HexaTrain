@@ -70,7 +70,7 @@ ceiling differ:
 | --- | --- | --- |
 | `64x = 66.015625` | `0x5420` | `0x5421` |
 | `32x = 33.0078125` | `0x5020` | `0x5021` |
-| `-64x = -66.015625` | `0xD420` | `0xD420` (toward -inf is the same here) |
+| `-64x = -66.015625` | `0xD420` | `0xD420` (ceiling = toward +inf, i.e. `-66.0`; rounding toward -inf would give `0xD421`) |
 
 The only rounding step before the store is the convert's RN16; `x` and `2x`
 are exact.
@@ -249,7 +249,8 @@ Fail closed before interpreting any slot if any of the following holds:
 * `hmx_executed != 1`;
 * `trials != 2`;
 * `mma_count != 2`, `convert_count != 4`, `store_count != 4`,
-  `bias_loads != 3`, or `recon_loops != 2`;
+  `bias_loads != 3`, or `recon_loops != 2` (the two DSP HVX recon loops,
+  one per subcase: S1's loop counts even though no slot is read from it);
 * `Rs` values are not the four registered values (`0x0001`, `0x2000`,
   `0x0001`, `0x1000`), or the DSP `Rs` echo is absent/mismatched;
 * `out_pos`, `out_neg` and `out_recon` are not distinct 2 KiB-aligned regions;

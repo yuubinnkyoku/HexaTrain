@@ -553,8 +553,8 @@ registered conditions.
 
 ### 6.2 Required cases
 
-Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 95 R2 checks pass, and
-the full oracle is 250 checks / 0 failures.
+Run by `scripts/run_hmx_signed_output_oracle.ps1`; all 114 R2 checks pass, and
+the full oracle is 269 checks / 0 failures.
 
 | case | model result | detector result |
 | --- | --- | --- |
@@ -570,6 +570,10 @@ the full oracle is 250 checks / 0 failures.
 | one-ULP ceiling rounding | S1 second `0x5021`, S2 `pos(s0)=0x5421`, `neg(s1)=0x5421` | `R2_ROUNDING_MISMATCH` |
 | corrupted word | `0x5420 -> 0x5520` | `R2_UNEXPECTED_OUTPUT` |
 | host contract (extra MMA/convert/store, wrong Rs) | counters or Rs differ | `R2_HOST_CONTRACT_FAILED` |
+| unregistered `Rs=0x1001` on the second convert (CPU store-equivalence experiment only) | registered contract requires exactly `0x1000` | `R2_HOST_CONTRACT_FAILED` |
+| any one of the four registered `Rs` values wrong (`0x0001`, `0x2000`, `0x0001`, `0x1000`) | that field alone differs from its registered value | `R2_HOST_CONTRACT_FAILED` |
+| HVX recon loop skipped in either subcase, or issued twice | `s1_recon_loops` / `s2_recon_loops` differ from 1 each | `R2_HOST_CONTRACT_FAILED` |
+| bias rows loaded a second time instead of one shared prologue | `bias_loads=6` instead of 3 | `R2_HOST_CONTRACT_FAILED` |
 | negative-ACC lane leaked into the positive buffer | `s2_pos[1]=0x5420` with a correct `s2_pos[0]` | `R2_UNEXPECTED_OUTPUT` |
 | DSP HVX recon region | pos/neg unchanged; `out_recon` matches the three registered lanes | `R2_ACC_REUSE_SUPPORTED` (simulated) |
 | host-only recon | `recon_source=0` | `R2_HOST_CONTRACT_FAILED` |
@@ -609,7 +613,7 @@ r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
              contract=R2_HOST_CONTRACT_FAILED
 r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
 r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit rs_echo=yes sentinel=yes
-r2_cpu_model_checks=95
+r2_cpu_model_checks=114
 r2_device_verdict=NOT_RUN
 ```
 
@@ -636,8 +640,10 @@ the same value. Those are exactly the pre-registered device checks.
 is at the store (the previous convert state is still negative and min-feedback
 changes the second output). If the clamp is inside the convert, the previous
 state is already 0 and the output detector is masked. The host contract's Rs
-check is the robust guard: the registered `Rs #2` must be `0x1000` or `0x1001`
-with `Rs[3:2]=0`. This limitation is printed as
+check is the robust guard: the registered `Rs #2` must be exactly `0x1000`
+with `Rs[3:2]=0`. The retain variant `0x1001` is a CPU store-equivalence
+experiment only (pre-registration §11) and is rejected by the host contract.
+This limitation is printed as
 `r2_feedback_output_detector=MASKED_AS_EXPECTED` and is not hidden.
 
 ## 7. G8/G9 1,024-cell accuracy
@@ -1018,9 +1024,9 @@ r2_device_classifier nominal=R2_ACC_REUSE_SUPPORTED
              contract=R2_HOST_CONTRACT_FAILED
 r2_slot_contract=11/11 sentinel=0 host_fail_closed=PASS
 r2_evidence recon=DSP_HVX counts=dsp_counter+static_audit rs_echo=yes sentinel=yes
-r2_cpu_model_checks=95
+r2_cpu_model_checks=114
 r2_device_verdict=NOT_RUN
-hmx_signed_output_oracle checks=250 fail=0
+hmx_signed_output_oracle checks=269 fail=0
 hmx_signed_output_oracle=PASS
 
 r2_g9 cells=1024 plain_direct_mean_abs=1.307244e-03 ...
@@ -1054,6 +1060,28 @@ At the time of this revision:
   the longer runtime here is not a test failure. No required step was skipped
   or converted into a PASS.
 
+Revision 4 (pre-registration/contract consistency fixes, on top of
+`fbe665a`, no device work):
+
+* the host contract now accepts only the registered `Rs #2 = 0x1000`; the
+  `0x1001` retain variant is kept solely as the CPU store-equivalence
+  experiment of §11 and is rejected as `R2_HOST_CONTRACT_FAILED`;
+* the four registered `Rs` values are four independent observation fields,
+  each breakable on its own (`r2.contract.rs_*`), instead of three fields
+  where S2's first convert could not be detected as wrong;
+* the S1 HVX recon loop is executed by the model and its per-subcase loop
+  count is a contract fact (`s1_recon_loops` / `s2_recon_loops`, 1 each);
+* `bias_loads` counts the load events of the one shared prologue bank (3),
+  and a second load pass (6) fails the contract;
+* contract facts are read back from the executed model rather than typed in
+  as literals;
+* the pre-registration's rounding note for `-66.015625` was corrected:
+  ceiling (toward +inf) is `0xD420`, toward -inf would be `0xD421`;
+* `scripts/verify.ps1 -Profile Fast` re-run after these changes: **PASS**,
+  185.8 s, `PASS=10 FAIL=0 SKIP=21`, exit 0, including
+  `hmx_signed_output_oracle checks=269 fail=0` and
+  `r2_cpu_model_checks=114`. No required step was skipped.
+
 Changed files for this study:
 
 * `host_tests/hmx_acc_residual_rpc/hmx_signed_output_oracle.c` — R2 state
@@ -1066,8 +1094,10 @@ Changed files for this study:
   implementation shape for the future S1/S2 device change.
 
 No DSP source, production QNN/Muon code, APK, checkpoint, logcat, device
-identifier, or private corpus is part of this change. No push, no merge, no
-PR state change; PR #14 remains Draft.
+identifier, or private corpus is part of this change. Commits through
+`fbe665a` are on `origin/experiment/hmx-acc-residual-feedback`; revision 4 is
+left uncommitted in the working tree, with no push, no merge and no PR state
+change. PR #14 remains Draft.
 
 ## 14. Bottom line
 
