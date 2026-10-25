@@ -927,6 +927,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 
 ### C-6. 索引
 
+- **【2026-10-25 abstract 確認済み】MiMuon（arXiv:2605.19619）** —
+  **Muon と momentum SGD の hybrid**: orthogonalization を「cautiously」
+  （選択的に）だけ適用する。理論: Muon の generalization error は
+  `O(1/(Nκ^T))`（κ = gradient 推定の最小 singular value gap、一般に小さい）
+  に対し MiMuon は `O(1/N)`、収束 rate は Muon 同値。
+  Qwen3-0.6B / YOLO26m で検証。
+  **orthogonalization cost を削る第4の軸**（Dion=amortize、Dion2=row fraction、
+  Gram NS=FLOP 削減、MiMuon=**適用を間引く**）として、Phase 5 の
+  「NS を毎 step 完走しない」arm 群に加わる。abstract 確認済み・本文未読。
+
 - **【2026-10-25 abstract 確認済み】Beyond Adam: SOAP and Muon for Label-Efficient
   Training（arXiv:2607.02499）** — 対象は **LLM ではなく MLIP**（NequIP/Allegro）だが、
   「Muon の利点は domain 依存で、SOAP / SOAP-Muon の方が一貫して頑健」という
