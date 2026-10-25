@@ -1770,6 +1770,16 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
 - [flash-linear-attention（GitHub, fla-org）](https://github.com/fla-org/flash-linear-attention) —
   GLA / DeltaNet / GDN 等の Triton 実装を集めた共通 library。chunkwise algorithm の
   参照実装として、QNN graph へ落とすときの「演算単位の切り出し」に使える。
+- **【2026-10-25 abstract 確認済み】DeltaNet chunkwise 原典（arXiv:2406.06484、NeurIPS 2024）** —
+  delta rule を **Householder 積の memory-efficient 表現（WY representation）**で
+  計算し、sequence 方向の chunkwise parallel 学習を可能にした原典
+  （1.3B / 100B token で Mamba / GLA を上回る。sliding-window attention との
+  hybrid 構成も強い）。
+  → F-2 の「chunkwise 分解」の理論的根拠文献がこれで揃う。
+  QNN node 数見積りの観点では、WY 表現により chunk 内演算が
+  **MatMul-class に帰着し、state 再帰だけが小さい逐次残り**になるため、
+  「HTP graph = 大きい MatMul node 群 + 小さい recurrent node」という
+  切り出し設計が原典レベルで正当化される。
 - GLA（arXiv:2312.06635）/ GDN（arXiv:2412.06464, repo 参照済み）の chunkwise 形式は
   「sequence を chunk C に割り、intra-chunk は MatMul、inter-chunk state は
   小さい再帰」に分解する。**この分解は HTP 向き**（MatMul 主体、state が小さい）で、
