@@ -1552,6 +1552,19 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   HexaTrain の reduced-channel gate 計画と並列に、**gate を掛ける位置の分解**
   （output 乘算位置と channel 幅の2軸）として整理するとよい。
 - **次に読む**: G2 の正確な挿入位置と backward cost。
+  → **【2026-10-25 本文確認済み（HTML）】**: G2 は **value projection の直後に
+  `V ⊙ σ(XW_θ)` を掛ける** variant（gate score は「現在 query でなく
+  過去 key/value に対応する hidden state」由来、非線形を attention weight 総和の
+  **前**に挿入 = G1 は後）。PPL は G1 5.761 < G2 5.820 < baseline 6.026 で
+  **G2 は sink を除去できない**（massive activation は減るが first-token
+  attention score は下がらない）。cost は gate 1投影 + 要素積で
+  latency < 2%（MoE 15A2B で G2 elementwise 25M / headwise 0.2M params）。
+  → **E-2 VGA との構造区分に注意**: 原文の G2 は「**value map 自体**への
+  X 由来 gate」だが、VGA は「**attention 出力**への **V 由来** gate」であり
+  位置と入力の両方が違う。原文の「G2 < G1」は value map 位置の否定であって
+  VGA 型（出力位置 + V 入力）の否定ではない。HexaTrain の V-gate arm は
+  「出力位置は G1 のまま・入力だけ V に替える」であり、
+  この区別を preregistration に明記する価値がある。
 
 ### E-2. Value-State Gated Attention（VGA）
 
