@@ -1140,6 +1140,31 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 - **HexaTrain との関連（全体）**: C-12 は収録差分の索引であり、
   個別精読は Phase 5/6/12 の各 lane 開始時に★項の abstract 確認から始める。
 
+### C-13. Bi-Maxwell — Muon の 2 時定数 momentum 理論（2026-10-25 新着掃描）
+
+- [A Physical Response-and-Memory Model for Muon（arXiv:2608.22994）](https://arxiv.org/abs/2608.22994)
+  — 2026-08。
+  **【2026-10-25 abstract 確認済み】**: weight 行列を「memory を持つ応答媒質」として
+  モデル化。Muon の semi-orthogonalized update を「出力側 safety budget 下の
+  最大散逸応答」、momentum を「媒質に溜まる内部応力」と解釈し、
+  応力緩和に **fast + slow の2時定数 memory kernel（Bi-Maxwell）**を提案
+  （Muon の単一時定数 momentum の置換）。
+  予測: 「gradient 方向は学習初期に速く後期に遅く変わる → 最適 memory 長は
+  学習 stage とともに伸びる」— **read-only probe による memory 長 proxy の計測**
+  （8 独立 trajectory）で検証。kernel の置換だけで
+  公開 LLM optimizer benchmark で target loss までの step 数を削減。
+- **HexaTrain との関連**:
+  (1) **J-5 ANVIL II の twin momentum（fast + slow rail）に理論的裏付けを与える**
+  — community の発見と独立導出の理論が一致している（本論文は PowerCool を
+  直接扱わないが同 benchmark 系）。
+  (2) HVX Muon の momentum は単一 buffer。**2本目（slow rail）の state 追加は
+  64x64 buffer 1個/param で、CPU/HVX 実装の増分は小さい**。
+  Phase 4/6 の momentum schedule 設計に「2時定数化」arm を追加する根拠。
+  (3) **memory 長 proxy probe** は HexaTrain の telemetry（update norm 系と同じ枠）に
+  追加可能な診断で、Phase 0 の stress harness 計測項目の候補。
+  理論の「output-side safety budget」解釈は、NS 直交化の役割を
+  step-size 制御（2605.11181 Kaon/Freon と同じ読み）に寄せる第3の視点。
+
 ### クラスタCの統合所見（2026-10-25時点）
 
 1. **「post-NS row norm 不均衡」が独立3系統（HexaTrain audit / Muon+ / NorMuon）で確認された。**
