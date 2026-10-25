@@ -1434,6 +1434,28 @@ Phase 14 に持つ。新規に拾えたのは (1) TTT 系と linear attention �
   同じ entropy 地図を共有するという統一的読みが可能。
 - **次に読む**: k の選び方と model 規模（HexaTrain の T32 診断に近い条件があるか）。
 
+### F-5. Gated DeltaNet-2 — erase/write gate 分離、GDN と KDA の上位集合（2026-10-25 新着掃描）
+
+- [Gated DeltaNet-2: Decoupling Erase and Write in Linear Attention（arXiv:2605.22791）](https://arxiv.org/abs/2605.22791)
+  / code: `NVlabs/GatedDeltaNet-2` — Hatamizadeh ほか（NVIDIA）、2026-05（引用30）。
+  **【2026-10-25 abstract 確認済み】**: 従来の delta rule 系が1つの scalar gate で
+  「key 側の erase 量」と「value 側の write 量」の両方を制御していたのを、
+  **channel-wise erase gate b_t と channel-wise write gate w_t に分離**。
+  「両 gate が同一 scalar に潰れると KDA、decay も潰れると Gated DeltaNet」に
+  それぞれ帰着する一般化。fast-weight update view、
+  **channel-wise decay を asymmetric erase factor に吸収した chunkwise WY**、
+  並列学習を保つ **gate-aware backward** を導出。
+  1.3B / 100B FineWeb-Edu で Mamba-2 / GDN / KDA / Mamba-3 中の最強、
+  利得は RULER multi-key retrieval（長文脈）で最大。
+- **HexaTrain との関連**: **Phase 14 の migration 設計空間を更新する論文。**
+  repo は GDN / KDA / SimpleGDN migration を検討中だが、GDN-2 はその両方の
+  上位集合であり、「GDN-2 の2 gate を実装してしまえば GDN と KDA は
+  gate を潰す ablation で回収できる」＝ **実装1つで ablation 2点**。
+  gate-aware backward は HTP graph 上で delta rule 系の backward を
+  手書きする HexaTrain の実装設計（学習側の並列性維持）の直接参照になる。
+  758k param / T32 では RULER 級の長文脈利得は出ないと想定されるが、
+  retrieve 系タスクで GDN vs KDA vs GDN-2 の比較を Phase 14 の評価に足す根拠。
+
 ### クラスタFの統合所見（2026-10-25時点）
 
 1. **linear attention 系は理論統一（F-1）と実装共通化（F-2）が同時に進んだ。**
