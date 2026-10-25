@@ -1109,7 +1109,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     実験設計の必須条件**: 反復数を下げた arm は LR↓/momentum↑ の再調整をセットで
     行わないと、近似誤差と LR 未調整を区別できず A/B が無効化される
     （numerical-evidence の単一要因原則と整合）。
-  - **Low-rank Orthogonalization（2509.11983）** — 大規模行列の低 rank orthogonalization。
+  - **【2026-10-25 abstract 確認済み】Low-rank Orthogonalization（2509.11983）** —
+    学習中の gradient が近似的に低 rank であることを利用し、**低 rank 内で
+    orthogonalization を完結**させる low-rank MSGD / low-rank Muon を提案。
+    GPT-2 / LLaMA pretraining で vanilla Muon に概ね同等以上
+    （大規模ほど利得が明確、v2 で主張を控えめに修正済み）。
+    iteration complexity の理論 bound 付き（heavy-tailed noise 下）。
+    code: `dengzhanwang/Low-rank-Muon`。
+    → Phase 5 の「低 rank 近似で NS を削る」arm の**直接の実装系譜**
+    （Dion=amortized power iteration / 本論文=gradient 低 rank 性の直接利用）。
   - **【2026-10-25 abstract 確認済み】CANS: Chebyshev-type Polynomials による NS 加速
     （2506.10935、math.NA）** — 固定係数の Newton–Schulz に対し
     **Chebyshev 交互定理で 3 次の最適係数を理論導出、高次は Remez 法で計算**。
