@@ -1046,9 +1046,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   - **MuonBP: Block-Periodic Orthogonalization（ICLR 2026 Poster）** —
     orthogonalization を block 間隔で共有。**適用間引き軸の第5候補**（C-6 MiMuon の次）。
   - **Drop-Muon: Update Less, Converge Faster（2510.02239）** — update 自体を間引く。
-  - **Beyond the Ideal: Analyzing the Inexact Muon Update（2510.19933）** —
-    **不正確な orthogonalization の理論**。Phase 5 の「低 rank 近似で NS を削る」
-    arm の誤差許容範囲を論じる際の直接参照。
+  - **【2026-10-25 abstract 確認済み】Beyond the Ideal: Analyzing the Inexact Muon
+    Update（2510.19933）** — 実用 Muon の**不正確な orthogonalization** の最初の理論解析
+    （LMO + 加法誤差 model）。劣化を oracle 誤差の関数として明示化し、
+    **「oracle 精度を下げるなら step size を小さく・momentum を大きくする共調整が本質」**
+    という coupling を導出（NanoGPT で LR が精度に応じてシフトすることを実測確認）。
+    → **Phase 5 の「低 rank 近似で NS 反復数を削る」arm には本論文の coupling が
+    実験設計の必須条件**: 反復数を下げた arm は LR↓/momentum↑ の再調整をセットで
+    行わないと、近似誤差と LR 未調整を区別できず A/B が無効化される
+    （numerical-evidence の単一要因原則と整合）。
   - **Low-rank Orthogonalization（2509.11983）** — 大規模行列の低 rank orthogonalization。
   - **Chebyshev-type Polynomials による NS 加速（2506.10935）** —
     C-5 Polar Express と同じ「係数設計で速く」系。
