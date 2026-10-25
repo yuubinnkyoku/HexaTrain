@@ -1025,6 +1025,59 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   Polar Express（2505.16932）、Can Muon Fine-tune Adam-Pretrained（2605.10468）。
   本調査で新規に重要と判断したのは MUON+ / NorMuon / スペクトル理論の3点。
 
+### C-12. Awesome-Muon 差分整理 — 未収録の Muon 系論文マップ（2026-10-25 追加）
+
+[Awesome-Muon](https://github.com/zhanghualin0/Awesome-Muon)（キュレーション list）と
+本調査の収録差分を整理する。**以下の ★ は list 経由の確認で abstract 未読**
+（要確認）を明示する。
+
+- **【2026-10-25 abstract 確認済み】Small Batch Size Training for LMs
+  （arXiv:2507.07101、NeurIPS 2025）** — 小 batch（**batch 1 まで**）で
+  momentum 無しの vanilla SGD でも LM 学習が安定、**gradient accumulation は
+  「step を effective batch に交換するだけ」で per-FLOP が等しいか悪くなるため、
+  multi-device/replica でない限り非推奨**。移行則は Adam の second moment の
+  **half-life を token 固定**で持つ（step 固定でない）。
+  small batch + 小 state optimizer が LoRA 相当の memory で full fine-tuning に匹敵。
+  → **Phase 6 の accumulation 1/2/4/8 掃引への反証仮説**: accumulation は
+  HexaTrain の単一端末構成では「無駄」な可能性があり、
+  「accumulation なし + aux Adam の half-life を token 基準で再調整」を
+  対照 arm として立てる根拠。B8 固定の現行設計自体は本論文の推奨側に立つ。
+- ★ **Phase 5（orthogonalization 削減・近似の理論）方向**:
+  - **MuonBP: Block-Periodic Orthogonalization（ICLR 2026 Poster）** —
+    orthogonalization を block 間隔で共有。**適用間引き軸の第5候補**（C-6 MiMuon の次）。
+  - **Drop-Muon: Update Less, Converge Faster（2510.02239）** — update 自体を間引く。
+  - **Beyond the Ideal: Analyzing the Inexact Muon Update（2510.19933）** —
+    **不正確な orthogonalization の理論**。Phase 5 の「低 rank 近似で NS を削る」
+    arm の誤差許容範囲を論じる際の直接参照。
+  - **Low-rank Orthogonalization（2509.11983）** — 大規模行列の低 rank orthogonalization。
+  - **Chebyshev-type Polynomials による NS 加速（2506.10935）** —
+    C-5 Polar Express と同じ「係数設計で速く」系。
+  - **AMUSE: Anytime Muon（2605.22432）** — 計算予算に応じた anytime 直交化。
+- ★ **Phase 12（Muon 低 bit 化）方向**: A-10（Full-Stack FP4）と同主題の群。
+  - **MuonQ: Directional Fidelity Optimization（2605.11396）**。
+  - **Effective Quantization of Muon Optimizer States（2509.23106）**。
+  - **Achieving low-bit Muon through subspace preservation and grid quantization
+    （ICLR 2026 Poster、arXiv ID 未確認）**。
+  - **Error Feedback for Muon and Friends（ICLR 2026 Poster）** — 低 bit 化の
+    誤差を error feedback で補償。Dion の error feedback と同型の考え方。
+- ★ **理論・批判系（C-3/C-8 の補強と反証）**:
+  - **Muon is Not That Special: Random or Inverted Spectra Work Just as Well
+    （2605.11181）** — spectrum の形自体より orthogonalization の方向操作が本質
+    という反 conventional 論。C-3 の preconditioning 理論への対抗仮説。
+  - **Isotropic Curvature Model / Is Gradient Orthogonalization Optimal?
+    （2511.00674）** — C-8（NDS 曲率）と同型の問いの別枠。
+  - **Convergence Bound and Critical Batch Size of Muon（2507.01598）** —
+    Muon の **critical batch size** 理論。Phase 6 の batch 設計の理論参照。
+  - **Delving into Muon and Beyond: Deep Analysis and Extensions（2602.04669）** —
+    解析+拡張の包括論文（NorMuon 関連リスト由来の未確認項目の有力候補）。
+- ★ **適用範囲の設計問い**: **Symmetry-Compatible Principle for Optimizer Design
+  （2605.18106）** — embeddings / LM head / SwiGLU / MoE router の
+  「どの行列に spectral 系 update を適用すべきか」の原理論。
+  HexaTrain が Muon を適用する tensor 集合（attention/FFN の2次元行列のみ）の
+  外挿妥当性の参照。
+- **HexaTrain との関連（全体）**: C-12 は収録差分の索引であり、
+  個別精読は Phase 5/6/12 の各 lane 開始時に★項の abstract 確認から始める。
+
 ### クラスタCの統合所見（2026-10-25時点）
 
 1. **「post-NS row norm 不均衡」が独立3系統（HexaTrain audit / Muon+ / NorMuon）で確認された。**
