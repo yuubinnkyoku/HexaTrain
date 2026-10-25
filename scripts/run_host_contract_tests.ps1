@@ -126,6 +126,9 @@ if ($LASTEXITCODE -ne 0) {
 Invoke-PhoneLmHostCppRun -Label "HMX mode45 R2 contract self-test" `
     -Executable $Mode45SelfTestExe
 Write-Host "probe_r2_mode45_selftest=PASS"
+# B3+R2 integrated full-tile precision simulator contract (1024 cells, PRM packing, 12k VTCM, 13 fault injections).
+Invoke-PhoneLmHostPwshScript -Label "HMX B3+R2 full-tile simulator contract" `
+    -ScriptPath (Join-Path $Root "scripts\run_hmx_b3_r2_sim.ps1")
 
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
