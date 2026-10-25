@@ -397,6 +397,12 @@ memory planner の設計参照**として読む。
     layer ごとの perturbation scale を学習
   - [Activation-Guided ZO (arXiv:2601.17261)](https://arxiv.org/abs/2601.17261) —
     activation 統計で perturbation を案内
+  - **【2026-10-25 abstract 確認済み】[Steering the Noise（arXiv:2601.04710）](https://arxiv.org/abs/2601.04710)**
+    — 候補 perturbation pool を評価し、loss の低/高 group の対比から
+    guiding vector を作る **MeZO-GV** と、budget 内で最良1本を残す **MeZO-Greedy** を提案。
+    OPT-13B の 11 benchmark で全 ZO baseline を上回り 9 個で gradient 系を超える。
+    perturbation pool + 選択という variance reduction は QZO-FF（sign-m-SPSA）にも
+    追加可能な plug-in 形（追加 forward が HTP で相対的に安い HexaTrain とは相性がある）。
   - Bio-FO（MLSys 2025）— biologically-plausible な forward-only on-device learning
 - **HexaTrain との関連**: repo の QZO-FF（sign-m-SPSA）/ Addax（P2）はこの系譜の端点。
   LOZO の「gradient の low-rank 構造」は GaLore 系と同じ観察に由来するため、
