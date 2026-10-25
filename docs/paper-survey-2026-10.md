@@ -717,6 +717,30 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   HexaTrain 実測で Muon が Adam を -0.066 bpb 下回った実績の上に
   さらに上ががあるかを測る問いを立てる根拠になる。
 
+### C-10. Dion / Dion2 / Dion3 — orthogonalization cost 系譜（2026-10-25 追加）
+
+- [Dion: Distributed Orthonormalized Updates（arXiv:2504.05295）](https://arxiv.org/abs/2504.05295)
+  / code: `microsoft/dion` — Ahn, Xu, Abreu ほか（Microsoft）、2025-04（v3 2025-09、引用79）。
+  **【2026-10-25 確認済み】**: Newton–Schulz を **momentum buffer 上の amortized
+  power iteration + rank-fraction parameter（error feedback 付き）の低 rank 更新**へ置換。
+  full-matrix 再構成を避け weight sharding と自然に整合。
+  160M〜3B で orthonormal update の利点を保ったまま
+  **大規模での wall-clock を顕著に削減**。NorMuon の比較でも Dion は
+  Adam 比 10.43%（Muon と同値）の step 削減を達成（C-2 参照）。
+- [Dion2: A Simple Method to Shrink Matrix in Muon（arXiv:2512.16928）](https://arxiv.org/abs/2512.16928)
+  （2025-12）— Muon の orthonormalization step の超線形コストを
+  行列縮小で回避する方向。要確認。
+- [Dion3: Full-Stack Orthogonal Updates（arXiv:2608.11612）](https://www.alphaxiv.org/abs/2608.11612)
+  — algorithm / kernel / update rule の3層で Muon を最大 6x 高速化する
+  full-stack framework。要確認。
+- **HexaTrain との関連**: **HVX Muon の optimizer wall（約55〜59 ms）に対する
+  最も直接的な低減候補群。** HexaTrain の 64x64 行列は小さいので NS5 の
+  絶対コスト自体は大規模系より小さいが、Dion 系の「power iteration を
+  amortize する」発想は NS5 反復を毎 step 完走する現行実装と代替関係にあり、
+  Phase 5 の Orthogonalization Accuracy lane に
+  「低 rank 近似で NS 反復数を削る」arm を立てる根拠になる。
+  error feedback 付き rank-fraction は state 増分が小さく HVX 実装とも相性が良い。
+
 ### C-6. 索引
 
 - **【2026-10-25 直接確認済み】Muown 原論文**:
