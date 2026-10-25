@@ -1200,8 +1200,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     HVX Muon state の低 bit 化（P2）は「まず 8-bit blockwise」から。
   - **Achieving low-bit Muon through subspace preservation and grid quantization
     （ICLR 2026 Poster、arXiv ID 未確認）**。
-  - **Error Feedback for Muon and Friends（ICLR 2026 Poster）** — 低 bit 化の
-    誤差を error feedback で補償。Dion の error feedback と同型の考え方。
+  - **【2026-10-25 abstract 確認済み】Error Feedback for Muon and Friends
+    （2510.00643、KAUST、ICLR 2026、引用16）** — 圧縮（= biased compressor）下の
+    Muon 型 orthogonalized update に対する**最初の厳密な error feedback 理論**。
+    EF で biased 圧縮でも収束保証が復元することを示し NanoGPT-124M 等で検証。
+    注意: 後続の sign 圧縮解析（2607.29674）は「**直交化後の出力を sign 圧縮した
+    場合は EF でも救済されない**」という限界を報告。
+    → Phase 12 で HVX Muon の momentum/update を低 bit 化する際の理論支柱
+    （量子化 = biased 圧縮、EF で補償 — Dion の rank-fraction EF と同じ発想）。
+    ただし「直交化後 output の aggressive 圧縮」は EF でも不可という boundary がある。
 - ★ **理論・批判系（C-3/C-8 の補強と反証）**:
   - **【2026-10-25 abstract 確認済み】Muon is Not That Special（2605.11181）** —
     singular value を **random noise に置換する Kaon** が Muon と同等性能で
