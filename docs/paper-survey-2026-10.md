@@ -781,6 +781,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 
 ### C-6. 索引
 
+- **【2026-10-25 abstract 確認済み】Pion（arXiv:2605.12492）** —
+  **multiplicative optimizer**: weight 行列を左右の orthogonal 変換で更新し
+  singular value spectrum（= spectral norm）を学習中一定に保つ
+  （Adam/Muon を「additive」と characterize して対比）。
+  LLM pre-training / finetuning で「stable and competitive」と主張
+  （spherelab.ai/pion、引用8）。scale 制御問題（Muown / MACRO / NorMuon と同じ土台）への
+  「additive をやめて spectrum を凍結する」という極端な解。HVX では
+  64x64 正方行列なら orthogonal 変換2回/step で実装可能だが weight 更新の意味論が変わり、
+  現行 Muon 系の検証資産と非互換。思想的参照止まり。abstract 確認済み・本文未読。
+
 - **【2026-10-25 abstract 確認済み】NuMuon（arXiv:2603.03597）** — update direction への
   **nuclear norm 制約**で weight を低 rank 化しやすくし、標準 LLM 圧縮 pipeline 後の
   品質を billion scale で改善（Muon の full-rank update でも学習 weight は既に
