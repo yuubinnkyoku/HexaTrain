@@ -312,6 +312,29 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   「scale 選択は最適でない」という問題提起自体は Phase 12 の静的 scale 設計
   （学習中 scale 更新の A/B）と接続する。abstract 確認済み・本文未読。
 
+### A-14. Outlier-Safe Pre-Training — Muon が outlier を作らない（2026-10-25 新着掃描）
+
+- [Outlier-Safe Pre-Training for Robust 4-Bit Quantization of LLMs（arXiv:2506.19697）](https://arxiv.org/abs/2506.19697)
+  / code: `dmis-lab/Outlier-Safe-Pre-Training` — 2025-06。
+  **【2026-10-25 abstract 確認済み】**: extreme activation outlier の原因を
+  **channel-wise 演算と adaptive gradient scaling** に帰属させ、
+  事後緩和でなく「outlier を作らない学習」を提案。3技術:
+  (1) **Muon optimizer**（privileged basis の除去）,
+  (2) **Single-Scale RMSNorm**（channel 別 gain をやめる）,
+  (3) **learnable embedding projection**（embedding 出力の magnitude 再配分）。
+  1.4B / 1T token で「outlier 無しの production-scale LLM は初」、
+  excess kurtosis **0.04**（通常 1818.56）、4-bit 量子化で 35.7 vs Adam 26.5
+  （10 benchmark 平均）、training overhead 2%。
+- **HexaTrain との関連**:
+  (1) **Muon 採用自体が 4-bit 配備耐性の有利な先行条件**になるという外部証拠。
+  HexaTrain（HVX Muon）の checkpoint は Adam 学習の同規模 model より
+  量子化しやすい可能性が高く、Phase 12 の出発点として不利ではない。
+  (2) **Single-Scale RMSNorm は model 構造の変更**を伴う（現行 RMSNorm の
+  per-channel gain を外す）— G1/Phase 7 の構造 arm との交差点だが、
+  758k model での利得は unverified。
+  (3) 「outlier は LLM 固有でなく学習戦略の帰結」という主張は、
+  Phase 12 を「低bit化の許容表を作る co-design」として設計する根拠になる。
+
 ### クラスタAの統合所見（2026-10-25時点、A-8〜A-10 追記後更新）
 ---
 
