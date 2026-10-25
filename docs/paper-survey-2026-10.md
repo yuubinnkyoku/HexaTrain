@@ -1132,11 +1132,19 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     （critical batch size が β/λ 依存で動くための理論的注意）。
   - **Delving into Muon and Beyond: Deep Analysis and Extensions（2602.04669）** —
     解析+拡張の包括論文（NorMuon 関連リスト由来の未確認項目の有力候補）。
-- ★ **適用範囲の設計問い**: **Symmetry-Compatible Principle for Optimizer Design
-  （2605.18106）** — embeddings / LM head / SwiGLU / MoE router の
-  「どの行列に spectral 系 update を適用すべきか」の原理論。
-  HexaTrain が Muon を適用する tensor 集合（attention/FFN の2次元行列のみ）の
-  外挿妥当性の参照。
+- ★ **適用範囲の設計問い**: **【2026-10-25 abstract 確認済み】Symmetry-Compatible
+  Principle for Optimizer Design（2605.18106、NeurIPS 2026）** —
+  「update 規則は対象 weight block の対称群に対して equivariant であるべき」原理。
+  Muon / spectral / Scion は一般行列層の bi-orthogonal equivariance として統一説明。
+  **embedding / LM head は permutation + shared-shift 対称**であり
+  full orthogonalization は不適、one-sided spectral / row-norm / hybrid /
+  centered row-norm / left-spectral 等の対称適合 update を導出
+  （SwiGLU MLP・MoE router も個別対称）。dense/sparse MoE LM（0.6B〜1B 級）で
+  val loss 改善・語彙 logit 成長の制御・router 安定化を報告。
+  → **HexaTrain の「Muon を2次元隠れ行列のみ、embedding/output は aux Adam」分割の
+  理論的正当化**。さらに「centered row-norm」は J-3 OEC（μ-centering）、
+  「row-norm」は Muown（C-6）と family が一致し、
+  row 制御系譜（Phase 4）の位置づけを補強する。
 - **HexaTrain との関連（全体）**: C-12 は収録差分の索引であり、
   個別精読は Phase 5/6/12 の各 lane 開始時に★項の abstract 確認から始める。
 
