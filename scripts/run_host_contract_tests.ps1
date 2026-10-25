@@ -107,6 +107,26 @@ Invoke-PhoneLmHostPwshScript -Label "HMX PRM layout / mode43 contract" `
 Invoke-PhoneLmHostPwshScript -Label "HMX signed-output discriminator oracle" `
     -ScriptPath (Join-Path $Root "scripts\run_hmx_signed_output_oracle.ps1")
 
+# Frozen R2 S1/S2 (mode 45) contract CPU-only self-test: the 11-slot
+# fixture, the fail-closed host contract and the pre-registered decision
+# order from docs/hmx-v81-r2-device-prereg.md sections 6-8 (shared header
+# hmx_mode45.h). gcc from PATH, no SDK, no device; same contract as the
+# identity self-test above.
+$Mode45SelfTestExe = Join-Path $OutputDirectory "probe_r2_mode45_selftest.exe"
+$mode45Gcc = Get-Command gcc -ErrorAction SilentlyContinue
+if (-not $mode45Gcc) {
+    throw "gcc not found on PATH (required for probe_r2_mode45_selftest)"
+}
+& $mode45Gcc.Source "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror" `
+    "-o" $Mode45SelfTestExe `
+    (Join-Path $Root "host_tests\hmx_acc_residual_rpc\probe_r2_mode45_selftest.c")
+if ($LASTEXITCODE -ne 0) {
+    throw "probe_r2_mode45_selftest compilation failed with exit $LASTEXITCODE"
+}
+Invoke-PhoneLmHostCppRun -Label "HMX mode45 R2 contract self-test" `
+    -Executable $Mode45SelfTestExe
+Write-Host "probe_r2_mode45_selftest=PASS"
+
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
     # Remaining product contracts stay in Suite All (Host / Formal / PrGate).
