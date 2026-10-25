@@ -756,7 +756,37 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   無変更の micro 最適化候補**（ correctness は不変）。
   Dion2 の「行列を shrink する理論」単体は 64x64 では効かない（既に最小規模）。
 
+### C-7. MACRO — manifold constraint 理論（2026-10-25 追加・NorMuon 関連経由）
+
+- [Demystifying Manifold Constraints in LLM Pre-training（arXiv:2605.04418）](https://arxiv.org/abs/2605.04418)
+  — An, Li, Goldfarb, Ma、2026-05。
+  **【2026-10-25 abstract 確認済み】**: Muon 系の「orthogonalization + row-wise
+  normalization」を **weight 行列の manifold 正規化**（spectral norm ball 系）と
+  みなして学習動力学を解析（activation scale / 回転動力学 /
+  **update-to-weight ratio** の3観点）。Riemannian spectral steepest descent
+  optimizer **MACRO** と radius 選択原理を提案。主要主張:
+  (1) **RMSNorm と manifold 制約は重複した役割**を果たす（相互代替）,
+  (2) manifold 制約下では **weight decay を完全に除去できる**,
+  (3) update-to-weight ratio 制御で **update cancellation を大幅緩和**,
+  (4) **MACRO は低精度計算に頑健**で標準 LLM pre-training の既存手法と競合。
+- **HexaTrain との関連**: (4) が最重要 — manifold 制約 optimizer の
+  **低精度頑健性の理論的裏付け**は HMX 低精度 Muon（Phase 12 / R2 系）と直結する。
+  Muon の orthogonalization 自体が既に spectral ball 制約の離散近似だとする視点は、
+  「HVX FP32 Muon の役割をどう数式で位置づけるか」の理論参照になる。
+  (1)(2) は model 構造（RMSNorm 削除・WD 削除）の削減余地を示すが、
+  758k param model で RMSNorm を外す効果は unverified であり、
+  Phase 6（LR×batch×optimizer）で update-to-weight ratio を計測している場合の
+  解釈補強に留める。MACRO 本体の採用は Riemannian 演算が HVX に乗るか未知。
+- 次に読むこと: radius 選択原理の数式（本文未読）。NuMuon（下記索引）との関係。
+
 ### C-6. 索引
+
+- **【2026-10-25 abstract 確認済み】NuMuon（arXiv:2603.03597）** — update direction への
+  **nuclear norm 制約**で weight を低 rank 化しやすくし、標準 LLM 圧縮 pipeline 後の
+  品質を billion scale で改善（Muon の full-rank update でも学習 weight は既に
+  低 rank 構造を持ち圧縮しやすい、という観察が前提）。
+  on-device 学習→on-device 配備の HexaTrain では「学習した weight が圧縮・低 bit 化に
+  耐えるか」は Phase 12 と同根の関心事。abstract 確認済み・本文未読。
 
 - **【2026-10-25 確認済み】ROOT（arXiv:2511.20626）** — dimension-robust な
   orthogonalization で安定性問題に対処（引用13）。行列の形状差による
