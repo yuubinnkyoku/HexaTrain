@@ -189,6 +189,17 @@ format（MX 系）の学習側文献として、このクラスタは Phase 12 �
     — Fishman, Chmiel, Banner（Intel/Habana）, Soudry（Technion）、2024-09（引用78）。
     trillion-token 級 FP8 混合精度学習の安定化。COAT・MOSS への直接的な先行。
     Phase 12 の大規模側参照として保持。
+- **【2026-10-25 新着掃描で追加】loss spike 系**:
+  - [Stabilizing the Pre-training of LLMs（arXiv:2312.16903、v4 2025-07）](https://arxiv.org/abs/2312.16903)
+    — loss spike の理論解析（少数の bad batch による **gradient norm の制御不能な成長**
+    が原因）。**小規模 model で大規模の不安定を予測する**手法は Wortsman（上記）と
+    同型で、spike の起きる機構の理論面を補う。stress harness の
+    「gradient norm 監視」項目の理論的根拠。
+  - [Spike-Aware Adam with Momentum Reset（arXiv:2501.06842）](https://arxiv.org/abs/2501.06842)
+    — 複数 architecture で gradient spike が普遍的に発生することを示し、
+    spike 検出 + **momentum reset** による緩和 optimizer を提案。
+    HexaTrain で spike が観測された場合の緩和候補（QNN graph 外の CPU 側で
+    適用可能な形状）。abstract 確認済み・本文未読。
 
 ### A-8. FP4 training recipe の起源系（AlphaXiv related 推薦から追加、2026-10-25）
 
