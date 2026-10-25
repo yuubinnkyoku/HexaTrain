@@ -1294,6 +1294,14 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   掛ける」方向に拡張できる。future-mixture supervision とも相性が良い（混合重みを
   entropy で変調）。
 - **次に読む**: entropy threshold の決め方（base model 自身の entropy を使う再帰性）。
+  → **【2026-10-25 追記】**[Adaptive Multi-Token Prediction: How far should we go?
+  （arXiv:2610.28619）](https://arxiv.org/abs/2610.28619)（2026-10）は**推論側**の
+  horizon 適応（speculative decoding の draft 長を online control 問題として解き、
+  「acceptance survival 確率」から期待 tokens/sec 最大の horizon を選ぶ controller、
+  再訓練不要・最大 4.1x 高速化）で、「単一の最適 horizon は存在しない」ことを
+  MTP 学習側（AdaMTP）と独立に支持。HexaTrain が MTP-lite を将来 spec decoding に
+  使う場合の推論側補完であり、entropy telemetry（H-2 / E-5）と
+  acceptance survival の相関を測る診断として接続できる。abstract 確認済み・本文未読。
 
 ### E-6. MobileLLM-R1 — sub-billion reasoning の open recipe
 
