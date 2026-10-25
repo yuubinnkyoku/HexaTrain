@@ -1110,8 +1110,14 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     行わないと、近似誤差と LR 未調整を区別できず A/B が無効化される
     （numerical-evidence の単一要因原則と整合）。
   - **Low-rank Orthogonalization（2509.11983）** — 大規模行列の低 rank orthogonalization。
-  - **Chebyshev-type Polynomials による NS 加速（2506.10935）** —
-    C-5 Polar Express と同じ「係数設計で速く」系。
+  - **【2026-10-25 abstract 確認済み】CANS: Chebyshev-type Polynomials による NS 加速
+    （2506.10935、math.NA）** — 固定係数の Newton–Schulz に対し
+    **Chebyshev 交互定理で 3 次の最適係数を理論導出、高次は Remez 法で計算**。
+    matrix multiply のみで制御付き近似直交化（Muon 直交化と Stiefel 多様体の
+    retraction を応用先に明記）。
+    → C-5 Polar Express（minimax 最適係数）と同 family の別解。
+    Phase 5 の「NS5 の係数を差し替えて同反復数で精度を上げる/同精度で反復数を削る」
+    arm の係数源候補が Polar Express + CANS の2系統になる。
   - **【2026-10-25 abstract 確認済み・初版記載を訂正】AMUSE: Anytime Muon
     （2605.22432）** — 「anytime」は直交化 cost でなく **Schedule-Free 系の
     anytime 学習**の意味。Muon の更新 geometry に Schedule-Free averaging を
