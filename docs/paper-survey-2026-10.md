@@ -1130,8 +1130,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     絶対値予測は不可）で画像+LM で検証。
     → Phase 6 の batch/accumulation 掃引では **β と WD を batch と独立に固定しない**
     （critical batch size が β/λ 依存で動くための理論的注意）。
-  - **Delving into Muon and Beyond: Deep Analysis and Extensions（2602.04669）** —
-    解析+拡張の包括論文（NorMuon 関連リスト由来の未確認項目の有力候補）。
+  - **【2026-10-25 abstract 確認済み】Delving into Muon and Beyond（2602.04669）** —
+    Muon を `U Σ^p V′` family の **p=0 端点**として統一的に解析（momentum 系と
+    RMS-normalized gradient 系の双方に適用）。p=1/2, 1/4, 1 を検証し
+    **SVD を避ける coupled Newton iteration** を開発。
+    主張: RMS-normalized の方が安定、spectral 圧縮は first-moment を安定化するが、
+    **Muon（p=0）は Adam に一貫して勝つわけではない**。
+    結論は「Muon は有効な spectral normalization の一形態で、万能ではない」。
+    Kaon/Freon（上記）と同じ反万能系。code: `Ocram7/BeyondMuon`。
+    （NorMuon 関連リストの残項目「SOAP-Muon-Beyond」は本論文では解消されず、
+    C-11 の NVIDIA 論文が該当項目と判断するのが妥当。）
 - ★ **適用範囲の設計問い**: **【2026-10-25 abstract 確認済み】Symmetry-Compatible
   Principle for Optimizer Design（2605.18106、NeurIPS 2026）** —
   「update 規則は対象 weight block の対称群に対して equivariant であるべき」原理。
