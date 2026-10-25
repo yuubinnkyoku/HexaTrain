@@ -743,6 +743,14 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 
 ### C-6. 索引
 
+- **【2026-10-25 確認済み】ROOT（arXiv:2511.20626）** — dimension-robust な
+  orthogonalization で安定性問題に対処（引用13）。行列の形状差による
+  NS 挙動差は HexaTrain の 64x64 一様形状では比較的問題にならないが、
+  形状探索（Phase 8）で非正方行列が増えた場合の参照。
+- **【2026-10-25 確認済み】TEON（arXiv:2601.23261）** — layer-wise Muon を
+  tensor 単位の orthonormalization へ拡張（MUON+ と同 group、2026-01）。
+  HexaTrain では 4D tensor（head 次元含む）をどう orthogonalize するかの
+  設計問いに対応。abstract 確認済み・本文未読。
 - **【2026-10-25 直接確認済み】Muown 原論文**:
   [arXiv:2605.10797](https://arxiv.org/abs/2605.10797) / [AlphaXiv](https://www.alphaxiv.org/abs/2605.10797)
   — Lion, Hübler, Li, Orvieto, He（ETH 系）、2026-05。
