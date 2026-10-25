@@ -1185,6 +1185,17 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     補正する材料（2510.19933 の LR/ momentum coupling と整合する読み）。
   - **Isotropic Curvature Model / Is Gradient Orthogonalization Optimal?
     （2511.00674）** — C-8（NDS 曲率）と同型の問いの別枠。
+  - **【2026-10-25 abstract 確認済み】Muon in Associative Memory Learning
+    （2602.05725、ICML 2026、53頁）** — 線形連想 memory + 階層 frequency spectrum の
+    model で Muon の学習動力学を解析。**GD は低周波成分が bottleneck の
+    不均一学習、Muon は frequency 間の進行を均し noiseless で GD に指数的加速**。
+    label noise + power-law spectrum 下で **Muon の scaling law を導出し
+    GD 上回る scaling 効率**を示す。解釈: Muon = adaptive task alignment と
+    block-symmetric gradient 構造からの implicit matrix preconditioner。
+    → 「data spectrum の偏りが大きいほど Muon の相対利得が大きい」メカニズムで、
+    Byte-BPE V1024 の長尾 token 分布を持つ HexaTrain の Muon 利得の
+    理論的な一説明。noise 下の scaling 効率は C-11（大 batch 実証）と
+    補完する理論面。
   - **【2026-10-25 abstract 確認済み】Convergence Bound and Critical Batch Size of
     Muon（2507.01598）** — 実用4構成（±Nesterov、±WD）の Muon 収束証明。
     WD ありで「bounded-gradient 仮定なしに parameter/gradient norm が
