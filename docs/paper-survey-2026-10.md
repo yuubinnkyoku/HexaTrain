@@ -2087,6 +2087,9 @@ Loss Curriculum」への文献裏付けを探した。
 | Softmax 高精度残置の想定 | softmax 自体の低bit化は「学習時に慣らす」必要があるという結果（H-3）。Kellogg の LN weight 除外（A-2）とも整合 | 中 |
 | Cross-Layer Reuse 診断 → Value Residual（NOW 5 / P1 pool） | Depth-Attention が parameter ゼロ・KV 中立の cross-layer value mixing を 360M から検証（E-3） | 中 |
 | Training Stability Stress Harness（P0 共通基盤） | Wortsman の小規模 proxy 手法論（A-7 追記）が同一指標系（update norm・logit growth）で規模間予測を実証 | 中 |
+| **【2026-10-25 午後追加】Muon 採用の大規模実証（Phase 4-6 の前提）** | multi-billion × 100M token batch で Muon が AdamW を一貫上回り、**大 batch で AdamW が劣化する中 Muon は安定**（C-11）。LR transfer は update-RMS matching が規範 | **高** |
+| **【2026-10-25 午後追加】小規模 curriculum の安定化利得（Phase 13）** | 14M〜1B で random ordering が GNS 増大・singular-entropy spike、**規模が小さいほど差が大**（I-2）。HexaTrain は利得最大帯のさらに下端 | 高 |
+| **【2026-10-25 午後追加】V81 HMX 上の学習 system の実在（R2/D クラスタの外部対照）** | 同世代 V81 HMX（OnePlus 15）で FP16 operand→wider accumulator→FP16 出力を用いた LoRA 学習 system が公開（B-9）。**per-row range guard** は R2 の signed 出力問題と同根の独立実装 | **高** |
 
 ## 2. この調査で新しく見えた設計軸（repo にまだ無いもの）
 
@@ -2108,6 +2111,22 @@ Loss Curriculum」への文献裏付けを探した。
 8. **checkpoint averaging（J-4）**: 高 LR 学習ほど averaging の恩恵が大きいという
    外部観察があり、G1 LR stress grid の checkpoint 群を averaging A/B へ
    流用できる。LR decay を merging で置き換える変種も候補。
+9. **【午後追加】planner objective を圧縮後転送量で書く（G-4 PlaneZip）**:
+   生 size 基準の cost model は compress 選択肢を構造的に過小評価する。
+   Phase 9 MILP の最初からの設計則。
+10. **【午後追加】orthogonalization を間引く 4 軸（C-10/C-6 MiMuon）**:
+    Dion=amortize / Dion2=row fraction / Gram NS=FLOP 削減 / MiMuon=適用を間引く。
+    Phase 5 の「NS を毎 step 完走しない」arm 群の候補が4つに。
+11. **【午後追加】GDN-2 の統一 gate 実装（F-5）**: erase/write の channel-wise 2 gate で
+    GDN と KDA を1実装+ablation で回収。Phase 14 の設計空間を更新。
+12. **【午後追加】unbiased estimator の SR 代替（A-11 MS-EDEN）**:
+    Phase 12 の estimator A/B を「SR vs MS-EDEN 型」に更新。
+13. **【午後追加】forward/backward の scale 一致性の観測点（A-12）**:
+    転置による scale 不一致が FP4 不安定の原因という診断は、HMX R2 系の
+    block scale が dX/dW で一致しているかという新観測点を与える。
+14. **【午後追加】weight averaging の readout blend（J-5 ANVIL II）**:
+    final 35% / EMA 65% の blend が record 設定の構成要素。J-4 の arm に
+    「単純平均対比の blend」を追加できる。
 
 ## 3. 外部動向として記録すべき構造変化
 
@@ -2121,6 +2140,9 @@ Loss Curriculum」への文献裏付けを探した。
 
 ## 4. すぐ読むべき論文の優先順位（本文精読リスト）
 
+0. **【午後追加】First-Order LoRA Training with Phone NPUs（2610.24816）** —
+   同世代 V81 HMX の学習 system。per-row range guard の閾値・sensitivity 推定法・
+   V79/V81 差は R2 と Phase 12 の直接対照になるため最優先。
 1. **MUON+（2602.21545）** — Muown lane の比較 arm 設計に直結。挿入する normalization の
    正確な形を確認する必要がある。
 2. **Compute Optimal Tokenization（2605.01188）** — Phase 10 の設計を compression rate
@@ -2168,6 +2190,18 @@ Loss Curriculum」への文献裏付けを探した。
     C-9 SAMuon。Phase 4/5 の評価に NDS 相当量（update 方向曲率）を入れると
     arm 間の効き所の帰属が取れる。SAMuon-lite は state ゼロ・rank-1 power iteration
     で Orthogonalization Accuracy lane の arm 候補）。
+12. **【午後追加】Phase 13 curriculum A/B に LR 側の交互作用 arm を必須化**
+    （根拠: I-3。ascending order × decay の非両立。緩やか decay arm と
+    checkpoint averaging 置換 arm を curriculum A/B と同時走查する。
+    J-4/I-2 とセット）。
+13. **【午後追加】B-9（V81 LoRA system）との対照表作成**
+    （根拠: B-9。HMX signed FP16 出力の per-row range guard vs R2 late-clamp /
+    sensitivity 別精度配分 vs Phase 12 tensor 除外表 / resident weight tile 再利用 vs
+    Cross-Layer Reuse。同一世代実機の独立実装は R2 系の数値合理解釈の
+    交差検証材料になる）。
+14. **【午後追加】Phase 5 に orthogonalization 削減 arm 群を4軸で整理**
+    （根拠: C-10 Dion 系譜 + C-6 MiMuon。amortize / row fraction / Gram NS /
+    適用間引きの4候補を、NS5 反復数と数値誤差の sweep に並べて比較設計する）。
 
 ## 6. 本調査の限界（2026-10-25 時点）
 
@@ -2175,6 +2209,8 @@ Loss Curriculum」への文献裏付けを探した。
   C-2 の second moment update 則）は本文未確認。ただし精読リスト上位5本
   （MUON+ / tokenization / VGA / K-interval softmax / Depth-Attention）は
   本文確認済みで「次に読む」に追記済み。
+  **午後追加の B-9（2610.24816）のみ HTML 本文の一部確認済み**（backend 構成・
+  実機世代まで）。B-9 の sensitivity 推定と range guard 数値は未確認。
 - 「AlphaXiv」は paper page（AI overview / related 推薦 graph）として利用した。
   人的 discussion は主要論文（MUON+ / NVFP4）で空だったため、
   議論内容の参照はまだ無い。related 推薦経由で FP4 recipe 起源論文（A-8）を発見。
