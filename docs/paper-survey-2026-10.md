@@ -495,6 +495,11 @@ memory planner の設計参照**として読む。
   （FastRPC / QuRT RTOS の内部）と
   [Qualcomm FastRPC GitHub](https://github.com/qualcomm/fastrpc) が最も詳しい。
   HexaTrain の RPC 境界・pack/unpack 最適化も公開文献上の空白であることを記録。
+  **【2026-10-25 再掃描】**「RPC-bound training / accelerator-aware optimizer 配置 /
+  host-accelerator 通信 overlap」で再検索したが、GPU 集合通信の offload（HOCCL,
+  arXiv:2609.34334）や multi-node 通信 scheduling（TRANSIT, arXiv:2610.07593）が
+  近いのみで、**学習 optimizer 境界としての RPC 設計を扱う文献は依然不存在**。
+  空白判定は維持。
 
 ### B-7. Mandheling — DSP offload による mixed-precision 端末学習（2026-10-25 追加・重要）
 
