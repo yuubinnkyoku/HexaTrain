@@ -1502,6 +1502,17 @@ MTP の直接 follow-up 系を中心に、G1 lane・P1 Candidate Pool（Value Re
   約160論文の SLM 系 survey。architecture / data / efficiency の地図として保持。
 - [Matryoshka Language Model Suites（arXiv:2608.09703）](https://arxiv.org/abs/2608.09703) —
   共有学習で model suite を作る方向。MatFormer / elastic model 系（P1〜P2）の近縁。
+- **【2026-10-25 abstract 確認済み】mHC: Manifold-Constrained Hyper-Connections
+  （arXiv:2512.24880、DeepSeek-AI、引用~120）+ xHC（arXiv:2607.14530）** —
+  Hyper-Connections（residual stream を複数 stream に広げて接続 pattern を変える拡張）が
+  **identity mapping 性質を損ない、大規模で学習不安定 + memory access overhead** を
+  生む問題に対し、residual 接続空間を manifold へ射影して identity 性質を復元する
+  mHC framework（infrastructure 最適化込み）。大規模で性能向上と高い scalability。
+  → HexaTrain 関連は薄い（multi-stream 化は activation memory を L19 分増やすため
+  端末の memory 制約と衝突）が、「residual 拡張系の安定化には identity mapping の
+  保持が本質」という診断は、Value Residual / Depth-Attention（E-3）系の
+  「identity からの離れ方」設計の対照軸として記録。follow-up の xHC は
+  LM head 前で多 stream を1本に戻す設計。abstract 確認済み・本文未読。
 - **XSA（arXiv:2603.09078, repo 参照済み）の追跡状況（2026-10-25）**:
   Apple（Shuangfei Zhai）による二次資料（EmergentMind / 著者 X 投稿）の確認では、
   XSA の gain は** sequence length とともに増大**するとされる。
