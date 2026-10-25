@@ -728,11 +728,22 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   **大規模での wall-clock を顕著に削減**。NorMuon の比較でも Dion は
   Adam 比 10.43%（Muon と同値）の step 削減を達成（C-2 参照）。
 - [Dion2: A Simple Method to Shrink Matrix in Muon（arXiv:2512.16928）](https://arxiv.org/abs/2512.16928)
-  （2025-12）— Muon の orthonormalization step の超線形コストを
-  行列縮小で回避する方向。要確認。
+  / Ahn, Amsel, Langford（Microsoft）、2025-12。
+  **【2026-10-25 abstract 確認済み】**: Muon の orthonormalization の超線形コストに対し、
+  **毎反復で行または列の一部 fraction を選び、その部分だけを orthonormalize する**
+  最小構成の行列縮小法。update を sparse 化し compute / communication を削減。
+  Dion 本体の rank-fraction（momentum buffer 上 power iteration）と異なり
+  「選んだ行列だけを直接 orthonormalize する」点が素朴。abstract に実験数値なし
+  （理論・手法論文。実験は Dion3 側にあると推測）。
 - [Dion3: Full-Stack Orthogonal Updates（arXiv:2608.11612）](https://www.alphaxiv.org/abs/2608.11612)
-  — algorithm / kernel / update rule の3層で Muon を最大 6x 高速化する
-  full-stack framework。要確認。
+  （2026-08、37頁）。**【2026-10-25 abstract 確認済み】**: Muon の直交化 overhead を
+  stack の全層で攻める3+1構成:
+  (1) **Gram Newton–Schulz**（対称性を利用し orthogonalization の FLOP を削減）,
+  (2) 対称性を活かす **CuteDSL kernel**, (3) sharded weight の通信を減らす
+  **megabatching**, (4) 毎 step momentum 行列の **行 fraction のみ orthogonalize**
+  する修正 update rule（Dion2 の発想を Dion 本体へ統合）。
+  主張: **Muon と同等以上の loss を達成しつつ optimizer step time を最大 6x 削減**。
+  `dion` package で drop-in Muon replacement として提供。
 - **HexaTrain との関連**: **HVX Muon の optimizer wall（約55〜59 ms）に対する
   最も直接的な低減候補群。** HexaTrain の 64x64 行列は小さいので NS5 の
   絶対コスト自体は大規模系より小さいが、Dion 系の「power iteration を
@@ -740,6 +751,10 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   Phase 5 の Orthogonalization Accuracy lane に
   「低 rank 近似で NS 反復数を削る」arm を立てる根拠になる。
   error feedback 付き rank-fraction は state 増分が小さく HVX 実装とも相性が良い。
+  また Dion3 の Gram Newton–Schulz（対称行列の対称性を FLOP 削減に使う）は、
+  HexaTrain の 64x64 NS5 実装にも作用面だけなら **反復あたり演算量を削れる
+  無変更の micro 最適化候補**（ correctness は不変）。
+  Dion2 の「行列を shrink する理論」単体は 64x64 では効かない（既に最小規模）。
 
 ### C-6. 索引
 
