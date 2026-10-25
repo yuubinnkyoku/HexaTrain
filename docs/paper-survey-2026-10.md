@@ -1060,7 +1060,17 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     C-5 Polar Express と同じ「係数設計で速く」系。
   - **AMUSE: Anytime Muon（2605.22432）** — 計算予算に応じた anytime 直交化。
 - ★ **Phase 12（Muon 低 bit 化）方向**: A-10（Full-Stack FP4）と同主題の群。
-  - **MuonQ: Directional Fidelity Optimization（2605.11396）**。
+  - **【2026-10-25 abstract 確認済み】MuonQ: Directional Fidelity Optimization
+    （2605.11396、COLM 2026）** — **Muon の state は Adam より量子化に敏感**
+    （orthogonalization は方向情報のみを保持するため、singular vector 方向の
+    小さな量子化誤差が update で増幅される）。対処3技術:
+    量子化前 normalization / power iteration で支配的 singular 成分を分離量子化
+    （誤差を方向でなく magnitude に向かわせる）/ **μ-law companding**
+    （密な momentum 値域に高分解能を割く）。**state 4-bit が安定**、
+    memory 7.3x 減で loss ほぼ回復（COLM 2026、code: `YupengSu/MuonQ`）。
+    → HVX Muon の momentum を低 bit 保存する場合の**方向保護が必須**という
+    設計制約。μ-law companding は HVX/CPU で安価。A-10 は「計算を FP4 化」、
+    MuonQ は「state を 4-bit 化」で対策の階層が違う。
   - **Effective Quantization of Muon Optimizer States（2509.23106）**。
   - **Achieving low-bit Muon through subspace preservation and grid quantization
     （ICLR 2026 Poster、arXiv ID 未確認）**。
