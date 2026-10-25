@@ -1089,7 +1089,17 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
 - ★ **Phase 5（orthogonalization 削減・近似の理論）方向**:
   - **MuonBP: Block-Periodic Orthogonalization（ICLR 2026 Poster）** —
     orthogonalization を block 間隔で共有。**適用間引き軸の第5候補**（C-6 MiMuon の次）。
-  - **Drop-Muon: Update Less, Converge Faster（2510.02239）** — update 自体を間引く。
+  - **【2026-10-25 abstract 確認済み】Drop-Muon: Update Less, Converge Faster
+    （2510.02239、KAUST / Richtárik group）** — **各 step で layer の部分集合だけを
+    更新する randomized progressive training**（全 layer 更新が最適でないことを
+    layer-wise smoothness の理論で示し、stochastic/non-smooth 域の収束保証は初）。
+    CNN で full-network Muon 同 accuracy を最大 1.4x 速い wall-clock で達成。
+    → **optimizer cost 削減の第6軸**（update 自体を間引く — forward/backward は
+    変わらず optimizer wall のみ削減）。HexaTrain の HVX Muon wall（約55-59 ms）に
+    対し「L19 のうち半分だけ更新」のような schedule が理論保証付きで存在する。
+    ただし **QNN graph は静的**なので実装は「未更新 layer の update を 0 mask」
+    （計算は節約できない）か graph 分岐が必要で、実装コストの壁は大きい。
+    Phase 5 arm として理論参照に置く。
   - **【2026-10-25 abstract 確認済み】Beyond the Ideal: Analyzing the Inexact Muon
     Update（2510.19933）** — 実用 Muon の**不正確な orthogonalization** の最初の理論解析
     （LMO + 加法誤差 model）。劣化を oracle 誤差の関数として明示化し、
