@@ -283,6 +283,19 @@ AlphaXiv の NVFP4 論文ページの related 推薦経由で、**RHT + SR recip
   precision gate 条件を満たす新経路**（A-3 の forward 高精度残置との対比で、
   「反復側を安定化する」アプローチ）。
 - **次に読む**: FP4 Root 反復の clipping 係数の決め方（NS 係数との関係）。
+  → **【2026-10-25 本文確認済み（HTML）】**: NS 反復は3項2次型
+  `X_{k+1} = aX_k + bX_k(X_k^TX_k) + cX_k(X_k^TX_k)^2`。
+  「shape-dependent」の中身は **Root（He et al. 2025）の最適化係数を
+  行列の aspect ratio 別に特殊化したもの**で、連続 NS step 間の
+  誤差増幅を抑える役割。**p99 outlier clipping** を併用、
+  量子化は RTN + adaptive 4/6 scaling、**1x16 block に Hadamard 回転**を挟む
+  pipeline。効果は NVFP4 NS の誤差 **~10% → ~3%**。
+  係数の具体値・導出は本論文に載らず Root 側に委ねられる。
+  → HexaTrain への含意: (a) **aspect ratio 別係数**の発想は Phase 5 で
+  非正方行列（G1 gate 等）を NS に掛ける場合の係数選択に直結
+  （64x64 正方では影響小）、(b) **低精度 NS では p99 clipping が
+  標準的な安定化手段**という知見は HTP NS 再試行の precision gate 設計に
+  使える（clipping 前提の gate 条件を書ける）。
 
 ### A-11. Quartet II — MS-EDEN、SR を超える unbiased 量子化（2026-10-25 新着掃描）
 
