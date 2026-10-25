@@ -2223,6 +2223,15 @@ Loss Curriculum」への文献裏付けを探した。
     直接移植可能性が低いことの実例。
 - **次に読む**: momentum warmup と分散 overhead 削減の具体的形
   （HVX Muon の W8 構成への流用可否）。
+  → **【2026-10-25 確認済み（blog level）】**: Muon の momentum warmup は
+  **update-to-weight ratio を学習序盤で schedule しながら nesterov momentum buffer を
+  立ち上げ、warmup 期間中は bias correction を効かせる**形
+  （[Muon 原典 blog](https://kellerjordan.github.io/posts/muon) /
+  [Varun Neal 解説](https://varunneal.github.io/essays/muon)）。
+  「update-to-weight ratio の制御」は C-7 MACRO の解析軸と同じ量であり、
+  HexaTrain の HVX Muon（CPU 側 optimizer）でも**序盤 momentum warmup +
+  bias correction は実装コスト小**で試せる（state は既存 buffer のみ）。
+  分散 overhead 削減側は 8 GPU 前提の話が多く、単一端末の HexaTrain には非適用。
 
 ### J-2. logit softcap の系譜と QK-norm との関係
 
