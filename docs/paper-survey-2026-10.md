@@ -824,6 +824,12 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   HVX/CPU でどこまで低コストかは未検証なので、Phase 11 の candidate として
   「CPU reference 1-step cost」から測るのが現実的。
 - **次に読む**: Alice の low-dimensional subspace 推定（HexaTrain の 64x64 行列群への適合性）。
+  → **【2026-10-25 abstract 再確認】**: Alice は「general な optimizer 構造への
+  low-rank extension framework」の適用例として提示され、**Adam 比 2x 超の収束**を
+  LLaMA ≤1B で達成（memory overhead は小）。ただし **subspace の推定方法・
+  次元の具体値は abstract に無く本文が必要**。64x64 行列群への適合性の判断は
+  保留（64x64 は既に小さく、subspace 化の利益は state 削減よりも
+  「Adam m+v を捨てられる」構造転換側にあると見るのが自然）。
 
 ### C-5. Polar Express（repo 参照の直接確認、2026-10-25）
 
