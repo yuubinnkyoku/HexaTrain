@@ -1147,6 +1147,15 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     → C-5 Polar Express（minimax 最適係数）と同 family の別解。
     Phase 5 の「NS5 の係数を差し替えて同反復数で精度を上げる/同精度で反復数を削る」
     arm の係数源候補が Polar Express + CANS の2系統になる。
+  - **【2026-10-25 abstract 確認済み】SUMO（2505.24749、NeurIPS 2025）** —
+    **動的に適応する低次元部分空間内で exact SVD 直交化**を行う
+    （full 空間での NS 近似を置換）。moment の condition number 依存の
+    近似誤差を回避し、低 rank optimizer 群比で memory 20% 減・
+    収束/安定性/性能を改善。
+    → Phase 5 の別解系譜: 「近似 NS in full space」対「**exact SVD in subspace**」。
+    64x64 規模なら CPU 側 Jacobi SVD は現実的なので、
+    HVX/CPU 構成の HexaTrain では NS5 以外の直交化器の選択肢として
+    理論参照になる（HVX に高速 SVD がない点は実装壁）。
   - **【2026-10-25 abstract 確認済み・初版記載を訂正】AMUSE: Anytime Muon
     （2605.22432）** — 「anytime」は直交化 cost でなく **Schedule-Free 系の
     anytime 学習**の意味。Muon の更新 geometry に Schedule-Free averaging を
