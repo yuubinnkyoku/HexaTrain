@@ -1894,6 +1894,28 @@ Loss Curriculum」への文献裏付けを探した。
   指標は言語学的3種で I-1 の情報理論指標と異なるため、
   難易度指標の選択は I-1（compression ratio / MTLD / Flesch）を主、本論文を対象語彙の補助とする。
 
+### I-3. LR decay × curriculum の非両立 — decay を averaging で置き換える（2026-10-25 新着掃描）
+
+- [How Learning Rate Decay Wastes Your Best Data in Curriculum-Based LLM Pretraining（arXiv:2511.18903）](https://arxiv.org/abs/2511.18903)
+  — Luo ほか（清華）、2025-11、**ICLR 2026 Oral（Top 1.2%）**、引用10。
+  **【2026-10-25 abstract 確認済み】**: **ascending data quality order と decaying LR の
+  非両立**を特定 — 高品質 data が学習終盤（LR が落ちた後）に配置されるため、
+  curriculum の利得が random shuffle と同等まで消える（constant LR なら利得が持続）。
+  対処2種: (1) **final LR を peak より「緩やかに小さい」程度に留める緩やかな decay**,
+  (2) **LR decay を最終 checkpoint 群の重み付き平均で置き換える**。
+  1.5B / 30B token で検証、組合せで random shuffle 比 benchmark 平均 +1.64%。
+  「data curriculum と optimization の co-design」を呼びかけ。
+- **HexaTrain との関連**: **Phase 13（curriculum）と LR schedule（Phase 6）の
+  co-design 制約を与える論文。** HexaTrain が curriculum を導入する場合、
+  現行の decay 型 schedule（S4000 凍結 control 系）のままだと
+  「easy→hard」順の利得が終盤で打ち消されるリスクがあり、
+  (a) 緩やか decay arm、(b) J-4 の checkpoint averaging 置換 arm、が
+  curriculum A/B の **必須の交互作用要因**になる。
+  J-4 の「高 LR × averaging」観察と統合すると、
+  「高 LR + 緩やか decay + checkpoint averaging」が文献整合的な1セットになる。
+  G1 LR stress grid の checkpoint 群を使った averaging A/B（統合所見 9）に
+  「decay 置換」という評価軸が加わる。
+
 ---
 
 ## J. 小規模学習 recipe の系譜（modded-nanogpt speedrun）
