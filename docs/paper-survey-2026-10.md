@@ -2395,6 +2395,10 @@ Loss Curriculum」への文献裏付けを探した。
   Muon+WD lane との併存確認にも使える。
 - **次に読む**: μ-centering の実装詳細（logits から引くか embedding を前処理するか）と
   実験規模。
+  → **【2026-10-25 確認状況】**: HTML 版（v1/v3）は 404 で公開されておらず、
+  PDF は tool で parse 不可。abstract の範囲では「μ-centering = 決定論的操作、
+  μ-loss = 正則化」の2実装形のみ確認済みで、**数式 level の実装詳細は未検証**。
+  A/B 設計時に PDF 原文（2601.02031）の人間側精読を要る状態を維持する。
 
 ### J-4. checkpoint merging 系譜（P2「Model Merging during Pre-training」の外部動向、2026-10-25 追加）
 
