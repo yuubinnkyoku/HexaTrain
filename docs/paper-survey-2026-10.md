@@ -1077,9 +1077,16 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   - **Error Feedback for Muon and Friends（ICLR 2026 Poster）** — 低 bit 化の
     誤差を error feedback で補償。Dion の error feedback と同型の考え方。
 - ★ **理論・批判系（C-3/C-8 の補強と反証）**:
-  - **Muon is Not That Special: Random or Inverted Spectra Work Just as Well
-    （2605.11181）** — spectrum の形自体より orthogonalization の方向操作が本質
-    という反 conventional 論。C-3 の preconditioning 理論への対抗仮説。
+  - **【2026-10-25 abstract 確認済み】Muon is Not That Special（2605.11181）** —
+    singular value を **random noise に置換する Kaon** が Muon と同等性能で
+    収束保証も保持（「正確な幾何構造の遵守は実質無関係」）。
+    Schatten (quasi-)norm 系 **Freon**（QDWH 反復）は SGD↔Muon を補間し、
+    GPT-2 の最適 Schatten 参数は quasi-norm 域（unitarily invariant LMO では表現不可）。
+    説明: 性能を支配するのは **alignment と descent potential の局所量**であり、
+    Muon は「大域幾何の追跡でなく step-size 最適性の保証」で成功している。
+    → C-3（preconditioning 利得理論）への**反証仮説**。Phase 5 の NS 精度 A/B の
+    解釈を「直交性誤差そのもの」から「方向別 effective step size の制御」へ
+    補正する材料（2510.19933 の LR/ momentum coupling と整合する読み）。
   - **Isotropic Curvature Model / Is Gradient Orthogonalization Optimal?
     （2511.00674）** — C-8（NDS 曲率）と同型の問いの別枠。
   - **【2026-10-25 abstract 確認済み】Convergence Bound and Critical Batch Size of
