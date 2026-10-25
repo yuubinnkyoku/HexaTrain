@@ -480,6 +480,46 @@ memory planner の設計参照**として読む。
   「on-chip に留める」原則の compile 側実装、(c) open source のため
   中期的な検証材料になる。
 
+### B-9. First-Order LoRA Training with Phone NPUs — V81 HMX 上の LoRA 学習（2026-10-25 追加・最重要近隣）
+
+- [arXiv:2610.24816](https://arxiv.org/abs/2610.24816)
+  — Zheng, Cheng, Chen, Xu, Sha, Ni, Luo ほか、**2026-10-17**（8日前の新着）。
+  **【2026-10-25 abstract+HTML 確認済み】**: phone NPU 上で first-order LoRA training を
+  行う system。frozen weight の3行列積（forward / activation recompute /
+  **input gradient**）をすべて NPU へ置き、training graph / adapter / optimizer は CPU。
+  **HexaTrain と同世代の実機**: Snapdragon 8 Elite Gen 5（**Hexagon V81**、OnePlus 15）と
+  8 Elite（V79、OnePlus 13T）。backend は QNN でなく **改造 llama.cpp ggml Hexagon backend**。
+  技術要素: (1) input-gradient kernel が forward の **resident weight tile と
+  dequantizer を再利用**（転置 weight copy 不要）、(2) 精度を **gradient sensitivity で
+  選択**（敏感な projection は FP16、残りは **32 weights/block + FP16 scale の Q8
+  block 量子化**）、forward の dequantizer を backward でも再利用,
+  (3) **FP16 出力への per-row range guard**、(4) NPU/adapter overlap, CPU operator fusion,
+  (5) **resumable 実行と thermal pacing** による夜間 background training。
+  workload は端末内 label による nightly personalization と LaMP-2。
+  Qwen / Llama 系 4 model。CPU trainer / phone-GPU / forward-only / GPU 参照と比較。
+- **HexaTrain との関連**: **これまでで最も近い隣接文献**（同 V81 HMX・同
+  「NPU が行列積を担い CPU が optimizer」分割）。ただし **LoRA first-order で
+  exact-BP scratch training ではなく**、weight gradient を NPU で出さない点、
+  ggml backend（QNN graph でない）の点で HexaTrain とは別系統。
+  クラスタB冒頭の正確化主張（HTP/QNN graph 上の exact-BP scratch LM 学習の不存在）は
+  この論文によっても**維持される**（むしろ最新研究も first-order LoRA 止まりという
+  ことは HexaTrain の空白の実在を補強する）。
+  交差点は3つ:
+  (a) **D クラスタ / R2 系**: 「HMX は FP16 operand を受け wider cell で accumulate し
+  FP16 result を書く」という外部記述と、**FP16 出力の per-row range guard** は
+  HMX signed FP16 出力（R2 の retain bit / late-clamp 系）と同じ問題意識の独立実装。
+  対照表を作る価値がある。
+  (b) **Phase 12**: gradient sensitivity による tensor 別精度配分（FP16 vs Q8 block）は
+  NVFP4 recipe（A-2）の tensor exclusion table と同型の**第2の実例**。
+  (c) **Cross-Layer Reuse / Phase 9**: resident weight tile + dequantizer 再利用は
+  「forward が既に持つものを backward で再計算しない」原則の具体的実装で、
+  retained-ACC（R2）と同じ方向。
+  さらに本文で GDN（recurrent）系 projection が gradient-sensitive 側に挙げられており
+  Phase 14（GDN migration）とも接する。推論 stack が llama.cpp 系のため
+  QNN graph の precision 制約（A-9）を回避している点も設計比較の材料。
+- 次に読むこと: 精度配分の sensitivity 推定方法（§実装）、per-row range guard の
+  clamp 値と HMX R2 の late-clamp 閾値の比較、V79 と V81 の性能差。
+
 ### クラスタBの統合所見（2026-10-25時点、B-7 追記後修正）
 
 1. **HexaTrain の位置は公開文献上も空白。** 「mobile NPU 上の exact-BP scratch LM training」は
@@ -489,6 +529,13 @@ memory planner の設計参照**として読む。
    low-rank ZO / sparse ZO / curvature ZO / activation-guided ZO / sparse backprop が
    2024-2026 に集中している。Phase 11 は MeBP / QZO-FF だけでなく
    LOZO・LOREN 型の選択肢も含めて再設計する価値がある。
+3. **【B-9 追加後】近隣最先端は「NPU+CPU 分割の first-order LoRA」で一致、
+   しかし exact-BP には届いていない。** 2026-10 時点の最新 system（B-9）が
+   HexaTrain と同世代 V81 HMX で input-gradient まで NPU に置いている一方、
+   weight gradient を NPU で計算する構成は依然存在しない。
+   「frozen 3行列積 NPU + adapter/optimizer CPU」が実用解のデファクトになりつつあり、
+   HexaTrain が NPU/HVX 側に置く範囲（weight gradient・optimizer 前段）の
+   差分が研究価値の所在を示す。
 
 ---
 
