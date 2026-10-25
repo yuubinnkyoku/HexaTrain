@@ -336,7 +336,7 @@ unchanged frozen recipe and reached step 8000 (1250 new updates, 1250-row LR
 telemetry fully schedule-verified). Mid-run the USB ADB endpoint vanished
 (host `ADB_COMMAND_FAILURE`; a transport interruption, not a numeric
 failure); the device-side run continued, and the host reattached over TCP
-after re-verifying the stable identity `324753221196`, polling the same run
+after re-verifying the stable device identity (private serial omitted), polling the same run
 to terminal and performing the same pulls/assertions into the same recovery
 directory. Checkpoints 7000/7250/7500/7750/8000 pulled and host-decode
 verified. Step 8000 (`2c2b05c6...`) is step=8000, seed=1, full Muon/AuxAdam
