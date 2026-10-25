@@ -2282,6 +2282,7 @@ Loss Curriculum」への文献裏付けを探した。
 | **【2026-10-25 午後追加】Muon 採用の大規模実証（Phase 4-6 の前提）** | multi-billion × 100M token batch で Muon が AdamW を一貫上回り、**大 batch で AdamW が劣化する中 Muon は安定**（C-11）。LR transfer は update-RMS matching が規範 | **高** |
 | **【2026-10-25 午後追加】小規模 curriculum の安定化利得（Phase 13）** | 14M〜1B で random ordering が GNS 増大・singular-entropy spike、**規模が小さいほど差が大**（I-2）。HexaTrain は利得最大帯のさらに下端 | 高 |
 | **【2026-10-25 午後追加】V81 HMX 上の学習 system の実在（R2/D クラスタの外部対照）** | 同世代 V81 HMX（OnePlus 15）で FP16 operand→wider accumulator→FP16 出力を用いた LoRA 学習 system が公開（B-9）。**per-row range guard** は R2 の signed 出力問題と同根の独立実装 | **高** |
+| **【午後追加】「Muon を2次元隠れ行列のみに適用、embedding/output は別系」の分割** | Symmetry-Compatible 原理（C-12）が「embedding/LM head は permutation 対称で full orthogonalization 不適」を理論化。HexaTrain の現行分割はこの原理と整合 | **高** |
 
 ## 2. この調査で新しく見えた設計軸（repo にまだ無いもの）
 
