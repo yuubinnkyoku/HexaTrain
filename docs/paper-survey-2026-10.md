@@ -1641,6 +1641,15 @@ quantized softmax 研究、整数-only 推論系。
 - [Faster Superword Tokenization（arXiv:2604.05192）](https://arxiv.org/abs/2604.05192) —
   BPE tokenization の高速化（4.7 CPU日→600 CPU秒）。アプリ内で tokenizer/cache を
   端末生成する「アプリ単体化」課題のコスト削減に使える可能性。
+- **【2026-10-25 abstract 確認済み】Decoupling the Benefits of Subword Tokenization
+  （arXiv:2604.27263）** — 制御された byte-level pretraining pipeline で
+  subword tokenization の利点を分解: **(1) training throughput 増大**
+  （同一 compute でより多くのテキスト）と **(2) subword 境界の言語学的 prior /
+  inductive bias** の2因子が本質で、後者は byte-level 学習に prior として
+  注入可能と示唆。HexaTrain の Byte-BPE V1024 は (1) を採る選択だが、
+  embedding table が 758k param の大きな割合を占める以上、
+  「byte まま + 境界 prior で語彙を削る」arm は Phase 10 の理論的対立仮説として
+  記録に値する（実現コストは data pipeline 変更が大）。abstract 確認済み・本文未読。
 - Bridging KV-Cache Quantization and Linear Attention（arXiv:2610.11214）は
   クラスタ F-3 に詳細あり（RAM-Net 統一 + weight migration）。
 - MELTing point（EuroSys 2025）はクラスタ B-4 参照。評価engine（NOW 1番）への
