@@ -2310,6 +2310,27 @@ Loss Curriculum」への文献裏付けを探した。
   G1 LR stress grid の checkpoint 群を使った averaging A/B（統合所見 9）に
   「decay 置換」という評価軸が加わる。
 
+### I-4. data mixing 系譜 — mixture 重みの最適化（2026-10-25 新着掃描）
+
+- **Data Mixing Laws（[arXiv:2403.16952](https://arxiv.org/abs/2403.16952)、ICLR 2025、引用218）** —
+  **validation loss を mixture 比率 `p` と model/data size の関数として
+  `f̂ᵢ(p) = cᵢ + kᵢ·exp(Σⱼ tᵢⱼ pⱼ)` で予測**し、訓練せずに最適 mixture を選ぶ。
+  小規模 fit → 大規模 extrapolation。follow-up に Aioli / OLMIX / IDEAL。
+- **CausalMix（[arXiv:2607.01104](https://arxiv.org/abs/2607.01104)、2026-07）** —
+  data pool の統計 feature を covariate、domain mixture を treatment とする
+  **因果推論 framing** で CATE を推定し state 依存の最適 mixture を動的推定。
+  **proxy model を 512 run の Qwen2.5-0.5B で fit** して 800K pool → 7B へ外挿。
+  RegMix 等 proxy 系 baseline を上回る。「静的分布仮定の proxy 系は
+  pool 変化で再訓練が必要」という限界指摘。
+- **HexaTrain との関連**: Phase 13（Difficulty-Aware Sampling）の隣接系譜で、
+  curriculum（順序）と mixture（比率）は独立軸。**Data Mixing Laws の
+  「小規模 run 群で loss 関数を fit → 外挿」は、HexaTrain の安価な
+  host-side 試行（A-7 Wortsman proxy と同じ思想）を mixture 設計に適用する
+  型紙**になる。CausalMix の「0.5B × 512 run」も同型で、
+  HexaTrain が multi-source corpus を増やす場合の設計参照。
+  ただし HexaTrain の現行 corpus は単一 source 系のため
+  「mixture 最適化」自体の効用は corpus 拡大時まで保留。
+
 ---
 
 ## J. 小規模学習 recipe の系譜（modded-nanogpt speedrun）
