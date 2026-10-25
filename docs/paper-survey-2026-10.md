@@ -1087,8 +1087,17 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   「accumulation なし + aux Adam の half-life を token 基準で再調整」を
   対照 arm として立てる根拠。B8 固定の現行設計自体は本論文の推奨側に立つ。
 - ★ **Phase 5（orthogonalization 削減・近似の理論）方向**:
-  - **MuonBP: Block-Periodic Orthogonalization（ICLR 2026 Poster）** —
-    orthogonalization を block 間隔で共有。**適用間引き軸の第5候補**（C-6 MiMuon の次）。
+  - **【2026-10-25 abstract 確認済み】MuonBP: Block-Periodic Orthogonalization
+    （2510.16981、引用34）** — 動機は分散時の直交化通信 overhead（AdamW 比
+    5-10% の throughput hit）。**各 device の shard で独立に orthogonalize し、
+    定期的に full orthogonalization を挟む**。理論は
+    **blockwise step と full step で別の step size を使うこと**を要求し、
+    収束保証付き（baseline Muon と競合する iteration complexity）。
+    8B × 8-way TP で throughput +8%、性能劣化なし。
+    → 単一端末の HexaTrain では通信動機は無いが、**計算動機の読み替えが可能**:
+    64x64 を 2x2 の 32x32 block に分割して NS を回すと block 毎の cost は 1/8、
+    4 block で計 1/2。定期 full orthogonalization + 2 LR が理論条件。
+    Phase 5 の「NS を毎 step 完走しない」arm 群の第5候補として正式化。
   - **【2026-10-25 abstract 確認済み】Drop-Muon: Update Less, Converge Faster
     （2510.02239、KAUST / Richtárik group）** — **各 step で layer の部分集合だけを
     更新する randomized progressive training**（全 layer 更新が最適でないことを
