@@ -1072,8 +1072,14 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
     という反 conventional 論。C-3 の preconditioning 理論への対抗仮説。
   - **Isotropic Curvature Model / Is Gradient Orthogonalization Optimal?
     （2511.00674）** — C-8（NDS 曲率）と同型の問いの別枠。
-  - **Convergence Bound and Critical Batch Size of Muon（2507.01598）** —
-    Muon の **critical batch size** 理論。Phase 6 の batch 設計の理論参照。
+  - **【2026-10-25 abstract 確認済み】Convergence Bound and Critical Batch Size of
+    Muon（2507.01598）** — 実用4構成（±Nesterov、±WD）の Muon 収束証明。
+    WD ありで「bounded-gradient 仮定なしに parameter/gradient norm が
+    almost-sure 有界」、WD 係数と LR の相互作用も整理。
+    **critical batch size の下界は定性的**（momentum β と WD λ が scaling を支配、
+    絶対値予測は不可）で画像+LM で検証。
+    → Phase 6 の batch/accumulation 掃引では **β と WD を batch と独立に固定しない**
+    （critical batch size が β/λ 依存で動くための理論的注意）。
   - **Delving into Muon and Beyond: Deep Analysis and Extensions（2602.04669）** —
     解析+拡張の包括論文（NorMuon 関連リスト由来の未確認項目の有力候補）。
 - ★ **適用範囲の設計問い**: **Symmetry-Compatible Principle for Optimizer Design
