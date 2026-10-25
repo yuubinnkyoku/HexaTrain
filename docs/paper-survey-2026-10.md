@@ -1112,7 +1112,17 @@ Muown lane の前提を**独立系統から裏付ける**動向であり、Phase
   - **Low-rank Orthogonalization（2509.11983）** — 大規模行列の低 rank orthogonalization。
   - **Chebyshev-type Polynomials による NS 加速（2506.10935）** —
     C-5 Polar Express と同じ「係数設計で速く」系。
-  - **AMUSE: Anytime Muon（2605.22432）** — 計算予算に応じた anytime 直交化。
+  - **【2026-10-25 abstract 確認済み・初版記載を訂正】AMUSE: Anytime Muon
+    （2605.22432）** — 「anytime」は直交化 cost でなく **Schedule-Free 系の
+    anytime 学習**の意味。Muon の更新 geometry に Schedule-Free averaging を
+    時変補間係数で統合（序盤は高速 Muon 列、後半は平均列へ漸移、
+    LR schedule 不要）。river-valley loss 解析で「orthogonalization は
+    bulk 進行を速める一方 dominant 方向の noise を増幅して振動する」
+    という Muon の弱点整理。vision + LLM pretraining で
+    Schedule-Free AdamW / Muon の Pareto 改善。
+    → HexaTrain は checkpoint 保存型の学習で schedule-free 化の要請は薄いが、
+    「Muon の振動 = dominant 方向 noise 増幅」は Phase 4/5 の telemetry
+    （update の dominant singular 成分の揺れ）という観測軸を与える。
 - ★ **Phase 12（Muon 低 bit 化）方向**: A-10（Full-Stack FP4）と同主題の群。
   - **【2026-10-25 abstract 確認済み】MuonQ: Directional Fidelity Optimization
     （2605.11396、COLM 2026）** — **Muon の state は Adam より量子化に敏感**
