@@ -1503,3 +1503,41 @@ only; no device contact, no new mode, no timing.
 
 Full evaluation: `docs/hmx-v81-sign-separated-output-cpu.md`. Statuses above
 are unchanged; E-3C2 remains `UNTRIGGERED`.
+
+#### B3+R2 full-tile CPU review corrections (2026-10-26)
+
+CPU-only revision of `docs/hmx-v81-b3-r2-full-tile-prereg.md` after review; no
+DSP code, no build, no device, no ADB, and Mode 46 stays unauthorised.
+
+* **Operand supply.** MMA #2 overwrites the 2 KiB VTCM `wgt` tile with `Wlo`, so
+  MMA #3 needs an explicit `Whi` restore source. It is a **third** 2 KiB DSP
+  L2/TCM staging tile (`stAlo`, `stWlo`, `stWhi` = 6 KiB staged, not 4 KiB); a
+  VTCM shadow does not fit (10,752 B + 2,048 B > 12,288 B). The per-MMA operand
+  identity `AHI:WHI, AHI:WLO, ALO:WHI` and the restore (`source=L2_STAGE`,
+  `reads=1`, FNV-1a staging checksum) are asserted by the simulator, and fault
+  14 `WHI_RESTORE_SOURCE_LOST` fails closed. 14/14 fault injections detected.
+* **Transfer cost.** The static count is unchanged (3 mid-kernel tiles = 48
+  vectors of 128 B); the cycles / ns / "< 0.1 %" estimate is **withdrawn**.
+  `asm volatile("" ::: "memory")` is a compiler barrier, not HMX/HVX ordering,
+  so MMA-versus-transfer synchronization is registered as `B3_R2_SYNC_UNPROVEN`
+  and gates the device trial (`hmx_b3_r2.h` adds the verdict tokens).
+* **FP32 input.** A separate condition rounds `X`/`W` to FP32 before the
+  `hi`/`lo` split. Measured: operand divergence `0`/2,048, stored-bit
+  divergence `0`/1,024, so plain `1.307244e-03` -> B3 `7.084101e-04`
+  (ratio `1.845321`, improved/equal/worsened `427/597/0`) reproduces exactly;
+  against the FP32-input-exact oracle the ratio is `1.845338`. The frozen G8
+  fixture and Mode 45 evidence are untouched.
+* **Reproducibility.** The truth fixture, the double oracle, the operand arrays
+  and the Plain/B3 expected raw-bit arrays are canonicalised (binary64/binary16
+  little-endian) and pinned by SHA-256 in both the simulator and the
+  pre-registration §6.4, so the numbers no longer live only in a gitignored
+  `build/` CSV. The `7.084104e-04` (G8, double residual) vs `7.084101e-04`
+  (deployed FP32 residual) delta is reproduced and localised: 162 activation and
+  152 weight `lo` bits differ, one stored cell differs, everything else is
+  identical. Medians now use the two-middle-order-statistic definition that the
+  pre-registered table always quoted.
+* Gate: `b3_r2_sim=PASS`, `b3_r2_checks=12561 fail=0`, `b3_r2_fault_injection=PASS
+  detected=14/14`, gcc `-std=gnu11 -O2 -Wall -Wextra -Werror -ffp-contract=off` exit 0.
+  The clang cross-check is **not** part of this PASS: clang is absent from PATH here,
+  the runner printed `b3_r2_sim_clang=SKIP (clang not found on PATH)`, and that
+  cross-compiler leg is **unverified**, not passing.

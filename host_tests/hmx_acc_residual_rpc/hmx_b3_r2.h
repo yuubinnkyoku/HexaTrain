@@ -10,7 +10,7 @@
 //
 // VTCM 12 KiB allocation:
 //   Offset     0 (2048 B): act buffer (Ahi then Alo)
-//   Offset  2048 (2048 B): wgt buffer (Whi then Wlo then Whi)
+//   Offset  2048 (2048 B): wgt buffer (Whi then Wlo then Whi restored from L2)
 //   Offset  4096 (2048 B): out_pos (Positive output buffer)
 //   Offset  6144 (2048 B): out_neg (Negative output buffer)
 //   Offset  8192 (2048 B): out_recon (HVX reconstructed output buffer)
@@ -21,6 +21,21 @@
 // Registered Rs values:
 //   Convert #1: 0x0001 (set 0, retain ACC, no feedback, RN16)
 //   Convert #2: 0x1000 (set 1, clear+swap after, no feedback, RN16)
+//
+// Operand lifetime (who owns which tile, per MMA):
+//   MMA #1: act = Ahi,     wgt = Whi
+//   MMA #2: act = Ahi,     wgt = Wlo      (Whi in VTCM is destroyed here)
+//   MMA #3: act = Alo,     wgt = Whi      (restored from the L2 stWhi tile)
+// The wgt buffer is 2 KiB, so MMA #2 necessarily overwrites Whi. MMA #3
+// therefore needs an explicit restore source. The only source that fits is a
+// third 2 KiB hosted staging tile in DSP L2/TCM (outside the 12 KiB HMX VTCM
+// window): Alo, Wlo and the Whi copy are 3 x 2 KiB = 6 KiB of L2, not 4 KiB.
+//
+// Static transfer accounting (counts only; NO cycle/ns/overhead estimate is
+// registered - see docs/hmx-v81-b3-r2-full-tile-prereg.md section 4.4):
+//   prologue: Ahi + Whi -> VTCM, Alo + Wlo + Whi -> L2 stage = 5 tiles
+//   mid-kernel stream: Wlo, Alo, Whi(restore)              = 3 tiles = 48 vectors
+//
 
 #ifndef HEXATRAIN_HMX_B3_R2_H
 #define HEXATRAIN_HMX_B3_R2_H
@@ -56,6 +71,38 @@
 /* Sentinel byte/word for unwritten buffer detection */
 #define HMX_B3_R2_SENTINEL_BYTE 0xA5u
 #define HMX_B3_R2_SENTINEL_WORD 0xA5A5u
+
+/* DSP L2/TCM operand staging area (NOT part of the 12 KiB HMX VTCM window).
+ * Three 2 KiB packed tiles hold the operands that are not resident in VTCM.
+ * stWhi is written once in the prologue and is read-only afterwards; it is
+ * the sole registered restore source for MMA #3. */
+#define HMX_B3_R2_STAGE_TILE_BYTES 2048
+#define HMX_B3_R2_STAGE_ALO_OFFSET 0
+#define HMX_B3_R2_STAGE_WLO_OFFSET 2048
+#define HMX_B3_R2_STAGE_WHI_OFFSET 4096
+#define HMX_B3_R2_STAGE_TOTAL      6144 /* 3 tiles: Alo, Wlo, Whi copy */
+#define HMX_B3_R2_STAGE_TILES      3
+
+/* Static transfer accounting. A tile is 2,048 B = 16 vectors of 128 B. */
+#define HMX_B3_R2_VECTOR_BYTES          128
+#define HMX_B3_R2_VECTORS_PER_TILE      16
+#define HMX_B3_R2_STREAM_TILES_MIDKERNEL 3 /* Wlo, Alo, Whi(restore) */
+#define HMX_B3_R2_STREAM_VECTORS_MIDKERNEL 48
+#define HMX_B3_R2_PROLOGUE_TILES          5 /* Ahi, Whi, Alo, Wlo, Whi */
+#define HMX_B3_R2_PROLOGUE_VECTORS        80
+
+/* Whi restore source enumeration for MMA #3. */
+#define HMX_B3_R2_WHI_RESTORE_NONE        0 /* not needed (single-MMA paths) */
+#define HMX_B3_R2_WHI_RESTORE_L2_STAGE    1 /* the only legal source */
+#define HMX_B3_R2_WHI_RESTORE_VTCM_SHADOW 2 /* illegal: needs +2 KiB, no room */
+#define HMX_B3_R2_WHI_RESTORE_HOST_REFETCH 3 /* illegal: extra mid-kernel RPC */
+
+/* Operand identity log, so a wrong tile in act/wgt is detectable. */
+#define HMX_B3_R2_OP_EMPTY 0
+#define HMX_B3_R2_OP_AHI   1
+#define HMX_B3_R2_OP_ALO   2
+#define HMX_B3_R2_OP_WHI   3
+#define HMX_B3_R2_OP_WLO   4
 
 /* Registered execution counts for full test (Plain subcase + B3 subcase) */
 #define HMX_B3_R2_PLAIN_MMA_COUNT   1
@@ -103,7 +150,10 @@ typedef enum hmx_b3_r2_verdict {
   HMX_B3_R2_NUMERICAL_BLOCKED = 2,
   HMX_B3_R2_INSUFFICIENT_EVIDENCE = 3,
   HMX_B3_R2_HOST_CONTRACT_FAILED = 4,
-  HMX_B3_R2_FAULT_INJECTED_DETECTED = 5
+  HMX_B3_R2_FAULT_INJECTED_DETECTED = 5,
+  /* Operand supply gates: device-only, see the pre-registration sections 4.3-4.5. */
+  HMX_B3_R2_OPERAND_SUPPLY_BLOCKED = 6,
+  HMX_B3_R2_SYNC_UNPROVEN = 7
 } hmx_b3_r2_verdict_t;
 
 static inline const char *hmx_b3_r2_verdict_name(hmx_b3_r2_verdict_t v) {
@@ -114,6 +164,8 @@ static inline const char *hmx_b3_r2_verdict_name(hmx_b3_r2_verdict_t v) {
     case HMX_B3_R2_INSUFFICIENT_EVIDENCE: return "B3_R2_INSUFFICIENT_EVIDENCE";
     case HMX_B3_R2_HOST_CONTRACT_FAILED: return "B3_R2_HOST_CONTRACT_FAILED";
     case HMX_B3_R2_FAULT_INJECTED_DETECTED: return "B3_R2_FAULT_INJECTED_DETECTED";
+    case HMX_B3_R2_OPERAND_SUPPLY_BLOCKED: return "B3_R2_OPERAND_SUPPLY_BLOCKED";
+    case HMX_B3_R2_SYNC_UNPROVEN: return "B3_R2_SYNC_UNPROVEN";
     default: return "UNKNOWN";
   }
 }
@@ -133,7 +185,8 @@ typedef enum hmx_b3_r2_fault {
   HMX_FAULT_HVX_SUB_REVERSED = 10,
   HMX_FAULT_RECON_STORE_FAIL = 11,
   HMX_FAULT_HOST_FAKE_RECON = 12,
-  HMX_FAULT_COUNTER_MISMATCH = 13
+  HMX_FAULT_COUNTER_MISMATCH = 13,
+  HMX_FAULT_WHI_RESTORE_MISSING = 14
 } hmx_b3_r2_fault_t;
 
 static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
@@ -152,6 +205,7 @@ static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
     case HMX_FAULT_RECON_STORE_FAIL: return "RECON_STORE_FAIL";
     case HMX_FAULT_HOST_FAKE_RECON: return "HOST_FAKE_RECON";
     case HMX_FAULT_COUNTER_MISMATCH: return "COUNTER_MISMATCH";
+    case HMX_FAULT_WHI_RESTORE_MISSING: return "WHI_RESTORE_SOURCE_LOST";
     default: return "UNKNOWN_FAULT";
   }
 }
@@ -170,6 +224,12 @@ typedef struct hmx_b3_r2_facts {
   uint32_t rs_cvt1;
   uint32_t rs_cvt2;
   int disasm_mma_count;   /* from static disassembly audit */
+  /* Operand supply / lifetime facts (B3 3-product streaming). */
+  int operand_log[6];     /* [MMA1 act, wgt, MMA2 act, wgt, MMA3 act, wgt] */
+  int stream_tiles_midkernel;  /* tiles copied between MMAs (expect 3) */
+  int whi_restore_source;     /* HMX_B3_R2_WHI_RESTORE_* */
+  int whi_restore_reads;      /* restores of Whi into wgt (expect 1) */
+  int whi_restore_payload_ok; /* staging checksum matched on restore */
 } hmx_b3_r2_facts_t;
 
 typedef struct hmx_b3_r2_contract {
@@ -184,6 +244,8 @@ typedef struct hmx_b3_r2_contract {
   int sentinel_ok;
   int layout_ok;
   int disasm_audit_ok;
+  int operand_lifetime_ok;
+  int whi_restore_ok;
   int all_ok;
 } hmx_b3_r2_contract_t;
 
@@ -201,10 +263,26 @@ static inline hmx_b3_r2_contract_t hmx_b3_r2_check_contract(const hmx_b3_r2_fact
   c.layout_ok = (f->buffer_overlap == 0);
   c.disasm_audit_ok = (f->disasm_mma_count == f->mma_count);
 
+  /* Ahi*Whi -> Ahi*Wlo -> Alo*Whi, with Whi restored from the L2 staging
+   * tile exactly once after MMA #2 destroyed the VTCM copy. */
+  c.operand_lifetime_ok =
+      (f->mma_count == HMX_B3_R2_B3_MMA_COUNT) &&
+      (f->operand_log[0] == HMX_B3_R2_OP_AHI &&
+       f->operand_log[1] == HMX_B3_R2_OP_WHI &&
+       f->operand_log[2] == HMX_B3_R2_OP_AHI &&
+       f->operand_log[3] == HMX_B3_R2_OP_WLO &&
+       f->operand_log[4] == HMX_B3_R2_OP_ALO &&
+       f->operand_log[5] == HMX_B3_R2_OP_WHI);
+  c.whi_restore_ok =
+      (f->stream_tiles_midkernel == HMX_B3_R2_STREAM_TILES_MIDKERNEL) &&
+      (f->whi_restore_source == HMX_B3_R2_WHI_RESTORE_L2_STAGE) &&
+      (f->whi_restore_reads == 1) &&
+      (f->whi_restore_payload_ok == 1);
+
   c.all_ok = c.mxclracc_ok && c.mma_count_ok && c.convert_count_ok &&
              c.store_count_ok && c.recon_loops_ok && c.recon_source_ok &&
              c.mma_order_ok && c.rs_ok && c.sentinel_ok && c.layout_ok &&
-             c.disasm_audit_ok;
+             c.disasm_audit_ok && c.operand_lifetime_ok && c.whi_restore_ok;
   return c;
 }
 
