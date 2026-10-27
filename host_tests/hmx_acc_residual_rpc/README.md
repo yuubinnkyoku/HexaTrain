@@ -1541,3 +1541,41 @@ DSP code, no build, no device, no ADB, and Mode 46 stays unauthorised.
   The clang cross-check is **not** part of this PASS: clang is absent from PATH here,
   the runner printed `b3_r2_sim_clang=SKIP (clang not found on PATH)`, and that
   cross-compiler leg is **unverified**, not passing.
+
+#### B3+R2 phase-reused VTCM comparison (2026-10-27)
+
+CPU-only design comparison against the registered streaming map; no DSP code,
+no build, no device, no ADB, no measurement. The audit itself is
+`docs/hmx-v81-b3-r2-sync-static-audit.md`; the candidate layout is §4.6 of
+`docs/hmx-v81-b3-r2-full-tile-prereg.md`.
+
+* **Corrected conclusion.** "12 KiB cannot avoid a mid-kernel operand
+  overwrite" was wrong: it assumed the R2 outputs are reserved while the
+  operands are live. The outputs only exist after the last MMA, so a
+  phase-reused layout fits (8,704 B during the MMAs, 10,752 B peak), keeps all
+  four operand tiles resident, and writes no operand between MMA #1 and MMA #3.
+  The earlier simultaneous-residency arithmetic (14,848 B / 12,800 B / 12,544 B)
+  is retained as the scope of the old claim.
+* **Candidate B layout.** `Ahi +0`, `Alo +2048`, `Whi +4096`, `Wlo +6144`,
+  `out_pos +8192`, bias sets `+10240`/`+10496`; `out_neg` reuses `Wlo` and
+  `out_recon` reuses `Ahi`, both after MMA #2's last operand read. `Alo` and
+  `Whi` (MMA #3 operands) are never written. No `Whi` restore, no staging
+  checksum, 0 mid-kernel transfers, 2,048 B L2 for the between-subcase save
+  instead of 6,144 B of operand staging.
+* **CPU model.** `verify_phase_reused_layout_static` + `run_phase_reused_crosscheck`
+  assert fit, alignment, operand disjointness, `last_use(owner) <
+  first_write(output)` for every aliased region, operand immutability by FNV-1a
+  across the MMA phase, that the Plain output save is load bearing, and that
+  both subcases' 1,024 cells are **bit-identical to the streaming model**.
+* **Faults 15-17** cover output reuse before the owner's last MMA, a live
+  operand clobbered by a stray fill, and `out_pos`/`out_neg` mapped to one
+  region; all fail closed (17/17).
+* **Sync status unchanged.** `B3_R2_SYNC_UNPROVEN` stays. The residual
+  dependency is D8 (MMA #2's operand reads finished before `out_neg`/
+  `out_recon` reuse `Wlo`/`Ahi`), still device-only; the in-order-MX argument
+  ("Convert #1 was correct, therefore all operand reads finished") is registered
+  as assumption A1, not as proof.
+* Gate: `b3_r2_sim=PASS`, `b3_r2_checks=12611 fail=0`,
+  `b3_r2_fault_injection=PASS detected=17/17`, gcc exit 0, all six evidence
+  digests unchanged. The clang leg is still SKIP (not on PATH) and is
+  **unverified**, not passing.

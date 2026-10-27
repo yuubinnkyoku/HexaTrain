@@ -91,6 +91,47 @@
 #define HMX_B3_R2_PROLOGUE_TILES          5 /* Ahi, Whi, Alo, Wlo, Whi */
 #define HMX_B3_R2_PROLOGUE_VECTORS        80
 
+/* ---------------- Phase-Reused VTCM layout (candidate B, 2026-10-27) --------
+ *
+ * Alternative to sequential operand streaming. The four operand tiles are all
+ * resident for the whole MMA phase, because the three output tiles are only
+ * needed *after* the last MMA. Output regions then reuse operand regions whose
+ * last use has already passed.
+ *
+ * MMA phase (4 tiles + 2 bias sets = 8,704 B):
+ *   +0     Ahi     +2048  Alo     +4096  Whi     +6144  Wlo
+ *   +8192  bias 0  +8448  bias 1
+ * Output phase (peak 10,752 B):
+ *   out_pos   -> +8192 (fresh region, no operand ever lived there)
+ *   out_neg   -> +6144 (reuses Wlo; Wlo's last use is MMA #2)
+ *   out_recon -> +0     (reuses Ahi; Ahi's last use is MMA #2)
+ *   +2048 Alo and +4096 Whi are NEVER written: their last use is MMA #3.
+ *
+ * Mid-kernel operand transfers: 0. L2 staging: 2,048 B (only the Plain
+ * subcase's completed output, saved before the B3 subcase re-packs +0).
+ *
+ * The remaining hazard is narrower than streaming's: no operand is written
+ * between MMAs, only out_neg/out_recon after MMA #3 and both converts. It is
+ * still NOT proven; see HMX_B3_R2_PR_SYNC_NOTE below. */
+#define HMX_B3_R2_PR_AHI_OFFSET   0
+#define HMX_B3_R2_PR_ALO_OFFSET   2048
+#define HMX_B3_R2_PR_WHI_OFFSET   4096
+#define HMX_B3_R2_PR_WLO_OFFSET   6144
+#define HMX_B3_R2_PR_POS_OFFSET   8192
+#define HMX_B3_R2_PR_BIAS0_OFFSET 10240
+#define HMX_B3_R2_PR_BIAS1_OFFSET 10496
+#define HMX_B3_R2_PR_MMA_PHASE_USED 8704  /* 4 tiles + 2 bias sets */
+#define HMX_B3_R2_PR_PEAK_USED     10752  /* same peak as the streaming map */
+#define HMX_B3_R2_PR_NEG_ALIAS_OWNER   HMX_B3_R2_PR_WLO_OFFSET /* last use: MMA #2 */
+#define HMX_B3_R2_PR_RECON_ALIAS_OWNER HMX_B3_R2_PR_AHI_OFFSET /* last use: MMA #2 */
+#define HMX_B3_R2_PR_MIDKERNEL_TILES   0
+#define HMX_B3_R2_PR_L2_SAVE_BYTES     2048 /* Plain output, not 6,144 B */
+
+/* PR layout sync status: the D1-D3 overwrite hazard is removed by construction
+ * (no operand is written between MMAs), but the reuse of Ahi/Wlo *after* MMA #3
+ * still needs "MMA #2 operand reads are done", which remains undocumented. */
+#define HMX_B3_R2_PR_SYNC_NOTE "reuse_after_mma3_unproven"
+
 /* Whi restore source enumeration for MMA #3. */
 #define HMX_B3_R2_WHI_RESTORE_NONE        0 /* not needed (single-MMA paths) */
 #define HMX_B3_R2_WHI_RESTORE_L2_STAGE    1 /* the only legal source */
@@ -186,7 +227,11 @@ typedef enum hmx_b3_r2_fault {
   HMX_FAULT_RECON_STORE_FAIL = 11,
   HMX_FAULT_HOST_FAKE_RECON = 12,
   HMX_FAULT_COUNTER_MISMATCH = 13,
-  HMX_FAULT_WHI_RESTORE_MISSING = 14
+  HMX_FAULT_WHI_RESTORE_MISSING = 14,
+  /* Phase-reused layout faults (candidate B). */
+  HMX_FAULT_PR_REUSE_BEFORE_LAST_USE = 15,
+  HMX_FAULT_PR_OPERAND_CLOBBER = 16,
+  HMX_FAULT_PR_OUTPUT_OVERLAP = 17
 } hmx_b3_r2_fault_t;
 
 static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
@@ -206,6 +251,9 @@ static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
     case HMX_FAULT_HOST_FAKE_RECON: return "HOST_FAKE_RECON";
     case HMX_FAULT_COUNTER_MISMATCH: return "COUNTER_MISMATCH";
     case HMX_FAULT_WHI_RESTORE_MISSING: return "WHI_RESTORE_SOURCE_LOST";
+    case HMX_FAULT_PR_REUSE_BEFORE_LAST_USE: return "PR_REUSE_BEFORE_LAST_USE";
+    case HMX_FAULT_PR_OPERAND_CLOBBER: return "PR_ALIVE_OPERAND_CLOBBERED";
+    case HMX_FAULT_PR_OUTPUT_OVERLAP: return "PR_OUTPUT_REGIONS_OVERLAP";
     default: return "UNKNOWN_FAULT";
   }
 }

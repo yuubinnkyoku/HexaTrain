@@ -196,6 +196,11 @@ between MMA #2 and MMA #3.
 - Total HMX VTCM reservation is **12,288 B** (12 KiB).
 - Remaining VTCM space for operands: $12,288 - 6,656 = 5,632\text{ B}$ (fits at most two 2 KiB operand buffers).
 - Storing four resident operand tiles ($A_{hi}, A_{lo}, W_{hi}, W_{lo} = 8\text{ KiB}$) simultaneously with the R2 outputs would require $14.5\text{ KiB} > 12\text{ KiB}$ and is **physically impossible**.
+- Scope of that statement: it is about *simultaneous* residency. The R2 outputs exist
+  only after the last MMA, so a **phase-reused** layout in which the outputs take over
+  operand regions whose owner has been consumed does fit. That alternative is evaluated
+  in §4.6 and `docs/hmx-v81-b3-r2-sync-static-audit.md` §7; it is **not registered** and
+  does not change the layout or the numbers below.
 
 ### 4.2 VTCM Map (verified): sequential operand streaming
 Keep the exact R2 non-overlapping memory map and stream operand tiles into the 2 KiB `act` and 2 KiB `wgt` buffers between MMAs:
@@ -302,6 +307,42 @@ The following must be proven on device before any full-tile result is accepted:
 
 Status: **OPEN**. `B3_R2_SYNC_UNPROVEN` is the correct classification of this
 design today, and the device trial stays unauthorised (§9).
+
+### 4.6 Phase-Reused VTCM Alternative (candidate B, evaluated CPU-only)
+
+The streaming map above is the **registered** layout and stays registered. A
+second layout was evaluated because §4.5's three dependencies would be far
+smaller if no operand were overwritten at all.
+
+| VTCM offset | MMA phase | Output phase | Owner's last use |
+|---:|---|---|---|
+| `+0` | `Ahi` | `out_recon` | MMA #2 |
+| `+2048` | `Alo` | never written | MMA #3 |
+| `+4096` | `Whi` | never written | MMA #3 |
+| `+6144` | `Wlo` | `out_neg` | MMA #2 |
+| `+8192` | — | `out_pos` | none (fresh) |
+| `+10240` | bias set 0 | bias set 0 | — |
+| `+10496` | bias set 1 | bias set 1 | — |
+
+| Quantity | Streaming (registered) | Candidate B |
+|---|---:|---:|
+| VTCM during the MMAs | 10,752 B | **8,704 B** |
+| VTCM peak | 10,752 B | 10,752 B |
+| Mid-kernel operand transfers | 3 tiles / 48 vectors | **0** |
+| Total operand transfers | 8 tiles / 128 vectors | **4 tiles / 64 vectors** |
+| L2 staging outside VTCM | 6,144 B | **2,048 B** |
+| `Whi` restore + checksum | required | **not needed** |
+| Operand written between MMAs | yes (2 regions) | **no** |
+
+CPU model status: layout fit, alignment, lifetime ordering (`last_use(owner) <
+first_write(output)`), operand immutability across the MMA phase, the
+between-subcase save, and **bit-identical 1,024-cell output for both
+subcases** are all asserted; faults 15–17 fail closed (17/17). Candidate B is
+therefore CPU-ready as a *candidate*, and is proposed as the preferred basis
+for Mode 46. It is **not registered**, **not implemented**, and it does not
+retire `B3_R2_SYNC_UNPROVEN`: the residual dependency is "MMA #2's operand
+reads are finished before `out_neg`/`out_recon` reuse `Wlo`/`Ahi`" (D8), which
+is still a device-only question.
 
 ### Architectural Safety Audits
 1. **Accumulator Immunity:** The HMX 37-bit ACC resides in internal execution registers, not in VTCM. Overwriting bytes at offsets 0..4095 has zero impact on accumulator contents.
@@ -615,7 +656,10 @@ A CPU-only re-run of the model can never produce
 - The 3-product B3 accumulation and R2 two-convert sign separation are
   architecturally proven to co-exist within 10,752 B of the 12 KiB VTCM via
   staged sequential operand streaming, **with `Whi` restored for MMA #3 from a
-  third 2 KiB L2/TCM staging tile (6 KiB staged, not 4 KiB)**.
+  third 2 KiB L2/TCM staging tile (6 KiB staged, not 4 KiB)**. A phase-reused
+  alternative (§4.6) also fits, needs no mid-kernel operand write, and is the
+  preferred candidate for a future Mode 46 pre-registration; this verdict is
+  unchanged for the registered layout.
 - Operand lifetimes are registered per MMA (`AHI:WHI, AHI:WLO, ALO:WHI`) and
   asserted; the restore is checksum-verified; a lost staging tile fails closed.
 - The 1,024-cell numeric oracle is frozen under a registered operand condition,

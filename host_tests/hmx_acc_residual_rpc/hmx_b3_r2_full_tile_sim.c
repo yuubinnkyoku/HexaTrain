@@ -424,6 +424,14 @@ typedef struct hmx_full_tile_state {
 
   /* Sentinel hit tracker */
   int sentinel_hits;
+
+  /* Phase-reused layout (candidate B) bookkeeping */
+  int pr_operand_mutated_during_mma; /* >0: an operand tile changed while live */
+  int pr_illegal_early_write;        /* output written before its owner's last use */
+  int pr_alive_operand_clobbered;    /* a live operand region was overwritten */
+  int pr_output_overlap;             /* out_pos and out_neg collided */
+  int pr_plain_save_required;        /* between-subcase save is load bearing */
+  int pr_midkernel_tiles;
 } hmx_full_tile_state_t;
 
 static uint32_t fnv1a32(const uint8_t *p, size_t n) {
@@ -527,12 +535,13 @@ static void exec_mxclracc(hmx_full_tile_state_t *st) {
   st->acc_cleared = 1;
 }
 
-/* Execute one MMA packet: reads act and wgt from VTCM and accumulates into st->acc */
-static void exec_mma_packet(hmx_full_tile_state_t *st) {
+/* Execute one MMA packet reading the operand tiles at the given VTCM offsets. */
+static void exec_mma_packet_at(hmx_full_tile_state_t *st, int act_offset,
+                               int wgt_offset) {
   st->count_mma++;
   log_operand_pair(st);
-  const uint16_t *act_vtcm = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_ACT_OFFSET);
-  const uint16_t *wgt_vtcm = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_WGT_OFFSET);
+  const uint16_t *act_vtcm = (const uint16_t *)(st->vtcm.raw + act_offset);
+  const uint16_t *wgt_vtcm = (const uint16_t *)(st->vtcm.raw + wgt_offset);
 
   for (int s = 0; s < T8; ++s) {
     for (int o = 0; o < T8; ++o) {
@@ -547,8 +556,16 @@ static void exec_mma_packet(hmx_full_tile_state_t *st) {
   }
 }
 
-/* Execute Convert and Store into dst_offset with given Rs */
-static void exec_convert_and_store(hmx_full_tile_state_t *st, uint32_t rs, int dst_offset) {
+/* Execute one MMA packet with the registered streaming offsets. */
+static void exec_mma_packet(hmx_full_tile_state_t *st) {
+  exec_mma_packet_at(st, HMX_B3_R2_ACT_OFFSET, HMX_B3_R2_WGT_OFFSET);
+}
+
+/* Execute Convert and Store into dst_offset with given Rs, reading the two
+ * bias sets from the supplied VTCM offsets. */
+static void exec_convert_and_store_at(hmx_full_tile_state_t *st, uint32_t rs,
+                                      int dst_offset, int bias0_offset,
+                                      int bias1_offset) {
   st->count_convert++;
   st->count_store++;
   if (st->rs_history_len < 8) {
@@ -559,7 +576,7 @@ static void exec_convert_and_store(hmx_full_tile_state_t *st, uint32_t rs, int d
   unsigned retain_acc = rs & 1u;
 
   /* Read bias row from VTCM based on bias_sel */
-  int bias_offset = (bias_sel == 0) ? HMX_B3_R2_BIAS0_OFFSET : HMX_B3_R2_BIAS1_OFFSET;
+  int bias_offset = (bias_sel == 0) ? bias0_offset : bias1_offset;
   const uint8_t *bias_row = st->vtcm.raw + bias_offset;
   uint16_t *store_dst = (uint16_t *)(st->vtcm.raw + dst_offset);
 
@@ -602,18 +619,32 @@ static void exec_convert_and_store(hmx_full_tile_state_t *st, uint32_t rs, int d
   }
 }
 
-/* Execute DSP HVX reconstruction loop: out_recon = out_pos - out_neg (16 vectors x 128 bytes) */
-static void exec_hvx_recon(hmx_full_tile_state_t *st, int reversed) {
+/* Execute Convert and Store with the registered streaming bias offsets. */
+static void exec_convert_and_store(hmx_full_tile_state_t *st, uint32_t rs,
+                                   int dst_offset) {
+  exec_convert_and_store_at(st, rs, dst_offset, HMX_B3_R2_BIAS0_OFFSET,
+                            HMX_B3_R2_BIAS1_OFFSET);
+}
+
+/* Execute DSP HVX reconstruction: dst = pos - neg (16 vectors x 128 bytes). */
+static void exec_hvx_recon_at(hmx_full_tile_state_t *st, int pos_offset,
+                              int neg_offset, int recon_offset, int reversed) {
   st->count_recon_loops++;
-  const uint16_t *pos = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_POS_OFFSET);
-  const uint16_t *neg = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_NEG_OFFSET);
-  uint16_t *recon = (uint16_t *)(st->vtcm.raw + HMX_B3_R2_RECON_OFFSET);
+  const uint16_t *pos = (const uint16_t *)(st->vtcm.raw + pos_offset);
+  const uint16_t *neg = (const uint16_t *)(st->vtcm.raw + neg_offset);
+  uint16_t *recon = (uint16_t *)(st->vtcm.raw + recon_offset);
 
   for (int k = 0; k < T8_CELLS; ++k) {
     double p = fp16_to_double(pos[k]);
     double n = fp16_to_double(neg[k]);
     recon[k] = reversed ? double_to_fp16(n - p) : double_to_fp16(p - n);
   }
+}
+
+/* Execute the HVX reconstruction with the registered streaming offsets. */
+static void exec_hvx_recon(hmx_full_tile_state_t *st, int reversed) {
+  exec_hvx_recon_at(st, HMX_B3_R2_POS_OFFSET, HMX_B3_R2_NEG_OFFSET,
+                     HMX_B3_R2_RECON_OFFSET, reversed);
 }
 
 /* ---------------- Full Tile Simulation Runners ---------------- */
@@ -731,6 +762,289 @@ static void run_b3_r2_subcase(hmx_full_tile_state_t *st, const b3_r2_ops_t *ops,
   }
 }
 
+/* ---------------- Phase-Reused VTCM model (candidate B) ----------------
+ *
+ * The streaming layout (above) is the registered design. This model evaluates
+ * the alternative that keeps all four operand tiles resident and reuses
+ * operand regions as outputs only after their last use. It changes no operand
+ * arithmetic, so its 1,024-cell raw bits must be identical to the streaming
+ * model's; that equality is asserted, not assumed.
+ *
+ * Usage ordinals: MMA #1 = 1, MMA #2 = 2, MMA #3 = 3, pos store = 4,
+ * neg store = 5, recon = 6. Every aliased output region must satisfy
+ * last_use(owner) < first_write(output). */
+
+enum {
+  PR_ORD_MMA1 = 1,
+  PR_ORD_MMA2 = 2,
+  PR_ORD_MMA3 = 3,
+  PR_ORD_POS_STORE = 4,
+  PR_ORD_NEG_STORE = 5,
+  PR_ORD_RECON = 6
+};
+
+/* Last MMA that reads each tile in the B3 schedule. */
+static int pr_last_use_ordinal(int operand_id) {
+  switch (operand_id) {
+    case HMX_B3_R2_OP_AHI: return PR_ORD_MMA2; /* Ahi*Whi, Ahi*Wlo */
+    case HMX_B3_R2_OP_WLO: return PR_ORD_MMA2; /* Ahi*Wlo */
+    case HMX_B3_R2_OP_ALO: return PR_ORD_MMA3; /* Alo*Whi */
+    case HMX_B3_R2_OP_WHI: return PR_ORD_MMA3; /* Ahi*Whi, Alo*Whi */
+    default: return 0;
+  }
+}
+
+static void pr_bias_init(hmx_full_tile_state_t *st) {
+  uint8_t *b0 = st->vtcm.raw + HMX_B3_R2_PR_BIAS0_OFFSET;
+  uint8_t *b1 = st->vtcm.raw + HMX_B3_R2_PR_BIAS1_OFFSET;
+  for (int o = 0; o < T8; ++o) {
+    uint32_t lo = bias20_lo_cell(HMX_B3_R2_SCALE_BITS, HMX_B3_R2_OUT_BIAS);
+    uint32_t hi0 = bias20_hi_cell(HMX_B3_R2_SHAPE0, 0, 0);
+    uint32_t hi1 = bias20_hi_cell(HMX_B3_R2_SHAPE4, 0, 0);
+    memcpy(b0 + o * 4, &lo, 4);
+    memcpy(b0 + 128 + o * 4, &hi0, 4);
+    memcpy(b1 + o * 4, &lo, 4);
+    memcpy(b1 + 128 + o * 4, &hi1, 4);
+  }
+}
+
+static void verify_phase_reused_layout_static(void) {
+  const int tiles[4] = {HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_ALO_OFFSET,
+                        HMX_B3_R2_PR_WHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET};
+
+  check_true("pr_ahi_aligned", (HMX_B3_R2_PR_AHI_OFFSET % 2048) == 0);
+  check_true("pr_alo_aligned", (HMX_B3_R2_PR_ALO_OFFSET % 2048) == 0);
+  check_true("pr_whi_aligned", (HMX_B3_R2_PR_WHI_OFFSET % 2048) == 0);
+  check_true("pr_wlo_aligned", (HMX_B3_R2_PR_WLO_OFFSET % 2048) == 0);
+  check_true("pr_pos_aligned", (HMX_B3_R2_PR_POS_OFFSET % 2048) == 0);
+  check_true("pr_bias0_aligned", (HMX_B3_R2_PR_BIAS0_OFFSET % 256) == 0);
+  check_true("pr_bias1_aligned", (HMX_B3_R2_PR_BIAS1_OFFSET % 256) == 0);
+
+  /* Four operand tiles plus the two bias sets must fit while all four are
+   * live; the outputs only exist afterwards. */
+  check_int("pr_mma_phase_bytes", HMX_B3_R2_PR_MMA_PHASE_USED, 4 * 2048 + 2 * 256);
+  check_true("pr_mma_phase_fits",
+             HMX_B3_R2_PR_MMA_PHASE_USED <= HMX_B3_R2_VTCM_TOTAL);
+  check_true("pr_peak_fits", HMX_B3_R2_PR_PEAK_USED <= HMX_B3_R2_VTCM_TOTAL);
+  /* Peak = 4 operand tiles + the one fresh output tile (+8192) + 2 bias sets;
+   * out_neg and out_recon live inside regions the operands had already
+   * released, so they add no bytes. */
+  check_int("pr_peak_bytes", HMX_B3_R2_PR_PEAK_USED, 4 * 2048 + 2048 + 512);
+  check_true("pr_peak_no_worse_than_streaming",
+             HMX_B3_R2_PR_PEAK_USED <= HMX_B3_R2_VTCM_USED);
+  check_true("pr_pos_offset_within_window",
+             HMX_B3_R2_PR_POS_OFFSET + 2048 <= HMX_B3_R2_PR_BIAS0_OFFSET);
+  check_true("pr_bias_last_within_window",
+             HMX_B3_R2_PR_BIAS1_OFFSET + 256 <= HMX_B3_R2_VTCM_TOTAL);
+
+  /* Operand tiles are pairwise disjoint and never overlap a bias set. */
+  for (int a = 0; a < 4; ++a) {
+    for (int b = a + 1; b < 4; ++b) {
+      check_true("pr_operands_disjoint",
+                 tiles[a] + 2048 <= tiles[b] || tiles[b] + 2048 <= tiles[a]);
+    }
+    check_true("pr_operand_not_bias",
+               tiles[a] + 2048 <= HMX_B3_R2_PR_BIAS0_OFFSET);
+  }
+
+  /* Reuse ordering: an output may only land on a region whose owner's last
+   * MMA has already been issued. */
+  check_true("pr_neg_reuse_after_last_use",
+             pr_last_use_ordinal(HMX_B3_R2_OP_WLO) < PR_ORD_NEG_STORE);
+  check_true("pr_recon_reuse_after_last_use",
+             pr_last_use_ordinal(HMX_B3_R2_OP_AHI) < PR_ORD_RECON);
+  check_true("pr_pos_needs_no_operand_reuse",
+             HMX_B3_R2_PR_POS_OFFSET != HMX_B3_R2_PR_AHI_OFFSET &&
+                 HMX_B3_R2_PR_POS_OFFSET != HMX_B3_R2_PR_ALO_OFFSET &&
+                 HMX_B3_R2_PR_POS_OFFSET != HMX_B3_R2_PR_WHI_OFFSET &&
+                 HMX_B3_R2_PR_POS_OFFSET != HMX_B3_R2_PR_WLO_OFFSET);
+  /* The two operands consumed by the last MMA are never recycled in-kernel. */
+  check_true("pr_mma3_operands_never_recycled",
+             pr_last_use_ordinal(HMX_B3_R2_OP_ALO) == PR_ORD_MMA3 &&
+                 pr_last_use_ordinal(HMX_B3_R2_OP_WHI) == PR_ORD_MMA3 &&
+                 HMX_B3_R2_PR_ALO_OFFSET != HMX_B3_R2_PR_NEG_ALIAS_OWNER &&
+                 HMX_B3_R2_PR_ALO_OFFSET != HMX_B3_R2_PR_RECON_ALIAS_OWNER &&
+                 HMX_B3_R2_PR_WHI_OFFSET != HMX_B3_R2_PR_NEG_ALIAS_OWNER &&
+                 HMX_B3_R2_PR_WHI_OFFSET != HMX_B3_R2_PR_RECON_ALIAS_OWNER);
+
+  check_int("pr_midkernel_tiles", HMX_B3_R2_PR_MIDKERNEL_TILES, 0);
+  check_int("pr_l2_save_bytes", HMX_B3_R2_PR_L2_SAVE_BYTES, 2048);
+  check_true("pr_l2_smaller_than_streaming",
+             HMX_B3_R2_PR_L2_SAVE_BYTES < HMX_B3_R2_STAGE_TOTAL);
+
+  printf("b3_r2_phase_reused_layout mma_phase_used=%d peak_used=%d "
+         "vtcm_total=%d midkernel_tiles=%d l2_save=%d PASS\n",
+         HMX_B3_R2_PR_MMA_PHASE_USED, HMX_B3_R2_PR_PEAK_USED,
+         HMX_B3_R2_VTCM_TOTAL, HMX_B3_R2_PR_MIDKERNEL_TILES,
+         HMX_B3_R2_PR_L2_SAVE_BYTES);
+}
+
+/* Plain+R2 under the phase-reused layout: 1 MMA, 2 converts, 1 HVX recon. */
+static void run_pr_plain_subcase(hmx_full_tile_state_t *st, const b3_r2_ops_t *ops) {
+  pack_act_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_AHI_OFFSET), ops->a_plain);
+  pack_wgt_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_WHI_OFFSET), ops->w_plain);
+  pr_bias_init(st);
+
+  exec_mxclracc(st);
+  st->act_id = HMX_B3_R2_OP_AHI;
+  st->wgt_id = HMX_B3_R2_OP_WHI;
+  exec_mma_packet_at(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+
+  memset(st->vtcm.raw + HMX_B3_R2_PR_POS_OFFSET, HMX_B3_R2_SENTINEL_BYTE, 2048);
+  memset(st->vtcm.raw + HMX_B3_R2_PR_NEG_ALIAS_OWNER, HMX_B3_R2_SENTINEL_BYTE, 2048);
+  memset(st->vtcm.raw + HMX_B3_R2_PR_RECON_ALIAS_OWNER, HMX_B3_R2_SENTINEL_BYTE, 2048);
+
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, HMX_B3_R2_PR_POS_OFFSET,
+                            HMX_B3_R2_PR_BIAS0_OFFSET, HMX_B3_R2_PR_BIAS1_OFFSET);
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT2, HMX_B3_R2_PR_NEG_ALIAS_OWNER,
+                            HMX_B3_R2_PR_BIAS0_OFFSET, HMX_B3_R2_PR_BIAS1_OFFSET);
+  exec_hvx_recon_at(st, HMX_B3_R2_PR_POS_OFFSET, HMX_B3_R2_PR_NEG_ALIAS_OWNER,
+                    HMX_B3_R2_PR_RECON_ALIAS_OWNER, 0);
+}
+
+/* B3+R2 under the phase-reused layout. No operand region is written between
+ * MMA #1 and MMA #3; out_neg/out_recon reuse Ahi/Wlo only afterwards. */
+static void run_phase_reused_subcase(hmx_full_tile_state_t *st,
+                                     const b3_r2_ops_t *ops,
+                                     hmx_b3_r2_fault_t fault) {
+  int pos_off = HMX_B3_R2_PR_POS_OFFSET;
+  int neg_off = HMX_B3_R2_PR_NEG_ALIAS_OWNER;   /* Wlo, last use MMA #2 */
+  int recon_off = HMX_B3_R2_PR_RECON_ALIAS_OWNER; /* Ahi, last use MMA #2 */
+
+  if (fault == HMX_FAULT_PR_OUTPUT_OVERLAP) {
+    neg_off = pos_off; /* out_pos and out_neg collide */
+    st->pr_output_overlap = 1;
+  }
+
+  pack_act_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_AHI_OFFSET), ops->ahi);
+  pack_act_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_ALO_OFFSET), ops->alo);
+  pack_wgt_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_WHI_OFFSET), ops->whi);
+  pack_wgt_prm((uint16_t *)(st->vtcm.raw + HMX_B3_R2_PR_WLO_OFFSET), ops->wlo);
+  pr_bias_init(st);
+  st->pr_midkernel_tiles = HMX_B3_R2_PR_MIDKERNEL_TILES;
+
+  const uint32_t crc_ahi = fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_AHI_OFFSET, 2048);
+  const uint32_t crc_alo = fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_ALO_OFFSET, 2048);
+  const uint32_t crc_whi = fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_WHI_OFFSET, 2048);
+  const uint32_t crc_wlo = fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_WLO_OFFSET, 2048);
+
+  exec_mxclracc(st);
+
+  /* MMA #1: Ahi * Whi */
+  st->act_id = HMX_B3_R2_OP_AHI;
+  st->wgt_id = HMX_B3_R2_OP_WHI;
+  exec_mma_packet_at(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+
+  if (fault == HMX_FAULT_PR_REUSE_BEFORE_LAST_USE) {
+    /* an output region is cleared while its owner (Wlo) is still live */
+    memset(st->vtcm.raw + neg_off, HMX_B3_R2_SENTINEL_BYTE, 2048);
+    st->pr_illegal_early_write = 1;
+  }
+
+  /* MMA #2: Ahi * Wlo */
+  st->act_id = HMX_B3_R2_OP_AHI;
+  st->wgt_id = HMX_B3_R2_OP_WLO;
+  exec_mma_packet_at(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+
+  if (fault == HMX_FAULT_PR_OPERAND_CLOBBER) {
+    /* a stray fill over the Alo tile before its last use (MMA #3) */
+    memset(st->vtcm.raw + HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_SENTINEL_BYTE, 2048);
+    st->pr_alive_operand_clobbered = 1;
+  }
+
+  /* MMA #3: Alo * Whi */
+  st->act_id = HMX_B3_R2_OP_ALO;
+  st->wgt_id = HMX_B3_R2_OP_WHI;
+  exec_mma_packet_at(st, HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+
+  /* Operand immutability across the whole MMA phase. */
+  if (fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_AHI_OFFSET, 2048) != crc_ahi) {
+    st->pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_ALO_OFFSET, 2048) != crc_alo) {
+    st->pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_WHI_OFFSET, 2048) != crc_whi) {
+    st->pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(st->vtcm.raw + HMX_B3_R2_PR_WLO_OFFSET, 2048) != crc_wlo) {
+    st->pr_operand_mutated_during_mma++;
+  }
+
+  /* Output phase: sentinels, then the stores, in the registered order. */
+  memset(st->vtcm.raw + pos_off, HMX_B3_R2_SENTINEL_BYTE, 2048);
+  memset(st->vtcm.raw + neg_off, HMX_B3_R2_SENTINEL_BYTE, 2048);
+  memset(st->vtcm.raw + recon_off, HMX_B3_R2_SENTINEL_BYTE, 2048);
+
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, pos_off,
+                            HMX_B3_R2_PR_BIAS0_OFFSET, HMX_B3_R2_PR_BIAS1_OFFSET);
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT2, neg_off,
+                            HMX_B3_R2_PR_BIAS0_OFFSET, HMX_B3_R2_PR_BIAS1_OFFSET);
+  exec_hvx_recon_at(st, pos_off, neg_off, recon_off, 0);
+}
+
+/* Runs both subcases under both layouts and requires bit-identical output.
+ * Also proves the between-subcase save is load-bearing: the B3 prologue packs
+ * Ahi into the region that currently holds the Plain subcase's output. */
+static void run_phase_reused_crosscheck(void) {
+  static uint16_t stream_plain[T8_CELLS], stream_b3[T8_CELLS];
+  static uint16_t pr_plain[T8_CELLS], pr_b3[T8_CELLS];
+
+  hmx_full_tile_state_t a;
+  state_init(&a);
+  run_plain_r2_subcase(&a, &g_ops_deploy);
+  memcpy(stream_plain, a.vtcm.raw + HMX_B3_R2_RECON_OFFSET, 2048);
+
+  hmx_full_tile_state_t b;
+  state_init(&b);
+  run_b3_r2_subcase(&b, &g_ops_deploy, HMX_FAULT_NONE);
+  memcpy(stream_b3, b.vtcm.raw + HMX_B3_R2_RECON_OFFSET, 2048);
+
+  hmx_full_tile_state_t p;
+  state_init(&p);
+  run_pr_plain_subcase(&p, &g_ops_deploy);
+  memcpy(pr_plain, p.vtcm.raw + HMX_B3_R2_PR_RECON_ALIAS_OWNER, 2048);
+
+  /* The Plain output must leave VTCM before the B3 prologue re-packs +0. */
+  const int save_required =
+      (HMX_B3_R2_PR_RECON_ALIAS_OWNER == HMX_B3_R2_PR_AHI_OFFSET);
+  p.pr_plain_save_required = save_required;
+  memcpy(p.stage, pr_plain, HMX_B3_R2_PR_L2_SAVE_BYTES);
+
+  hmx_full_tile_state_t q;
+  state_init(&q);
+  run_phase_reused_subcase(&q, &g_ops_deploy, HMX_FAULT_NONE);
+  memcpy(pr_b3, q.vtcm.raw + HMX_B3_R2_PR_RECON_ALIAS_OWNER, 2048);
+
+  int plain_same = memcmp(stream_plain, pr_plain, 2048) == 0;
+  int b3_same = memcmp(stream_b3, pr_b3, 2048) == 0;
+  int saved_same = memcmp(p.stage, pr_plain, HMX_B3_R2_PR_L2_SAVE_BYTES) == 0;
+  /* The Plain output currently occupies the region the B3 prologue will pack
+   * Ahi into, so the save is load bearing. */
+  int save_is_load_bearing =
+      memcmp(p.vtcm.raw + HMX_B3_R2_PR_AHI_OFFSET, pr_plain, 2048) == 0;
+
+  check_true("pr_plain_save_required", save_required == 1);
+  check_true("pr_plain_output_saved", saved_same == 1);
+  check_true("pr_b3_prologue_destroys_plain_region", save_is_load_bearing == 1);
+  check_true("pr_plain_bits_identical_to_streaming", plain_same == 1);
+  check_true("pr_b3_bits_identical_to_streaming", b3_same == 1);
+  check_true("pr_nominal_no_operand_mutation", q.pr_operand_mutated_during_mma == 0);
+  check_int("pr_nominal_midkernel_tiles", q.pr_midkernel_tiles, 0);
+
+  printf("b3_r2_phase_reused_bits plain=%s b3=%s cells=%d save_required=%d "
+         "save_load_bearing=%d\n",
+         plain_same ? "IDENTICAL" : "DIFF", b3_same ? "IDENTICAL" : "DIFF",
+         2 * T8_CELLS, save_required, save_is_load_bearing);
+  printf("b3_r2_layout_compare streaming_vtcm=%d streaming_l2=%d "
+         "streaming_midkernel_tiles=%d pr_vtcm_mma=%d pr_vtcm_peak=%d "
+         "pr_l2=%d pr_midkernel_tiles=%d\n",
+         HMX_B3_R2_VTCM_USED, HMX_B3_R2_STAGE_TOTAL,
+         HMX_B3_R2_STREAM_TILES_MIDKERNEL, HMX_B3_R2_PR_MMA_PHASE_USED,
+         HMX_B3_R2_PR_PEAK_USED, HMX_B3_R2_PR_L2_SAVE_BYTES,
+         HMX_B3_R2_PR_MIDKERNEL_TILES);
+}
+
 /* ---------------- Statistical & Metric Verification ---------------- */
 
 typedef struct tile_metrics {
@@ -773,16 +1087,17 @@ static int cmp_double(const void *a, const void *b) {
   return (da > db) - (da < db);
 }
 
-static void evaluate_metrics(const hmx_full_tile_state_t *st, tile_metrics_t *m,
-                             const uint16_t *ref_direct, const double *oracle) {
+static void evaluate_metrics_at(const hmx_full_tile_state_t *st, tile_metrics_t *m,
+                                int pos_offset, int neg_offset, int recon_offset,
+                                const uint16_t *ref_direct, const double *oracle) {
   memset(m, 0, sizeof(*m));
   double errors[T8_CELLS];
   double sum_err = 0.0, sum_sq_err = 0.0;
   double max_err = 0.0;
 
-  const uint16_t *pos_buf = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_POS_OFFSET);
-  const uint16_t *neg_buf = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_NEG_OFFSET);
-  const uint16_t *rec_buf = (const uint16_t *)(st->vtcm.raw + HMX_B3_R2_RECON_OFFSET);
+  const uint16_t *pos_buf = (const uint16_t *)(st->vtcm.raw + pos_offset);
+  const uint16_t *neg_buf = (const uint16_t *)(st->vtcm.raw + neg_offset);
+  const uint16_t *rec_buf = (const uint16_t *)(st->vtcm.raw + recon_offset);
 
   for (int s = 0; s < T8; ++s) {
     for (int o = 0; o < T8; ++o) {
@@ -843,6 +1158,13 @@ static void evaluate_metrics(const hmx_full_tile_state_t *st, tile_metrics_t *m,
   m->median_abs_err =
       (errors[T8_CELLS / 2 - 1] + errors[T8_CELLS / 2]) / 2.0;
   m->p95_abs_err = errors[(int)(T8_CELLS * 0.95)];
+}
+
+/* Registered streaming layout (act / wgt / pos / neg / recon). */
+static void evaluate_metrics(const hmx_full_tile_state_t *st, tile_metrics_t *m,
+                             const uint16_t *ref_direct, const double *oracle) {
+  evaluate_metrics_at(st, m, HMX_B3_R2_POS_OFFSET, HMX_B3_R2_NEG_OFFSET,
+                      HMX_B3_R2_RECON_OFFSET, ref_direct, oracle);
 }
 
 /* ---------------- Reference Direct Values (from G8/G9 model) ---------------- */
@@ -1444,7 +1766,7 @@ static void run_fp32_input_condition(void) {
 /* ---------------- Fault Injection Battery ---------------- */
 
 static void run_fault_injection_tests(void) {
-  printf("===== Running 14 Fault Injection Tests =====\n");
+  printf("===== Running 17 Fault Injection Tests =====\n");
 
   static const struct {
     hmx_b3_r2_fault_t fault;
@@ -1463,7 +1785,11 @@ static void run_fault_injection_tests(void) {
     {HMX_FAULT_RECON_STORE_FAIL,    "Recon store failed (sentinel unwritten)"},
     {HMX_FAULT_HOST_FAKE_RECON,     "Host fake reconstruction (DSP source missing)"},
     {HMX_FAULT_COUNTER_MISMATCH,    "DSP counter and static audit mismatch"},
-    {HMX_FAULT_WHI_RESTORE_MISSING, "Whi restore source lost after MMA #2"}
+    {HMX_FAULT_WHI_RESTORE_MISSING, "Whi restore source lost after MMA #2"},
+    /* Phase-reused layout (candidate B). */
+    {HMX_FAULT_PR_REUSE_BEFORE_LAST_USE, "PR: output region reused before its owner's last MMA"},
+    {HMX_FAULT_PR_OPERAND_CLOBBER,  "PR: live operand tile clobbered by a stray fill"},
+    {HMX_FAULT_PR_OUTPUT_OVERLAP,   "PR: out_pos and out_neg mapped to one region"}
   };
 
   int total_faults = (int)(sizeof(faults) / sizeof(faults[0]));
@@ -1473,6 +1799,37 @@ static void run_fault_injection_tests(void) {
   compute_reference_direct(&g_ops_deploy, plain_ref, b3_ref);
 
   for (int f = 0; f < total_faults; ++f) {
+    /* Phase-reused layout faults run the candidate-B model, not the
+     * registered streaming path. */
+    if (faults[f].fault >= HMX_FAULT_PR_REUSE_BEFORE_LAST_USE) {
+      hmx_full_tile_state_t pr;
+      state_init(&pr);
+      run_phase_reused_subcase(&pr, &g_ops_deploy, faults[f].fault);
+
+      tile_metrics_t pm;
+      evaluate_metrics_at(&pr, &pm, HMX_B3_R2_PR_POS_OFFSET,
+                          HMX_B3_R2_PR_NEG_ALIAS_OWNER,
+                          HMX_B3_R2_PR_RECON_ALIAS_OWNER, b3_ref, g_oracle_y);
+
+      int pr_detected = 0;
+      if (pr.pr_operand_mutated_during_mma > 0) pr_detected = 1;
+      if (pr.pr_alive_operand_clobbered) pr_detected = 1;
+      if (pr.pr_output_overlap) pr_detected = 1;
+      if (pm.bits_diff_vs_oracle > 0) pr_detected = 1;
+      if (pm.raw_recon[0] != 0x5401u) pr_detected = 1;
+
+      check_true("pr_fault_detected", pr_detected);
+      if (pr_detected) {
+        detected_faults++;
+        printf("ok   fault %2d [%-32s]: DETECTED (fail-closed)\n",
+               (int)faults[f].fault, faults[f].desc);
+      } else {
+        printf("FAIL fault %2d [%-32s]: NOT DETECTED!\n",
+               (int)faults[f].fault, faults[f].desc);
+      }
+      continue;
+    }
+
     hmx_full_tile_state_t st;
     state_init(&st);
     run_b3_r2_subcase(&st, &g_ops_deploy, faults[f].fault);
@@ -1636,6 +1993,8 @@ int main(void) {
   printf("b3_r2_full_tile_sim=START\n");
 
   run_full_tile_verification();
+  verify_phase_reused_layout_static();
+  run_phase_reused_crosscheck();
   run_split_provenance_explanation();
   run_fp32_input_condition();
   run_fault_injection_tests();
