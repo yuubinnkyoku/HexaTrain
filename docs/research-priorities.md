@@ -1,12 +1,14 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-10-20 JST**
+> **研究内容の最終更新: 2026-10-28 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
 > **2026-10-04 更新**: `headwise_g1_sigmoid` を **current research baseline** へ昇格（`PROMOTE_WITH_RUNTIME_FOLLOWUP`）。legacy control（`attention_gate=none` / 758,528 params / `NPRTCKPTV4`）は historical anchor として保持し、**production / default behavior は変更していない**。詳細は「学習baseline」節と [headwise-g1-gated-attention.md](headwise-g1-gated-attention.md) の `## Baseline promotion`。
 >
 > **2026-10-20 研究候補追記**: [Muse Glimmer 30B技術レポート](https://arxiv.org/abs/2610.24628)を踏まえ、同一runのcheckpoint平均化をP1候補へ、Dense対MoEのメモリ制約付き比較・MQA・蒸留・推論重みの精度配分・DFlashを既存の研究課題へ統合。**新規の実機検証結果やbaseline変更を意味しない**。
+>
+> **2026-10-28 研究候補追記**: [Liquid AI LFM3発表](https://www.liquid.ai/blog/lfm3)を踏まえ、短畳み込みとAttentionの混成をP1 feasibility / P2実験候補へ、実機を使った探索を既存P1構造探索へ統合。G1 / Partial RoPE / Sandwich Norm / Local-Globalの位置づけを整理。**新規実装・実機測定・baseline変更・学習実行は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -239,6 +241,21 @@ Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2
 - **Muse Spark上位256 logitsによる蒸留**（§4.2）。学習の95%をKL、最後の5%を正解tokenのCEに切り替え、top-k教師分布の打切り偏りを回避する。HexaTrainのV1024と教師のV202048ではtoken identityが一致しないため、**同一語彙の教師を用意する等の整合手段がない限りlogitを直接比較しない**。外部教師を使う研究は単体scratch trainingと独立のP2 track。
 - **推論用の役割別量子化**（§7.1）。Q4_K/Q5_K/Q6_Kを重み群ごとに割当て、校正KL悪化と節約byteの関係を探索。EvoPressの15課題平均正答率75.6%はBF16の75.7%に近いが、**post-training量子化の結果であり、HTPでの学習演算精度を保証しない**。まず役割別のoffline fake-quant感度を測り、その後V81の実wallと互換性を見る。
 - **DFlashによる先読み生成**（§7.2）は通常の逐次生成・KV-cache成立後のP3に置く。Gated Attention採用は既存G1の独立再検証や、ReLU²の棄却の取り消しを正当化しない。
+
+### LFM3から見える短畳み込み・実機探索課題（2026-10-28）
+
+[LFM3公式発表](https://www.liquid.ai/blog/lfm3)によると、LFM3-1.7Bは24層中 **gated short convolution 13層 / sliding-window attention（window=256）5層 / global attention 6層** の三種混成。短畳み込みのkernel幅は7（LFM2は3）。Global Attentionはheadの高周波側半分だけにRoPE、SWAにはFull RoPEを適用する。Head-wise sigmoid gateとblock入出力のSandwich Normも採用。22T tokensの事前学習や終盤3.5Tの高品質データ段階も同時に変更しているため、公開ベンチマークから**構造単独の品質改善**は断定しない。
+
+**HexaTrain（V1024/T32/D64/FFN128/L19/H2 + G1 research baseline）への判断**:
+
+- **短畳み込みだけを新規の独立候補にする**。softmax/T²演算を省ける一方で、追加の線形変換・畳み込み・ゲート・backwardとgraph固定費が発生する。**T32で高速・省parameterとは予測しない**。kernel3/7・1/2/4層だけの置換と、Full/Skip Attentionを比較する。
+- **G1は既存の成果と重複**。LFM3型head-wise sigmoid gateはattention head出力をoutput projection前で制御する点が現行G1に近い。G1の昇格やidentity-init / fixed-halfの既存負例を巻き戻さず、LFM3全体の成績をゲート単独の効果として数えない。
+- **Partial RoPE / Sandwich Normは既存課題に統合**。Globalで半分RoPE・LocalでFull RoPEという層別化はT拡大後。Sandwich Normは現行LayerNorm対RMSNormの分離検証後に、branch出力側の追加normとしてP2で検討する。いずれも畳み込みと同時に変えない。
+- **Local/Global混成はP3維持**。T32ではwindow=256のSWAとGlobalが同じ過去範囲を見る。13/5/6の比率をそのまま縮小コピーしない。
+- **hardware-in-the-loopは探索手法として取り込む**。Liquid AIはQualcomm Hexagon NPUを含む14 device/backend組合せを構造探索に使用したが、公開した優位性は主に**推論**。HexaTrainではForward / Backward / Optimizer / FastRPC・tensor転送 / graph準備の**学習全体の実測**を評価し、推論の倍率を転用しない。
+- 128K語彙・256K context・マルチモーダル化・大規模agentic RLは現行scratch LMの直接候補にしない。終盤のデータ配合は既存Data Mix研究の独立因子とする。
+
+**実験ゲート**: 既存6031 / G1 formal backwardの検証とは独立して、まずCPUでcausal convolutionのforward/backward・finite difference・padding/境界条件を数値照合する。QAIRT上の対応op / HTP・HVX代替を調べ、単体microbenchmarkで実wall・parity・転送量を判定。その後のみP2の短期matched A/Bへ進む。既存G1 checkpoint・negative control・正式証拠を上書きせず、QNN failure・fallback・nonfiniteではfail closedとする。長期runは未承認。
 
 ### 推論・Android基盤
 
@@ -479,6 +496,13 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 ### P1 Candidate Pool【空きslotが出たら昇格】
 
+- **LFM3型短畳み込みの成立性調査【新規・未実装】**
+  - CPU oracleでkernel3/7の因果的短畳み込み、gate、forward/backward、finite differenceを照合。最初は最小の単層演算から
+  - L19中1/2/4層の候補配置とFull/Skip比較を事前登録。parameter-matchedと同一step/byte budgetは別比較にする
+  - QNN HTP / HVX / CPUごとにgraph準備・Forward/Backward・RPC/転送・peak RAM・CPU parityを測る。T32では固定費を回収できない可能性を明記
+  - 新weight・optimizer role・checkpoint schema・architecture identityを分離し、G1研究基準と過去checkpointの互換性を壊さない
+  - 数値・実機の両ゲートを通過した場合にのみP2の短期品質実験へ昇格。NOWの5件枠は増やさない
+
 - **Same-run Checkpoint Averaging / Weight Soup【新規・評価専用pilot】**
   - Meta Muse Glimmerの§4.2を参考に、**既存学習runの利用可能な終盤checkpoint**だけで単独最終checkpoint / 近接2点平均 / 3〜4点平均を比較。600-step等の間隔はMetaの実験値であり、HexaTrainに存在しないsnapshotを仮定しない
   - **同一run / seed / dataset・順序 / tokenizer hash / architecture / parameter metadata / checkpoint schema / optimizer identity**の一致を強制。G1 V5とungated V4、異なるseedや別recipeは混ぜない
@@ -513,6 +537,10 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 
 ## P2 — Muown / architecture基礎実験の後
+
+- **LFM3型短畳み込み×Attention混成【P1成立後のみ】**
+  - G1研究基準を親にし、1/2/4層置換・kernel3/7を独立因子として比較。位置表現・norm・gate・data mixを同時変更しない
+  - 正式学習の許可を得るまで長期runは行わず、成立後も短期stress → matched 500/2000 step → 必要時だけ長期へ。Balanced bpb / Val・Dev NLL、ms/update、time-to-bpb、RAM、QNN health、graph準備時間を記録
 
 - **Learning Rate × Effective Batch × Optimizer**
   - Muown short A/Bが有望な場合のみ、physical B8固定でaccumulation 1 / 2 / 4 / 8を比較
@@ -591,6 +619,7 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 - token-level sparse selection + forced recent window
 - hierarchical sparse indexer / candidate-pool reuse
 - Local / Global hybrid / Bounded Replay
+  - LFM3のSWA window=256 / Global混成はT32では参照範囲の差が出ないため、T拡大後に限る。13/5/6配置を流用しない
   - Muse Glimmerの[Local(RoPE)×3 → Global(NoPE)]をT拡大後の比較候補に追加。T32ではwindow=2048がFullと等価なため採用しない
 - KV low-bit storage（INT8/INT4/FP4相当）+ dequantize-before-attention
 - **DSpark / DFlash / post-hoc speculative drafter**（通常KV-cache＋通常逐次decode成立後に比較。Muse GlimmerはDFlashを別学習）
@@ -648,6 +677,7 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 | モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
+| **LFM3-1.7B（2026-10-27発表）** | 13 gated short conv + 5 SWA(window256) + 6 global、head-wise sigmoid gate、global Partial RoPE、Sandwich Norm、Hexagon NPUを含む14環境探索 | **短畳み込み成立性をP1候補へ、混成短期A/BをP2へ**。G1は既存研究基準を維持。SWA/GlobalはT拡大後P3、Sandwich NormはRMSNorm検証後P2。公表倍率をHTP学習へ外挿しない |
 | **Muse Glimmer 30B（2026-10-19論文公開）** | 32GB inference memory制約でDense優位（対象ladder比）、Q32/KV2 GQA、Local×3/Global×1、Local RoPE/Global NoPE、Gated Attention、same-run checkpoint soup、top-256 logit蒸留→終盤CE、重み役割別PTQ、DFlash | **checkpoint soup評価専用pilotをP1候補へ**。MQA/parameter-matched searchはP1維持、蒸留/PTQはP2、local/global・DFlashはP3。MetaのGPU倍率・推論PTQ結果をHTP学習へ外挿しない |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
 | **HySparse2** | two-level KV sharing（KV Bridging + KV Reuse）、token-level sparse selection、forced local window、MQA、self/cross-decoder early-exit prefill | **本格sparseはP3据え置き**。ただしHq2/Hkv1 MQAとCross-Layer Top-k Reuse診断をP0/P1へ前倒し。generationは通常KV cacheを先に成立させる |
@@ -880,6 +910,8 @@ D64/FFN64 → D64/FFN128ではparametersが約25.8%増えた一方、256+256 hel
 
 Limiteを根拠にQK Normまで同時変更せず、**block normだけを先に分離A/B**する。
 
+LFM3のSandwich Normは追加候補（P2）。既存norm比較を終えてから残差加算前のbranch出力側normだけを独立因子で試し、QNN backward・reduction・activation scale・wallの増分を測る。畳み込み置換と同時に導入しない。
+
 ## FFN Activation / Gating
 
 → **P1**
@@ -1035,6 +1067,9 @@ Qwen3-NextでQK-Normのnorm weightが大きくなる問題への対策として�
 
 へ拡張する。
 
+
+LFM3型gated short convolutionへの置換は、上記Full/Skip探索の後にP1の数値・実機成立性検査を通過した場合だけP2として追加する。
+
 ## Gated Attention
 
 → **完了 / G1 は current research baseline（2026-10-04）**
@@ -1074,6 +1109,8 @@ Limite/Violetto実装ではper-head gateをoutput projection前へ置き、`2 * 
 - gate mean / std / <0.1 / >0.9
 - attention sink指標
 - parity error
+
+LFM3もhead-wise sigmoid gateを出力射影の前で用いるが、既存G1に近い設計の別事例であり、G1の品質改善をLFM3から独立に再実証したものではない。
 
 参考:
 
@@ -2180,6 +2217,8 @@ QK Normの粒度をhead単位でも比較する。
 - 0%
 
 Qwen3-Nextはhead dimensionの一部のみRoPEを使う。
+
+LFM3はGlobal Attentionの高周波側半分にRoPE、SWAにはFull RoPEを使用。T32ではまず現行position方式 / Full / Partialを単独で比較し、層別化はT拡大後に回す。
 
 短いTでは効果が見えにくいため、速度だけ先に測り、
 
@@ -3788,6 +3827,8 @@ scratch-training trackと結果を混同しない。
 
 ## Phase 14 — Hybrid Sequence Operators
 
+- **LFM3型短畳み込み**: P1でCPU数値・QNN/HVX実行費用とcheckpoint identityを確認し、成立時のみP2のkernel3/7・1/2/4層の短期matched A/Bへ進む。6031とG1 formalの問題は別laneとし、T32で高速化すると仮定しない
+
 - Full/Skip Attentionで置換候補layerを特定
 - **Dense checkpoint → SimpleGDN weight-preserving / low-disruption migration**
 - Gated DeltaNet
@@ -3853,6 +3894,12 @@ long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE�
 - packed/fused QKV implementation
 - pretraining speedrun系のReLU² / same-head multi-token supervision / RRE
 - 「モデル構造と実行layoutを同時に詰める」設計のreference
+
+## Liquid AI
+
+- LFM3-1.7Bはgated short convolution / SWA / global attentionの混成。HexaTrainでは短畳み込み単層から因果的backwardと実機固定費を比較する
+- Hexagon NPUを含む14環境のhardware-in-loop探索は推論主体。HexaTrainでは学習update全体のquality / latency / RAMのParetoを正本とする
+- G1 / Partial RoPE / Sandwich Norm / Local-Globalは既存候補に統合し、重複実装しない
 
 ## Qualcomm AI Research
 
@@ -4094,6 +4141,13 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [D64/FFN128 capacity experiment](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/nicopedia-byte-bpe-v1024-d64-ffn128.md)
 
 - [Muon Row-Geometry Audit](https://github.com/yuubinnkyoku/HexaTrain/blob/main/docs/muon-row-geometry-audit.md)
+
+## Liquid AI / LFM3（2026-10-28追加）
+
+- [LFM3公式発表（英語・実機探索の詳細）](https://www.liquid.ai/blog/lfm3)
+- [LFM3公式発表（日本語）](https://www.liquid.ai/ja/blog/lfm3)
+- [LFM3-1.7Bモデルカード](https://huggingface.co/LiquidAI/LFM3-1.7B)
+- [LFM3-1.7B-Baseモデルカード](https://huggingface.co/LiquidAI/LFM3-1.7B-Base)
 
 ## Muse Glimmer / Meta（2026-10-20追加）
 
