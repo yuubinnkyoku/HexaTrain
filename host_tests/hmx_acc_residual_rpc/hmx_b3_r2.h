@@ -132,6 +132,85 @@
  * still needs "MMA #2 operand reads are done", which remains undocumented. */
 #define HMX_B3_R2_PR_SYNC_NOTE "reuse_after_mma3_unproven"
 
+/* ---------------- Candidate C: single shared output buffer (2026-10-29) -----
+ *
+ * A third layout, evaluated CPU-only as a design hypothesis. The four operand
+ * tiles are resident for the whole kernel and are NEVER written again; all
+ * three output stages share ONE 2 KiB VTCM buffer.
+ *
+ * VTCM (12,288 B window):
+ *   +0     Ahi      (2048)   written once, prologue
+ *   +2048  Alo      (2048)   written once, prologue
+ *   +4096  Whi      (2048)   written once, prologue
+ *   +6144  Wlo      (2048)   written once, prologue
+ *   +8192  OUT      (2048)   pos -> neg -> recon, in place
+ *   +10240 bias set 0 (256)
+ *   +10496 bias set 1 (256)
+ *   used 10,752 B, margin 1,536 B
+ *
+ * Output staging lives in DSP L2, outside the VTCM window:
+ *   Plain: pos, neg and recon are all copied out (the shared buffer is reused
+ *          by the B3 subcase); the three raw tiles are retained for evidence.
+ *   B3:    pos and neg are copied out (neg BEFORE the in-place recon destroys
+ *          it); the recon stays in OUT and is read back over the RPC boundary.
+ *
+ * Status: CPU hypothesis only. NOT registered, NOT the preferred design, and
+ * NOT a Mode 46 pre-registration. Candidate B keeps CPU_VALIDATED_PREFERRED_DESIGN.
+ * See docs/hmx-v81-cand-c-single-output-buffer.md. */
+#define HMX_B3_R2_CC_AHI_OFFSET   0
+#define HMX_B3_R2_CC_ALO_OFFSET   2048
+#define HMX_B3_R2_CC_WHI_OFFSET   4096
+#define HMX_B3_R2_CC_WLO_OFFSET   6144
+#define HMX_B3_R2_CC_OUT_OFFSET   8192 /* the single shared output buffer */
+#define HMX_B3_R2_CC_BIAS0_OFFSET 10240
+#define HMX_B3_R2_CC_BIAS1_OFFSET 10496
+#define HMX_B3_R2_CC_USED          10752
+#define HMX_B3_R2_CC_MARGIN        (HMX_B3_R2_VTCM_TOTAL - HMX_B3_R2_CC_USED)
+#define HMX_B3_R2_CC_OPERAND_TILES 4
+#define HMX_B3_R2_CC_OUTPUT_TILES  1
+#define HMX_B3_R2_CC_MIDKERNEL_OPERAND_TILES 0 /* no operand is written after the prologue */
+
+/* DSP L2 arena (outside VTCM). Lifetimes:
+ *   Plain pos/neg/recon  written during the Plain subcase, retained to the end
+ *   B3 cur pos/neg       written during the B3 subcase
+ * Peak under raw-bit retention = 5 tiles = 10,240 B, reached when B3's neg
+ * evidence is copied out. If the Plain pos/neg tiles are folded into the
+ * mutual-exclusivity counters during the recon pass, only the Plain recon tile
+ * survives and the peak drops to 6,144 B. Both numbers are computed from the
+ * lifetime table in the simulator, not asserted from the layout. */
+#define HMX_B3_R2_CC_L2_PLAIN_POS_OFFSET   0
+#define HMX_B3_R2_CC_L2_PLAIN_NEG_OFFSET   2048
+#define HMX_B3_R2_CC_L2_PLAIN_RECON_OFFSET 4096
+#define HMX_B3_R2_CC_L2_CUR_POS_OFFSET     6144
+#define HMX_B3_R2_CC_L2_CUR_NEG_OFFSET     8192
+#define HMX_B3_R2_CC_L2_PEAK_RAW_BYTES     10240 /* 5 tiles, raw retention */
+#define HMX_B3_R2_CC_L2_PEAK_FOLD_BYTES    6144  /* 3 tiles, Plain pos/neg folded */
+
+/* Static copy accounting (counts only; NO cycle/ns/overhead claim). */
+#define HMX_B3_R2_CC_L2_CLEAR_PLAIN 3 /* pos, neg, recon */
+#define HMX_B3_R2_CC_L2_CLEAR_B3    2 /* pos, neg (recon stays in VTCM) */
+#define HMX_B3_R2_CC_L2_CLEAR_TOTAL  5
+#define HMX_B3_R2_CC_L2_CLEAR_VECTORS 80 /* 5 tiles x 16 vectors of 128 B */
+
+/* Candidate C sync dependencies. Only C2 is a hardware question; C1/C3 are the
+ * direction Mode 45 already exercised (MX store -> later HVX load), C4/C5 are
+ * program-order properties inside the kernel. */
+typedef enum hmx_b3_r2_cc_sync {
+  HMX_CC_SYNC_C1 = 0, /* Convert #1 MX store -> HVX load of OUT for the pos save */
+  HMX_CC_SYNC_C2 = 1, /* HVX pos save complete -> Convert #2 MX store over OUT */
+  HMX_CC_SYNC_C3 = 2, /* Convert #2 MX store -> HVX load of OUT for the neg save */
+  HMX_CC_SYNC_C4 = 3, /* in-place recon: per-vector load before store, same thread */
+  HMX_CC_SYNC_C5 = 4  /* Plain evidence copied out before the B3 Convert #1 */
+} hmx_b3_r2_cc_sync_t;
+
+#define HMX_CC_SYNC_IMPL_SUPPORTED 1 /* direction exercised by Mode 45 */
+#define HMX_CC_SYNC_DEVICE_ONLY    2 /* no spec, no binary, no device exercise */
+#define HMX_CC_SYNC_PROGRAM_ORDER  3 /* enforceable by source order, hardware silent */
+
+#define HMX_B3_R2_CC_STATUS "CAND_C_CPU_MODEL_CONSISTENT"
+#define HMX_B3_R2_CC_PRIORITY_NOTE "candidate_b_preference_unchanged"
+#define HMX_B3_R2_CC_REGISTERED 0 /* not a registered layout */
+
 /* Whi restore source enumeration for MMA #3. */
 #define HMX_B3_R2_WHI_RESTORE_NONE        0 /* not needed (single-MMA paths) */
 #define HMX_B3_R2_WHI_RESTORE_L2_STAGE    1 /* the only legal source */
@@ -231,7 +310,13 @@ typedef enum hmx_b3_r2_fault {
   /* Phase-reused layout faults (candidate B). */
   HMX_FAULT_PR_REUSE_BEFORE_LAST_USE = 15,
   HMX_FAULT_PR_OPERAND_CLOBBER = 16,
-  HMX_FAULT_PR_OUTPUT_OVERLAP = 17
+  HMX_FAULT_PR_OUTPUT_OVERLAP = 17,
+  /* Single shared output buffer faults (candidate C). */
+  HMX_FAULT_CC_POS_SAVE_MISSING = 18,     /* pos never copied out before Convert #2 */
+  HMX_FAULT_CC_RESTORE_BEFORE_SAVE = 19,  /* Convert #2 issued mid-save */
+  HMX_FAULT_CC_NEG_EVIDENCE_LOST = 20,    /* neg raw bits lost to the in-place recon */
+  HMX_FAULT_CC_INPLACE_RW_CONFLICT = 21,  /* vector stored before its own neg load */
+  HMX_FAULT_CC_PLAIN_CLOBBERED = 22      /* Plain evidence lost to the shared buffer */
 } hmx_b3_r2_fault_t;
 
 static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
@@ -254,6 +339,11 @@ static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
     case HMX_FAULT_PR_REUSE_BEFORE_LAST_USE: return "PR_REUSE_BEFORE_LAST_USE";
     case HMX_FAULT_PR_OPERAND_CLOBBER: return "PR_ALIVE_OPERAND_CLOBBERED";
     case HMX_FAULT_PR_OUTPUT_OVERLAP: return "PR_OUTPUT_REGIONS_OVERLAP";
+    case HMX_FAULT_CC_POS_SAVE_MISSING: return "CC_POS_SAVE_MISSING";
+    case HMX_FAULT_CC_RESTORE_BEFORE_SAVE: return "CC_RESTORE_BEFORE_SAVE";
+    case HMX_FAULT_CC_NEG_EVIDENCE_LOST: return "CC_NEG_EVIDENCE_LOST";
+    case HMX_FAULT_CC_INPLACE_RW_CONFLICT: return "CC_INPLACE_RW_CONFLICT";
+    case HMX_FAULT_CC_PLAIN_CLOBBERED: return "CC_PLAIN_CLOBBERED";
     default: return "UNKNOWN_FAULT";
   }
 }

@@ -20,7 +20,15 @@
 //   - Static transfer accounting only: 3 mid-kernel tiles / 48 vectors of
 //     128 B. NO cycles, ns or percentage overhead is claimed anywhere - that
 //     needs device measurement (see the pre-registration document).
-//   - All 14 fault injections verified to fail closed.
+//   - All 22 fault injections verified to fail closed (14 streaming, 3 candidate
+//     B phase-reuse, 5 candidate C single-shared-output-buffer).
+//
+// Design comparison models (no verdict change, no layout registration):
+//   candidate B  phase-reused VTCM, outputs alias operand regions after use
+//   candidate C  four resident operands + ONE shared 2 KiB output buffer at
+//                +8192; pos saved to L2, neg saved to L2, recon in place.
+//                CPU-only hypothesis; see
+//                docs/hmx-v81-cand-c-single-output-buffer.md.
 //
 // Registered conditions:
 //   cond=deploy_float_split   the registered B3+R2 condition (F32-arith residual,
@@ -1765,8 +1773,11 @@ static void run_fp32_input_condition(void) {
 
 /* ---------------- Fault Injection Battery ---------------- */
 
+/* Candidate C fault runner (defined with the candidate C model below). */
+static int cand_c_fault_detected(hmx_b3_r2_fault_t fault);
+
 static void run_fault_injection_tests(void) {
-  printf("===== Running 17 Fault Injection Tests =====\n");
+  printf("===== Running 22 Fault Injection Tests =====\n");
 
   static const struct {
     hmx_b3_r2_fault_t fault;
@@ -1789,7 +1800,13 @@ static void run_fault_injection_tests(void) {
     /* Phase-reused layout (candidate B). */
     {HMX_FAULT_PR_REUSE_BEFORE_LAST_USE, "PR: output region reused before its owner's last MMA"},
     {HMX_FAULT_PR_OPERAND_CLOBBER,  "PR: live operand tile clobbered by a stray fill"},
-    {HMX_FAULT_PR_OUTPUT_OVERLAP,   "PR: out_pos and out_neg mapped to one region"}
+    {HMX_FAULT_PR_OUTPUT_OVERLAP,   "PR: out_pos and out_neg mapped to one region"},
+    /* Single shared output buffer (candidate C). */
+    {HMX_FAULT_CC_POS_SAVE_MISSING,    "CC: positive tile never copied out before Convert #2"},
+    {HMX_FAULT_CC_RESTORE_BEFORE_SAVE, "CC: Convert #2 issued before the positive save finished"},
+    {HMX_FAULT_CC_NEG_EVIDENCE_LOST,   "CC: negative raw bits lost to the in-place recon"},
+    {HMX_FAULT_CC_INPLACE_RW_CONFLICT, "CC: in-place vector stored before its own neg load"},
+    {HMX_FAULT_CC_PLAIN_CLOBBERED,     "CC: Plain evidence harvested from the reused buffer"}
   };
 
   int total_faults = (int)(sizeof(faults) / sizeof(faults[0]));
@@ -1799,6 +1816,21 @@ static void run_fault_injection_tests(void) {
   compute_reference_direct(&g_ops_deploy, plain_ref, b3_ref);
 
   for (int f = 0; f < total_faults; ++f) {
+    /* Candidate C faults run the single-shared-output-buffer model. */
+    if (faults[f].fault >= HMX_FAULT_CC_POS_SAVE_MISSING) {
+      int cc_detected = cand_c_fault_detected(faults[f].fault);
+      check_true("cc_fault_detected", cc_detected);
+      if (cc_detected) {
+        detected_faults++;
+        printf("ok   fault %2d [%-32s]: DETECTED (fail-closed)\n",
+               (int)faults[f].fault, faults[f].desc);
+      } else {
+        printf("FAIL fault %2d [%-32s]: NOT DETECTED!\n",
+               (int)faults[f].fault, faults[f].desc);
+      }
+      continue;
+    }
+
     /* Phase-reused layout faults run the candidate-B model, not the
      * registered streaming path. */
     if (faults[f].fault >= HMX_FAULT_PR_REUSE_BEFORE_LAST_USE) {
@@ -1914,6 +1946,14 @@ static void run_fault_injection_tests(void) {
 #define EXPECT_SHA_B3_BITS    "687509a2c5999541ee15d5da21aecd28e41d37a4417ed22b2f0a13184e030939"
 #define EXPECT_SHA_FP32_OPS   "e5193d9980150245f7a0e0a6d9d7361db7be22c999c1a95594053dee1f0d47a3"
 
+/* Candidate-C-only evidence, registered for the future C2 device pre-registration.
+ * These are the positive and negative raw arrays of the one-MMA Plain subcase:
+ * the two buffers a minimal C2 experiment observes separately. They are NOT part
+ * of the frozen streaming six; the six above are unaffected. */
+#define CAND_C_SHA_PLAIN_POS_BITS "82107d6e53e2e6d7d07bf007357d722fdfcb4a17c00a3582c3b514e90f76ffb8"
+#define CAND_C_SHA_PLAIN_NEG_BITS "3fcddb24e66920f21ff2818aea0f3003f344ac006b546047e3151e6bce1a3309"
+#define CAND_C_PLAIN_DISCRIMINATING_CELLS 1023
+
 static void run_evidence_digests(void) {
   printf("===== Evidence Digests (SHA-256) =====\n");
 
@@ -1987,6 +2027,877 @@ static void run_evidence_digests(void) {
   }
 }
 
+/* ================== Candidate C: single shared output buffer ==================
+ *
+ * Third design hypothesis, evaluated CPU-only and deliberately independent of
+ * the registered streaming layout and of candidate B. The four operand tiles
+ * are resident for the whole kernel and are never written after the prologue;
+ * the positive, negative and reconstructed outputs all share ONE 2 KiB VTCM
+ * buffer, with the earlier stages preserved in DSP L2.
+ *
+ * The contract is checked on recorded VTCM *access events*, not on the intended
+ * schedule: every write is logged with its byte range, so "no operand region is
+ * ever overwritten" is verified from the writes that actually happened. This is
+ * the property candidate B's sentinel fill violates (its fill is the first real
+ * write into an aliased operand region and is not covered by its store ordinal),
+ * and candidate C does not inherit it because the sentinel target is disjoint
+ * from every operand region by construction.
+ *
+ * Nothing here is a device claim: C2 (HVX load of OUT -> later MX store over OUT)
+ * has no specification, no binary evidence and no device exercise.
+ */
+
+typedef struct cc_ev {
+  int seq;
+  int kind;
+  int offset;
+  int size;
+  int is_write;
+  int touches_operand;
+} cc_ev_t;
+
+enum {
+  CC_EV_PACK_WRITE = 1,
+  CC_EV_BIAS_WRITE,
+  CC_EV_SENTINEL_WRITE,
+  CC_EV_MX_STORE,
+  CC_EV_HVX_STORE,
+  CC_EV_HVX_LOAD,
+  CC_EV_HOST_READ,
+  CC_EV_MMA_ISSUE,
+  CC_EV_CONVERT_ISSUE
+};
+
+#define CC_EV_CAP 256
+
+typedef struct cand_c_state {
+  hmx_full_tile_state_t core; /* reuses the same ACC / convert / crouton maths */
+
+  uint8_t l2[HMX_B3_R2_CC_L2_PEAK_RAW_BYTES];
+
+  cc_ev_t ev[CC_EV_CAP];
+  int ev_len;
+  int ev_overflow;
+  int seq;
+
+  /* Write-event accounting (the operand-immutability contract). The sub_*
+   * counters are per subcase, so both subcases can share one physical VTCM. */
+  int vtcm_writes;
+  int operand_writes_total;
+  int operand_writes_after_mma1;
+  int output_region_writes;
+  int sub_writes;
+  int sub_operand_writes;
+  int sub_operand_after_mma1;
+  int sub_out_writes;
+  int sub_mmas;
+  int sub_converts;
+  int sub_l2_tiles;
+  int sub_l2_vectors;
+  int first_out_write_seq;
+
+  /* Program-order landmarks (per subcase). */
+  int mma1_seq;
+  int cvt1_seq;
+  int pos_save_done_seq;
+  int cvt2_seq;
+  int neg_save_done_seq;
+  int pos_save_start_seq;
+  int recon_save_seq;
+
+  /* Copy accounting (static only, no timing claim). */
+  int l2_tiles;
+  int l2_vectors;
+
+  /* Preserved raw bits. */
+  uint16_t pos[T8_CELLS];
+  uint16_t neg[T8_CELLS];
+  uint16_t recon[T8_CELLS];
+  int l2_pos_off;
+  int l2_neg_off;
+  int l2_recon_off;
+  int recon_from_vtcm;
+
+  /* Fault bookkeeping. */
+  int pos_save_missing;
+  int restore_before_save;
+  int neg_evidence_lost;
+  int inplace_conflicts;
+  int inplace_subtracts;
+  int plain_evidence_deferred;
+  int plain_evidence_lost;
+} cand_c_state_t;
+
+static int cc_is_operand_range(int off, int size) {
+  const int ops[4] = {HMX_B3_R2_CC_AHI_OFFSET, HMX_B3_R2_CC_ALO_OFFSET,
+                      HMX_B3_R2_CC_WHI_OFFSET, HMX_B3_R2_CC_WLO_OFFSET};
+  for (int i = 0; i < 4; ++i) {
+    if (off < ops[i] + HMX_B3_R2_TILE_BYTES && ops[i] < off + size) return 1;
+  }
+  return 0;
+}
+
+static void cc_log_ev(cand_c_state_t *c, int kind, int off, int size, int is_write) {
+  if (c->ev_len >= CC_EV_CAP) {
+    c->ev_overflow++;
+    return;
+  }
+  cc_ev_t *e = &c->ev[c->ev_len++];
+  e->seq = ++c->seq;
+  e->kind = kind;
+  e->offset = off;
+  e->size = size;
+  e->is_write = is_write;
+  e->touches_operand = 0;
+  if (is_write) {
+    c->vtcm_writes++;
+    c->sub_writes++;
+    e->touches_operand = cc_is_operand_range(off, size);
+    if (e->touches_operand) {
+      c->operand_writes_total++;
+      c->sub_operand_writes++;
+      if (c->mma1_seq > 0) {
+        c->operand_writes_after_mma1++;
+        c->sub_operand_after_mma1++;
+      }
+    }
+    if (off >= HMX_B3_R2_CC_OUT_OFFSET &&
+        off + size <= HMX_B3_R2_CC_OUT_OFFSET + HMX_B3_R2_TILE_BYTES) {
+      c->output_region_writes++;
+      c->sub_out_writes++;
+      if (c->first_out_write_seq == 0) c->first_out_write_seq = e->seq;
+    }
+  }
+}
+
+static void cc_state_init(cand_c_state_t *c) {
+  memset(c, 0, sizeof(*c));
+  state_init(&c->core);
+  c->core.mma_order_id = 123;
+  c->l2_pos_off = -1;
+  c->l2_neg_off = -1;
+  c->l2_recon_off = -1;
+}
+
+/* Every subcase re-uses the same physical VTCM, so the per-subcase counters
+ * and landmarks restart here while the event history and the L2 arena persist. */
+static void cc_begin_subcase(cand_c_state_t *c) {
+  c->sub_writes = 0;
+  c->sub_operand_writes = 0;
+  c->sub_operand_after_mma1 = 0;
+  c->sub_out_writes = 0;
+  c->sub_mmas = 0;
+  c->sub_converts = 0;
+  c->sub_l2_tiles = 0;
+  c->sub_l2_vectors = 0;
+  c->first_out_write_seq = 0;
+  c->mma1_seq = 0;
+  c->cvt1_seq = 0;
+  c->cvt2_seq = 0;
+  c->pos_save_start_seq = 0;
+  c->pos_save_done_seq = 0;
+  c->neg_save_done_seq = 0;
+  c->recon_save_seq = 0;
+  c->inplace_conflicts = 0;
+  c->inplace_subtracts = 0;
+}
+
+/* Bias sets at the candidate C offsets (same encoding as the registered set). */
+static void cc_bias_init(cand_c_state_t *c) {
+  uint8_t *b0 = c->core.vtcm.raw + HMX_B3_R2_CC_BIAS0_OFFSET;
+  uint8_t *b1 = c->core.vtcm.raw + HMX_B3_R2_CC_BIAS1_OFFSET;
+  for (int o = 0; o < T8; ++o) {
+    uint32_t lo = bias20_lo_cell(HMX_B3_R2_SCALE_BITS, HMX_B3_R2_OUT_BIAS);
+    uint32_t hi0 = bias20_hi_cell(HMX_B3_R2_SHAPE0, 0, 0);
+    uint32_t hi1 = bias20_hi_cell(HMX_B3_R2_SHAPE4, 0, 0);
+    memcpy(b0 + o * 4, &lo, 4);
+    memcpy(b0 + 128 + o * 4, &hi0, 4);
+    memcpy(b1 + o * 4, &lo, 4);
+    memcpy(b1 + 128 + o * 4, &hi1, 4);
+  }
+  cc_log_ev(c, CC_EV_BIAS_WRITE, HMX_B3_R2_CC_BIAS0_OFFSET, 512, 1);
+}
+
+static void cc_pack_operand(cand_c_state_t *c, int off, const uint16_t *src,
+                            int is_act) {
+  cc_log_ev(c, CC_EV_PACK_WRITE, off, HMX_B3_R2_TILE_BYTES, 1);
+  if (is_act) pack_act_prm((uint16_t *)(c->core.vtcm.raw + off), src);
+  else pack_wgt_prm((uint16_t *)(c->core.vtcm.raw + off), src);
+}
+
+static void cc_fill_output(cand_c_state_t *c) {
+  cc_log_ev(c, CC_EV_SENTINEL_WRITE, HMX_B3_R2_CC_OUT_OFFSET,
+            HMX_B3_R2_TILE_BYTES, 1);
+  memset(c->core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET, HMX_B3_R2_SENTINEL_BYTE,
+         HMX_B3_R2_TILE_BYTES);
+}
+
+static void cc_mma(cand_c_state_t *c, int act_off, int wgt_off, int act_id,
+                   int wgt_id) {
+  cc_log_ev(c, CC_EV_MMA_ISSUE, act_off, HMX_B3_R2_TILE_BYTES, 0);
+  c->core.act_id = act_id;
+  c->core.wgt_id = wgt_id;
+  exec_mma_packet_at(&c->core, act_off, wgt_off);
+  c->sub_mmas++;
+  if (c->sub_mmas == 1) c->mma1_seq = c->seq;
+}
+
+/* Convert + MX store into the single shared output buffer. */
+static void cc_mx_store(cand_c_state_t *c, uint32_t rs) {
+  cc_log_ev(c, CC_EV_CONVERT_ISSUE, HMX_B3_R2_CC_OUT_OFFSET,
+            HMX_B3_R2_TILE_BYTES, 0);
+  cc_log_ev(c, CC_EV_MX_STORE, HMX_B3_R2_CC_OUT_OFFSET,
+            HMX_B3_R2_TILE_BYTES, 1);
+  exec_convert_and_store_at(&c->core, rs, HMX_B3_R2_CC_OUT_OFFSET,
+                            HMX_B3_R2_CC_BIAS0_OFFSET,
+                            HMX_B3_R2_CC_BIAS1_OFFSET);
+  c->sub_converts++;
+  if (c->sub_converts == 1) c->cvt1_seq = c->seq;
+  if (c->sub_converts == 2) c->cvt2_seq = c->seq;
+}
+
+/* HVX copy of the shared buffer into an L2 tile, one 128 B vector at a time.
+ * `vectors` is normally 16; a short count models a save that has not finished. */
+static void cc_hvx_save(cand_c_state_t *c, int l2_off, int vectors) {
+  for (int v = 0; v < vectors; ++v) {
+    cc_log_ev(c, CC_EV_HVX_LOAD, HMX_B3_R2_CC_OUT_OFFSET + v * 128, 128, 0);
+    memcpy(c->l2 + l2_off + v * 128,
+           c->core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET + v * 128, 128);
+  }
+  if (vectors == HMX_B3_R2_VECTORS_PER_TILE) {
+    c->l2_tiles++;
+    c->sub_l2_tiles++;
+  }
+  c->l2_vectors += vectors;
+  c->sub_l2_vectors += vectors;
+}
+
+/* In-place reconstruction: for each 128 B vector, load the positive tile from L2,
+ * load the negative tile from the shared VTCM buffer, subtract, store back into
+ * the same VTCM bytes. `conflict_vector` < 0 is the nominal order; otherwise
+ * that vector's store is committed before its own load, so the load observes the
+ * just-stored bytes (the model of a read/write conflict, not a microarchitecture
+ * claim). */
+static void cc_hvx_recon_inplace(cand_c_state_t *c, int pos_l2_off,
+                                 int conflict_vector) {
+  c->core.count_recon_loops++;
+  for (int v = 0; v < HMX_B3_R2_VECTORS_PER_TILE; ++v) {
+    const int vt_off = HMX_B3_R2_CC_OUT_OFFSET + v * 128;
+    uint16_t *out = (uint16_t *)(c->core.vtcm.raw + vt_off);
+    const uint16_t *pos = (const uint16_t *)(c->l2 + pos_l2_off + v * 128);
+
+    if (v == conflict_vector) {
+      cc_log_ev(c, CC_EV_HVX_STORE, vt_off, 128, 1);
+      memcpy(out, pos, 128);
+      cc_log_ev(c, CC_EV_HVX_LOAD, vt_off, 128, 0);
+      for (int k = 0; k < 64; ++k) {
+        out[k] = double_to_fp16(fp16_to_double(pos[k]) - fp16_to_double(out[k]));
+      }
+      c->inplace_conflicts++;
+      continue;
+    }
+
+    cc_log_ev(c, CC_EV_HVX_LOAD, vt_off, 128, 0);
+    for (int k = 0; k < 64; ++k) {
+      double p = fp16_to_double(pos[k]);
+      double n = fp16_to_double(out[k]);
+      out[k] = double_to_fp16(p - n);
+    }
+    cc_log_ev(c, CC_EV_HVX_STORE, vt_off, 128, 1);
+    c->inplace_subtracts += 64;
+  }
+}
+
+/* Evidence harvest. The stored bytes are in pair-interleaved store crouton
+ * order, so every harvest is decoded to cell order (s*32+o) before comparison:
+ * the metrics/digest arrays are row-major, not crouton-ordered. */
+static void cc_decode_tile(const uint16_t *tile, uint16_t *dst) {
+  for (int s = 0; s < T8; ++s) {
+    for (int o = 0; o < T8; ++o) {
+      dst[s * T8 + o] = tile[hmx_b3_r2_store_u16(s, o)];
+    }
+  }
+}
+
+static void cc_harvest_from_l2(cand_c_state_t *c, int l2_off, uint16_t *dst) {
+  cc_decode_tile((const uint16_t *)(c->l2 + l2_off), dst);
+}
+
+static void cc_harvest_from_vtcm(cand_c_state_t *c, uint16_t *dst) {
+  cc_log_ev(c, CC_EV_HOST_READ, HMX_B3_R2_CC_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 0);
+  cc_decode_tile((const uint16_t *)(c->core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET),
+                 dst);
+}
+
+static void verify_cand_c_layout_static(void) {
+  const int tiles[4] = {HMX_B3_R2_CC_AHI_OFFSET, HMX_B3_R2_CC_ALO_OFFSET,
+                        HMX_B3_R2_CC_WHI_OFFSET, HMX_B3_R2_CC_WLO_OFFSET};
+
+  check_true("cc_ahi_aligned", (HMX_B3_R2_CC_AHI_OFFSET % 2048) == 0);
+  check_true("cc_alo_aligned", (HMX_B3_R2_CC_ALO_OFFSET % 2048) == 0);
+  check_true("cc_whi_aligned", (HMX_B3_R2_CC_WHI_OFFSET % 2048) == 0);
+  check_true("cc_wlo_aligned", (HMX_B3_R2_CC_WLO_OFFSET % 2048) == 0);
+  check_true("cc_out_aligned", (HMX_B3_R2_CC_OUT_OFFSET % 2048) == 0);
+  check_true("cc_bias0_aligned", (HMX_B3_R2_CC_BIAS0_OFFSET % 256) == 0);
+  check_true("cc_bias1_aligned", (HMX_B3_R2_CC_BIAS1_OFFSET % 256) == 0);
+
+  check_int("cc_used_bytes", HMX_B3_R2_CC_USED, 4 * 2048 + 2048 + 512);
+  check_int("cc_margin_bytes", HMX_B3_R2_CC_MARGIN, 1536);
+  check_true("cc_window_fits",
+             HMX_B3_R2_CC_USED + HMX_B3_R2_CC_MARGIN == HMX_B3_R2_VTCM_TOTAL);
+  check_int("cc_operand_tiles", HMX_B3_R2_CC_OPERAND_TILES, 4);
+  check_int("cc_output_tiles", HMX_B3_R2_CC_OUTPUT_TILES, 1);
+  check_int("cc_midkernel_operand_tiles", HMX_B3_R2_CC_MIDKERNEL_OPERAND_TILES, 0);
+
+  /* The shared output buffer must be disjoint from every operand tile and from
+   * the two bias sets: that is what makes the sentinel fill legal. */
+  for (int a = 0; a < 4; ++a) {
+    check_true("cc_out_disjoint_from_operand",
+               HMX_B3_R2_CC_OUT_OFFSET >= tiles[a] + 2048 ||
+                   tiles[a] >= HMX_B3_R2_CC_OUT_OFFSET + 2048);
+  }
+  check_true("cc_out_below_bias",
+             HMX_B3_R2_CC_OUT_OFFSET + 2048 <= HMX_B3_R2_CC_BIAS0_OFFSET);
+  check_true("cc_bias_last_within_window",
+             HMX_B3_R2_CC_BIAS1_OFFSET + 256 <= HMX_B3_R2_VTCM_TOTAL);
+
+  /* The four operand tiles are pairwise disjoint. */
+  for (int a = 0; a < 4; ++a) {
+    for (int b = a + 1; b < 4; ++b) {
+      check_true("cc_operands_disjoint",
+                 tiles[a] + 2048 <= tiles[b] || tiles[b] + 2048 <= tiles[a]);
+    }
+  }
+
+  /* Static copy accounting. */
+  check_int("cc_l2_clear_total", HMX_B3_R2_CC_L2_CLEAR_TOTAL,
+            HMX_B3_R2_CC_L2_CLEAR_PLAIN + HMX_B3_R2_CC_L2_CLEAR_B3);
+  check_int("cc_l2_clear_vectors", HMX_B3_R2_CC_L2_CLEAR_VECTORS,
+            HMX_B3_R2_CC_L2_CLEAR_TOTAL * HMX_B3_R2_VECTORS_PER_TILE);
+
+  printf("cand_c_layout vtcm_used=%d vtcm_total=%d margin=%d operand_tiles=%d "
+         "output_tiles=%d out_off=%d bias0=%d bias1=%d PASS\n",
+         HMX_B3_R2_CC_USED, HMX_B3_R2_VTCM_TOTAL, HMX_B3_R2_CC_MARGIN,
+         HMX_B3_R2_CC_OPERAND_TILES, HMX_B3_R2_CC_OUTPUT_TILES,
+         HMX_B3_R2_CC_OUT_OFFSET, HMX_B3_R2_CC_BIAS0_OFFSET,
+         HMX_B3_R2_CC_BIAS1_OFFSET);
+}
+
+/* L2 peak recomputed from the lifetime table, not from the layout sketch.
+ * Stage liveness (5 live tiles at the widest point under raw retention). */
+static void verify_cand_c_l2_lifetimes(int *peak_raw_out, int *peak_fold_out) {
+  /* plain_pos, plain_neg, plain_recon, b3_pos, b3_neg */
+  const int stage_live[6][5] = {
+      {1, 0, 0, 0, 0}, /* Plain pos copied out         2048 */
+      {1, 1, 0, 0, 0}, /* Plain neg evidence           4096 */
+      {1, 1, 1, 0, 0}, /* Plain recon harvested        6144 */
+      {1, 1, 1, 1, 0}, /* B3 pos copied out            8192 */
+      {1, 1, 1, 1, 1}, /* B3 neg evidence             10240 <- peak */
+      {1, 1, 1, 1, 1}  /* B3 recon read from VTCM     10240 */
+  };
+  const int fold_live[6][5] = {
+      {1, 0, 0, 0, 0}, {1, 1, 0, 0, 0}, {0, 0, 1, 0, 0},
+      {0, 0, 1, 1, 0}, {0, 0, 1, 1, 1}, {0, 0, 1, 1, 1}
+  };
+
+  int peak_raw = 0, peak_fold = 0;
+  for (int st = 0; st < 6; ++st) {
+    int raw = 0, fold = 0;
+    for (int r = 0; r < 5; ++r) {
+      raw += stage_live[st][r] ? 2048 : 0;
+      fold += fold_live[st][r] ? 2048 : 0;
+    }
+    if (raw > peak_raw) peak_raw = raw;
+    if (fold > peak_fold) peak_fold = fold;
+  }
+
+  check_int("cc_l2_peak_raw", peak_raw, HMX_B3_R2_CC_L2_PEAK_RAW_BYTES);
+  check_int("cc_l2_peak_fold", peak_fold, HMX_B3_R2_CC_L2_PEAK_FOLD_BYTES);
+  check_true("cc_l2_fits_declared_arena",
+             peak_raw <= (int)sizeof(((cand_c_state_t *)0)->l2));
+  check_true("cc_l2_fold_is_strictly_smaller", peak_fold < peak_raw);
+  check_int("cc_l2_arena_bytes", (int)sizeof(((cand_c_state_t *)0)->l2), 10240);
+
+  printf("cand_c_l2_lifetimes peak_raw=%d peak_fold=%d arena=%d tiles_raw=5 "
+         "tiles_fold=3 policy=raw_retention PASS\n",
+         peak_raw, peak_fold, (int)sizeof(((cand_c_state_t *)0)->l2));
+  if (peak_raw_out) *peak_raw_out = peak_raw;
+  if (peak_fold_out) *peak_fold_out = peak_fold;
+}
+
+/* Plain + R2 under candidate C: 1 MMA, 2 converts, 2 saves, 1 in-place recon,
+ * then the three raw tiles are copied out to L2 for the evidence digests. */
+static void run_cand_c_plain(cand_c_state_t *c, const b3_r2_ops_t *ops,
+                             hmx_b3_r2_fault_t fault) {
+  cc_begin_subcase(c);
+  c->l2_pos_off = HMX_B3_R2_CC_L2_PLAIN_POS_OFFSET;
+  c->l2_neg_off = HMX_B3_R2_CC_L2_PLAIN_NEG_OFFSET;
+  c->l2_recon_off = HMX_B3_R2_CC_L2_PLAIN_RECON_OFFSET;
+
+  cc_pack_operand(c, HMX_B3_R2_CC_AHI_OFFSET, ops->a_plain, 1);
+  cc_pack_operand(c, HMX_B3_R2_CC_WHI_OFFSET, ops->w_plain, 0);
+  cc_bias_init(c);
+
+  exec_mxclracc(&c->core);
+  cc_mma(c, HMX_B3_R2_CC_AHI_OFFSET, HMX_B3_R2_CC_WHI_OFFSET,
+         HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI);
+
+  cc_fill_output(c);
+  cc_mx_store(c, HMX_B3_R2_RS_CVT1);
+  c->pos_save_start_seq = c->seq;
+  cc_hvx_save(c, c->l2_pos_off, HMX_B3_R2_VECTORS_PER_TILE);
+  c->pos_save_done_seq = c->seq;
+
+  cc_mx_store(c, HMX_B3_R2_RS_CVT2);
+  cc_hvx_save(c, c->l2_neg_off, HMX_B3_R2_VECTORS_PER_TILE);
+  c->neg_save_done_seq = c->seq;
+
+  cc_hvx_recon_inplace(c, c->l2_pos_off, -1);
+
+  /* The shared buffer is reused by the B3 subcase, so all three raw tiles have
+   * to leave VTCM here. Deferring the recon copy is the registered fault. */
+  if (fault == HMX_FAULT_CC_PLAIN_CLOBBERED) {
+    c->plain_evidence_deferred = 1;
+  } else {
+    cc_hvx_save(c, c->l2_recon_off, HMX_B3_R2_VECTORS_PER_TILE);
+    c->recon_save_seq = c->seq;
+  }
+
+  cc_harvest_from_l2(c, c->l2_pos_off, c->pos);
+  cc_harvest_from_l2(c, c->l2_neg_off, c->neg);
+  if (!c->plain_evidence_deferred) cc_harvest_from_l2(c, c->l2_recon_off, c->recon);
+}
+
+/* B3 + R2 under candidate C. No operand region is written after the prologue;
+ * the shared output buffer is written pos -> neg -> recon in place. */
+static void run_cand_c_b3(cand_c_state_t *c, const b3_r2_ops_t *ops,
+                          hmx_b3_r2_fault_t fault) {
+  cc_begin_subcase(c);
+  c->l2_pos_off = HMX_B3_R2_CC_L2_CUR_POS_OFFSET;
+  c->l2_neg_off = HMX_B3_R2_CC_L2_CUR_NEG_OFFSET;
+  c->l2_recon_off = -1; /* the recon stays in VTCM and is read back over RPC */
+
+  cc_pack_operand(c, HMX_B3_R2_CC_AHI_OFFSET, ops->ahi, 1);
+  cc_pack_operand(c, HMX_B3_R2_CC_ALO_OFFSET, ops->alo, 1);
+  cc_pack_operand(c, HMX_B3_R2_CC_WHI_OFFSET, ops->whi, 0);
+  cc_pack_operand(c, HMX_B3_R2_CC_WLO_OFFSET, ops->wlo, 0);
+  cc_bias_init(c);
+
+  const uint32_t crc_ahi =
+      fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_AHI_OFFSET, 2048);
+  const uint32_t crc_alo =
+      fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_ALO_OFFSET, 2048);
+  const uint32_t crc_whi =
+      fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_WHI_OFFSET, 2048);
+  const uint32_t crc_wlo =
+      fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_WLO_OFFSET, 2048);
+
+  exec_mxclracc(&c->core);
+  cc_mma(c, HMX_B3_R2_CC_AHI_OFFSET, HMX_B3_R2_CC_WHI_OFFSET,
+         HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI);
+  cc_mma(c, HMX_B3_R2_CC_AHI_OFFSET, HMX_B3_R2_CC_WLO_OFFSET,
+         HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO);
+  cc_mma(c, HMX_B3_R2_CC_ALO_OFFSET, HMX_B3_R2_CC_WHI_OFFSET,
+         HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI);
+
+  /* Operand immutability across the whole MMA phase (independent of the log). */
+  if (fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_AHI_OFFSET, 2048) != crc_ahi) {
+    c->core.pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_ALO_OFFSET, 2048) != crc_alo) {
+    c->core.pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_WHI_OFFSET, 2048) != crc_whi) {
+    c->core.pr_operand_mutated_during_mma++;
+  }
+  if (fnv1a32(c->core.vtcm.raw + HMX_B3_R2_CC_WLO_OFFSET, 2048) != crc_wlo) {
+    c->core.pr_operand_mutated_during_mma++;
+  }
+
+  cc_fill_output(c);
+  cc_mx_store(c, HMX_B3_R2_RS_CVT1);
+  c->pos_save_start_seq = c->seq;
+
+  if (fault == HMX_FAULT_CC_POS_SAVE_MISSING) {
+    c->pos_save_missing = 1;
+  } else if (fault == HMX_FAULT_CC_RESTORE_BEFORE_SAVE) {
+    /* half the positive tile leaves VTCM, then Convert #2 overwrites OUT and
+     * the second half of the "positive" tile is filled with negative bytes */
+    cc_hvx_save(c, c->l2_pos_off, HMX_B3_R2_VECTORS_PER_TILE / 2);
+    c->restore_before_save = 1;
+    cc_mx_store(c, HMX_B3_R2_RS_CVT2);
+    cc_hvx_save(c, c->l2_pos_off + (HMX_B3_R2_VECTORS_PER_TILE / 2) * 128,
+                HMX_B3_R2_VECTORS_PER_TILE / 2);
+    c->pos_save_done_seq = c->seq;
+  } else {
+    cc_hvx_save(c, c->l2_pos_off, HMX_B3_R2_VECTORS_PER_TILE);
+    c->pos_save_done_seq = c->seq;
+  }
+
+  if (fault != HMX_FAULT_CC_RESTORE_BEFORE_SAVE) {
+    cc_mx_store(c, HMX_B3_R2_RS_CVT2);
+  }
+
+  if (fault == HMX_FAULT_CC_NEG_EVIDENCE_LOST) {
+    c->neg_evidence_lost = 1;
+  } else {
+    cc_hvx_save(c, c->l2_neg_off, HMX_B3_R2_VECTORS_PER_TILE);
+    c->neg_save_done_seq = c->seq;
+  }
+
+  cc_hvx_recon_inplace(c, c->l2_pos_off,
+                       (fault == HMX_FAULT_CC_INPLACE_RW_CONFLICT) ? 3 : -1);
+
+  /* Evidence: pos/neg from L2, recon from the VTCM shared buffer. */
+  cc_harvest_from_l2(c, c->l2_pos_off, c->pos);
+  cc_harvest_from_l2(c, c->l2_neg_off, c->neg);
+  cc_harvest_from_vtcm(c, c->recon);
+  c->recon_from_vtcm = 1;
+}
+
+static int cc_count_cell_mismatches(const uint16_t *got, const uint16_t *want,
+                                    const char *tag, int fail_closed) {
+  int diff = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (got[i] != want[i]) diff++;
+  }
+  if (fail_closed) check_int(tag, diff, 0);
+  return diff;
+}
+
+/* Per-subcase facts, captured so both subcases can share one physical VTCM
+ * while their write accounting stays separable. */
+typedef struct cc_subcase_facts {
+  int writes;
+  int operand_writes;
+  int operand_after_mma1;
+  int out_writes;
+  int inplace_subtracts;
+  int inplace_conflicts;
+  int l2_tiles;
+  int l2_vectors;
+  int cvt1_seq;
+  int cvt2_seq;
+  int pos_save_start_seq;
+  int pos_save_done_seq;
+  int neg_save_done_seq;
+  int recon_save_seq;
+  int first_out_write_seq;
+} cc_subcase_facts_t;
+
+static void cc_snapshot(const cand_c_state_t *c, cc_subcase_facts_t *f) {
+  f->writes = c->sub_writes;
+  f->operand_writes = c->sub_operand_writes;
+  f->operand_after_mma1 = c->sub_operand_after_mma1;
+  f->out_writes = c->sub_out_writes;
+  f->inplace_subtracts = c->inplace_subtracts;
+  f->inplace_conflicts = c->inplace_conflicts;
+  f->l2_tiles = c->sub_l2_tiles;
+  f->l2_vectors = c->sub_l2_vectors;
+  f->cvt1_seq = c->cvt1_seq;
+  f->cvt2_seq = c->cvt2_seq;
+  f->pos_save_start_seq = c->pos_save_start_seq;
+  f->pos_save_done_seq = c->pos_save_done_seq;
+  f->neg_save_done_seq = c->neg_save_done_seq;
+  f->recon_save_seq = c->recon_save_seq;
+  f->first_out_write_seq = c->first_out_write_seq;
+}
+
+/* Contract assertions that only the nominal candidate C run can satisfy. */
+static void cand_c_assert_nominal_contract(const cand_c_state_t *c,
+                                           const cc_subcase_facts_t *f,
+                                           const char *phase,
+                                           int expected_operand_packs) {
+  char tag[64];
+
+  /* The only writes that may touch an operand region are the prologue packs. */
+  snprintf(tag, sizeof(tag), "%s_operand_writes_are_prologue_packs_only", phase);
+  check_int(tag, f->operand_writes, expected_operand_packs);
+  snprintf(tag, sizeof(tag), "%s_no_operand_write_after_mma1", phase);
+  check_int(tag, f->operand_after_mma1, 0);
+  snprintf(tag, sizeof(tag), "%s_no_event_overflow", phase);
+  check_int(tag, c->ev_overflow, 0);
+  snprintf(tag, sizeof(tag), "%s_no_operand_mutation", phase);
+  check_int(tag, c->core.pr_operand_mutated_during_mma, 0);
+  snprintf(tag, sizeof(tag), "%s_midkernel_operand_tiles", phase);
+  check_int(tag, c->core.stream_tiles, 0);
+  snprintf(tag, sizeof(tag), "%s_subcase_mmas", phase);
+  check_int(tag, c->sub_mmas, (expected_operand_packs == 2) ? 1 : 3);
+  snprintf(tag, sizeof(tag), "%s_subcase_converts", phase);
+  check_int(tag, c->sub_converts, 2);
+
+  /* Program order of the new dependency chain:
+   * MX store -> HVX save -> MX store -> HVX in-place recon. */
+  snprintf(tag, sizeof(tag), "%s_c1_cvt1_store_then_pos_save", phase);
+  check_true(tag, f->cvt1_seq > 0 && f->cvt1_seq <= f->pos_save_start_seq);
+  snprintf(tag, sizeof(tag), "%s_c2_pos_save_before_cvt2", phase);
+  check_true(tag, f->pos_save_done_seq > 0 &&
+                      f->pos_save_done_seq < f->cvt2_seq);
+  snprintf(tag, sizeof(tag), "%s_c3_cvt2_before_neg_save", phase);
+  check_true(tag, f->cvt2_seq < f->neg_save_done_seq);
+
+  snprintf(tag, sizeof(tag), "%s_inplace_vectors", phase);
+  check_int(tag, f->inplace_subtracts, T8_CELLS);
+  snprintf(tag, sizeof(tag), "%s_inplace_conflicts", phase);
+  check_int(tag, f->inplace_conflicts, 0);
+  snprintf(tag, sizeof(tag), "%s_neg_evidence_saved", phase);
+  check_int(tag, c->neg_evidence_lost, 0);
+  snprintf(tag, sizeof(tag), "%s_pos_evidence_saved", phase);
+  check_int(tag, c->pos_save_missing, 0);
+}
+
+/* Full candidate C evaluation: layout, L2 lifetimes, 1,024-cell parity against
+ * the registered streaming model, preserved digests, and the dependency table. */
+static void run_cand_c_evaluation(void) {
+  printf("===== Candidate C: single shared output buffer (CPU-only) =====\n");
+
+  verify_cand_c_layout_static();
+  verify_cand_c_l2_lifetimes(NULL, NULL);
+
+  /* One physical VTCM for both subcases: the shared output buffer is the same
+   * bytes in the Plain and the B3 phase, exactly as the kernel would run. */
+  static cand_c_state_t shared;
+  static uint16_t plain_pos[T8_CELLS], plain_neg[T8_CELLS],
+      plain_recon[T8_CELLS];
+  static uint8_t plain_out_snapshot[HMX_B3_R2_TILE_BYTES];
+
+  cc_state_init(&shared);
+  run_cand_c_plain(&shared, &g_ops_deploy, HMX_FAULT_NONE);
+  cc_subcase_facts_t pf;
+  cc_snapshot(&shared, &pf);
+  memcpy(plain_pos, shared.pos, sizeof(plain_pos));
+  memcpy(plain_neg, shared.neg, sizeof(plain_neg));
+  memcpy(plain_recon, shared.recon, sizeof(plain_recon));
+  memcpy(plain_out_snapshot, shared.core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET,
+         HMX_B3_R2_TILE_BYTES);
+  const uint32_t plain_l2_recon_crc =
+      fnv1a32(shared.l2 + HMX_B3_R2_CC_L2_PLAIN_RECON_OFFSET,
+              HMX_B3_R2_TILE_BYTES);
+  cand_c_assert_nominal_contract(&shared, &pf, "cc_plain", 2); /* Ahi, Whi */
+
+  run_cand_c_b3(&shared, &g_ops_deploy, HMX_FAULT_NONE);
+  cc_subcase_facts_t bf;
+  cc_snapshot(&shared, &bf);
+  cand_c_assert_nominal_contract(&shared, &bf, "cc_b3", 4); /* Ahi, Alo, Whi, Wlo */
+
+  /* C5: the Plain evidence left OUT before the B3 subcase wrote OUT at all
+   * (its sentinel fill is the first B3 write into the buffer). */
+  check_true("cc_c5_plain_save_before_b3_output_phase",
+             pf.recon_save_seq > 0 &&
+                 pf.recon_save_seq < bf.first_out_write_seq);
+  /* The save is load bearing: the B3 output phase really does destroy the
+   * bytes that were sitting in OUT, and the L2 copy really does survive it. */
+  check_true("cc_b3_output_phase_destroys_plain_bytes_in_vtcm",
+             memcmp(shared.core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET,
+                    plain_out_snapshot, HMX_B3_R2_TILE_BYTES) != 0);
+  check_true("cc_plain_l2_evidence_survives_b3",
+             fnv1a32(shared.l2 + HMX_B3_R2_CC_L2_PLAIN_RECON_OFFSET,
+                     HMX_B3_R2_TILE_BYTES) == plain_l2_recon_crc);
+  check_true("cc_plain_evidence_not_deferred",
+             !shared.plain_evidence_deferred);
+
+  /* 1,024-cell parity for all six arrays. */
+  int d_pos_p = cc_count_cell_mismatches(plain_pos, g_m_plain.raw_pos,
+                                         "cc_plain_pos_cells", 1);
+  int d_neg_p = cc_count_cell_mismatches(plain_neg, g_m_plain.raw_neg,
+                                         "cc_plain_neg_cells", 1);
+  int d_rec_p = cc_count_cell_mismatches(plain_recon, g_m_plain.raw_recon,
+                                         "cc_plain_recon_cells", 1);
+  int d_pos_b = cc_count_cell_mismatches(shared.pos, g_m_b3.raw_pos,
+                                         "cc_b3_pos_cells", 1);
+  int d_neg_b = cc_count_cell_mismatches(shared.neg, g_m_b3.raw_neg,
+                                         "cc_b3_neg_cells", 1);
+  int d_rec_b = cc_count_cell_mismatches(shared.recon, g_m_b3.raw_recon,
+                                         "cc_b3_recon_cells", 1);
+
+  /* The six registered digests must not move: the two output digests are
+   * recomputed from the candidate C bits and compared with the pinned values. */
+  static uint8_t plain_buf[T8_CELLS * 2];
+  static uint8_t b3_buf[T8_CELLS * 2];
+  char sha_plain[65], sha_b3[65];
+  put_u16_le(plain_buf, plain_recon, T8_CELLS);
+  put_u16_le(b3_buf, shared.recon, T8_CELLS);
+  sha256_hex(plain_buf, sizeof(plain_buf), sha_plain);
+  sha256_hex(b3_buf, sizeof(b3_buf), sha_b3);
+  check_str("cc_sha_plain_expected_bits", sha_plain, EXPECT_SHA_PLAIN_BITS);
+  check_str("cc_sha_b3_expected_bits", sha_b3, EXPECT_SHA_B3_BITS);
+
+  printf("cand_c_bits plain_pos_diff=%d plain_neg_diff=%d plain_recon_diff=%d "
+         "b3_pos_diff=%d b3_neg_diff=%d b3_recon_diff=%d cells=%d\n",
+         d_pos_p, d_neg_p, d_rec_p, d_pos_b, d_neg_b, d_rec_b, T8_CELLS);
+  printf("cand_c_sha256 plain=%s b3=%s registered_unchanged=%d\n", sha_plain,
+         sha_b3,
+         (strcmp(sha_plain, EXPECT_SHA_PLAIN_BITS) == 0 &&
+          strcmp(sha_b3, EXPECT_SHA_B3_BITS) == 0));
+
+  /* Extra pinned evidence for the future C2 device pre-registration: the
+   * positive and negative raw arrays of the one-MMA Plain subcase are exactly
+   * the two buffers a minimal C2 experiment observes separately, so their
+   * digests are registered here rather than left implicit in the recon bits.
+   * `discriminating_cells` is the classifier's denominator: cells where the
+   * positive and negative payloads actually differ (the fixture guarantees at
+   * most one nonzero side per cell, so equal cells carry no C1/C2 information). */
+  static uint8_t pos_buf[T8_CELLS * 2];
+  static uint8_t neg_buf[T8_CELLS * 2];
+  char sha_pos[65], sha_neg[65];
+  put_u16_le(pos_buf, plain_pos, T8_CELLS);
+  put_u16_le(neg_buf, plain_neg, T8_CELLS);
+  sha256_hex(pos_buf, sizeof(pos_buf), sha_pos);
+  sha256_hex(neg_buf, sizeof(neg_buf), sha_neg);
+  int discriminating = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (plain_pos[i] != plain_neg[i]) discriminating++;
+  }
+  printf("cand_c_sha256_plain_pos_bits=%s\n", sha_pos);
+  printf("cand_c_sha256_plain_neg_bits=%s\n", sha_neg);
+  printf("cand_c_plain_payload discriminating_cells=%d non_discriminating=%d "
+         "cells=%d\n",
+         discriminating, T8_CELLS - discriminating, T8_CELLS);
+  check_int("cand_c_plain_discriminating_cells", discriminating,
+            CAND_C_PLAIN_DISCRIMINATING_CELLS);
+  check_str("cand_c_sha_plain_pos_bits", sha_pos, CAND_C_SHA_PLAIN_POS_BITS);
+  check_str("cand_c_sha_plain_neg_bits", sha_neg, CAND_C_SHA_PLAIN_NEG_BITS);
+
+  /* Write-event census: what actually happened in VTCM. */
+  check_true("cc_b3_output_writes_exist", bf.out_writes > 0);
+  check_int("cc_b3_vtcm_writes_are_operand_plus_output", bf.writes,
+            4 /* packs */ + 1 /* bias */ + 1 /* sentinel */ + 2 /* MX stores */ +
+                16 /* in-place vector stores */);
+  check_int("cc_plain_vtcm_writes", pf.writes, 2 + 1 + 1 + 2 + 16);
+  check_int("cc_b3_out_writes", bf.out_writes, 1 + 2 + 16);
+
+  printf("cand_c_write_census b3_vtcm_writes=%d b3_operand_writes=%d "
+         "b3_operand_writes_after_mma1=%d b3_output_region_writes=%d "
+         "plain_operand_writes=%d whole_kernel_operand_writes=%d "
+         "vtcm_shared_by_both_subcases=1\n",
+         bf.writes, bf.operand_writes, bf.operand_after_mma1, bf.out_writes,
+         pf.operand_writes, pf.operand_writes + bf.operand_writes);
+
+  /* Dependency table: what Mode 45 supports and what it does not. */
+  static const struct {
+    hmx_b3_r2_cc_sync_t id;
+    const char *name;
+    int cls;
+  } deps[5] = {
+      {HMX_CC_SYNC_C1, "C1_convert1_store_then_hvx_load_out",
+       HMX_CC_SYNC_IMPL_SUPPORTED},
+      {HMX_CC_SYNC_C2, "C2_hvx_pos_save_then_convert2_store",
+       HMX_CC_SYNC_DEVICE_ONLY},
+      {HMX_CC_SYNC_C3, "C3_convert2_store_then_hvx_load_out",
+       HMX_CC_SYNC_IMPL_SUPPORTED},
+      {HMX_CC_SYNC_C4, "C4_inplace_load_before_store",
+       HMX_CC_SYNC_PROGRAM_ORDER},
+      {HMX_CC_SYNC_C5, "C5_plain_evidence_before_convert1",
+       HMX_CC_SYNC_PROGRAM_ORDER}
+  };
+  int device_only = 0;
+  for (int i = 0; i < 5; ++i) {
+    const char *cls = "UNKNOWN";
+    if (deps[i].cls == HMX_CC_SYNC_IMPL_SUPPORTED) cls = "IMPLEMENTATION_SUPPORTED";
+    else if (deps[i].cls == HMX_CC_SYNC_DEVICE_ONLY) cls = "DEVICE_ONLY";
+    else if (deps[i].cls == HMX_CC_SYNC_PROGRAM_ORDER) cls = "PROGRAM_ORDER";
+    if (deps[i].cls == HMX_CC_SYNC_DEVICE_ONLY) device_only++;
+    printf("cand_c_sync %s class=%s\n", deps[i].name, cls);
+  }
+  check_int("cc_device_only_dependencies", device_only, 1);
+  check_true("cc_c2_is_the_only_hardware_question",
+             deps[1].id == HMX_CC_SYNC_C2 &&
+                 deps[1].cls == HMX_CC_SYNC_DEVICE_ONLY);
+
+  /* Three-way design comparison (static facts only). */
+  printf("design_compare design=streaming operator_overwrite_between_mma=yes "
+         "final_operand_reuse=yes midkernel_operand_tiles=%d l2_staging=%d "
+         "unproven=D1,D2,D3\n",
+         HMX_B3_R2_STREAM_TILES_MIDKERNEL, HMX_B3_R2_STAGE_TOTAL);
+  printf("design_compare design=candidate_b operator_overwrite_between_mma=no "
+         "final_operand_reuse=yes midkernel_operand_tiles=%d l2_staging=%d "
+         "unproven=D8\n",
+         HMX_B3_R2_PR_MIDKERNEL_TILES, HMX_B3_R2_PR_L2_SAVE_BYTES);
+  printf("design_compare design=candidate_c operator_overwrite_between_mma=no "
+         "final_operand_reuse=no midkernel_operand_tiles=%d l2_staging=%d "
+         "l2_copies=%d unproven=C2\n",
+         HMX_B3_R2_CC_MIDKERNEL_OPERAND_TILES, HMX_B3_R2_CC_L2_PEAK_RAW_BYTES,
+         HMX_B3_R2_CC_L2_CLEAR_TOTAL);
+  printf("cand_c_copy_static tiles=%d vectors=%d bytes=%d timing_claimed=none\n",
+         HMX_B3_R2_CC_L2_CLEAR_TOTAL, HMX_B3_R2_CC_L2_CLEAR_VECTORS,
+         HMX_B3_R2_CC_L2_CLEAR_TOTAL * 2048);
+
+  check_int("cc_b3_l2_tiles_copied", bf.l2_tiles, HMX_B3_R2_CC_L2_CLEAR_B3);
+  check_int("cc_plain_l2_tiles_copied", pf.l2_tiles,
+            HMX_B3_R2_CC_L2_CLEAR_PLAIN);
+  check_int("cc_plain_l2_vectors", pf.l2_vectors,
+            HMX_B3_R2_CC_L2_CLEAR_PLAIN * HMX_B3_R2_VECTORS_PER_TILE);
+  check_int("cc_b3_l2_vectors", bf.l2_vectors,
+            HMX_B3_R2_CC_L2_CLEAR_B3 * HMX_B3_R2_VECTORS_PER_TILE);
+  check_int("cc_l2_tiles_total", shared.l2_tiles,
+            HMX_B3_R2_CC_L2_CLEAR_TOTAL);
+  check_int("cc_l2_vectors_total", shared.l2_vectors,
+            HMX_B3_R2_CC_L2_CLEAR_VECTORS);
+
+  check_true("cc_not_registered", HMX_B3_R2_CC_REGISTERED == 0);
+  printf("cand_c_verdict=%s registered=%d priority=%s device_gate=OPEN\n",
+         HMX_B3_R2_CC_STATUS, HMX_B3_R2_CC_REGISTERED,
+         HMX_B3_R2_CC_PRIORITY_NOTE);
+}
+
+/* Candidate C fault battery (5 models). Detection must come from the preserved
+ * bits and the recorded events, not only from a flag the fault sets itself. */
+static int cand_c_fault_detected(hmx_b3_r2_fault_t fault) {
+  static cand_c_state_t plain, b3;
+  int detected = 0;
+
+  if (fault == HMX_FAULT_CC_PLAIN_CLOBBERED) {
+    cc_state_init(&plain);
+    run_cand_c_plain(&plain, &g_ops_deploy, fault);
+    /* The deferred copy happens after the shared buffer has been rewritten.
+     * Both subcases use the same physical VTCM, so the B3 convert's bytes are
+     * what the late copy would read. */
+    cc_state_init(&b3);
+    run_cand_c_b3(&b3, &g_ops_deploy, HMX_FAULT_NONE);
+    memcpy(plain.core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET,
+           b3.core.vtcm.raw + HMX_B3_R2_CC_OUT_OFFSET, HMX_B3_R2_TILE_BYTES);
+    cc_hvx_save(&plain, plain.l2_recon_off, HMX_B3_R2_VECTORS_PER_TILE);
+    cc_harvest_from_l2(&plain, plain.l2_recon_off, plain.recon);
+    int diff = cc_count_cell_mismatches(plain.recon, g_m_plain.raw_recon,
+                                        "cc_fault_plain_recon", 0);
+    if (diff > 0) detected = 1;
+    if (plain.plain_evidence_deferred) detected = 1;
+    printf("cc_fault_detail=%s plain_recon_cells_diff=%d deferred=%d\n",
+           hmx_b3_r2_fault_name(fault), diff, plain.plain_evidence_deferred);
+    return detected;
+  }
+
+  cc_state_init(&b3);
+  run_cand_c_b3(&b3, &g_ops_deploy, fault);
+
+  int d_rec = cc_count_cell_mismatches(b3.recon, g_m_b3.raw_recon,
+                                       "cc_fault_recon", 0);
+  int d_neg = cc_count_cell_mismatches(b3.neg, g_m_b3.raw_neg,
+                                       "cc_fault_neg", 0);
+  int d_pos = cc_count_cell_mismatches(b3.pos, g_m_b3.raw_pos,
+                                       "cc_fault_pos", 0);
+
+  if (d_rec > 0) detected = 1;
+  if (d_neg > 0) detected = 1;
+  if (d_pos > 0) detected = 1;
+  if (b3.core.pr_operand_mutated_during_mma > 0) detected = 1;
+  if (b3.sub_operand_after_mma1 > 0) detected = 1;
+  if (b3.ev_overflow > 0) detected = 1;
+  if (b3.pos_save_missing || b3.restore_before_save || b3.neg_evidence_lost ||
+      b3.inplace_conflicts > 0) {
+    detected = 1;
+  }
+  /* A finished save must precede the second MX store; a violation is itself a
+   * contract failure even if the bits happened to survive. */
+  if (b3.restore_before_save && b3.pos_save_done_seq > b3.cvt2_seq) detected = 1;
+
+  printf("cc_fault_detail=%s recon_diff=%d neg_diff=%d pos_diff=%d conflicts=%d "
+         "pos_missing=%d restore_before_save=%d neg_lost=%d\n",
+         hmx_b3_r2_fault_name(fault), d_rec, d_neg, d_pos, b3.inplace_conflicts,
+         b3.pos_save_missing, b3.restore_before_save, b3.neg_evidence_lost);
+  return detected;
+}
+
 /* ---------------- Main Entry Point ---------------- */
 
 int main(void) {
@@ -1995,6 +2906,7 @@ int main(void) {
   run_full_tile_verification();
   verify_phase_reused_layout_static();
   run_phase_reused_crosscheck();
+  run_cand_c_evaluation();
   run_split_provenance_explanation();
   run_fp32_input_condition();
   run_fault_injection_tests();
