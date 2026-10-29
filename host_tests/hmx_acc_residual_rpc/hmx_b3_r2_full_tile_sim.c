@@ -1775,9 +1775,11 @@ static void run_fp32_input_condition(void) {
 
 /* Candidate C fault runner (defined with the candidate C model below). */
 static int cand_c_fault_detected(hmx_b3_r2_fault_t fault);
+/* C2 minimal-experiment pre-registration runner (defined at the end of the file). */
+static int c2_fault_detected(hmx_b3_r2_fault_t fault);
 
 static void run_fault_injection_tests(void) {
-  printf("===== Running 22 Fault Injection Tests =====\n");
+  printf("===== Running 27 Fault Injection Tests =====\n");
 
   static const struct {
     hmx_b3_r2_fault_t fault;
@@ -1806,7 +1808,13 @@ static void run_fault_injection_tests(void) {
     {HMX_FAULT_CC_RESTORE_BEFORE_SAVE, "CC: Convert #2 issued before the positive save finished"},
     {HMX_FAULT_CC_NEG_EVIDENCE_LOST,   "CC: negative raw bits lost to the in-place recon"},
     {HMX_FAULT_CC_INPLACE_RW_CONFLICT, "CC: in-place vector stored before its own neg load"},
-    {HMX_FAULT_CC_PLAIN_CLOBBERED,     "CC: Plain evidence harvested from the reused buffer"}
+    {HMX_FAULT_CC_PLAIN_CLOBBERED,     "CC: Plain evidence harvested from the reused buffer"},
+    /* C2 minimal experiment (pre-registration revision 2). */
+    {HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP, "C2: guard_lo fill lands inside the W tile"},
+    {HMX_FAULT_C2_COPY_PARTIAL,            "C2: only half of X reaches the positive tile P"},
+    {HMX_FAULT_C2_MIXED_SIGNATURE,         "C2: pre-Store-#1 and post-Store-#2 cells mixed"},
+    {HMX_FAULT_C2_FTZ_ZERO_LOSS,           "C2: FTZ zero on a payload cell read as a C2 signature"},
+    {HMX_FAULT_C2_L2_GUARD_OVERRUN,        "C2: copy destination runs one vector past P into the L2 P guard"}
   };
 
   int total_faults = (int)(sizeof(faults) / sizeof(faults[0]));
@@ -1816,6 +1824,21 @@ static void run_fault_injection_tests(void) {
   compute_reference_direct(&g_ops_deploy, plain_ref, b3_ref);
 
   for (int f = 0; f < total_faults; ++f) {
+    /* C2 pre-registration faults run the 1-MMA minimal-experiment model. */
+    if (faults[f].fault >= HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP) {
+      int c2_detected = c2_fault_detected(faults[f].fault);
+      check_true("c2_fault_detected", c2_detected);
+      if (c2_detected) {
+        detected_faults++;
+        printf("ok   fault %2d [%-32s]: DETECTED (fail-closed)\n",
+               (int)faults[f].fault, faults[f].desc);
+      } else {
+        printf("FAIL fault %2d [%-32s]: NOT DETECTED!\n",
+               (int)faults[f].fault, faults[f].desc);
+      }
+      continue;
+    }
+
     /* Candidate C faults run the single-shared-output-buffer model. */
     if (faults[f].fault >= HMX_FAULT_CC_POS_SAVE_MISSING) {
       int cc_detected = cand_c_fault_detected(faults[f].fault);
@@ -2898,6 +2921,950 @@ static int cand_c_fault_detected(hmx_b3_r2_fault_t fault) {
   return detected;
 }
 
+/* ---------------- Candidate C: C2 minimal experiment (revision 2) ----------------
+ *
+ * CPU model of the single pre-registered C2 experiment
+ * (docs/hmx-v81-cand-c-c2-device-prereg.md): 1 MMA, 1 operand pair, 1 output
+ * buffer X written twice by HMX with one HVX read in between. Nothing here runs
+ * on a device. The point of the model is that the registration's memory map and
+ * its decision procedure are executable, so a broken map (revision 1) and a
+ * mis-attributed observation are caught before any hardware time is requested.
+ */
+
+enum {
+  C2_R_ACT = 0,
+  C2_R_WGT,
+  C2_R_GUARD_LO,
+  C2_R_X,
+  C2_R_GUARD_HI,
+  C2_R_BIAS0,
+  C2_R_BIAS1,
+  C2_R_COUNT
+};
+
+static const char *c2_class_name(hmx_c2_class_t cls) {
+  switch (cls) {
+    case HMX_C2_CLASS_CONTRACT_FAILED: return "C2_PREREG_CONTRACT_FAILED";
+    case HMX_C2_CLASS_STORE2_PATH_BROKEN: return "C2_STORE2_PATH_BROKEN";
+    case HMX_C2_CLASS_COPY_NOT_EXECUTED: return "C2_COPY_NOT_EXECUTED";
+    case HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS: return "C2_SUBNORMAL_OR_ZERO_LOSS";
+    case HMX_C2_CLASS_MIXED_SIGNATURE: return "C2_CAUSE_INCONCLUSIVE";
+    case HMX_C2_CLASS_C1_SIGNATURE: return "C1_STORE_VISIBILITY_SUSPECT";
+    case HMX_C2_CLASS_C2_SIGNATURE: return "C2_ORDERING_VIOLATED";
+    case HMX_C2_CLASS_CAUSE_INCONCLUSIVE: return "C2_CAUSE_INCONCLUSIVE";
+    case HMX_C2_CLASS_SUPPORTED: return "C2_MINIMAL_SEQUENCE_SUPPORTED";
+    default: return "C2_UNCLASSIFIED";
+  }
+}
+
+/* Label contract (audit 2026-10-30). C2_MINIMAL_SEQUENCE_SUPPORTED is a
+ * DEVICE outcome: reserved for a run that executed the registered sequence on
+ * hardware and passed every contract row. The CPU model's nominal outcome is
+ * rendered as C2_CPU_NOMINAL_MATCH, and every CPU-side evaluation of a device
+ * label (classifier controls, fault injection) is displayed with an explicit
+ * simulated / fault_injected tag. No amount of CPU-only testing can promote
+ * anything to the device label. */
+#define HMX_C2_DEVICE_SUPPORTED_LABEL "C2_MINIMAL_SEQUENCE_SUPPORTED"
+#define HMX_C2_CPU_NOMINAL_LABEL "C2_CPU_NOMINAL_MATCH"
+
+static void c2_cpu_label(hmx_c2_class_t cls, const char *context, char *out,
+                         size_t cap) {
+  if (cls == HMX_C2_CLASS_SUPPORTED) {
+    snprintf(out, cap, "%s", HMX_C2_CPU_NOMINAL_LABEL);
+  } else {
+    snprintf(out, cap, "%s(%s)", c2_class_name(cls), context);
+  }
+}
+
+typedef struct {
+  int off[C2_R_COUNT];
+  int size[C2_R_COUNT];
+  int used;
+  int rev;
+} c2_layout_t;
+
+static c2_layout_t c2_layout_rev(int rev) {
+  c2_layout_t l;
+  memset(&l, 0, sizeof(l));
+  l.rev = rev;
+  for (int r = 0; r < C2_R_COUNT; ++r) {
+    int guard = (r == C2_R_GUARD_LO || r == C2_R_GUARD_HI);
+    int bias = (r == C2_R_BIAS0 || r == C2_R_BIAS1);
+    l.size[r] = guard ? HMX_B3_R2_C2_GUARD_BYTES : bias ? 256 : HMX_B3_R2_TILE_BYTES;
+  }
+  if (rev == 1) {
+    l.off[C2_R_ACT] = 0;
+    l.off[C2_R_WGT] = 2048;
+    l.off[C2_R_GUARD_LO] = HMX_B3_R2_C2_V1_GUARD_LO_OFFSET;
+    l.off[C2_R_X] = HMX_B3_R2_C2_V1_X_OFFSET;
+    l.off[C2_R_GUARD_HI] = HMX_B3_R2_C2_V1_GUARD_HI_OFFSET;
+    l.off[C2_R_BIAS0] = HMX_B3_R2_C2_V1_BIAS0_OFFSET;
+    l.off[C2_R_BIAS1] = HMX_B3_R2_C2_V1_BIAS1_OFFSET;
+    l.used = HMX_B3_R2_C2_V1_USED;
+  } else {
+    l.off[C2_R_ACT] = HMX_B3_R2_C2_ACT_OFFSET;
+    l.off[C2_R_WGT] = HMX_B3_R2_C2_WGT_OFFSET;
+    l.off[C2_R_GUARD_LO] = HMX_B3_R2_C2_GUARD_LO_OFFSET;
+    l.off[C2_R_X] = HMX_B3_R2_C2_X_OFFSET;
+    l.off[C2_R_GUARD_HI] = HMX_B3_R2_C2_GUARD_HI_OFFSET;
+    l.off[C2_R_BIAS0] = HMX_B3_R2_C2_BIAS0_OFFSET;
+    l.off[C2_R_BIAS1] = HMX_B3_R2_C2_BIAS1_OFFSET;
+    l.used = HMX_B3_R2_C2_USED;
+  }
+  return l;
+}
+
+/* Pairwise region overlap. Returns the pair count and, for each pair, the index
+ * `r1 * C2_R_COUNT + r2`, so a failure names the exact conflicting regions. */
+static int c2_overlap_pairs(const c2_layout_t *l, int *pairs, int cap,
+                            int *bytes) {
+  int n = 0;
+  int total = 0;
+  for (int a = 0; a < C2_R_COUNT; ++a) {
+    for (int b = a + 1; b < C2_R_COUNT; ++b) {
+      int lo = l->off[a] > l->off[b] ? l->off[a] : l->off[b];
+      int hi_a = l->off[a] + l->size[a];
+      int hi_b = l->off[b] + l->size[b];
+      int hi = hi_a < hi_b ? hi_a : hi_b;
+      if (hi > lo) {
+        if (pairs && n < cap) pairs[n] = a * C2_R_COUNT + b;
+        n++;
+        total += hi - lo;
+      }
+    }
+  }
+  if (bytes) *bytes = total;
+  return n;
+}
+
+typedef struct {
+  hmx_full_tile_state_t core;
+  uint8_t l2[HMX_B3_R2_C2_L2_ARENA_BYTES];
+  c2_layout_t lay;
+  int pairs[8];
+  int overlaps;
+  int overlap_bytes;
+  int wgt_tail_intact;
+  int contract_ok;
+  int store_addrs_identical;
+  int copy_vectors_done;
+  int mxclracc_count;
+  int mma_count;
+  int convert_count;
+  int store_count;
+  int guard_hits;
+  int p_guard_hits;
+  int outside_nonzero;
+  uint16_t p[T8_CELLS];
+  uint16_t x[T8_CELLS];
+  uint16_t exp_pos[T8_CELLS];
+  uint16_t exp_neg[T8_CELLS];
+  int subnormal_pos_cells;
+  /* Written-range ledger (audit 2026-10-30): every prologue fill records the
+   * byte range it actually wrote, so the overlap audit runs on writes, not
+   * only on the declared map. wr_region maps back to the C2_R_* region. */
+  int wr_region[8];
+  int wr_off[8];
+  int wr_size[8];
+  int wr_count;
+  int wr_overlaps;
+  int wr_mismatch_declared;
+  /* Observation census (filled by c2_observe). */
+  int deadic_cells;
+  int c1_cells;
+  int c2_nonzero_cells;      /* p == exp_neg != 0: only Store #2 can supply this */
+  int c2_zero_cells;         /* p == 0 == exp_neg: also explainable by zeroing */
+  int ambiguous_subnormal;   /* p == 0 where a subnormal payload was due */
+  int zero_loss_other;       /* p == 0 where a nonzero payload was due, other */
+  int payload_match_cells;
+  int unknown_cells;
+  int x_mismatch_cells;
+  hmx_c2_class_t cls;
+} c2_state_t;
+
+static void c2_fill_u16(uint8_t *dst, int bytes, uint16_t word) {
+  uint16_t *p = (uint16_t *)dst;
+  for (int i = 0; i < bytes / 2; ++i) p[i] = word;
+}
+
+static int c2_all_bytes(uint8_t *src, int bytes, uint8_t want) {
+  for (int i = 0; i < bytes; ++i) {
+    if (src[i] != want) return 0;
+  }
+  return 1;
+}
+
+/* Bytes not owned by any declared region must stay zero: revision 2 has two
+ * gaps (X's upper guard to bias0, and the tail of the window), and an
+ * unregistered write there is a contract violation, not a curiosity. */
+static int c2_outside_nonzero(const c2_state_t *c) {
+  static signed char owner[HMX_B3_R2_VTCM_TOTAL];
+  memset(owner, -1, sizeof(owner));
+  for (int r = 0; r < C2_R_COUNT; ++r) {
+    for (int i = 0; i < c->lay.size[r]; ++i) {
+      int off = c->lay.off[r] + i;
+      if (off >= 0 && off < (int)sizeof(owner)) owner[off] = (signed char)r;
+    }
+  }
+  int bad = 0;
+  for (int i = 0; i < HMX_B3_R2_VTCM_TOTAL; ++i) {
+    if (owner[i] < 0 && c->core.vtcm.raw[i] != 0) bad++;
+  }
+  return bad;
+}
+
+static void c2_bias_init(c2_state_t *c) {
+  uint8_t *b0 = c->core.vtcm.raw + c->lay.off[C2_R_BIAS0];
+  uint8_t *b1 = c->core.vtcm.raw + c->lay.off[C2_R_BIAS1];
+  for (int o = 0; o < T8; ++o) {
+    uint32_t lo = bias20_lo_cell(HMX_B3_R2_SCALE_BITS, HMX_B3_R2_OUT_BIAS);
+    uint32_t hi0 = bias20_hi_cell(HMX_B3_R2_SHAPE0, 0, 0);
+    uint32_t hi1 = bias20_hi_cell(HMX_B3_R2_SHAPE4, 0, 0);
+    memcpy(b0 + o * 4, &lo, 4);
+    memcpy(b0 + 128 + o * 4, &hi0, 4);
+    memcpy(b1 + o * 4, &lo, 4);
+    memcpy(b1 + 128 + o * 4, &hi1, 4);
+  }
+}
+
+/* 128 B vector copy X -> P, one vector at a time (the registered access width).
+ * dst_shift_vecs shifts the destination base by whole vectors; the overrun
+ * fault uses 1 to model a store address advanced before the first store. */
+static int c2_copy_vecs(c2_state_t *c, int from, int to, int dst_shift_vecs) {
+  int n = 0;
+  for (int v = from; v < to; ++v) {
+    memcpy(c->l2 + HMX_B3_R2_C2_L2_P_OFFSET + (v + dst_shift_vecs) * 128,
+           c->core.vtcm.raw + c->lay.off[C2_R_X] + v * 128, 128);
+    n++;
+  }
+  c->copy_vectors_done += n;
+  return n;
+}
+
+/* Pairwise overlap over the ranges that were actually written, plus a
+ * comparison against the declared map region of the same region id. */
+static void c2_evaluate_written_ranges(c2_state_t *c) {
+  c->wr_overlaps = 0;
+  c->wr_mismatch_declared = 0;
+  for (int a = 0; a < c->wr_count; ++a) {
+    if (c->wr_region[a] >= 0 && c->wr_region[a] < C2_R_COUNT &&
+        (c->wr_off[a] != c->lay.off[c->wr_region[a]] ||
+         c->wr_size[a] != c->lay.size[c->wr_region[a]])) {
+      c->wr_mismatch_declared++;
+    }
+    for (int b = a + 1; b < c->wr_count; ++b) {
+      int lo = c->wr_off[a] > c->wr_off[b] ? c->wr_off[a] : c->wr_off[b];
+      int hi_a = c->wr_off[a] + c->wr_size[a];
+      int hi_b = c->wr_off[b] + c->wr_size[b];
+      int hi = hi_a < hi_b ? hi_a : hi_b;
+      if (hi > lo) c->wr_overlaps++;
+    }
+  }
+}
+
+static void c2_record_write(c2_state_t *c, int region, int off, int size) {
+  if (c->wr_count < 8) {
+    c->wr_region[c->wr_count] = region;
+    c->wr_off[c->wr_count] = off;
+    c->wr_size[c->wr_count] = size;
+    c->wr_count++;
+  }
+}
+
+static void c2_observe(c2_state_t *c) {
+  c->deadic_cells = 0;
+  c->c1_cells = 0;
+  c->c2_nonzero_cells = 0;
+  c->c2_zero_cells = 0;
+  c->ambiguous_subnormal = 0;
+  c->zero_loss_other = 0;
+  c->payload_match_cells = 0;
+  c->unknown_cells = 0;
+  c->x_mismatch_cells = 0;
+
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (c->x[i] != c->exp_neg[i]) c->x_mismatch_cells++;
+  }
+
+  for (int i = 0; i < T8_CELLS; ++i) {
+    const uint16_t p = c->p[i];
+    if (p == HMX_C2_SENTINEL_P) {
+      c->deadic_cells++;
+      continue;
+    }
+    if (p == HMX_C2_SENTINEL_X) {
+      c->c1_cells++;
+      continue;
+    }
+    if (p == c->exp_pos[i]) {
+      c->payload_match_cells++;
+      continue;
+    }
+    /* Attribution needs positive evidence. A cell only shows that P was read
+     * AFTER Store #2 if it carries the negative payload itself; a zero shows
+     * nothing of the sort, because zeroing is also what FTZ/DAZ and the clamp
+     * law produce, and by mutual exclusivity every cell whose positive payload
+     * is nonzero has a negative payload of 0x0000. A zero where a subnormal
+     * payload was due is therefore classified as ambiguous FIRST; a zero on a
+     * normal payload is weak evidence at best; and only a specific NONZERO bit
+     * pattern is strong evidence, because nothing but Store #2 can supply it. */
+    if (p == 0x0000u && c->exp_pos[i] != 0x0000u) {
+      if (c->exp_neg[i] == 0x0000u) {
+        if (is_subnormal_fp16(c->exp_pos[i])) c->ambiguous_subnormal++;
+        else c->c2_zero_cells++;
+      } else {
+        c->zero_loss_other++;
+      }
+      continue;
+    }
+    if (c->exp_pos[i] != c->exp_neg[i] && p == c->exp_neg[i]) {
+      c->c2_nonzero_cells++;
+      continue;
+    }
+    c->unknown_cells++;
+  }
+}
+
+/* The registered decision procedure, in the registered order. Any 0xDEAD cell
+ * (not just an all-0xDEAD tile) stops the run before any signature is read, and
+ * a zero never becomes a C2 claim unless the run is unambiguous everywhere. */
+static hmx_c2_class_t c2_classify(const c2_state_t *c) {
+  if (!c->contract_ok) return HMX_C2_CLASS_CONTRACT_FAILED;
+  /* Any residual 0xDEAD invalidates P as an observation before X is even
+   * interpreted: a partial or absent copy means the registered HVX read never
+   * happened, whatever Store #2 wrote. (Audit 2026-10-30: this order is pinned
+   * by c2_control_x_broken_plus_dead, which has both defects at once.) */
+  if (c->deadic_cells > 0) return HMX_C2_CLASS_COPY_NOT_EXECUTED;
+  if (c->x_mismatch_cells > 0) return HMX_C2_CLASS_STORE2_PATH_BROKEN;
+  /* Two read points in one tile is not a C2 answer, whatever the counts. */
+  if (c->c1_cells > 0 && c->c2_nonzero_cells > 0) {
+    return HMX_C2_CLASS_MIXED_SIGNATURE;
+  }
+  if (c->c1_cells > 0) {
+    if (c->ambiguous_subnormal > 0 || c->zero_loss_other > 0 ||
+        c->c2_zero_cells > 0 || c->unknown_cells > 0) {
+      return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+    }
+    return HMX_C2_CLASS_C1_SIGNATURE;
+  }
+  /* Strong evidence wins: a specific nonzero negative pattern cannot be produced
+   * by any zeroing law, so once one cell carries it the read demonstrably landed
+   * after Store #2 and the zero-valued cells are explained by the same read. */
+  if (c->c2_nonzero_cells > 0) return HMX_C2_CLASS_C2_SIGNATURE;
+  if (c->ambiguous_subnormal > 0) {
+    if (c->c2_zero_cells == 0 && c->zero_loss_other == 0 && c->unknown_cells == 0) {
+      return HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS;
+    }
+    return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+  }
+  if (c->c2_zero_cells > 0 || c->zero_loss_other > 0 || c->unknown_cells > 0) {
+    return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+  }
+  if (c->payload_match_cells == T8_CELLS) return HMX_C2_CLASS_SUPPORTED;
+  return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+}
+
+/* Run the registered instruction sequence (revision 2 unless the fault forces
+ * revision 1's overlapping guard map). */
+static void c2_model_run(c2_state_t *c, hmx_b3_r2_fault_t fault) {
+  memset(c, 0, sizeof(*c));
+  c->lay = c2_layout_rev(fault == HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP ? 1 : 2);
+  c->overlaps = c2_overlap_pairs(&c->lay, c->pairs, 8, &c->overlap_bytes);
+  memcpy(c->exp_pos, g_m_plain.raw_pos, sizeof(c->exp_pos));
+  memcpy(c->exp_neg, g_m_plain.raw_neg, sizeof(c->exp_neg));
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (is_subnormal_fp16(c->exp_pos[i])) c->subnormal_pos_cells++;
+  }
+
+  const int act = c->lay.off[C2_R_ACT];
+  const int wgt = c->lay.off[C2_R_WGT];
+  const int x = c->lay.off[C2_R_X];
+  const int g_lo = c->lay.off[C2_R_GUARD_LO];
+  const int g_hi = c->lay.off[C2_R_GUARD_HI];
+
+  /* prologue (not on the critical path). Each fill records the byte range it
+   * actually wrote, so the overlap audit runs on writes, not only on the map. */
+  pack_act_prm((uint16_t *)(c->core.vtcm.raw + act), g_ops_deploy.a_plain);
+  c2_record_write(c, C2_R_ACT, act, HMX_B3_R2_TILE_BYTES);
+  pack_wgt_prm((uint16_t *)(c->core.vtcm.raw + wgt), g_ops_deploy.w_plain);
+  c2_record_write(c, C2_R_WGT, wgt, HMX_B3_R2_TILE_BYTES);
+  c2_bias_init(c);
+  c2_record_write(c, C2_R_BIAS0, c->lay.off[C2_R_BIAS0], 256);
+  c2_record_write(c, C2_R_BIAS1, c->lay.off[C2_R_BIAS1], 256);
+
+  /* The last 128 B of the packed W tile are crouton ic 30/31 of every output
+   * channel. Snapshot them so the guard-overlap fault is detected from content
+   * and not only from the layout predicate. */
+  static uint8_t wgt_tail[HMX_B3_R2_C2_GUARD_BYTES];
+  memcpy(wgt_tail, c->core.vtcm.raw + wgt + HMX_B3_R2_TILE_BYTES - 128, 128);
+
+  c2_fill_u16(c->core.vtcm.raw + x, HMX_B3_R2_TILE_BYTES, HMX_C2_SENTINEL_X);
+  c2_record_write(c, C2_R_X, x, HMX_B3_R2_TILE_BYTES);
+  c2_fill_u16(c->core.vtcm.raw + g_lo, HMX_B3_R2_C2_GUARD_BYTES, HMX_C2_SENTINEL_G);
+  c2_record_write(c, C2_R_GUARD_LO, g_lo, HMX_B3_R2_C2_GUARD_BYTES);
+  c2_fill_u16(c->core.vtcm.raw + g_hi, HMX_B3_R2_C2_GUARD_BYTES, HMX_C2_SENTINEL_G);
+  c2_record_write(c, C2_R_GUARD_HI, g_hi, HMX_B3_R2_C2_GUARD_BYTES);
+  c2_fill_u16(c->l2 + HMX_B3_R2_C2_L2_P_OFFSET, HMX_B3_R2_TILE_BYTES,
+              HMX_C2_SENTINEL_P);
+  c2_fill_u16(c->l2 + HMX_B3_R2_C2_L2_P_GUARD_LO, HMX_B3_R2_C2_GUARD_BYTES,
+              HMX_C2_SENTINEL_G);
+  c2_fill_u16(c->l2 + HMX_B3_R2_C2_L2_P_GUARD_HI, HMX_B3_R2_C2_GUARD_BYTES,
+              HMX_C2_SENTINEL_G);
+  c2_evaluate_written_ranges(c);
+
+  c->wgt_tail_intact =
+      memcmp(wgt_tail, c->core.vtcm.raw + wgt + HMX_B3_R2_TILE_BYTES - 128, 128) == 0;
+
+  /* A map with overlapping regions, or a guard fill that already destroyed a
+   * live operand, fails the contract before the MMA is issued. */
+  c->contract_ok = (c->overlaps == 0) && c->wgt_tail_intact;
+  if (!c->contract_ok) {
+    c->cls = HMX_C2_CLASS_CONTRACT_FAILED;
+    return;
+  }
+
+  /* critical path begin */
+  exec_mxclracc(&c->core);
+  c->mxclracc_count = c->core.count_mxclracc;
+
+  c->core.act_id = HMX_B3_R2_OP_AHI;
+  c->core.wgt_id = HMX_B3_R2_OP_WHI;
+  exec_mma_packet_at(&c->core, act, wgt);
+  c->mma_count = c->core.count_mma;
+
+  int pre = 0;      /* vectors read before Store #1 */
+  int mid = HMX_C2_COPY_VECTORS; /* vectors read between Store #1 and #2 */
+  int late = 0;     /* vectors read after Store #2 */
+  const int dst_shift =
+      (fault == HMX_FAULT_C2_L2_GUARD_OVERRUN) ? 1 : 0;
+  if (fault == HMX_FAULT_C2_MIXED_SIGNATURE) {
+    pre = HMX_C2_COPY_VECTORS / 2;
+    mid = pre;
+    late = HMX_C2_COPY_VECTORS - mid;
+  } else if (fault == HMX_FAULT_C2_COPY_PARTIAL) {
+    mid = HMX_C2_COPY_VECTORS / 2;
+  }
+
+  c2_copy_vecs(c, 0, pre, dst_shift);
+
+  exec_convert_and_store_at(&c->core, HMX_B3_R2_RS_CVT1, x,
+                            c->lay.off[C2_R_BIAS0], c->lay.off[C2_R_BIAS1]);
+  const int store1_addr = x;
+  c->convert_count = c->core.count_convert;
+  c->store_count = c->core.count_store;
+
+  c2_copy_vecs(c, pre, mid, dst_shift);
+
+  exec_convert_and_store_at(&c->core, HMX_B3_R2_RS_CVT2, x,
+                            c->lay.off[C2_R_BIAS0], c->lay.off[C2_R_BIAS1]);
+  const int store2_addr = x;
+  c->convert_count = c->core.count_convert;
+  c->store_count = c->core.count_store;
+  c->store_addrs_identical = (store1_addr == store2_addr);
+
+  c2_copy_vecs(c, mid, mid + late, dst_shift);
+  /* critical path end */
+
+  cc_decode_tile((const uint16_t *)(c->l2 + HMX_B3_R2_C2_L2_P_OFFSET), c->p);
+  cc_decode_tile((const uint16_t *)(c->core.vtcm.raw + x), c->x);
+
+  c->guard_hits = 0;
+  if (!c2_all_bytes(c->core.vtcm.raw + g_lo, HMX_B3_R2_C2_GUARD_BYTES, 0x5A)) {
+    c->guard_hits++;
+  }
+  if (!c2_all_bytes(c->core.vtcm.raw + g_hi, HMX_B3_R2_C2_GUARD_BYTES, 0x5A)) {
+    c->guard_hits++;
+  }
+  c->p_guard_hits = 0;
+  if (!c2_all_bytes(c->l2 + HMX_B3_R2_C2_L2_P_GUARD_LO, HMX_B3_R2_C2_GUARD_BYTES, 0x5A)) {
+    c->p_guard_hits++;
+  }
+  if (!c2_all_bytes(c->l2 + HMX_B3_R2_C2_L2_P_GUARD_HI, HMX_B3_R2_C2_GUARD_BYTES, 0x5A)) {
+    c->p_guard_hits++;
+  }
+  c->outside_nonzero = c2_outside_nonzero(c);
+
+  c->contract_ok = c->contract_ok && c->mxclracc_count == 1 &&
+                   c->mma_count == 1 && c->convert_count == 2 &&
+                   c->store_count == 2 && c->store_addrs_identical &&
+                   c->guard_hits == 0 && c->p_guard_hits == 0 &&
+                   c->outside_nonzero == 0;
+
+  c2_observe(c);
+  c->cls = c2_classify(c);
+}
+
+/* Layout structure, and a regression that proves the checker rejects revision 1.
+ * Exposed as its own function because the overlap is a property of the map, not
+ * of any observation. */
+static void c2_classifier_controls(const c2_state_t *nominal);
+
+static void c2_verify_layout(void) {
+  const c2_layout_t v2 = c2_layout_rev(2);
+  const c2_layout_t v1 = c2_layout_rev(1);
+  int pairs[8];
+  int bytes = 0;
+
+  int n2 = c2_overlap_pairs(&v2, pairs, 8, &bytes);
+  check_int("c2_rev2_region_overlaps", n2, 0);
+  check_int("c2_rev2_overlap_bytes", bytes, 0);
+  check_true("c2_rev2_x_aligned", (v2.off[C2_R_X] % 2048) == 0);
+  check_true("c2_rev2_act_aligned", (v2.off[C2_R_ACT] % 2048) == 0);
+  check_true("c2_rev2_wgt_aligned", (v2.off[C2_R_WGT] % 2048) == 0);
+  check_true("c2_rev2_bias0_aligned", (v2.off[C2_R_BIAS0] % 256) == 0);
+  check_true("c2_rev2_bias1_aligned", (v2.off[C2_R_BIAS1] % 256) == 0);
+  check_true("c2_rev2_guard_lo_adjacent_to_x",
+             v2.off[C2_R_GUARD_LO] + HMX_B3_R2_C2_GUARD_BYTES == v2.off[C2_R_X]);
+  check_true("c2_rev2_guard_hi_adjacent_to_x",
+             v2.off[C2_R_X] + HMX_B3_R2_TILE_BYTES == v2.off[C2_R_GUARD_HI]);
+  check_true("c2_rev2_guard_lo_clear_of_wgt",
+             v2.off[C2_R_GUARD_LO] >= v2.off[C2_R_WGT] + HMX_B3_R2_TILE_BYTES);
+  check_int("c2_rev2_used_bytes", v2.used, v2.off[C2_R_BIAS1] + 256);
+  check_int("c2_rev2_margin_bytes", HMX_B3_R2_VTCM_TOTAL - v2.used, 3328);
+  check_true("c2_rev2_bias_above_guard_hi",
+             v2.off[C2_R_BIAS0] >= v2.off[C2_R_GUARD_HI] + HMX_B3_R2_C2_GUARD_BYTES);
+  check_true("c2_rev2_fits_window", v2.used <= HMX_B3_R2_VTCM_TOTAL);
+
+  /* L2 arena: every guard offset is a positive in-arena offset. */
+  check_true("c2_l2_p_guard_lo_nonnegative", HMX_B3_R2_C2_L2_P_GUARD_LO >= 0);
+  check_true("c2_l2_p_guard_lo_under_p",
+             HMX_B3_R2_C2_L2_P_GUARD_LO + HMX_B3_R2_C2_GUARD_BYTES ==
+                 HMX_B3_R2_C2_L2_P_OFFSET);
+  check_true("c2_l2_p_guard_hi_over_p",
+             HMX_B3_R2_C2_L2_P_OFFSET + HMX_B3_R2_TILE_BYTES ==
+                 HMX_B3_R2_C2_L2_P_GUARD_HI);
+  check_true("c2_l2_arena_covers_guards",
+             HMX_B3_R2_C2_L2_P_GUARD_HI + HMX_B3_R2_C2_GUARD_BYTES ==
+                 HMX_B3_R2_C2_L2_ARENA_BYTES);
+  /* 128 B vector access must stay aligned and never reach into a guard: the
+   * P offset and both guard offsets are 128 B multiples, and 16 vectors tile
+   * P exactly up to the upper guard. The device arena base must also be
+   * 128 B aligned (prereg section 3.2), which makes base+offset aligned. */
+  check_true("c2_l2_p_offset_128b_aligned", (HMX_B3_R2_C2_L2_P_OFFSET % 128) == 0);
+  check_true("c2_l2_p_guard_lo_128b_aligned",
+             (HMX_B3_R2_C2_L2_P_GUARD_LO % 128) == 0);
+  check_true("c2_l2_p_guard_hi_128b_aligned",
+             (HMX_B3_R2_C2_L2_P_GUARD_HI % 128) == 0);
+  check_true("c2_l2_copy_vectors_tile_p_exactly",
+             HMX_B3_R2_C2_L2_P_OFFSET + HMX_C2_COPY_VECTORS * 128 ==
+                 HMX_B3_R2_C2_L2_P_GUARD_HI);
+
+  /* Revision 1 must be rejected by the same checker, and named exactly. */
+  bytes = 0;
+  int n1 = c2_overlap_pairs(&v1, pairs, 8, &bytes);
+  check_int("c2_rev1_region_overlaps", n1, 1);
+  check_int("c2_rev1_overlap_pair",
+            n1 > 0 ? pairs[0] : -1, C2_R_WGT * C2_R_COUNT + C2_R_GUARD_LO);
+  check_int("c2_rev1_overlap_bytes", bytes, 128);
+
+  printf("c2_prereg revision=%d vtcm_used=%d margin=%d rev2_overlaps=0 "
+         "rev1_overlaps=%d rev1_pair=%s/%s rev1_bytes=%d\n",
+         HMX_C2_PREREG_REVISION, v2.used, HMX_B3_R2_VTCM_TOTAL - v2.used, n1,
+         "wgt", "guard_lo", bytes);
+  printf("c2_prereg_map act=+%d wgt=+%d guard_lo=+%d X=+%d guard_hi=+%d "
+         "bias0=+%d bias1=+%d first_unused=+%d l2_p=+%d l2_arena=%d\n",
+         v2.off[C2_R_ACT], v2.off[C2_R_WGT], v2.off[C2_R_GUARD_LO],
+         v2.off[C2_R_X], v2.off[C2_R_GUARD_HI], v2.off[C2_R_BIAS0],
+         v2.off[C2_R_BIAS1], v2.used, HMX_B3_R2_C2_L2_P_OFFSET,
+         HMX_B3_R2_C2_L2_ARENA_BYTES);
+}
+
+static void run_c2_prereg_evaluation(void) {
+  printf("===== Candidate C: C2 minimal experiment pre-registration (revision %d) =====\n",
+         HMX_C2_PREREG_REVISION);
+
+  c2_verify_layout();
+
+  static c2_state_t st;
+  c2_model_run(&st, HMX_FAULT_NONE);
+
+  int d_pos = cc_count_cell_mismatches(st.p, st.exp_pos, "c2_nominal_p_cells", 1);
+  int d_neg = cc_count_cell_mismatches(st.x, st.exp_neg, "c2_nominal_x_cells", 1);
+
+  check_int("c2_nominal_mxclracc", st.mxclracc_count, 1);
+  check_int("c2_nominal_mma", st.mma_count, 1);
+  check_int("c2_nominal_converts", st.convert_count, 2);
+  check_int("c2_nominal_stores", st.store_count, 2);
+  check_true("c2_nominal_store_addr_identical", st.store_addrs_identical);
+  check_int("c2_nominal_copy_vectors", st.copy_vectors_done, HMX_C2_COPY_VECTORS);
+  check_int("c2_nominal_guards", st.guard_hits, 0);
+  check_int("c2_nominal_p_guards", st.p_guard_hits, 0);
+  check_int("c2_nominal_outside_untouched", st.outside_nonzero, 0);
+  check_int("c2_nominal_deadic_cells", st.deadic_cells, 0);
+  check_int("c2_nominal_ambiguous_subnormal", st.ambiguous_subnormal, 0);
+  check_int("c2_nominal_zero_loss_other", st.zero_loss_other, 0);
+  check_int("c2_nominal_c1_cells", st.c1_cells, 0);
+  check_int("c2_nominal_c2_nonzero_cells", st.c2_nonzero_cells, 0);
+  check_int("c2_nominal_c2_zero_cells", st.c2_zero_cells, 0);
+  check_int("c2_nominal_class", (int)st.cls, HMX_C2_CLASS_SUPPORTED);
+
+  /* Written-range ledger: the prologue's actual writes are pairwise disjoint
+   * and each equals its declared region, so the map audit is confirmed on
+   * what was written, not only on the declared constants. */
+  check_int("c2_rev2_written_range_overlaps", st.wr_overlaps, 0);
+  check_int("c2_rev2_written_matches_declared", st.wr_mismatch_declared, 0);
+  {
+    int wr_bytes = 0;
+    for (int k = 0; k < st.wr_count; ++k) wr_bytes += st.wr_size[k];
+    printf("c2_written_ranges count=%d bytes=%d overlaps=%d "
+           "mismatch_declared=%d\n",
+           st.wr_count, wr_bytes, st.wr_overlaps, st.wr_mismatch_declared);
+  }
+
+  /* Label-separation contract: the CPU context can never render the device
+   * success label, whatever the classifier outcome. */
+  char cpu_lbl[96];
+  c2_cpu_label(st.cls, "simulated", cpu_lbl, sizeof(cpu_lbl));
+  check_str("c2_cpu_nominal_label", cpu_lbl, HMX_C2_CPU_NOMINAL_LABEL);
+  {
+    int label_leak = 0;
+    for (int k = 0; k <= HMX_C2_CLASS_SUPPORTED; ++k) {
+      c2_cpu_label((hmx_c2_class_t)k, "simulated", cpu_lbl, sizeof(cpu_lbl));
+      if (strcmp(cpu_lbl, HMX_C2_DEVICE_SUPPORTED_LABEL) == 0) label_leak++;
+    }
+    check_int("c2_cpu_label_never_device_label", label_leak, 0);
+  }
+
+  /* The two payloads a C2 run observes are exactly the registered candidate C
+   * Plain positive/negative arrays, so their digests must not move. */
+  static uint8_t p_buf[T8_CELLS * 2];
+  static uint8_t x_buf[T8_CELLS * 2];
+  char sha_p[65], sha_x[65];
+  put_u16_le(p_buf, st.p, T8_CELLS);
+  put_u16_le(x_buf, st.x, T8_CELLS);
+  sha256_hex(p_buf, sizeof(p_buf), sha_p);
+  sha256_hex(x_buf, sizeof(x_buf), sha_x);
+  check_str("c2_nominal_sha_p", sha_p, CAND_C_SHA_PLAIN_POS_BITS);
+  check_str("c2_nominal_sha_x", sha_x, CAND_C_SHA_PLAIN_NEG_BITS);
+
+  int discriminating = 0;
+  int nonzero_neg = 0;
+  int zero_neg_normal_pos = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (st.exp_pos[i] != st.exp_neg[i]) discriminating++;
+    if (st.exp_neg[i] != 0x0000u) nonzero_neg++;
+    if (st.exp_neg[i] == 0x0000u && st.exp_pos[i] != 0x0000u &&
+        !is_subnormal_fp16(st.exp_pos[i])) {
+      zero_neg_normal_pos++;
+    }
+  }
+  check_true("c2_payload_nonzero_neg_cells_exist", nonzero_neg > 0);
+
+  printf("c2_nominal p_diff=%d x_diff=%d cells=%d discriminating=%d "
+         "class=%s sha_p=%s sha_x=%s subnormal_pos_cells=%d\n",
+         d_pos, d_neg, T8_CELLS, discriminating, cpu_lbl, sha_p,
+         sha_x, st.subnormal_pos_cells);
+  printf("c2_payload_census cells=%d discriminating=%d nonzero_neg=%d "
+         "zero_neg_normal_pos=%d subnormal_pos=%d note=only_nonzero_neg_is_"
+         "unambiguous_C2_evidence\n",
+         T8_CELLS, discriminating, nonzero_neg, zero_neg_normal_pos,
+         st.subnormal_pos_cells);
+  printf("c2_observation_contract deadic=any_cell c1_signature=0xA5A5 "
+         "c2_signature=nonzero_neg_payload zero_loss_before_signature=1 "
+         "forbidden_between_stores=checksums,fences,dummy_cvt,host_rpc\n");
+
+  c2_classifier_controls(&st);
+}
+
+/* Every branch of the registered decision procedure is exercised on synthetic
+ * observations built from the registered payloads. Without this the probe could
+ * pass simply by never attributing anything: the positive control below is what
+ * shows a real post-Store-#2 read IS reported as an ordering violation. */
+static void c2_classifier_controls(const c2_state_t *nominal) {
+  static c2_state_t t;
+
+  /* 1. Whole-tile post-Store-#2 read: all 1,024 cells carry the negative
+   *    payload. Must be attributed, not excused. */
+  t = *nominal;
+  memcpy(t.p, t.exp_neg, sizeof(t.p));
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_full_store2_read", (int)t.cls, HMX_C2_CLASS_C2_SIGNATURE);
+  check_true("c2_control_full_store2_has_nonzero_neg", t.c2_nonzero_cells > 0);
+
+  /* 2. Whole tile still holding X's sentinel: the copy never ran. */
+  t = *nominal;
+  for (int i = 0; i < T8_CELLS; ++i) t.p[i] = HMX_C2_SENTINEL_P;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_all_dead", (int)t.cls, HMX_C2_CLASS_COPY_NOT_EXECUTED);
+
+  /* 3. A single pre-Store-#1 cell: C1 signature, and not a C2 one. */
+  t = *nominal;
+  t.p[0] = HMX_C2_SENTINEL_X;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_single_c1", (int)t.cls, HMX_C2_CLASS_C1_SIGNATURE);
+
+  /* 4. X broken: not a C1/C2 question at all. */
+  t = *nominal;
+  t.x[0] ^= 0x0001u;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_store2_broken", (int)t.cls,
+            HMX_C2_CLASS_STORE2_PATH_BROKEN);
+
+  /* 5. Only zero-value agreement: consistent with a wrong read order AND with
+   *    any zeroing law, so it must not be attributed. */
+  t = *nominal;
+  int zeros_only = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (t.exp_pos[i] != t.exp_neg[i] && t.exp_neg[i] == 0x0000u &&
+        !is_subnormal_fp16(t.exp_pos[i])) {
+      t.p[i] = 0x0000u;
+      zeros_only++;
+    }
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_zero_only_exists", zeros_only > 0);
+  check_int("c2_control_zero_only_not_attributed", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+
+  /* 6. Subnormal zero loss with nothing else: an FTZ observation, not a C2 one. */
+  t = *nominal;
+  int sub_zero = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (t.exp_pos[i] != 0x0000u && is_subnormal_fp16(t.exp_pos[i])) {
+      t.p[i] = 0x0000u;
+      sub_zero++;
+    }
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_subnormal_cells_present", sub_zero > 0);
+  check_int("c2_control_subnormal_zero_loss", (int)t.cls,
+            HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS);
+
+  /* 7. X broken AND a 0xDEAD residue at once: the copy-not-executed stop
+   *    comes first (registered order: 0xDEAD before the X interpretation). */
+  t = *nominal;
+  t.x[0] ^= 0x0001u;
+  t.p[T8_CELLS - 1] = HMX_C2_SENTINEL_P;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_x_broken_plus_dead", (int)t.cls,
+            HMX_C2_CLASS_COPY_NOT_EXECUTED);
+  const hmx_c2_class_t cls_x_plus_dead = t.cls;
+
+  /* 8. A C1 signature coexisting with subnormal zeros: the signature is
+   *    evaluated first, so the run is inconclusive, not an FTZ observation. */
+  t = *nominal;
+  t.p[0] = HMX_C2_SENTINEL_X;
+  int c1_sub = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (t.exp_pos[i] != 0x0000u && is_subnormal_fp16(t.exp_pos[i])) {
+      t.p[i] = 0x0000u;
+      c1_sub++;
+    }
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_c1_plus_subnormal_cells", c1_sub > 0);
+  check_int("c2_control_c1_plus_subnormal_inconclusive", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+  const hmx_c2_class_t cls_c1_subnormal = t.cls;
+
+  /* 9. An unexplained bit pattern (bit 15 clear, not any registered value):
+   *    recorded as unexplained, never attributed to C1 or C2. */
+  t = *nominal;
+  {
+    uint16_t v = 0x3555u;
+    while (v == 0x0000u || v == HMX_C2_SENTINEL_G || v == t.exp_pos[0] ||
+           v == t.exp_neg[0]) {
+      v++;
+    }
+    t.p[0] = v;
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_unknown_bit_is_unexplained", t.unknown_cells >= 1);
+  check_int("c2_control_unknown_bit_class", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+  const hmx_c2_class_t cls_unknown_bit = t.cls;
+
+  /* 10. Host swaps the P and X arrays at harvest: the X check fails before
+   *     any signature is read, so mislabelled buffers cannot become a C2
+   *     verdict even though the swapped-in P carries 475 non-zero negative
+   *     patterns. */
+  t = *nominal;
+  {
+    uint16_t tmp[T8_CELLS];
+    memcpy(tmp, t.p, sizeof(tmp));
+    memcpy(t.p, t.x, sizeof(tmp));
+    memcpy(t.x, tmp, sizeof(tmp));
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_p_x_swapped", (int)t.cls,
+            HMX_C2_CLASS_STORE2_PATH_BROKEN);
+  const hmx_c2_class_t cls_p_x_swapped = t.cls;
+
+  /* 11. Decode-order swap on both tiles: the host unscrambles with the
+   *     identity map instead of the registered store crouton. The scrambled
+   *     negative tile already breaks the X check -> fail closed. */
+  t = *nominal;
+  {
+    uint16_t scr[T8_CELLS];
+    memset(scr, 0, sizeof(scr));
+    for (int s = 0; s < T8; ++s)
+      for (int o = 0; o < T8; ++o)
+        scr[hmx_b3_r2_store_u16(s, o)] = t.x[s * T8 + o];
+    memcpy(t.x, scr, sizeof(scr)); /* observed = raw crouton bytes */
+    memset(scr, 0, sizeof(scr));
+    for (int s = 0; s < T8; ++s)
+      for (int o = 0; o < T8; ++o)
+        scr[hmx_b3_r2_store_u16(s, o)] = t.p[s * T8 + o];
+    memcpy(t.p, scr, sizeof(scr));
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_decode_order_swapped", (int)t.cls,
+            HMX_C2_CLASS_STORE2_PATH_BROKEN);
+  const hmx_c2_class_t cls_decode_swap = t.cls;
+
+  /* 12. P-only decode-order swap (X decode correct): the scrambled positive
+   *     tile is mostly unexplained. Fail-closed: never SUPPORTED. Whether any
+   *     cell coincidentally matches a non-zero negative payload is the
+   *     coincidental-match question of the audit; it is counted and printed,
+   *     not assumed away. */
+  t = *nominal;
+  int p_swap_c2_coincidences = 0;
+  {
+    uint16_t scr[T8_CELLS];
+    memset(scr, 0, sizeof(scr));
+    for (int s = 0; s < T8; ++s)
+      for (int o = 0; o < T8; ++o)
+        scr[hmx_b3_r2_store_u16(s, o)] = t.p[s * T8 + o];
+    memcpy(t.p, scr, sizeof(scr));
+  }
+  c2_observe(&t);
+  p_swap_c2_coincidences = t.c2_nonzero_cells;
+  t.cls = c2_classify(&t);
+  check_true("c2_control_p_decode_swap_fail_closed",
+             t.cls != HMX_C2_CLASS_SUPPORTED);
+  const hmx_c2_class_t cls_p_decode_swap = t.cls;
+
+  {
+    char l1[96], l2[96], l3[96], l4[96], l5[96], l6[96], l7[96], l8[96],
+        l9[96], l10[96], l11[96], l12[96];
+    c2_cpu_label(HMX_C2_CLASS_C2_SIGNATURE, "simulated", l1, sizeof(l1));
+    c2_cpu_label(HMX_C2_CLASS_COPY_NOT_EXECUTED, "simulated", l2, sizeof(l2));
+    c2_cpu_label(HMX_C2_CLASS_C1_SIGNATURE, "simulated", l3, sizeof(l3));
+    c2_cpu_label(HMX_C2_CLASS_STORE2_PATH_BROKEN, "simulated", l4, sizeof(l4));
+    c2_cpu_label(HMX_C2_CLASS_CAUSE_INCONCLUSIVE, "simulated", l5, sizeof(l5));
+    c2_cpu_label(HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS, "simulated", l6,
+                 sizeof(l6));
+    printf("c2_classifier_controls full_store2=%s all_dead=%s single_c1=%s "
+           "store2_broken=%s zero_only=%s subnormal_zero=%s "
+           "zero_only_cells=%d subnormal_zero_cells=%d\n",
+           l1, l2, l3, l4, l5, l6, zeros_only, sub_zero);
+    c2_cpu_label(cls_x_plus_dead, "simulated", l7, sizeof(l7));
+    c2_cpu_label(cls_c1_subnormal, "simulated", l8, sizeof(l8));
+    c2_cpu_label(cls_unknown_bit, "simulated", l9, sizeof(l9));
+    c2_cpu_label(cls_p_x_swapped, "simulated", l10, sizeof(l10));
+    c2_cpu_label(cls_decode_swap, "simulated", l11, sizeof(l11));
+    c2_cpu_label(cls_p_decode_swap, "simulated", l12, sizeof(l12));
+    printf("c2_control_matrix x_plus_dead=%s c1_plus_subnormal=%s "
+           "unknown_bit=%s p_x_swapped=%s decode_swap=%s "
+           "p_decode_swap=%s p_swap_c2_coincidences=%d\n",
+           l7, l8, l9, l10, l11, l12, p_swap_c2_coincidences);
+  }
+}
+
+/* C2 fault battery (4 models). Detection must come from the map, the preserved
+ * bits and the registered classifier -- never from a flag the fault sets. */
+static int c2_fault_detected(hmx_b3_r2_fault_t fault) {
+  static c2_state_t st;
+
+  if (fault == HMX_FAULT_C2_FTZ_ZERO_LOSS) {
+    /* Classifier probe: a zero where a payload was due must never be reported
+     * as a C2 ordering violation. Zero the cells whose expected positive
+     * payload is subnormal (real FTZ) and report which branch was exercised. */
+    c2_model_run(&st, HMX_FAULT_NONE);
+    int zeroed = 0;
+    for (int i = 0; i < T8_CELLS; ++i) {
+      if (st.exp_pos[i] != 0x0000u && is_subnormal_fp16(st.exp_pos[i])) {
+        st.p[i] = 0x0000u;
+        zeroed++;
+      }
+    }
+    const char *branch = "subnormal_cells";
+    if (zeroed == 0) {
+      for (int i = 0; i < T8_CELLS; ++i) {
+        if (st.exp_pos[i] != 0x0000u && st.exp_pos[i] != st.exp_neg[i]) {
+          st.p[i] = 0x0000u;
+          zeroed = 1;
+          branch = "outside_subnormal_set";
+          break;
+        }
+      }
+    }
+    /* Counterfactual: without the zero-loss rule these cells would each have
+     * matched the negative payload exactly (0x0000) and the run would have been
+     * reported as an ordering violation. That is the false positive this probe
+     * exists to prevent. */
+    int would_be_false_c2 = 0;
+    for (int i = 0; i < T8_CELLS; ++i) {
+      if (st.p[i] == 0x0000u && st.exp_pos[i] == 0x0000u) continue;
+      if (st.p[i] == 0x0000u && st.exp_pos[i] != st.exp_neg[i]) would_be_false_c2++;
+    }
+    c2_observe(&st);
+    st.cls = c2_classify(&st);
+    int detected = (zeroed > 0) && st.cls != HMX_C2_CLASS_C2_SIGNATURE &&
+                   st.cls != HMX_C2_CLASS_SUPPORTED;
+    char lbl[96];
+    c2_cpu_label(st.cls, "fault_injected", lbl, sizeof(lbl));
+    printf("c2_fault_detail=%s zeroed=%d branch=%s class=%s "
+           "ambiguous_subnormal=%d zero_loss_other=%d c2_nonzero=%d "
+           "would_be_false_c2=%d\n",
+           hmx_b3_r2_fault_name(fault), zeroed, branch, lbl,
+           st.ambiguous_subnormal, st.zero_loss_other, st.c2_nonzero_cells,
+           would_be_false_c2);
+    return detected;
+  }
+
+  c2_model_run(&st, fault);
+
+  int detected = 0;
+  if (st.cls == HMX_C2_CLASS_CONTRACT_FAILED ||
+      st.cls == HMX_C2_CLASS_COPY_NOT_EXECUTED ||
+      st.cls == HMX_C2_CLASS_MIXED_SIGNATURE || st.cls == HMX_C2_CLASS_C1_SIGNATURE ||
+      st.cls == HMX_C2_CLASS_C2_SIGNATURE ||
+      st.cls == HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS ||
+      st.cls == HMX_C2_CLASS_CAUSE_INCONCLUSIVE) {
+    detected = 1;
+  }
+  /* A guard that eats a live operand must be caught by the map, by the
+   * written-range ledger, and by the content snapshot, and it must stop the
+   * run before the MMA is issued. */
+  if (fault == HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP) {
+    detected = (st.overlaps > 0) && (st.wr_overlaps > 0) &&
+               !st.wgt_tail_intact && st.mma_count == 0 &&
+               st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
+  }
+  /* A destination overrun one vector past P must be caught by the guard
+   * content (payload bytes in the L2 P guard) and by the 0xDEAD residue it
+   * leaves at the start of P, and it must fail the contract. */
+  if (fault == HMX_FAULT_C2_L2_GUARD_OVERRUN) {
+    detected = (st.p_guard_hits == 1) && st.deadic_cells == 64 &&
+               st.copy_vectors_done == HMX_C2_COPY_VECTORS &&
+               st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
+  }
+
+  {
+    char lbl[96];
+    c2_cpu_label(st.cls, "fault_injected", lbl, sizeof(lbl));
+    printf("c2_fault_detail=%s class=%s overlaps=%d wgt_tail_intact=%d mma=%d "
+           "deadic=%d c1=%d c2_nonzero=%d c2_zero=%d copied_vectors=%d "
+           "wr_overlaps=%d\n",
+           hmx_b3_r2_fault_name(fault), lbl, st.overlaps, st.wgt_tail_intact,
+           st.mma_count, st.deadic_cells, st.c1_cells, st.c2_nonzero_cells,
+           st.c2_zero_cells, st.copy_vectors_done, st.wr_overlaps);
+  }
+  return detected;
+}
+
 /* ---------------- Main Entry Point ---------------- */
 
 int main(void) {
@@ -2907,6 +3874,7 @@ int main(void) {
   verify_phase_reused_layout_static();
   run_phase_reused_crosscheck();
   run_cand_c_evaluation();
+  run_c2_prereg_evaluation();
   run_split_provenance_explanation();
   run_fp32_input_condition();
   run_fault_injection_tests();

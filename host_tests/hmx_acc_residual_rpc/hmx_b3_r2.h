@@ -211,6 +211,71 @@ typedef enum hmx_b3_r2_cc_sync {
 #define HMX_B3_R2_CC_PRIORITY_NOTE "candidate_b_preference_unchanged"
 #define HMX_B3_R2_CC_REGISTERED 0 /* not a registered layout */
 
+/* ---------------- Candidate C: C2 minimal experiment, revision 2 ----------------
+ *
+ * This is NOT the Candidate C layout above. It is the 1-MMA map used by the C2
+ * device pre-registration (docs/hmx-v81-cand-c-c2-device-prereg.md): one operand
+ * pair, one output buffer X, no operand reuse, no reconstruction on the critical
+ * path. Revision 2 exists because revision 1 violated a hard invariant:
+ *
+ *   revision 1 put guard_lo at +3968, inside the packed weight tile
+ *   (+2048..+4095). Filling the guard with 0x5A5A before the MMA destroys the
+ *   last 128 B of W -- crouton ic 30/31 of every output channel -- so the
+ *   experiment corrupts its own input before it can test anything.
+ *
+ * Revision 2 moves both guards next to X, clear of every operand. The revision 1
+ * offsets are kept below so the CPU overlap checker can be shown to reject them
+ * (HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP); they are not usable for a run. */
+#define HMX_B3_R2_C2_GUARD_BYTES    128
+#define HMX_B3_R2_C2_ACT_OFFSET     0
+#define HMX_B3_R2_C2_WGT_OFFSET     2048
+#define HMX_B3_R2_C2_GUARD_LO_OFFSET 6016 /* adjacent to X, 1,920 B clear of wgt */
+#define HMX_B3_R2_C2_X_OFFSET       6144 /* 2 KiB aligned; the single output */
+#define HMX_B3_R2_C2_GUARD_HI_OFFSET 8192
+#define HMX_B3_R2_C2_BIAS0_OFFSET   8448 /* 256 B aligned, shape 0 (positive) */
+#define HMX_B3_R2_C2_BIAS1_OFFSET   8704 /* 256 B aligned, shape 4 (negative) */
+#define HMX_B3_R2_C2_USED           8960
+#define HMX_B3_R2_C2_MARGIN        (HMX_B3_R2_VTCM_TOTAL - HMX_B3_R2_C2_USED)
+
+/* Superseded revision 1 map (kept only for the overlap regression). */
+#define HMX_B3_R2_C2_V1_GUARD_LO_OFFSET 3968
+#define HMX_B3_R2_C2_V1_X_OFFSET        4096
+#define HMX_B3_R2_C2_V1_GUARD_HI_OFFSET 6144
+#define HMX_B3_R2_C2_V1_BIAS0_OFFSET    8192
+#define HMX_B3_R2_C2_V1_BIAS1_OFFSET    8448
+#define HMX_B3_R2_C2_V1_USED            8704
+
+/* DSP L2 arena for the C2 experiment. The positive tile P is the only payload
+ * that leaves VTCM, and it is guarded on both sides INSIDE the arena, so no
+ * guard offset is negative and the whole reservation is a positive-size
+ * range that can be checked structurally. Revision 1 wrote P at L2 +0 with its
+ * lower guard at L2 -128, which is not a checkable allocation. */
+#define HMX_B3_R2_C2_L2_ARENA_BYTES 2560
+#define HMX_B3_R2_C2_L2_P_GUARD_LO  256  /* 256..383 */
+#define HMX_B3_R2_C2_L2_P_OFFSET    384  /* 384..2431 */
+#define HMX_B3_R2_C2_L2_P_GUARD_HI  2432 /* 2432..2559 */
+
+/* C2 observation classes. Order is the evaluation order: the first matching
+ * class wins, which is what makes the special values get classified before any
+ * C1/C2 signature is claimed. */
+typedef enum hmx_c2_class {
+  HMX_C2_CLASS_CONTRACT_FAILED = 0, /* counts / Rs / guards / build mismatch */
+  HMX_C2_CLASS_STORE2_PATH_BROKEN = 1, /* X is not the negative payload at all */
+  HMX_C2_CLASS_COPY_NOT_EXECUTED = 2, /* any 0xDEAD residue, partial included */
+  HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS = 3, /* FTZ/clamp zero where a payload was due */
+  HMX_C2_CLASS_MIXED_SIGNATURE = 4, /* both C1 and C2 evidence present */
+  HMX_C2_CLASS_C1_SIGNATURE = 5,   /* P saw X before Store #1 */
+  HMX_C2_CLASS_C2_SIGNATURE = 6,   /* P saw X after Store #2 */
+  HMX_C2_CLASS_CAUSE_INCONCLUSIVE = 7, /* content present but not attributable */
+  HMX_C2_CLASS_SUPPORTED = 8       /* all 1,024 cells are the positive payload */
+} hmx_c2_class_t;
+
+#define HMX_C2_SENTINEL_X  0xA5A5u /* pre-Store-#1 fill of X (bit 15 set) */
+#define HMX_C2_SENTINEL_P  0xDEADu /* fill of P (bit 15 set) */
+#define HMX_C2_SENTINEL_G  0x5A5Au /* guard fill (bit 15 clear, not a payload) */
+#define HMX_C2_COPY_VECTORS 16
+#define HMX_C2_PREREG_REVISION 2
+
 /* Whi restore source enumeration for MMA #3. */
 #define HMX_B3_R2_WHI_RESTORE_NONE        0 /* not needed (single-MMA paths) */
 #define HMX_B3_R2_WHI_RESTORE_L2_STAGE    1 /* the only legal source */
@@ -316,7 +381,13 @@ typedef enum hmx_b3_r2_fault {
   HMX_FAULT_CC_RESTORE_BEFORE_SAVE = 19,  /* Convert #2 issued mid-save */
   HMX_FAULT_CC_NEG_EVIDENCE_LOST = 20,    /* neg raw bits lost to the in-place recon */
   HMX_FAULT_CC_INPLACE_RW_CONFLICT = 21,  /* vector stored before its own neg load */
-  HMX_FAULT_CC_PLAIN_CLOBBERED = 22      /* Plain evidence lost to the shared buffer */
+  HMX_FAULT_CC_PLAIN_CLOBBERED = 22,     /* Plain evidence lost to the shared buffer */
+  /* C2 minimal experiment pre-registration faults (revision 2). */
+  HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP = 23, /* rev1 guard_lo lands in the W tile */
+  HMX_FAULT_C2_COPY_PARTIAL = 24,            /* only half of X reaches P */
+  HMX_FAULT_C2_MIXED_SIGNATURE = 25,         /* C1-looking and C2-looking cells */
+  HMX_FAULT_C2_FTZ_ZERO_LOSS = 26,           /* FTZ zero read as a C2 signature */
+  HMX_FAULT_C2_L2_GUARD_OVERRUN = 27         /* copy destination shifted one vector into the L2 P guard */
 } hmx_b3_r2_fault_t;
 
 static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
@@ -344,6 +415,11 @@ static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
     case HMX_FAULT_CC_NEG_EVIDENCE_LOST: return "CC_NEG_EVIDENCE_LOST";
     case HMX_FAULT_CC_INPLACE_RW_CONFLICT: return "CC_INPLACE_RW_CONFLICT";
     case HMX_FAULT_CC_PLAIN_CLOBBERED: return "CC_PLAIN_CLOBBERED";
+    case HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP: return "C2_GUARD_LO_WEIGHT_OVERLAP";
+    case HMX_FAULT_C2_COPY_PARTIAL: return "C2_COPY_PARTIAL";
+    case HMX_FAULT_C2_MIXED_SIGNATURE: return "C2_MIXED_SIGNATURE";
+    case HMX_FAULT_C2_FTZ_ZERO_LOSS: return "C2_FTZ_ZERO_LOSS";
+    case HMX_FAULT_C2_L2_GUARD_OVERRUN: return "C2_L2_P_GUARD_OVERRUN";
     default: return "UNKNOWN_FAULT";
   }
 }
