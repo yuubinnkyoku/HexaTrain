@@ -2491,6 +2491,40 @@ Loss Curriculum」への文献裏付けを探した。
   なっていることの実測確認になる。EMA weight averaging（J-4/I-3）は
   Track 3 でも #45（150-step EMA への final blend）として採用済み。
 
+### クラスタIの統合所見（2026-10-25、I-4 追加後に新設）
+
+1. **curriculum は「順序」、data mixing は「比率」で独立軸**（I-1/I-2 対 I-4）。
+   HexaTrain への適用は Phase 13 が両方を扱うが、効き方の理屈が違う
+   （curriculum は phase 滞在時間と安定性（I-2）、mixture は budget 配分）。
+2. **小規模ほど curriculum の安定化利得が大きい**（I-2）。HexaTrain（0.76M）は
+   利得最大帯の下端にあり、Phase 13 を「小規模特有の安定化施策」として
+   位置づける外部根拠。逆に scale を上げる Phase 0 suite では利得が縮む予測。
+3. **curriculum を入れるなら LR schedule との co-design が必須**（I-3）。
+   ascending order × decay の非両立により、緩やか decay と checkpoint averaging
+   （J-4/I-3、統合所見 9）を交互作用 arm として同時に走查する。
+4. **mixture 最適化の効用は corpus 拡大時まで保留**（I-4）。
+   現行は単一 source 系だが、Data Mixing Laws / CausalMix の
+   「小規模 run 群 → 外挿」手法は HexaTrain の host-side 試行 culture と同型。
+
+### クラスタJの統合所見（2026-10-25、J-5 追加後に新設）
+
+1. **speedrun 記録の陳腐化に注意**（J-1）。本調査初版の「90秒」は既に
+   約40秒（record #92、2026-08-30）へ更新されていた。recipe の記録引用は
+   必ず README の現行 record と照合して使う。
+2. **U-Net skip + value embeddings の36%級 gain は P1 pool（Value Residual /
+   Depth-Attention）の傍証**として最重量（J-1）。logit softcap と OEC（J-2/J-3）は
+   CE graph 変更最小の安定化候補として同じ枠で A/B できる。
+3. **ANVIL II（J-5）は wallclock track、Track 3 record（2690 step）は step 計測と
+   系が別**。ANVIL の twin momentum は C-13 Bi-Maxwell で理論裏付けが付き、
+   polynomial map は C-5 Polar Express と同型 — speedrun の発見が
+   C クラスタの理論系譜と合流している。
+4. **weight averaging は track を跨ぐ共通勝ち筋**（J-4/J-5/Track 3 #45）。
+   G1 LR stress grid の checkpoint 群を使った averaging A/B（統合所見 9）に
+   「単純平均 vs final/EMA blend」の arm を立てる材料が揃った。
+5. **speedrun の個別手法の直接移植は不可**（規模・data・相互作用依存、
+   J-1 ReLU² の実例）。recipe 引用は「存在証明」として使い、
+   HexaTrain での matched A/B を省略しない。
+
 ---
 
 # 全体統合（2026-10-25、クラスタ A〜J 完了時点）
