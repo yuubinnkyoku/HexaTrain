@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-10-28 JST**
+> **研究内容の最終更新: 2026-10-30 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -9,6 +9,8 @@
 > **2026-10-20 研究候補追記**: [Muse Glimmer 30B技術レポート](https://arxiv.org/abs/2610.24628)を踏まえ、同一runのcheckpoint平均化をP1候補へ、Dense対MoEのメモリ制約付き比較・MQA・蒸留・推論重みの精度配分・DFlashを既存の研究課題へ統合。**新規の実機検証結果やbaseline変更を意味しない**。
 >
 > **2026-10-28 研究候補追記**: [Liquid AI LFM3発表](https://www.liquid.ai/blog/lfm3)を踏まえ、短畳み込みとAttentionの混成をP1 feasibility / P2実験候補へ、実機を使った探索を既存P1構造探索へ統合。G1 / Partial RoPE / Sandwich Norm / Local-Globalの位置づけを整理。**新規実装・実機測定・baseline変更・学習実行は行っていない**。
+>
+> **2026-10-30 研究候補追記**: [Cartesia「From Tokens to Bytes」第1部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-1)・[第2部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-2)を踏まえ、文脈依存の学習型バイト分割 **H-Net** をText RepresentationのP2候補へ追加。まず小規模CPU検証と公平なbyte基準比較を行い、HTP移植は条件付きとする。**今回の変更は研究計画のみで、実装・実機測定・baseline変更・学習実行は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -29,7 +31,7 @@ Forward / Loss / Backward / Adamは引き続きQNN opを明示的に構築する
    - Attention / recurrent operator / layer layout
    - tied embedding / memory layer / sparse structure
 2. **Text Representation** 
-   - byte-BPEを現行基準とし、raw byte / GBST / BLT等を比較
+   - byte-BPEを現行基準とし、raw byte / GBST / BLT / H-Net等を比較
    - vocabulary sizeではなく、元UTF-8 byteあたりの品質・時間で比較
 3. **Gradient / Optimizer** 
    - Exact BP / segmented BP / ZO / hybrid BP+ZO
@@ -867,12 +869,30 @@ D64/FFN64 → D64/FFN128ではparametersが約25.8%増えた一方、256+256 hel
 - 現状では実装・backward・HTP costが大きいため、GBST/簡易patchの後
 - [Byte Latent Transformer](https://ai.meta.com/research/publications/byte-latent-transformer-patches-scale-better-than-tokens/)
 
+### E. H-Net（文脈依存の学習型バイト分割）
+
+→ **P2：PC上で小規模な数値・計算量検証を先行。HTP移植は効果確認後に判断**
+
+- 生のbyte列をencoderで読み、学習した境界で可変長のまとまりへ圧縮し、内側のモデルで処理した後にdechunking / decoderでbyte位置へ戻す。固定BPEや、局所的な圧縮だけを目的とする方式とは異なり、分割境界そのものを文脈依存でend-to-endに学習する。
+- [Cartesia「From Tokens to Bytes I」（2026-10-28）](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-1)では、内側のTransformerや計算量などを対応させた1-stage H-Netが、BPE基準に対して同等のvalidation bpbへ約1.28倍、OLMES上のbpbへ約2.06倍の計算効率を示した。より大規模な2-stageの比較ではSmolLM3の最終平均評価に約10分の1のデータ・計算量で到達したが、3.67B対3.08B parameterの別条件であり、HexaTrainの小規模モデルへの外挿は禁止する。
+- [第2部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-2)では、raw byteの汎化上の利点とBPEの系列圧縮の利点を両立しうると報告。仮説として扱い、Nicopediaの日本語UTF-8と小規模・短文脈でも成立するか独立に検証する。
+- 大規模2-stage版では外側のencoder / decoderが学習FLOPsの約43%を占める。**分割による短縮が外側の処理費用を上回るとは限らない**。2026-10-28の発表で用いた改良版は公開予定とされ、[公開済みの初期H-Net実装](https://github.com/goombalab/hnet)だけで新報告の数値を再現できると仮定しない。
+
+段階的な比較・採否条件:
+
+1. **CPU oracle / 小規模1-stageから開始**。現行Byte BPE V1024をcontrolとし、Raw Byte / GBST / 簡易BLTと区別した独立armにする。多段H-NetやHTP実装への直行はしない。
+2. **比較単位を元UTF-8 byteに固定**。文書境界・学習データ・評価集合・seedを揃え、parameter数だけでなくtraining FLOPs/original byte、圧縮率、内側・外側の計算量、総wall time、bpb、original bytes/s、peak RAMを記録する。同一条件にできない項目は差として明示する。token単位lossやstep数だけで優劣を判定しない。
+3. **日本語と短文脈の効果を検証**。UTF-8多バイト文字・語境界・未知語での分割例、実効圧縮率、global sequence長を可視化する。現行T32との元byte被覆範囲の違いを明記し、文脈量の差を学習効果と取り違えない。
+4. **学習・生成の正しさを先に確認**。causal性（未来byteの混入禁止）、dechunkingと復元位置、可変長境界のmask / padding、境界学習を含むbackwardの数値照合、決定的再実行、chunker設定・パラメータを含むcheckpoint identityを必須とする。
+5. **HTP移植の条件**。小規模で再現可能なbpb対wall / compute改善が出た場合のみ、動的shape、graph再生成、padding・pack/unpack、CPU↔HTP同期、Forward/Backward数値誤差をmicrotestで測る。正式なG1 / HTP検証や既存の保護資産は変更せず、独立研究laneで扱う。効果が出なければP2に据え置くか見送る。
+
 評価指標はtokenizer間で直接比較できるよう、
 
 - **bits per original UTF-8 byte (bpb)**
 - original UTF-8 bytes / model step
 - original UTF-8 bytes / second
-- global Transformer sequence length
+- global Transformer sequence length / 実効byte圧縮率
+- encoder・chunker・decoderを含む計算量（H-Net候補）
 - output projection cost
 - embedding / optimizer-state bytes
 - end-to-end training wall time
@@ -3780,11 +3800,12 @@ parameter数/FLOPsではなく、bpb・wall time・original-byte throughput・RA
 - BPE V512/2048/4096
 - GBST
 - simplified BLT
+- **1-stage H-Net（P2、まずCPU oracle。小規模で改善を確認できた場合のみHTP費用検証）**
 - **V1024 + MicroEngram**
 
 をbpbとoriginal-byte/sで比較する。
 
-特にlarger BPEとMicroEngramは、parameter数だけでなく**output projection / softmax cost、application-visible memory、host lookup traffic**まで含めて比較する。
+特にlarger BPEとMicroEngramは、parameter数だけでなく**output projection / softmax cost、application-visible memory、host lookup traffic**まで含めて比較する。H-Netは元byteあたりの品質・総FLOPs・wall・RAMと動的分割の実装費用を同時に測り、論文の大規模改善率を小規模HTPでの予測値として使わない。
 
 ## Phase 11 — Gradient / Optimizer alternatives
 
