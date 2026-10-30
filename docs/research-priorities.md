@@ -10,6 +10,8 @@
 >
 > **2026-10-28 研究候補追記**: [Liquid AI LFM3発表](https://www.liquid.ai/blog/lfm3)を踏まえ、短畳み込みとAttentionの混成をP1 feasibility / P2実験候補へ、実機を使った探索を既存P1構造探索へ統合。G1 / Partial RoPE / Sandwich Norm / Local-Globalの位置づけを整理。**新規実装・実機測定・baseline変更・学習実行は行っていない**。
 >
+> **2026-10-30 研究候補追記**: [Stacking Your Transformers（NeurIPS 2024）](https://arxiv.org/abs/2405.15319)を踏まえ、**Progressive Depth Growth / Layer Stacking**をPhase 8へP1 host診断→P2実機比較の候補として追加。SNS上のQwen3.5-9B/27B重み継承説は独立未検証の着想と区別する。**実装・実機測定・baseline変更・学習実行は行っていない**。
+>
 > **2026-10-30 研究候補追記**: [Cartesia「From Tokens to Bytes」第1部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-1)・[第2部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-2)を踏まえ、文脈依存の学習型バイト分割 **H-Net** をText RepresentationのP2候補へ追加。まず小規模CPU検証と公平なbyte基準比較を行い、HTP移植は条件付きとする。**今回の変更は研究計画のみで、実装・実機測定・baseline変更・学習実行は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
@@ -3782,6 +3784,24 @@ MUDD-liteは上記の軽量residual/value候補が不十分な場合のみ追加
 - parameter-matchedに加え、**同一推論メモリ上限**と**同一学習メモリ上限**の比較を分ける（Muse Glimmerの32GB inference-only条件との区別）
 
 parameter数/FLOPsではなく、bpb・wall time・original-byte throughput・RAMのParetoを保存する。
+
+### Progressive Depth Growth / Layer Stacking【P1 host診断 → P2実機比較】
+
+[Stacking Your Transformers（NeurIPS 2024、arXiv:2405.15319）](https://arxiv.org/abs/2405.15319)は、浅い学習済みTransformerの層を複製して深いモデルを初期化し、追加学習する`G_stack`を検証した。7B級では同程度の損失への到達がscratch 300B tokens対growth 194B tokensで、論文は**FLOPs換算の54.6% speedup**を報告する。これは**wall timeの54.6%削減ではなく**、約76万parameterのHexaTrainやスマートフォン実機で同じ効果がある証拠でもない。
+
+Qwen3.5-9B/27Bの公開重みの対応から「中間層複製後に追加学習した」とするSNS上の推定は**独立未検証の着想**であり、公式のtraining recipeとして扱わない。複製後に各層を独立更新する方式を、同じ重みを繰り返し共有する**Looped Transformer**とも区別する。重みを複製しただけでは元の入出力関数が保存されるとは限らない。
+
+**問い:** L19を最初から学習するよりも、浅いモデルの学習済み表現を残して段階的にL19まで成長させる方が、**総学習wall time・品質・RAM**の実測上有利になるか。
+
+**比較案（すべて候補値、production設定は変更しない）:**
+
+1. 親条件は現行**G1 research baseline**（V1024/T32/D64/FFN128/H2、最終L19、NPRTCKPTV5）。tokenizer・dataset identity・データ分割・評価器・optimizerと学習率の選択条件を揃え、legacy controlとproduction/defaultを維持する。
+2. **A: Scratch-L19**、**B: Stacking 7→13→19**（学習済み中間層の決定的な対応表に基づく複製、複製層は独立parameter）、**C: Identity-growth 7→13→19**（追加残差枝のゼロ出力初期化と関数保存性のCPU検証）を比較する。B/Cは成長時点と最終形状を一致させ、効果を混同しない。
+3. **optimizer stateは重みとは別に扱う。** 残存層の状態継承、追加層のMuon momentum・Aux Adam stateの初期化を明示し、複製state引継ぎ対resetは必要な場合のみ独立armで比べる。学習率や成長タイミングも同時には変えない。
+4. **異なる層数のcheckpointを通常resumeとして読み込ませない。** 元・先のconfig、層対応表、parameter registry、shape、state、hashを記録したversioned migration artifactを別に作り、読み戻し一致・finite・CPU forwardをfail-closed検査する。Bの成長直後の出力は元モデルと異なり得る。
+5. **P1:** host-only CPUで重み移植、決定性、forward/backward数値照合、成長直後の損失跳ね上がり・勾配・層別表現、資源見積もりを先に検証する。**P2:** P1通過後のみ、固定QAIRT・active-run保護・既存Tier条件に従い短期matched実機A/Bへ進む。既存G1/6031 formal laneを侵さず、未承認の長時間学習は開始しない。
+
+**採否:** Val/Dev bpb（final holdoutは選別に使わない）、`time-to-bpb`、**浅い段階と成長後を合算した**wall time/FLOPs推定、original UTF-8 bytes/s、graph create/finalize・migration固定費、peak RAM、推論品質/速度、非有限・QNN/HVX failure・fallbackを記録する。**同一原文byte予算**と**同一総wall time**は別比較として示す。複数seedでScratch-L19と同等以上の品質を保ち、目標bpb到達時間かRAMの明確な改善が得られた場合のみ昇格する。失敗はnegative evidenceとして保存し、既定動作を変えない。
 
 ## Phase 9 — Memory / Data Movement
 
