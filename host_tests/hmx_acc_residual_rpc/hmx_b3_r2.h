@@ -255,17 +255,21 @@ typedef enum hmx_b3_r2_cc_sync {
 #define HMX_B3_R2_C2_L2_P_OFFSET    384  /* 384..2431 */
 #define HMX_B3_R2_C2_L2_P_GUARD_HI  2432 /* 2432..2559 */
 
-/* C2 observation classes. Order is the evaluation order: the first matching
- * class wins, which is what makes the special values get classified before any
- * C1/C2 signature is claimed. */
+/* C2 observation classes. The numeric order IS the pinned evaluation order of
+ * pre-registration section 9: c2_classify() returns the first class below whose
+ * condition holds. The signature classes (MIXED/C1/C2) deliberately precede
+ * SUBNORMAL_OR_ZERO_LOSS, because revision 2 pins "collect every signature over
+ * all 1,024 cells, then fall back to the ambiguous card", so that a payload cell
+ * which reads as zero cannot hijack a C1/C2 attribution. Do not reorder this
+ * enum without changing section 9 and the fault-25 control expectations. */
 typedef enum hmx_c2_class {
   HMX_C2_CLASS_CONTRACT_FAILED = 0, /* counts / Rs / guards / build mismatch */
   HMX_C2_CLASS_STORE2_PATH_BROKEN = 1, /* X is not the negative payload at all */
   HMX_C2_CLASS_COPY_NOT_EXECUTED = 2, /* any 0xDEAD residue, partial included */
-  HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS = 3, /* FTZ/clamp zero where a payload was due */
-  HMX_C2_CLASS_MIXED_SIGNATURE = 4, /* both C1 and C2 evidence present */
-  HMX_C2_CLASS_C1_SIGNATURE = 5,   /* P saw X before Store #1 */
-  HMX_C2_CLASS_C2_SIGNATURE = 6,   /* P saw X after Store #2 */
+  HMX_C2_CLASS_MIXED_SIGNATURE = 3,    /* both C1 and C2 evidence present */
+  HMX_C2_CLASS_C1_SIGNATURE = 4,       /* P saw X before Store #1 */
+  HMX_C2_CLASS_C2_SIGNATURE = 5,       /* P saw X after Store #2 */
+  HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS = 6, /* FTZ/clamp zero where a payload was due */
   HMX_C2_CLASS_CAUSE_INCONCLUSIVE = 7, /* content present but not attributable */
   HMX_C2_CLASS_SUPPORTED = 8       /* all 1,024 cells are the positive payload */
 } hmx_c2_class_t;
