@@ -483,3 +483,11 @@ better than Candidate B (it has more copies and more L2), or that Candidate C
 should replace Candidate B. `B3_R2_FULL_TILE_CPU_READY`,
 `B3_R2_SYNC_UNPROVEN`, `CPU_VALIDATED_PREFERRED_DESIGN` and Mode 46 `NOT_RUN` all
 stand as recorded.
+
+### Later CPU audit: CB-FIX-1
+
+The earlier references to CB-FIX-1 as open describe the state at the time of
+this evaluation. Its CPU access-recording contract was subsequently corrected
+and verified; see [CB-FIX-1 CPU access audit](hmx-cb-fix-1-cpu-access-audit.md).
+`CB-FIX-1_CPU_CONTRACT_CLOSED` does not close D8, establish HMX read completion,
+or change the device synchronization status.
