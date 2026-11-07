@@ -82,7 +82,7 @@ re-implements, in Python and from the pre-registration text only:
   signatures before special values), applied to fixed raw bit arrays and
   synthetic observations.
 
-Results (67 checks, 0 failures):
+Results (81 checks, 0 failures; 18 fixed cases after the 2026-11-08 mixed-priority regression):
 
 - **Fixed battery (16 cases)** covers every terminal label of §9/§10:
   nominal (`C2_CPU_NOMINAL_MATCH`), whole-tile post-Store-#2
@@ -110,7 +110,7 @@ Results (67 checks, 0 failures):
   `C2_MINIMAL_SEQUENCE_SUPPORTED`; the CPU nominal outcome is
   `C2_CPU_NOMINAL_MATCH`.
 
-### 3.1 Machine differential against the C classifier (audit 2026-11-07)
+### 3.1 Machine differential against the C classifier (audit 2026-11-07, extended 2026-11-08)
 
 The Python test above never fed its observations to the C classifier, and the C
 model's controls were a separate hand-written battery. Two batteries can agree
@@ -121,30 +121,47 @@ gap mechanically:
 - it derives the registered payloads independently (same digest-pinned
   arithmetic), then computes the Python answer for **every** case *before* any C
   code runs;
-- it writes 1,818 cases to `build/c2_differential_cases.txt`: 282 byte-level
+- it writes 1,820 cases to `build/c2_differential_cases.txt`: 284 byte-level
   observations (the fixed battery, every classification boundary, multi-fault
-  combinations, 256 deterministic-seed mixtures) plus 1,536 exhaustive
-  counter combinations (all 2^9 binary combinations at `match=0`, all 2^8
-  combinations at `match=1,023` and at `match=1,024`, and the same sweep with
-  `contract_ok=0`);
+  combinations, 256 deterministic-seed mixtures, and two synthetic-expected
+  cases) plus 1,536 exhaustive counter combinations (all 2^9 binary
+  combinations at `match=0`, all 2^8 combinations at `match=1,023` and at
+  `match=1,024`, and the same sweep with `contract_ok=0`);
 - it replays them through the shipped `c2_observe()`/`c2_classify()` via the
   simulator's `--c2-replay` mode under **gcc `-O0`, gcc `-O2` and clang `-O2`**;
 - it compares the class streams mechanically and saves a JSON repro on any
   mismatch;
-- it corrupts one C answer in memory and **requires** the comparator to notice.
+- it corrupts one C answer in memory and **requires** the comparator to notice;
+- it pins the pre-registered label and the intended observation census for the
+  adopted cases (`mixed_signature`, `synthetic_c1_plus_zero_loss`), so a shared
+  drift of both implementations fails the pin instead of passing.
 
-Result: `c2_diff_impl=… cases=1818 mismatches=0` for all three builds,
-`c2_diff_checks=5454 fail=0`, `c2_diff_mutation_detected=1`. Every terminal
-class of §9 appears in the expectation histogram. This establishes
-implementation agreement, not hardware truth: if the registered text itself
-were an inadequate model of the device, both implementations would agree on the
-wrong answer.
+Result: `c2_diff_impl=… cases=1820 mismatches=0` for all three builds,
+`c2_diff_checks=5460 fail=0`, `c2_diff_mutation_detected=1`. Every terminal
+class of §9 appears in the expectation histogram.
+
+### 3.2 Mutation regression (2026-11-08)
+
+Agreement alone does not show that a case *discriminates*. Two deliberate
+mutations are applied to a scratch copy of the simulator (never to tracked
+source) and must be caught:
+
+| Mutation | Caught by |
+| --- | --- |
+| the payload-loss counter in `c2_observe` is not incremented | `synthetic_c1_plus_zero_loss` (only this case: a plain zero-loss state falls through to the same `INCONCLUSIVE` class) |
+| the mixed-signature test is removed from `c2_classify` | `mixed_signature` and the exhaustive counter sweep |
+
+`scripts/run_hmx_c2_mutation_check.ps1` runs both and prints
+`c2_mutation_check=PASS mutants=2`; the HMX gate executes it after the
+differential. If the mutation patterns ever stop matching the source, the
+mutants equal the original, the differential passes, and the mutation script
+fails closed.
 
 Known limitation, stated rather than hidden: the C model and the Python test
 are two implementations of the same registered text. If the text itself were
 ambiguous in a way both implementations read the same wrong way, this
-cross-check would not see it. The fixed battery pins every branch to the class
-the pre-registration names for it, which is the mitigation.
+cross-check would not see it. Fixed label pins and the mutation regression are
+the mitigation; they still cannot certify the text as a model of the hardware.
 
 ## 4. DSP-side evidence contract (design only)
 
@@ -164,7 +181,9 @@ held to.
 6. **Bias set selection** echoed per convert (set 0 then set 1).
 7. **Store #1/#2 address match** echoed (both `+6144`).
 8. **Full 2,048 B of P** (L2) and **full 2,048 B of X** (VTCM) returned to the
-   host as zero-extended u16 in decoded cell order (§5 below).
+   host as zero-extended u16 in raw pair-interleaved store-crouton order; the
+   host decodes exactly once to cell order `s*32+o` before comparing or
+   hashing (§5.2).
 9. **VTCM guards** (`+6016`, `+8192`) and **L2 guards** (L2 `+256`, `+2432`)
    checked on the DSP against `0x5A5A` before harvest, status + first
    mismatch reported.
@@ -214,10 +233,12 @@ words and can carry C2's:
 
 - **`results`: 2,048 slots = 8,192 B.** Slots 0..1023 = `P` (the positive
   tile harvested from L2), slots 1024..2047 = `X` final (the negative tile
-  harvested from VTCM). Each slot is one u16 cell, zero-extended, **decoded
-  cell order** (the host decodes before hashing, or the DSP pre-decodes —
-  this must be fixed in the future implementation, and the registered digest
-  arithmetic assumes decoded cell order `s*32+o`, u16 LE).
+  harvested from VTCM). Each slot is one zero-extended u16 in **raw
+  pair-interleaved store-crouton order on the wire**. The host decodes exactly
+  once before comparing or hashing in decoded cell order `s*32+o`, u16 LE.
+  This fixes the formerly ambiguous wire order (the DSP does not pre-decode)
+  without changing the registered expected bits or digests. The ABI has not
+  been implemented.
 - **`metadata`: 32 words**, same allocation size as Mode 45:
 
 | Word | Content | Expected |
@@ -271,9 +292,9 @@ words and can carry C2's:
   first contract-failure reason verbatim; RPC and close status. All of it
   printed, all of it preserved before `rpcmem_free`, and the raw bytes of
   both tiles preserved on any failure per §9 of the pre-registration.
-- **Sizing sanity**: 8,192 B + 128 B of ION shared memory is three orders of
-  magnitude below the allocations the APK already makes elsewhere; no FastRPC
-  practical limit is approached. The mode number this would use (Mode 46)
+- **Sizing sanity**: the proposed buffers total 8,192 B + 128 B. Actual
+  allocation, mapping and transport limits remain unverified until a future
+  approved implementation is audited. The mode number this would use (Mode 46)
   remains `NOT_RUN` and unregistered — registering it is DSP work and is
   **not** designed here.
 
@@ -383,7 +404,7 @@ C2 result can only fail to disprove C2 (prereg §1).
    prologue to zero the 5,376 unowned bytes over a dirty allocation (fault 28);
    the device implementation must do the same, and its disassembly is the only
    place that can be confirmed.
-9. **Differential scope** — 5,454 agreeing classifications establish that the C
+9. **Differential scope** — 5,460 agreeing classifications establish that the C
    and Python implementations read the registered text identically. They cannot
    establish that the text models the hardware correctly.
 
@@ -395,13 +416,13 @@ DSP binary was built, nothing ran on a phone, and `C2` stays `NOT_RUN`.
 
 | Evidence | Producer | Result | Bound to |
 | --- | --- | --- | --- |
-| C model + fault battery | gcc 15.2.0 `-O0`/`-O2` and clang 22.1.8 `-O2`, `-std=gnu11 -Wall -Wextra -Werror -ffp-contract=off` on `hmx_b3_r2_full_tile_sim.c` | `b3_r2_checks=12817 fail=0`, `b3_r2_fault_injection=PASS detected=30/30` | `f95d287` |
+| C model + fault battery | gcc 15.2.0 `-O0`/`-O2` and clang 22.1.8 `-O2`, `-std=gnu11 -Wall -Wextra -Werror -ffp-contract=off` on `hmx_b3_r2_full_tile_sim.c` | `b3_r2_checks=12828 fail=0`, `b3_r2_fault_injection=PASS detected=30/30` | `c56d4bf` |
 | Map + written-range ledger | same run | `c2_prereg … vtcm_used=8960 margin=3328 rev2_overlaps=0 rev1_overlaps=1`, `c2_written_ranges count=7 bytes=6912 overlaps=0 mismatch_declared=0` | map in `b22836e`, ledger in `bae32cf` |
 | Untouched-byte zeroing | same run | `c2_observation_contract … unowned_bytes=5376 zeroed_by_prologue=5376 dirty_fill=0xA5`; fault 28 fails the contract when the zeroing is omitted | `f95d287` |
 | Nominal bits | same run | `c2_nominal p_diff=0 x_diff=0 class=C2_CPU_NOMINAL_MATCH`, `sha_p=82107d6e…`, `sha_x=3fcddb24…` | §1 digest inventory |
 | Six-array Candidate B parity | same run | `cb_fix_1_six_array_parity … plain_pos=IDENTICAL plain_neg=IDENTICAL plain_recon=IDENTICAL b3_pos=IDENTICAL b3_neg=IDENTICAL b3_recon=IDENTICAL plain_diff_cells=0 b3_diff_cells=0` | `f95d287` |
 | Independent classifier | `python …/hmx_c2_independent_classifier_test.py` | `checks=67 fail=0`, `verdict=C2_INDEPENDENT_AUDIT_PASS` | `dfaed70` |
-| C/Python differential | `python …/hmx_c2_differential_test.py --clang-exe=…` (run by the HMX gate) | `c2_diff_impl=gcc-O2/-O0/clang-O2 cases=1818 mismatches=0`, `c2_diff_checks=5454 fail=0`, `c2_diff_mutation_detected=1` | `f95d287` |
+| C/Python differential | `python …/hmx_c2_differential_test.py --clang-exe=…` (run by the HMX gate) | `c2_diff_impl=gcc-O2/-O0/clang-O2 cases=1820 mismatches=0`, `c2_diff_checks=5460 fail=0`, `c2_diff_mutation_detected=1`, `c2_mutation_check=PASS mutants=2` | `c56d4bf` |
 | Class enum order | runtime pins `c2_class_enum_*` | numeric order equals the §9 order: contract → `0xDEAD` → X → mixed → C1 → C2 → special → inconclusive → supported | `f95d287` |
 
 Toolchain used: gcc 15.2.0 (`x86_64-w64-mingw32`) for the gate-owning leg,
@@ -429,9 +450,9 @@ Five things a re-runner must know:
    silently again.
 4. Cross-compiler agreement was checked directly: the gcc 15.2.0 build and the
    clang 22.1.8 build of the same source produce identical stdout for the
-   registered lines (all six SHA-256 values and `b3_r2_checks=12817 fail=0`),
+   registered lines (all six SHA-256 values and `b3_r2_checks=12828 fail=0`),
    so the registered digests are not an artefact of one compiler's code
-   generation. The same 1,818 differential cases agree under both compilers at
+   generation. The same 1,820 differential cases agree under both compilers at
    `-O0` and `-O2`.
 5. The Python differential test deliberately ignores `$CC`: on these machines
    `CC` is often pinned to `cl.exe`, whose flags are incompatible with this

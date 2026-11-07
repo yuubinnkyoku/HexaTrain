@@ -33,10 +33,13 @@ require hardware, not to promote CPU results to device evidence.
 | F8 | `run_hmx_b3_r2_sim.ps1` did not create `build/`. `build/` is gitignored, so on a clean checkout the simulator's `fopen` failed silently and the Python audit exited 2 (`SKIP`) with no gate failure. | script | Runner creates `build/`; the simulator prints `b3_r2_dump=written|not_written` |
 | F9 | The host ABI sizes (2,048 result slots, 32 metadata words) existed only in prose. | model | Constants `HMX_B3_R2_C2_RESULT_SLOTS/_METADATA_WORDS/_SLOT_BYTES/_P_SLOT_BASE/_X_SLOT_BASE` with seven `c2_abi_*` checks |
 | F10 | The evidence contract did not require: exact `resultsLen`/`metadataLen`, a defined word-25 enumeration (or an explicit "echo only"), the copy to sit between the two stores in object order, or the prologue zero-fill in the disassembly audit. | doc | All four added to §5.2/§6 |
+| F11 | Section 9's mixed-signature branch was never explicitly pinned: no case required a tile holding both a C1 cell and a non-zero negative cell. The enum numbering happens to match the list, so a reorder would have gone unnoticed. (Found in the 2026-11-08 legacy-worktree triage and adopted.) | test gap | `c2_control_mixed_signal` + Python `case_mixed_registered_label`, with a counterfactual proving the case discriminates the order |
+| F12 | The observer's payload-loss row (`zero_loss_other`, §6 row 6) was unreachable from the registered fixture because the fixture is mutually exclusive; only the classifier's counter sweep could see it, never `c2_observe`. | test gap | `synthetic_c1_plus_zero_loss` uses a synthetic expected pair, combined with a C1 cell so a missing count changes the class (C1 instead of `INCONCLUSIVE`) |
+| F13 | The differential's cases were not proven discriminating: agreement on 1,818 cases could be agreement on inputs that cannot fail. | test gap | `scripts/run_hmx_c2_mutation_check.ps1` removes the zero-loss counter and the mixed test in scratch builds; the differential must detect both |
 
 No registered expected value, digest, map offset or authorisation line was
-changed. The check count moved 12,784 → 12,817 (+33) and the fault battery
-27 → 30.
+changed. The check count moved 12,784 → 12,828 (+44: 33 from the 2026-11-07
+audit, 11 from the 2026-11-08 addendum) and the fault battery 27 → 30.
 
 ---
 
@@ -92,26 +95,42 @@ Case population:
 
 | Kind | Count | What it covers |
 | --- | --: | --- |
-| Byte-level observations | 282 | the fixed battery, every §9 branch, boundary values, multi-fault combinations, 256 deterministic-seed mixtures across 5 profiles |
+| Byte-level observations | 284 | the fixed battery, every §9 branch, boundary values, multi-fault combinations, 256 deterministic-seed mixtures across 5 profiles, and two synthetic-expected cases (mixed signature; C1 + payload loss) |
 | Exhaustive counter combinations | 1,536 | all 2⁹ binary combinations at `match=0`; all 2⁸ combinations at `match=1,023` and at `match=1,024`; the same sweep with `contract_ok=0` |
-| **Total** | **1,818** | |
+| **Total** | **1,820** | |
 
-Result (2026-11-07):
+The two synthetic cases (added 2026-11-08 from the legacy worktree) do not
+replace registered arrays: they supply a synthetic expected pair only to reach
+cell classes the registered fixture cannot produce. `mixed_signature` carries
+both read points and is pinned to `C2_CAUSE_INCONCLUSIVE`;
+`synthetic_c1_plus_zero_loss` carries one C1 cell and one cell with a non-zero
+expected pair and `P = 0`, so a missing `zero_loss_other` count changes the
+class to C1 instead of leaving it inconclusive.
+
+Result (2026-11-08):
 
 ```text
-c2_diff_impl=gcc-O2 cases=1818 mismatches=0 answers=1818
-c2_diff_impl=gcc-O0 cases=1818 mismatches=0 answers=1818
-c2_diff_impl=clang-O2 cases=1818 mismatches=0 answers=1818
+c2_diff_impl=gcc-O2 cases=1820 mismatches=0 answers=1820
+c2_diff_impl=gcc-O0 cases=1820 mismatches=0 answers=1820
+c2_diff_impl=clang-O2 cases=1820 mismatches=0 answers=1820
 c2_diff_mutation_detected=1 case=1 C2_ORDERING_VIOLATED->C2_CAUSE_INCONCLUSIVE
-c2_diff_checks=5454 fail=0 implementations=3
+c2_diff_checks=5460 fail=0 implementations=3
 c2_diff_verdict=C2_DIFFERENTIAL_PASS
+c2_mutation_check=PASS mutants=2
 ```
 
-Python class distribution over the 1,818 cases (every terminal class present):
+The mutation regression (`scripts/run_hmx_c2_mutation_check.ps1`) compiles two
+scratch mutants and requires detection: removing the payload-loss counter is
+caught only by `synthetic_c1_plus_zero_loss` (exactly one mismatch), and
+removing the mixed test is caught by `mixed_signature` plus four counter-sweep
+cases. A mutation that no longer matches the source produces an unmutated
+binary, the differential passes, and the script fails closed.
+
+Python class distribution over the 1,820 cases (every terminal class present):
 `C2_PREREG_CONTRACT_FAILED` 514, `C2_COPY_NOT_EXECUTED` 568,
 `C2_STORE2_PATH_BROKEN` 326, `C1_STORE_VISIBILITY_SUSPECT` 42,
 `C2_ORDERING_VIOLATED` 100, `C2_SUBNORMAL_OR_ZERO_LOSS` 6,
-`C2_CAUSE_INCONCLUSIVE` 260, `C2_MINIMAL_SEQUENCE_SUPPORTED` 2.
+`C2_CAUSE_INCONCLUSIVE` 262, `C2_MINIMAL_SEQUENCE_SUPPORTED` 2.
 
 Limits of this result, stated so it is not over-read:
 
@@ -171,10 +190,30 @@ What the numbers do **not** say:
   not part of this comparison.
 - The L2 staging and L2 evidence columns are different resources and must not be
   combined into one "L2 usage" number.
-- Candidate C's 10,240 B is a larger **evidence set**, not 8 KiB of extra cost
-  for the same evidence: C must retain `plain_pos`/`plain_neg` raw because its
-  `OUT` is rewritten three times per subcase, while B keeps those tiles in VTCM
-  and only has to save the Plain recon.
+- The 2,048 B B figure is a **recon-only** evidence set, not the full six-array
+  condition. See the equal-evidence accounting below before quoting it.
+
+### Equal-evidence accounting (legacy-worktree finding, 2026-11-08)
+
+The table above reports what each model currently saves, not what a run that
+retains all six raw arrays needs. If all six 2,048 B arrays must survive to the
+host in one kernel:
+
+| Quantity | Streaming | Candidate B | Candidate C |
+| --- | ---: | ---: | ---: |
+| Mid-kernel operand staging | 6,144 B | 0 | 0 |
+| Plain evidence to L2 | 6,144 B (3 tiles) | 6,144 B (3 tiles) | 6,144 B (3 tiles, inside the arena) |
+| B3 output evidence to L2 | 0 (harvested from VTCM) | 0 (harvested from VTCM) | 4,096 B (pos + neg) |
+| **Peak L2 under this scenario** | **12,288 B** when staging and Plain evidence are both live | **6,144 B** | **10,240 B** |
+
+This is an accounting scenario, not a measured peak: neither the streaming nor
+the B model implements the combined schedule, so 12,288 B and 6,144 B are
+assumptions about a future implementation. What it establishes is narrower and
+important: the registered 2,048 B B-save covers only the reconstructed tile,
+so quoting it against C's five-tile arena compares different evidence sets.
+At equal evidence the ranking is unchanged — B (6,144 B) < C (10,240 B) <
+streaming (12,288 B when both roles are live) — but the gap to streaming
+narrows and the numbers must be labelled with their evidence condition.
 
 **Ordering for a first device trial: B > streaming > C.** B keeps the smallest
 L2 footprint, needs no mid-kernel operand transfers, has the smallest
@@ -218,14 +257,15 @@ Remaining **device** questions, deliberately not closed here:
 
 | Run | Command | Result |
 | --- | --- | --- |
-| C model, gcc 15.2.0 `-O2` | `scripts/run_hmx_b3_r2_sim.ps1` | `b3_r2_checks=12817 fail=0`, `fault_injection=PASS detected=30/30` |
+| C model, gcc 15.2.0 `-O2` | `scripts/run_hmx_b3_r2_sim.ps1` | `b3_r2_checks=12828 fail=0`, `fault_injection=PASS detected=30/30` |
 | C model, gcc 15.2.0 `-O0` | direct compile | identical count, digests and 30/30 |
 | C model, clang 22.1.8 `-O2` | runner clang leg | exit 0, identical stdout for registered lines |
-| Python independent audit | `hmx_c2_independent_classifier_test.py` | `checks=67 fail=0`, `C2_INDEPENDENT_AUDIT_PASS` |
-| C/Python differential | `hmx_c2_differential_test.py` (gcc `-O0`/`-O2`, clang `-O2`) | `c2_diff_checks=5454 fail=0`, mutation detected |
+| Python independent audit | `hmx_c2_independent_classifier_test.py` | `checks=81 fail=0`, `C2_INDEPENDENT_AUDIT_PASS` |
+| C/Python differential | `hmx_c2_differential_test.py` (gcc `-O0`/`-O2`, clang `-O2`) | `c2_diff_checks=5460 fail=0`, mutation detected |
+| Mutation regression | `run_hmx_c2_mutation_check.ps1` | `c2_mutation_check=PASS mutants=2` (payload-loss row, mixed test) |
 | Digest immutability | all runs | six SHA-256 values equal the pre-registered constants |
 | `verify.ps1 -Profile Fast` | `scripts/verify.ps1 -Profile Fast` | **PASS** (PASS=10 FAIL=0 SKIP=21; the first attempt failed only on `git-diff-check` for one trailing space in the new fault table, fixed before the passing run) |
-| `verify.ps1 -Profile Host` | `scripts/verify.ps1 -Profile Host` | **PASS** (see the PR comment for the recorded totals) |
+| `verify.ps1 -Profile Host` | `scripts/verify.ps1 -Profile Host` | **PASS** (PASS=2 FAIL=0 SKIP=0, `host-tests PASS 898.2s`; re-run on the 2026-11-08 integration commit) |
 
 No expected value, decision criterion or registered hash was relaxed to obtain
 any of these results.

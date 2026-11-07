@@ -71,6 +71,36 @@ authorisation line changed. What the audit established, and what it fixed:
 The five fixes changed no registered bit and no digest; the fault battery moved
 from 27 to 30 and the check count from 12,784 to 12,817.
 
+**Addendum of 2026-11-08 (legacy-worktree triage, still pre-execution).** The
+long-lived uncommitted changes in the original worktree were preserved, audited
+and selectively adopted; nothing was discarded. No map, fixture bit, digest or
+authorisation line changed. Adopted, because they close real test gaps:
+
+1. **Mixed-signature priority was never explicitly pinned.** Section 9 is a
+   first-match list and the enum numbering happens to match it, but no case
+   required a tile with *both* a C1 cell and a non-zero negative cell to take
+   the mixed branch. Added `c2_control_mixed_signal` (C) and
+   `case_mixed_registered_label` (Python), with a counterfactual that shows the
+   same observation answers C1 under the rejected order
+   (`c2_control_mixed_counterfactual_reports_c1`,
+   `case_mixed_counterfactual_after_c1_reports_c1`). A mutation regression
+   removes the mixed test in a scratch build and requires the differential to
+   catch it.
+2. **The observer's payload-loss row was unreachable from the registered
+   fixture** (mutual exclusivity means no cell has both expected halves
+   non-zero). A synthetic expected pair, combined with a C1 cell so the case
+   *discriminates* rather than falling through to the same class, now exercises
+   `c2_observe`'s `zero_loss_other` row end-to-end. The synthetic pair does not
+   replace any registered array or digest.
+3. **The differential's cases were not proven discriminating.** Two mutants
+   (payload-loss counter removed, mixed test removed) are compiled from scratch
+   copies and must be detected by the differential
+   (`scripts/run_hmx_c2_mutation_check.ps1`).
+
+Totals after the addendum: C model **12,828** checks, Python independent audit
+**81** checks over 18 fixed cases, differential **1,820** cases × 3 builds =
+**5,460** comparisons, fault battery **30/30**.
+
 ---
 
 ## 0. The one question
@@ -581,8 +611,8 @@ run by the Fast gate.
 | `c2_nominal_sha_p` / `_sha_x` | the observed `P` and `X` digests equal the registered positive/negative digests | PASS |
 | `c2_payload_census` | 1,023 discriminating, 475 non-zero negative payloads, 546 weak cells, 2 ambiguous subnormal cells | PASS |
 | label contract (`c2_cpu_nominal_label`, `c2_cpu_label_never_device_label`) | no CPU context can render `C2_MINIMAL_SEQUENCE_SUPPORTED`, for any classifier outcome (§5.1) | PASS |
-| `c2_control_*` (27 checks) | every branch of §9, the whole-tile post-Store-#2 read that must be attributed, and the 2026-10-30 audit controls: X-broken+`0xDEAD` order pin, C1+subnormal inconclusive, unknown bit pattern, P/X swap, both-tile decode-order swap, P-only decode-order swap. The 2026-11-07 audit added the multi-fault precedence pins (`0xDEAD`+signature, contract+`0xDEAD`, C1+unknown, FTZ+signature, all-C1, all-unknown, a single non-zero C2 cell, and the 1,023-match defensive branch) | PASS |
-| `c2_differential_*` (`hmx_c2_differential_test.py`) | the C classifier and the independent Python classifier agree on 1,818 identical cases (282 observations + 1,536 exhaustive counter combinations) under gcc `-O0`, gcc `-O2` and clang `-O2`; a mutation of one C answer is detected | PASS 5,454/5,454 |
+| `c2_control_*` (38 checks) | every branch of §9, the whole-tile post-Store-#2 read that must be attributed, and the 2026-10-30 audit controls: X-broken+`0xDEAD` order pin, C1+subnormal inconclusive, unknown bit pattern, P/X swap, both-tile decode-order swap, P-only decode-order swap. The 2026-11-07 audit added the multi-fault precedence pins (`0xDEAD`+signature, contract+`0xDEAD`, C1+unknown, FTZ+signature, all-C1, all-unknown, a single non-zero C2 cell, and the 1,023-match defensive branch). The 2026-11-08 addendum added the mixed-signature priority pin, its counterfactual, the single-C2 single-point check and the "signature run is not a contract failure" checks | PASS |
+| `c2_differential_*` (`hmx_c2_differential_test.py`) | the C classifier and the independent Python classifier agree on 1,820 identical cases (284 observations + 1,536 exhaustive counter combinations) under gcc `-O0`, gcc `-O2` and clang `-O2`; a mutation of one C answer is detected, and two deliberate classifier/observer mutations are caught by `run_hmx_c2_mutation_check.ps1` | PASS 5,460/5,460, mutants 2/2 |
 
 Fault injections (`b3_r2_fault_injection=PASS detected=30/30`), 23–27 being the
 original C2 set and 28–30 added by the 2026-11-07 audit:
@@ -654,24 +684,28 @@ payload cell can (§5).
 # c2_classifier_controls full_store2=C2_ORDERING_VIOLATED(simulated) ... subnormal_zero=C2_SUBNORMAL_OR_ZERO_LOSS(simulated)
 # c2_control_matrix x_plus_dead=C2_COPY_NOT_EXECUTED(simulated) ... p_decode_swap=C2_CAUSE_INCONCLUSIVE(simulated) p_swap_c2_coincidences=0
 # c2_observation_contract ... unowned_bytes=5376 zeroed_by_prologue=5376 dirty_fill=0xA5
+# c2_mixed_priority single_c1=C1_STORE_VISIBILITY_SUSPECT(simulated) single_c2=C2_ORDERING_VIOLATED(simulated) mixed=C2_CAUSE_INCONCLUSIVE(simulated) ... counterfactual_after_c1_is_c1=1
 # b3_r2_fault_injection=PASS detected=30/30
-# b3_r2_checks=12817 fail=0
-# b3_r2_c2_python=PASS (independent=exit0 differential=exit0 incl clang-O2)
-# c2_diff_impl=gcc-O2 cases=1818 mismatches=0
-# c2_diff_impl=gcc-O0 cases=1818 mismatches=0
-# c2_diff_impl=clang-O2 cases=1818 mismatches=0
+# b3_r2_checks=12828 fail=0
+# b3_r2_c2_python=PASS (independent=exit0 differential=exit0 mutation=exit0 incl clang-O2)
+# c2_diff_impl=gcc-O2 cases=1820 mismatches=0
+# c2_diff_impl=gcc-O0 cases=1820 mismatches=0
+# c2_diff_impl=clang-O2 cases=1820 mismatches=0
 # c2_diff_mutation_detected=1
+# c2_mutation_check=PASS mutants=2
 ```
 
 Registered artifacts are `build/`-only and gitignored. The digests above are the
 registration; the files are not. The `b3_r2_checks` count is a deterministic
 function of the simulator source (same count at `-O0` and `-O2`); it moved from
 12704 (revision 1, commit `b22836e`) to 12759 (revision 2), to 12784
-(2026-10-30 classification audit), to **12,817** with the 33 checks the
-2026-11-07 differential/contract audit added. The runner now also creates
+(2026-10-30 classification audit), to 12817 with the 33 checks the
+2026-11-07 differential/contract audit added, and to **12,828** with the 11
+checks of the 2026-11-08 mixed-priority addendum. The runner now also creates
 `build/` before the simulator runs, so the Python audits cannot silently SKIP on
-a clean checkout, and it executes both Python audits as part of the Fast gate
-(with `SKIP` only when `python` is genuinely absent from `PATH`).
+a clean checkout, and it executes the independent audit, the differential and
+the mutation regression as part of the Fast gate (with `SKIP` only when
+`python` is genuinely absent from `PATH`).
 
 ---
 
