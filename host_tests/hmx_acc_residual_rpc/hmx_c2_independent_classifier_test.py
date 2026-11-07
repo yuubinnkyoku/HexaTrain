@@ -233,17 +233,22 @@ def observe_cells(p, x, exp_pos, exp_neg):
     }
 
 
-def classify(obs, contract_ok=True):
+def classify(obs, contract_ok=True, mixed_after_c1=False):
     """Prereg section 9 (amended 2026-10-30): 0xDEAD before X; signatures
     before special values; special values claim the run only when nothing
-    else coexists."""
+    else coexists.
+
+    mixed_after_c1 is the *rejected* ordering: it moves the mixed test behind
+    the C1 branch and exists only so the mixed-priority regression can show
+    that its case would fail under that reordering. Every real judgement uses
+    the default."""
     if not contract_ok:
         return "C2_PREREG_CONTRACT_FAILED"
     if obs["dead"] > 0:
         return "C2_COPY_NOT_EXECUTED"
     if obs["x_mismatch"] > 0:
         return "C2_STORE2_PATH_BROKEN"
-    if obs["c1"] > 0 and obs["c2_nonzero"] > 0:
+    if obs["c1"] > 0 and obs["c2_nonzero"] > 0 and not mixed_after_c1:
         return "C2_CAUSE_INCONCLUSIVE"  # mixed: two read points in one tile
     if obs["c1"] > 0:
         if obs["ambig"] > 0 or obs["zero_loss"] > 0 or obs["c2_zero"] > 0 or obs["unknown"] > 0:
@@ -403,6 +408,40 @@ def main():
     p_c1[0] = SENTINEL_X
     c, _ = run_case("single_c1", p_c1, nominal_x)
     check(c == "C1_STORE_VISIBILITY_SUSPECT", "case_single_c1")
+
+    # ---- Mixed-signature priority (adopted 2026-11-08 from the legacy
+    # uncommitted worktree; regression for a real ordering hazard). ----
+    # Section 9 is a first-match list, so a C1 cell and a non-zero negative cell
+    # in the same tile must reach the mixed branch *before* the C1 branch. The
+    # counterfactual below proves the case discriminates the order rather than
+    # passing because the implementation happens to agree with itself.
+    strong_idx = [i for i in range(CELLS)
+                  if exp_neg[i] != 0 and exp_pos[i] != exp_neg[i]]
+    check(len(strong_idx) > 1, "mixed_strong_cells_available")
+    c2_cell = strong_idx[0] if strong_idx[0] != 0 else strong_idx[1]
+
+    p_one_c2 = list(exp_pos)
+    p_one_c2[c2_cell] = exp_neg[c2_cell]
+    c, obs_one_c2 = run_case("single_c2", p_one_c2, nominal_x)
+    check(c == "C2_ORDERING_VIOLATED", "case_single_c2_attributed")
+    check(obs_one_c2["c2_nonzero"] == 1 and obs_one_c2["c1"] == 0,
+          "case_single_c2_is_single_point_evidence")
+
+    p_mixed = list(exp_pos)
+    p_mixed[0] = SENTINEL_X
+    p_mixed[c2_cell] = exp_neg[c2_cell]
+    c_mixed, obs_mixed = run_case("mixed", p_mixed, nominal_x)
+    check(obs_mixed["c1"] > 0 and obs_mixed["c2_nonzero"] > 0,
+          "case_mixed_has_two_read_points")
+    check(c_mixed == "C2_CAUSE_INCONCLUSIVE", "case_mixed_registered_label")
+    check(c_mixed != "C1_STORE_VISIBILITY_SUSPECT", "case_mixed_not_c1")
+    check(c_mixed != "C2_ORDERING_VIOLATED", "case_mixed_not_c2")
+    check(obs_mixed["dead"] == 0 and obs_mixed["x_mismatch"] == 0,
+          "case_mixed_no_dead_no_x_mismatch")
+    check(c_mixed != "C2_PREREG_CONTRACT_FAILED",
+          "case_mixed_not_contract_failed")
+    check(classify(obs_mixed, mixed_after_c1=True) == "C1_STORE_VISIBILITY_SUSPECT",
+          "case_mixed_counterfactual_after_c1_reports_c1")
 
     x_broken = list(nominal_x)
     x_broken[0] ^= 1

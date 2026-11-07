@@ -128,8 +128,10 @@ try {
     }
 
     # ---------------- Python independent audits (CPU only) ----------------
-    # Both are optional in the sense that a machine without python must report
-    # SKIP, not FAIL; when python is present a failure is a gate failure.
+    # Three legs: the independent classifier audit, the C/Python differential,
+    # and a mutation regression that must be detected by the differential. They
+    # are optional in the sense that a machine without python must report SKIP,
+    # not FAIL; when python is present a failure is a gate failure.
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCommand) {
         $pythonStatus = "SKIP (python not found on PATH)"
@@ -149,13 +151,24 @@ try {
         & $pythonCommand.Source @diffArgs
         $diffExit = $LASTEXITCODE
         Write-Host "b3_r2_c2_differential_exit=$diffExit"
-        if ($indepExit -eq 0 -and $diffExit -eq 0) {
-            $pythonStatus = "PASS (independent=exit0 differential=exit0)"
+        # Mutation regression: two deliberate classifier/observer mutations must
+        # be detected by the differential. Only meaningful when the differential
+        # itself passed, so a failure there is not masked by this leg.
+        $mutationExit = 0
+        if ($diffExit -eq 0) {
+            & (Join-Path $Root "scripts\run_hmx_c2_mutation_check.ps1")
+            $mutationExit = $LASTEXITCODE
+        } else {
+            Write-Host "c2_mutation_check=SKIP (differential failed)"
+        }
+        Write-Host "b3_r2_c2_mutation_exit=$mutationExit"
+        if ($indepExit -eq 0 -and $diffExit -eq 0 -and $mutationExit -eq 0) {
+            $pythonStatus = "PASS (independent=exit0 differential=exit0 mutation=exit0)"
             if ($diffArgs.Count -gt 1) {
-                $pythonStatus = "PASS (independent=exit0 differential=exit0 incl clang-O2)"
+                $pythonStatus = "PASS (independent=exit0 differential=exit0 mutation=exit0 incl clang-O2)"
             }
         } else {
-            $pythonStatus = "FAIL (independent=$indepExit differential=$diffExit)"
+            $pythonStatus = "FAIL (independent=$indepExit differential=$diffExit mutation=$mutationExit)"
             $pythonRunFailed = $true
         }
     }

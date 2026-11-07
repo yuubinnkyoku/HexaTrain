@@ -86,9 +86,11 @@ def is_subnormal(bits):
 
 # ------------------------------------------------------------------- cases
 class Case(object):
-    __slots__ = ("cid", "kind", "desc", "contract", "p", "x", "counts")
+    __slots__ = ("cid", "kind", "desc", "contract", "p", "x", "counts",
+                 "expect", "probe", "ep", "en")
 
-    def __init__(self, cid, kind, desc, contract, p=None, x=None, counts=None):
+    def __init__(self, cid, kind, desc, contract, p=None, x=None, counts=None,
+                 expect=None, probe=None, ep=None, en=None):
         self.cid = cid
         self.kind = kind
         self.desc = desc
@@ -96,6 +98,16 @@ class Case(object):
         self.p = p
         self.x = x
         self.counts = counts
+        # Pre-registered label pin (independent of both implementations) and an
+        # optional observation-census predicate that proves the case reaches
+        # the intended cell class.
+        self.expect = expect
+        self.probe = probe
+        # Optional synthetic expected pair. None means "the registered fixture
+        # arrays"; a synthetic pair never replaces the registered evidence and
+        # is used only to reach cell classes the fixture cannot produce.
+        self.ep = ep
+        self.en = en
 
 
 def scaled_store_index(s, o):
@@ -142,9 +154,11 @@ def build_array_cases(exp_pos, exp_neg):
     strong = first_nonzero_negative(exp_pos, exp_neg)
     assert sub and weak and strong >= 0
 
-    def add(desc, p, x, contract=1):
-        cases.append(Case(len(cases), "arrays", desc, contract, list(p), list(x)))
-
+    def add(desc, p, x, contract=1, expect=None, probe=None, ep=None, en=None):
+        cases.append(Case(len(cases), "arrays", desc, contract, list(p), list(x),
+                          expect=expect, probe=probe,
+                          ep=None if ep is None else list(ep),
+                          en=None if en is None else list(en)))
     nominal_p = list(exp_pos)
     nominal_x = list(exp_neg)
 
@@ -240,6 +254,44 @@ def build_array_cases(exp_pos, exp_neg):
     add("contract_failed", nominal_p, nominal_x, contract=0)
     add("contract_failed_plus_dead", p_partial, x_broken, contract=0)
 
+    # ---- Cases adopted from the legacy uncommitted worktree (2026-11-08) ----
+    # Both written through a *synthetic* expected pair. They do not alter the
+    # registered arrays or digests; they exist because the registered fixture
+    # cannot reach two cell classes:
+    #
+    # (a) payload loss (row 6) combined with a C1 signature. The fixture is
+    #     mutually exclusive, so no cell has a non-zero expected positive *and*
+    #     a non-zero expected negative; a zero P cell there is the only way to
+    #     exercise c2_observe's zero_loss_other row end-to-end. The C1 cell is
+    #     required for the case to *discriminate*: on a plain zero-loss state
+    #     the C classifier would fall through to INCONCLUSIVE even if it never
+    #     counted the row, so a class-only comparison could not tell. With C1
+    #     present, a missing count yields C1 and the comparison fails.
+    synth_p = list(exp_pos)
+    synth_x = list(exp_neg)
+    synth_ep = list(exp_pos)
+    synth_en = list(exp_neg)
+    loss_cell = strong if strong != 0 else 1
+    synth_ep[loss_cell], synth_en[loss_cell] = 0x3C00, 0x4000
+    synth_p[loss_cell], synth_x[loss_cell] = 0, 0x4000
+    synth_p[0] = 0xA5A5
+    add("synthetic_c1_plus_zero_loss", synth_p, synth_x,
+        expect="C2_CAUSE_INCONCLUSIVE",
+        probe=lambda obs: obs["zero_loss"] >= 1 and obs["c1"] >= 1,
+        ep=synth_ep, en=synth_en)
+
+    # (b) mixed signature: both read points in one tile, pinned to the label
+    #     section 9 names, with two read points present in the census.
+    mixed_cell = strong if strong != 0 else first_nonzero_negative(
+        exp_pos, exp_neg, 1)
+    assert mixed_cell > 0
+    p_mixed = list(exp_pos)
+    p_mixed[0] = 0xA5A5
+    p_mixed[mixed_cell] = exp_neg[mixed_cell]
+    add("mixed_signature", p_mixed, nominal_x,
+        expect="C2_CAUSE_INCONCLUSIVE",
+        probe=lambda obs: obs["c1"] > 0 and obs["c2_nonzero"] > 0)
+
     return cases
 
 
@@ -315,7 +367,9 @@ def python_expectation(case, exp_pos, exp_neg):
     if case.kind == "counts":
         obs = {k: case.counts[k] for k in case.counts}
         return indep.classify(obs, case.contract), obs
-    obs = indep.observe_cells(case.p, case.x, exp_pos, exp_neg)
+    ep = case.ep if case.ep is not None else exp_pos
+    en = case.en if case.en is not None else exp_neg
+    obs = indep.observe_cells(case.p, case.x, ep, en)
     return indep.classify(obs, case.contract), obs
 
 
@@ -334,8 +388,10 @@ def write_cases(cases, exp_pos, exp_neg):
                     c.counts["x_mismatch"]))
             else:
                 fh.write("arrays %d %d\n" % (c.cid, c.contract))
+                ep = c.ep if c.ep is not None else exp_pos
+                en = c.en if c.en is not None else exp_neg
                 for tag, arr in (("P", c.p), ("X", c.x),
-                                 ("EP", exp_pos), ("EN", exp_neg)):
+                                 ("EP", ep), ("EN", en)):
                     fh.write("%s %s\n" % (tag, " ".join("%04x" % v for v in arr)))
 
 
@@ -421,8 +477,20 @@ def main():
 
     # Python answers are computed BEFORE any C process runs.
     expected = {}
+    pin_failures = 0
     for c in cases:
-        expected[c.cid], _obs = python_expectation(c, exp_pos, exp_neg)
+        expected[c.cid], obs = python_expectation(c, exp_pos, exp_neg)
+        if c.expect is not None and expected[c.cid] != c.expect:
+            log("FAIL case=%s (%s): pre-registered label %s, python says %s"
+                % (c.cid, c.desc, c.expect, expected[c.cid]))
+            pin_failures += 1
+        if c.probe is not None and not c.probe(obs):
+            log("FAIL case=%s (%s): observation does not reach the intended "
+                "cell class (census=%s)" % (c.cid, c.desc, json.dumps(obs)))
+            pin_failures += 1
+    if pin_failures:
+        log("c2_diff_verdict=C2_DIFFERENTIAL_FAIL (label/coverage pins)")
+        return 1
 
     write_cases(cases, exp_pos, exp_neg)
 
@@ -442,27 +510,40 @@ def main():
     # this source requires. An explicit --cc= argument is the only override.
     gcc = "gcc"
     clang_exe = None
+    replay_exe = None
     for arg in sys.argv[1:]:
         if arg.startswith("--cc="):
             gcc = arg.split("=", 1)[1]
         elif arg.startswith("--clang-exe="):
             clang_exe = arg.split("=", 1)[1]
-    if shutil.which(gcc) is None:
-        log("SKIP (no C compiler %r on PATH)" % gcc)
-        return 2
-    for opt in (2, 0):
-        exe = os.path.join(BUILD, "hmx_c2_replay_gcc_o%d.exe" % opt)
-        path, err = compile_replay(gcc, opt, exe)
-        if path is None:
-            log("FAIL gcc-O%d compile %s" % (opt, err))
-            return 2
-        runs.append(("gcc-O%d" % opt, path))
+        elif arg.startswith("--replay-exe="):
+            replay_exe = arg.split("=", 1)[1]
 
-    if clang_exe:
-        if not os.path.isfile(clang_exe):
-            log("SKIP clang replay (no binary at %s)" % clang_exe)
-        else:
-            runs.append(("clang-O2", clang_exe))
+    if replay_exe is not None:
+        # Audit hook: compare a specific (possibly mutated) binary instead of
+        # building the tree's own source. Used by the mutation regression to
+        # prove that the new cases are discriminating.
+        if not os.path.isfile(replay_exe):
+            log("SKIP (no replay binary at %s)" % replay_exe)
+            return 2
+        runs.append(("provided", replay_exe))
+    else:
+        if shutil.which(gcc) is None:
+            log("SKIP (no C compiler %r on PATH)" % gcc)
+            return 2
+        for opt in (2, 0):
+            exe = os.path.join(BUILD, "hmx_c2_replay_gcc_o%d.exe" % opt)
+            path, err = compile_replay(gcc, opt, exe)
+            if path is None:
+                log("FAIL gcc-O%d compile %s" % (opt, err))
+                return 2
+            runs.append(("gcc-O%d" % opt, path))
+
+        if clang_exe:
+            if not os.path.isfile(clang_exe):
+                log("SKIP clang replay (no binary at %s)" % clang_exe)
+            else:
+                runs.append(("clang-O2", clang_exe))
 
     total_mismatch = 0
     verified_ids = None

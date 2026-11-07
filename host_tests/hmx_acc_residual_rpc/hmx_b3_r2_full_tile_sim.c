@@ -3446,6 +3446,17 @@ static void c2_observe(c2_state_t *c) {
   }
 }
 
+/* What the procedure returns once a C1 signature exists and the mixed test has
+ * not already claimed the run. Factored out so the registered order and the
+ * rejected counterfactual below cannot drift apart. */
+static hmx_c2_class_t c2_c1_branch_verdict(const c2_state_t *c) {
+  if (c->ambiguous_subnormal > 0 || c->zero_loss_other > 0 ||
+      c->c2_zero_cells > 0 || c->unknown_cells > 0) {
+    return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+  }
+  return HMX_C2_CLASS_C1_SIGNATURE;
+}
+
 /* The registered decision procedure, in the registered order. Any 0xDEAD cell
  * (not just an all-0xDEAD tile) stops the run before any signature is read, and
  * a zero never becomes a C2 claim unless the run is unambiguous everywhere. */
@@ -3461,13 +3472,7 @@ static hmx_c2_class_t c2_classify(const c2_state_t *c) {
   if (c->c1_cells > 0 && c->c2_nonzero_cells > 0) {
     return HMX_C2_CLASS_MIXED_SIGNATURE;
   }
-  if (c->c1_cells > 0) {
-    if (c->ambiguous_subnormal > 0 || c->zero_loss_other > 0 ||
-        c->c2_zero_cells > 0 || c->unknown_cells > 0) {
-      return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
-    }
-    return HMX_C2_CLASS_C1_SIGNATURE;
-  }
+  if (c->c1_cells > 0) return c2_c1_branch_verdict(c);
   /* Strong evidence wins: a specific nonzero negative pattern cannot be produced
    * by any zeroing law, so once one cell carries it the read demonstrably landed
    * after Store #2 and the zero-valued cells are explained by the same read. */
@@ -3483,6 +3488,20 @@ static hmx_c2_class_t c2_classify(const c2_state_t *c) {
   }
   if (c->payload_match_cells == T8_CELLS) return HMX_C2_CLASS_SUPPORTED;
   return HMX_C2_CLASS_CAUSE_INCONCLUSIVE;
+}
+
+/* Counterfactual ordering, NOT the registered one: this is what the procedure
+ * would answer if the mixed-signature test were moved behind the C1 branch.
+ * It exists only so the mixed-priority regression can prove that its case
+ * discriminates the order instead of passing because the enum numbering
+ * happens to match the list. It never produces a verdict. Returns -1 when the
+ * reordered tail is not the branch this run would take. */
+static int c2_classify_mixed_after_c1(const c2_state_t *c) {
+  if (!c->contract_ok || c->deadic_cells > 0 || c->x_mismatch_cells > 0) {
+    return -1;
+  }
+  if (c->c1_cells > 0) return (int)c2_c1_branch_verdict(c);
+  return -1;
 }
 
 /* Run the registered instruction sequence (revision 2 unless the fault forces
@@ -3872,6 +3891,7 @@ static void c2_classifier_controls(const c2_state_t *nominal) {
   c2_observe(&t);
   t.cls = c2_classify(&t);
   check_int("c2_control_single_c1", (int)t.cls, HMX_C2_CLASS_C1_SIGNATURE);
+  const hmx_c2_class_t cls_single_c1 = t.cls;
 
   /* 4. X broken: not a C1/C2 question at all. */
   t = *nominal;
@@ -4130,8 +4150,11 @@ static void c2_classifier_controls(const c2_state_t *nominal) {
   }
   c2_observe(&t);
   t.cls = c2_classify(&t);
+  check_true("c2_control_single_c2_is_single_point",
+             t.c2_nonzero_cells == 1 && t.c1_cells == 0);
   check_int("c2_control_single_nonzero_c2_cell", (int)t.cls,
             HMX_C2_CLASS_C2_SIGNATURE);
+  const hmx_c2_class_t cls_single_c2 = t.cls;
 
   /* 20. Defensive branch: 1,023 matches and nothing else is unreachable from a
    *     full observation (a non-match is always classified), but the decision
@@ -4150,9 +4173,51 @@ static void c2_classifier_controls(const c2_state_t *nominal) {
   check_int("c2_control_partial_match_only_inconclusive", (int)t.cls,
             HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
 
+  /* 21. One pre-Store-#1 cell AND one non-zero negative cell in the same tile:
+   *     two read points, so the mixed class claims the run -- not C1 and not
+   *     C2. Adopted by the 2026-11-08 legacy-worktree audit from the
+   *     uncommitted mixed-priority regression: section 9 is a first-match list
+   *     and the enum numbering happens to match it, so nothing else prevented
+   *     a later edit from moving this test behind the C1 branch. */
+  t = *nominal;
+  {
+    int strong = -1;
+    for (int i = 1; i < T8_CELLS; ++i) {
+      if (t.exp_pos[i] != t.exp_neg[i] && t.exp_neg[i] != 0x0000u) {
+        strong = i;
+        break;
+      }
+    }
+    check_true("c2_control_mixed_strong_cell_exists", strong > 0);
+    t.p[0] = HMX_C2_SENTINEL_X;
+    if (strong > 0) t.p[strong] = t.exp_neg[strong];
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_mixed_has_two_read_points",
+             t.c1_cells == 1 && t.c2_nonzero_cells == 1);
+  check_int("c2_control_mixed_signal", (int)t.cls,
+            HMX_C2_CLASS_MIXED_SIGNATURE);
+  check_true("c2_control_mixed_distinct_from_c1",
+             t.cls != HMX_C2_CLASS_C1_SIGNATURE);
+  check_true("c2_control_mixed_distinct_from_c2",
+             t.cls != HMX_C2_CLASS_C2_SIGNATURE);
+  check_true("c2_control_mixed_not_contract_failed",
+             t.cls != HMX_C2_CLASS_CONTRACT_FAILED);
+  check_true("c2_control_signature_run_contract_intact", t.contract_ok);
+  check_int("c2_control_signature_run_dead_cells", t.deadic_cells, 0);
+  check_int("c2_control_signature_run_x_mismatch", t.x_mismatch_cells, 0);
+  /* Ordering control. Under the rejected order the very same observation reads
+   * as C1. If this ever stops reporting C1, case 21 no longer discriminates
+   * the order and is passing by accident. */
+  const int cf_mixed_after_c1 = c2_classify_mixed_after_c1(&t);
+  check_int("c2_control_mixed_counterfactual_reports_c1", cf_mixed_after_c1,
+            (int)HMX_C2_CLASS_C1_SIGNATURE);
+  const hmx_c2_class_t cls_mixed = t.cls;
+
   {
     char l1[96], l2[96], l3[96], l4[96], l5[96], l6[96], l7[96], l8[96],
-        l9[96], l10[96], l11[96], l12[96];
+        l9[96], l10[96], l11[96], l12[96], l13[96], l14[96], l15[96];
     c2_cpu_label(HMX_C2_CLASS_C2_SIGNATURE, "simulated", l1, sizeof(l1));
     c2_cpu_label(HMX_C2_CLASS_COPY_NOT_EXECUTED, "simulated", l2, sizeof(l2));
     c2_cpu_label(HMX_C2_CLASS_C1_SIGNATURE, "simulated", l3, sizeof(l3));
@@ -4174,6 +4239,16 @@ static void c2_classifier_controls(const c2_state_t *nominal) {
            "unknown_bit=%s p_x_swapped=%s decode_swap=%s "
            "p_decode_swap=%s p_swap_c2_coincidences=%d\n",
            l7, l8, l9, l10, l11, l12, p_swap_c2_coincidences);
+    c2_cpu_label(cls_single_c1, "simulated", l13, sizeof(l13));
+    c2_cpu_label(cls_single_c2, "simulated", l14, sizeof(l14));
+    c2_cpu_label(cls_mixed, "simulated", l15, sizeof(l15));
+    printf("c2_mixed_priority single_c1=%s single_c2=%s mixed=%s "
+           "mixed_distinct_from_c1=%d mixed_distinct_from_c2=%d "
+           "counterfactual_after_c1_is_c1=%d\n",
+           l13, l14, l15,
+           (int)(cls_mixed != HMX_C2_CLASS_C1_SIGNATURE),
+           (int)(cls_mixed != HMX_C2_CLASS_C2_SIGNATURE),
+           (int)(cf_mixed_after_c1 == (int)HMX_C2_CLASS_C1_SIGNATURE));
   }
 }
 
