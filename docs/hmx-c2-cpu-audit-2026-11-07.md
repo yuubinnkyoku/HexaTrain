@@ -148,10 +148,27 @@ for the Plain+B3 run, and all three produce the same six 1,024-cell arrays.
 | Device evidence | none for the full tile; Mode 45 covers the C1 direction | none | none; C2 `NOT_RUN` |
 | Design-specific unproven | `B3_R2_SYNC_UNPROVEN` + D1/D2/D3 | D8 (HMX read completion) | C2, C4, C5 |
 
+Lifetimes behind the L2 numbers (they are not per-call temporaries):
+
+- **streaming**: the 6,144 B staging area is live from the prologue until each
+  staged tile's last MMA read (Whi is re-read by MMA #3); it is a prerequisite
+  of the run, not evidence.
+- **Candidate B**: the 2,048 B save is live from the Plain reconstruction until
+  the post-B3 harvest, because the B3 prologue re-packs the region the Plain
+  output occupies. That is exactly what `save_load_bearing=1` measures.
+- **Candidate C**: every evidence tile is live from its save to the end of the
+  kernel; `plain_pos`, `plain_neg` and `plain_recon` are simultaneously live
+  until the B3 re-pack, which is the 10,240 B peak. The folded policy drops the
+  two Plain counters earlier (6,144 B peak).
+
 What the numbers do **not** say:
 
 - No cycle, byte/s, latency or speed-up figure is measured or implied. The CPU
   model counts events; it does not time a device.
+- Host↔DSP RPC transfer volume is not modeled: the CPU model reads its own
+  memory. The only registered ABI size is the C2 experiment's
+  8,192 B results + 128 B metadata; the full-tile designs' harvest volume is
+  not part of this comparison.
 - The L2 staging and L2 evidence columns are different resources and must not be
   combined into one "L2 usage" number.
 - Candidate C's 10,240 B is a larger **evidence set**, not 8 KiB of extra cost
