@@ -156,6 +156,18 @@ common runner
 training / resume / checkpoint / evaluation / evidence処理など、
 共通部分だけrunner側に置く。
 
+### AIによる実験候補の検証付き実行（Inkling 2 Smallからの設計指針・未実装）
+
+長時間の自動研究を実証した[Inkling 2 Small](https://thinkingmachines.ai/news/inkling-2-small/)から借りるのは、無制限に学習を起動する方式ではなく、**評価器・中止条件・失敗証拠を実験と一緒に固定する**原則。E2のspec化を試す機会が来たら、最初の1実験だけで次を確認する。
+
+- specに候補仮説、変更対象、基準checkpoint / dataset / tokenizer identity、評価split、総step/byte/wall上限、実行権限、停止条件を明記する
+- AIは提案→独立CPU参照/数値契約→Fast/Host→短い実機比較→証拠付き採否判定の順に進み、未承認の長期runやbaseline変更を自動で行わない
+- QNN 6031・他のQNN error・non-finite・fallback・resume不一致・identity mismatchが発生したら、後続armや品質評価を停止し、既存のincident手順で一次evidenceを保全する
+- final read-once、保護済み成果物、他PR/branch、既存checkpointを上書きしない。比較は同一環境・元byte予算・wall・数値誤差で行い、単体kernelだけの速度向上を全体改善とみなさない
+- 採否は機械可読の結果と独立監査を必須とする。現行runnerと同じ結果を示せない場合は既存方式へ戻し、新しい共通基盤を増設しない
+
+この節は**実装指示ではなく着手時の検証契約**。既存E2の着手条件を緩めず、[research-priorities.md](research-priorities.md) Phase 16で研究側の位置づけを管理する。
+
 ### 着手条件
 
 - 新しい実験のために既存runnerをコピーしようとしている
