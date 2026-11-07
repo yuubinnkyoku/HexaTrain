@@ -41,6 +41,36 @@ expected value:
    2,560 B revision 2 first wrote, which mis-summed the two in-extent gaps and
    the tail).
 
+**Amendment of 2026-11-07 (independent CPU differential audit, still
+pre-execution).** No map offset, fixture bit, digest, budget line or
+authorisation line changed. What the audit established, and what it fixed:
+
+1. The class enum numbering did **not** actually match the §9 order: it placed
+   `STORE2_PATH_BROKEN` before `COPY_NOT_EXECUTED`, while §9 evaluates the
+   per-cell `0xDEAD` residue first. The earlier "enum aligned" change had fixed
+   only the special-value/signature part. Renumbered (behaviour-identical) and
+   now pinned at runtime by six `c2_class_enum_*` checks.
+2. The C classifier and the independent Python classifier had never been fed
+   the same observations. They now are: 1,818 cases (282 byte-level
+   observations including every §9 branch, 1,536 exhaustive counter
+   combinations) agree under gcc `-O0`, gcc `-O2` and clang `-O2`
+   (5,454/5,454), and the comparator is proven non-vacuous by a mutation check.
+3. §8's "bytes outside every declared region are `0x00`" row was satisfied by
+   the simulator's own `memset` even though §2 already registers the zero-fill
+   step: the model never executed it, so the row could not fail and the CPU
+   check said nothing about the sequence. The model now starts from a dirty
+   allocation and executes the registered zero-fill; fault 28 shows the contract
+   fails if it does not.
+4. The L2 `P` guard was exercised only on the overrun side. Fault 29 adds the
+   one-vector undershoot; fault 30 dirties the VTCM guard and proves the
+   content check is not a counter.
+5. The host ABI sizes of §5.2 (2,048 result slots, 32 metadata words, 8,320 B)
+   are now compile-time constants with checks, so the observation-array/tile
+   correspondence cannot drift silently.
+
+The five fixes changed no registered bit and no digest; the fault battery moved
+from 27 to 30 and the check count from 12,784 to 12,817.
+
 ---
 
 ## 0. The one question
@@ -544,17 +574,18 @@ run by the Fast gate.
 
 | Check family | What it establishes | Result |
 | --- | --- | --- |
-| `c2_rev2_*` (16 checks) | revision 2 map: 0 overlaps, alignment, guards adjacent to X and clear of `wgt`, 8,960 B used, 3,328 B margin; plus the **written-range ledger**: the 7 prologue fills are pairwise disjoint and each equals its declared region | PASS |
+| `c2_rev2_*` / `c2_l2_*` | revision 2 map: 0 overlaps, alignment, guards adjacent to X and clear of `wgt`, 8,960 B used, 3,328 B margin; the **written-range ledger** (the 7 prologue fills are pairwise disjoint and each equals its declared region); the class-enum order pins (6) and the host ABI sizes (7) | PASS |
 | `c2_rev1_*` (3 checks) | the same checker rejects revision 1: exactly 1 overlapping pair, `wgt`/`guard_lo`, over 128 B | PASS |
 | `c2_l2_*` (8 checks) | the L2 arena tiles exactly: guard low + P + guard high with no negative offset; `P` and both guards are 128 B multiples and the 16 copy vectors tile `P` up to the upper guard | PASS |
-| `c2_nominal_*` (21 checks, incl. the two 1,024-cell diffs) | the registered sequence produces 1 `mxclracc`, 1 MMA, 2 converts, 2 identical store addresses, 16 copied vectors, clean guards, untouched gaps, and classifies as `C2_CPU_NOMINAL_MATCH` (the CPU rendering of the all-positive-payload outcome; §5.1) | PASS |
+| `c2_nominal_*` (22 checks, incl. the two 1,024-cell diffs) | the registered sequence produces 1 `mxclracc`, 1 MMA, 2 converts, 2 identical store addresses, 16 copied vectors, clean guards, untouched gaps zeroed by the prologue over a dirty allocation, and classifies as `C2_CPU_NOMINAL_MATCH` (the CPU rendering of the all-positive-payload outcome; §5.1) | PASS |
 | `c2_nominal_sha_p` / `_sha_x` | the observed `P` and `X` digests equal the registered positive/negative digests | PASS |
 | `c2_payload_census` | 1,023 discriminating, 475 non-zero negative payloads, 546 weak cells, 2 ambiguous subnormal cells | PASS |
 | label contract (`c2_cpu_nominal_label`, `c2_cpu_label_never_device_label`) | no CPU context can render `C2_MINIMAL_SEQUENCE_SUPPORTED`, for any classifier outcome (§5.1) | PASS |
-| `c2_control_*` (17 checks) | every branch of §9, the whole-tile post-Store-#2 read that must be attributed, and the 2026-10-30 audit controls: X-broken+`0xDEAD` order pin, C1+subnormal inconclusive, unknown bit pattern, P/X swap, both-tile decode-order swap, P-only decode-order swap | PASS |
+| `c2_control_*` (27 checks) | every branch of §9, the whole-tile post-Store-#2 read that must be attributed, and the 2026-10-30 audit controls: X-broken+`0xDEAD` order pin, C1+subnormal inconclusive, unknown bit pattern, P/X swap, both-tile decode-order swap, P-only decode-order swap. The 2026-11-07 audit added the multi-fault precedence pins (`0xDEAD`+signature, contract+`0xDEAD`, C1+unknown, FTZ+signature, all-C1, all-unknown, a single non-zero C2 cell, and the 1,023-match defensive branch) | PASS |
+| `c2_differential_*` (`hmx_c2_differential_test.py`) | the C classifier and the independent Python classifier agree on 1,818 identical cases (282 observations + 1,536 exhaustive counter combinations) under gcc `-O0`, gcc `-O2` and clang `-O2`; a mutation of one C answer is detected | PASS 5,454/5,454 |
 
-Fault injections (`b3_r2_fault_injection=PASS detected=27/27`), the five new
-ones being 23–27:
+Fault injections (`b3_r2_fault_injection=PASS detected=30/30`), 23–27 being the
+original C2 set and 28–30 added by the 2026-11-07 audit:
 
 | # | Fault | Required detection | Observed |
 | ---: | --- | --- | --- |
@@ -563,6 +594,16 @@ ones being 23–27:
 | 25 | half of `P` read before Store #1, half after Store #2 | `C2_CAUSE_INCONCLUSIVE`, never a C2 verdict | `INCONCLUSIVE`, c1=512, non-zero C2=217, weak=295 |
 | 26 | FTZ zeroes the subnormal payload cells | must **not** become a C2 signature | `SUBNORMAL_OR_ZERO_LOSS`, 2 cells, `would_be_false_c2=2` |
 | 27 | copy destination shifted one vector past `P` into the L2 P guard | `C2_PREREG_CONTRACT_FAILED` from guard content (payload bytes in the guard) and the 64-cell `0xDEAD` residue | `CONTRACT_FAILED`, p_guard=1, deadic=64 |
+| 28 | prologue omits the zeroing of the 5,376 VTCM bytes no declared region owns (dirty allocation) | `C2_PREREG_CONTRACT_FAILED` from the untouched-bytes row, with 5,376 dirty bytes reported | `CONTRACT_FAILED`, unowned=0, outside_nonzero=5376 |
+| 29 | copy destination shifted one vector **below** `P` into the low L2 guard | same contract failure from the low guard and the 64-cell top-of-`P` residue | `CONTRACT_FAILED`, p_guard=1, deadic=64 |
+| 30 | a stray 16 B store dirties the upper VTCM guard | `C2_PREREG_CONTRACT_FAILED` from guard content alone | `CONTRACT_FAILED`, guard_hits=1, deadic=0 |
+
+Faults 29 and 30 exist because the original battery exercised only the **high**
+L2 guard and no VTCM guard at all: a checker that is only ever shown one side
+can be wrong about the other. Fault 28 exists because the untouched-bytes row
+used to be satisfied by the simulator's own `memset` rather than by the
+sequence under test.
+
 
 Fault 26 is a classifier probe rather than a memory fault: the CPU model takes
 the nominal observation and zeroes the cells whose positive payload is subnormal,
@@ -612,15 +653,25 @@ payload cell can (§5).
 # c2_payload_census ... nonzero_neg=475 zero_neg_normal_pos=546 subnormal_pos=2
 # c2_classifier_controls full_store2=C2_ORDERING_VIOLATED(simulated) ... subnormal_zero=C2_SUBNORMAL_OR_ZERO_LOSS(simulated)
 # c2_control_matrix x_plus_dead=C2_COPY_NOT_EXECUTED(simulated) ... p_decode_swap=C2_CAUSE_INCONCLUSIVE(simulated) p_swap_c2_coincidences=0
-# b3_r2_fault_injection=PASS detected=27/27
-# b3_r2_checks=12776 fail=0
+# c2_observation_contract ... unowned_bytes=5376 zeroed_by_prologue=5376 dirty_fill=0xA5
+# b3_r2_fault_injection=PASS detected=30/30
+# b3_r2_checks=12817 fail=0
+# b3_r2_c2_python=PASS (independent=exit0 differential=exit0 incl clang-O2)
+# c2_diff_impl=gcc-O2 cases=1818 mismatches=0
+# c2_diff_impl=gcc-O0 cases=1818 mismatches=0
+# c2_diff_impl=clang-O2 cases=1818 mismatches=0
+# c2_diff_mutation_detected=1
 ```
 
 Registered artifacts are `build/`-only and gitignored. The digests above are the
 registration; the files are not. The `b3_r2_checks` count is a deterministic
 function of the simulator source (same count at `-O0` and `-O2`); it moved from
-12759 to 12776 with the 17 checks this audit added, and from 12704 (revision 1,
-commit `b22836e`) to 12759 when revision 2 was written.
+12704 (revision 1, commit `b22836e`) to 12759 (revision 2), to 12784
+(2026-10-30 classification audit), to **12,817** with the 33 checks the
+2026-11-07 differential/contract audit added. The runner now also creates
+`build/` before the simulator runs, so the Python audits cannot silently SKIP on
+a clean checkout, and it executes both Python audits as part of the Fast gate
+(with `SKIP` only when `python` is genuinely absent from `PATH`).
 
 ---
 
@@ -634,11 +685,26 @@ commit `b22836e`) to 12759 when revision 2 was written.
    never on the C2 critical path.
 4. **C5** — Plain-to-B3 evidence evacuation; CPU-verified ordering, device
    untested.
-5. **CB-FIX-1** — Candidate B's sentinel/ordinal inconsistency is still open and
-   still unfixed; it does not affect the 1,024-cell bits.
+5. **CB-FIX-1** — `CB-FIX-1_CPU_CONTRACT_CLOSED` as of commit `3d4e9f9`
+   (`docs/hmx-cb-fix-1-cpu-access-audit.md`). The CPU access contract now records
+   sentinel fills and checks every later overlapping write against each
+   operand's last MMA read. This closes the CPU-model defect only; it does not
+   establish when an asynchronous HMX operand read completes on a device
+   (D8 remains `DEVICE_ONLY`).
 6. **D8a / D8b** — unchanged diagnostic hypotheses, `DEVICE_ONLY`.
-7. **Mode 46** — `NOT_RUN`.
+7. **Mode 46** — `NOT_RUN`. The C2 evidence contract's metadata layout reserves
+   Mode 46, so *registering a mode that triggers this sequence* is a prerequisite
+   of the experiment, not part of this pre-registration.
 8. **Revision 1's map** — rejected on paper and in the CPU model, never executed.
    The device-side address constraints of the revision 2 map (whether `+6016`
    and the 128 B gaps are acceptable to the allocator) are a separate audit that
    has **not** been done.
+9. **Untouched-byte zeroing** — the 0x00 row of §8 is a property of the sequence,
+   not of the allocation: the DSP implementation must zero the 5,376 bytes no
+   declared region owns before the MMA. The CPU model now models a dirty
+   allocation and fails closed if the zeroing is missing (fault 28), but the
+   device implementation is not written and its zero-fill must appear in the
+   disassembly audit.
+10. **C/Python differential scope** — the 5,454-case agreement shows the two
+    implementations read the registered text the same way; it cannot show the
+    *text itself* is the right model of the hardware. That remains device work.

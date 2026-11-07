@@ -330,14 +330,18 @@ smaller if no operand were overwritten at all.
 | VTCM peak | 10,752 B | 10,752 B |
 | Mid-kernel operand transfers | 3 tiles / 48 vectors | **0** |
 | Total operand transfers | 8 tiles / 128 vectors | **4 tiles / 64 vectors** |
-| L2 staging outside VTCM | 6,144 B | **2,048 B** |
+| L2 outside VTCM, operand staging | 6,144 B | **0** |
+| L2 outside VTCM, output-evidence save | 0 | 2,048 B (Plain recon) |
 | `Whi` restore + checksum | required | **not needed** |
 | Operand written between MMAs | yes (2 regions) | **no** |
 
 CPU model status: layout fit, alignment, lifetime ordering (`last_use(owner) <
 first_write(output)`), operand immutability across the MMA phase, the
-between-subcase save, and **bit-identical 1,024-cell output for both
-subcases** are all asserted; faults 15–17 fail closed (17/17). Candidate B is
+between-subcase save, and **bit-identical 1,024-cell arrays for both
+subcases** are all asserted; faults 15–17 fail closed (30/30 in the current
+shared battery; 17/17 at the time this section was written). The all-six-array
+parity was completed on 2026-11-07 — until then only the two reconstructed
+arrays were compared. Candidate B is
 therefore CPU-ready as a *candidate*, and is proposed as the preferred basis
 for Mode 46. It is **not registered**, **not implemented**, and it does not
 retire `B3_R2_SYNC_UNPROVEN`: the residual dependency is "MMA #2's operand

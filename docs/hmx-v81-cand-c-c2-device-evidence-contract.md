@@ -1,19 +1,20 @@
 # Candidate C — C2 Device Experiment: Evidence Contract and Audit Record
 
-Status: **DESIGN AND AUDIT RECORD, CPU-ONLY**, 2026-10-30. Companion to
-`docs/hmx-v81-cand-c-c2-device-prereg.md` (revision 2). This document
-authorises nothing: no DSP source, no DSP build, no QAIRT invocation, no ADB,
-no device contact. It exists so that the single registered C2 device attempt,
-if the user ever approves it, has an unambiguous observation contract, a
-complete digest inventory, and a pre-written disassembly audit plan — and so
-the CPU-only state of the research is auditable without asking the simulator
-to vouch for itself.
+Status: **DESIGN AND AUDIT RECORD, CPU-ONLY**, 2026-10-30, extended
+2026-11-07. Companion to `docs/hmx-v81-cand-c-c2-device-prereg.md` (revision 2).
+This document authorises nothing: no DSP source, no DSP build, no QAIRT
+invocation, no ADB, no device contact. It exists so that the single registered
+C2 device attempt, if the user ever approves it, has an unambiguous observation
+contract, a complete digest inventory, and a pre-written disassembly audit plan —
+and so the CPU-only state of the research is auditable without asking the
+simulator to vouch for itself.
 
 Sections:
 
 1. [Digest inventory (9 claimed, 8 named, 7 distinct values)](#1)
 2. [Payload census, independently recounted](#2)
-3. [Independent classifier verification](#3)
+3. [Independent classifier verification](#3) — incl. the machine C/Python
+   differential (3.1)
 4. [DSP-side evidence contract (design only)](#4)
 5. [Host-side evidence contract and the `sequence<long>` ABI](#5)
 6. [Disassembly audit plan (future requirement)](#6)
@@ -109,6 +110,36 @@ Results (67 checks, 0 failures):
   `C2_MINIMAL_SEQUENCE_SUPPORTED`; the CPU nominal outcome is
   `C2_CPU_NOMINAL_MATCH`.
 
+### 3.1 Machine differential against the C classifier (audit 2026-11-07)
+
+The Python test above never fed its observations to the C classifier, and the C
+model's controls were a separate hand-written battery. Two batteries can agree
+with the text and still disagree with each other on an input neither lists, so
+`host_tests/hmx_acc_residual_rpc/hmx_c2_differential_test.py` now closes that
+gap mechanically:
+
+- it derives the registered payloads independently (same digest-pinned
+  arithmetic), then computes the Python answer for **every** case *before* any C
+  code runs;
+- it writes 1,818 cases to `build/c2_differential_cases.txt`: 282 byte-level
+  observations (the fixed battery, every classification boundary, multi-fault
+  combinations, 256 deterministic-seed mixtures) plus 1,536 exhaustive
+  counter combinations (all 2^9 binary combinations at `match=0`, all 2^8
+  combinations at `match=1,023` and at `match=1,024`, and the same sweep with
+  `contract_ok=0`);
+- it replays them through the shipped `c2_observe()`/`c2_classify()` via the
+  simulator's `--c2-replay` mode under **gcc `-O0`, gcc `-O2` and clang `-O2`**;
+- it compares the class streams mechanically and saves a JSON repro on any
+  mismatch;
+- it corrupts one C answer in memory and **requires** the comparator to notice.
+
+Result: `c2_diff_impl=… cases=1818 mismatches=0` for all three builds,
+`c2_diff_checks=5454 fail=0`, `c2_diff_mutation_detected=1`. Every terminal
+class of §9 appears in the expectation histogram. This establishes
+implementation agreement, not hardware truth: if the registered text itself
+were an inadequate model of the device, both implementations would agree on the
+wrong answer.
+
 Known limitation, stated rather than hidden: the C model and the Python test
 are two implementations of the same registered text. If the text itself were
 ambiguous in a way both implementations read the same wrong way, this
@@ -137,7 +168,11 @@ held to.
 9. **VTCM guards** (`+6016`, `+8192`) and **L2 guards** (L2 `+256`, `+2432`)
    checked on the DSP against `0x5A5A` before harvest, status + first
    mismatch reported.
-10. **Untouched bytes** (the two gaps and the tail, 5,376 B) still `0x00`.
+10. **Untouched bytes** (the two gaps and the tail, 5,376 B) still `0x00` after
+    the registered prologue zero-fill (§2 of the pre-registration). The fill is
+    a required step, not an assumption about the allocator: a VTCM allocation is
+    not guaranteed zero, and the CPU model now fails closed if the step is
+    omitted (fault 28).
 11. **Weight-tail evidence**: FNV-1a 32 of the last 128 B of the packed W
     tile, computed twice on the DSP — once in the prologue right after
     packing (before any guard fill) and once after Store #2 — both values
@@ -211,6 +246,23 @@ words and can carry C2's:
 | 26 / 27 | first mismatching guard word value / region code | 0 / 0 |
 | 28–31 | reserved | 0 |
 
+- **Length is part of the contract.** The host asserts `resultsLen == 2048` and
+  `metadataLen == 32` *before* reading any slot. A short or long return is
+  `C2_PREREG_CONTRACT_FAILED`; it is never "fewer cells to interpret". The sizes
+  are now compile-time constants in the CPU model
+  (`HMX_B3_R2_C2_RESULT_SLOTS`, `HMX_B3_R2_C2_METADATA_WORDS`,
+  `HMX_B3_R2_C2_SLOT_BYTES`, `_P_SLOT_BASE`, `_X_SLOT_BASE`) with `c2_abi_*`
+  checks, so the slot/tile correspondence cannot drift silently.
+- **Word 25 is echoed verbatim until Mode 46 is registered.** This document does
+  not invent failure codes; a host that decodes them before the enumeration is
+  registered would be reading a guess. The same applies to the "first mismatching
+  guard word value / region code" pair (words 26/27): echo and preserve, do not
+  interpret.
+- **Registering the trigger mode is a prerequisite, not part of this design.**
+  The table reserves Mode 46 because that is the mode number the C2 sequence
+  would use, but Mode 46 remains `NOT_RUN` and unregistered. No device attempt
+  can be authorised before that registration exists.
+
 - **Host-side evidence, per run** (what the report of the real attempt must
   contain): P/X as 1,024 zero-extended u16 each; the decoded cell order
   mapping; the measured raw bits and their SHA-256; the two pre-registered
@@ -245,7 +297,14 @@ statically **before** the run, and the audit demands:
 7. **no** helper call in the critical path (a call can implicitly contain a
    barrier; audit the callee bodies or forbid the call);
 8. **no** host-side reconstruction, reordering or data correction — the host
-   compares bytes, it does not fix them.
+   compares bytes, it does not fix them;
+9. the HVX copy loop sits **between** the two HMX Store constructs in the
+   object's instruction order (a hoisted, duplicated or branch-skipped copy
+   would delete the hazard the experiment exists to test), and store #1 is not
+   sunk below the copy;
+10. the prologue zero-fill of the 5,376 bytes owned by no declared region is
+    present **before** the MMA, and no other construct writes into those bytes
+    (prereg §8; CPU fault 28 models its absence).
 
 Two honesty rules bound the audit itself:
 
@@ -267,44 +326,68 @@ document (prereg §11; the full-tile pre-registration §4.4).
 | Item | Streaming (registered, `B3_R2_FULL_TILE_CPU_READY`) | Candidate B (phase-reuse, preferred) | Candidate C (single shared OUT) |
 | --- | --- | --- | --- |
 | VTCM used | 10,752 B of 12,288 B (fresh act/wgt/pos/neg/recon + 2 bias) | MMA phase 8,704 B; peak 10,752 B (outputs reuse dead operand regions) | 10,752 B (4 resident operands + 1 shared OUT + 2 bias) |
-| DSP L2 | 6,144 B staging (Alo, Wlo, Whi copy) + output evidence | 2,048 B (Plain output save) | peak 10,240 B raw / 6,144 B folded (5 tiles = 80 vectors copied out) |
+| L2 mid-kernel operand staging | 6,144 B (Alo, Wlo, Whi restore) — a prerequisite to run at all | 0 B | 0 B |
+| L2 output-evidence retention | 0 B in the CPU model (outputs stay in VTCM and are harvested over RPC) | 2,048 B (Plain recon; the load-bearing between-subcase save) | 10,240 B raw / 6,144 B folded (5 / 3 tiles, 80 / 48 vectors) |
+
+The two L2 rows were one row until 2026-11-07, which invited reading 6,144 B,
+2,048 B and 10,240 B as the same quantity. They are not: streaming spends its
+L2 on **operand staging** (without it the run cannot fit VTCM at all), while B
+and C spend theirs on **evidence retention** (nothing to do with fitting). The
+three numbers must not be added, ordered or turned into a speed claim. The CPU
+model now prints the roles separately (`design_compare … l2_midkernel_staging=…
+l2_output_evidence=…`).
 | HMX MMA count (Plain+B3 run) | 4 | 4 | 4 |
 | Convert / Store count | 4 / 4 | 4 / 4 | 4 / 4 |
 | HVX copies | recon 16 vectors per subcase + operand restores (48 mid-kernel vectors) | recon 16 vectors per subcase + Plain 1-tile save; **0 mid-kernel operand transfers** | 5 tiles = 80 vectors (pos/neg/recon saves) + in-place recon |
 | HMX operand reuse | none — every region fresh | out_neg→Wlo, out_recon→Ahi after their last MMA | none for operands (they are never rewritten); outputs share one buffer in place |
-| Cross-unit ordering dependencies | MX store → later HVX read (Mode 45-supported direction) | same, **plus** operand-region reuse after MMA #3 — `reuse_after_mma3_unproven`, and **CB-FIX-1 open** | C1 (store→read, supported), **C2 (read→store over same buffer, the open hardware question)**, C3 (supported direction, new context), C4/C5 (program order) |
-| CPU numerical result | registered arrays (rows 1–5 of §1) | identical bits to streaming (all six arrays 0/1024 diff) | identical bits (Plain pos/neg/recon digests equal streaming's) |
+| Cross-unit ordering dependencies | MX store → later HVX read (Mode 45-supported direction) | same, **plus** operand-region reuse after MMA #3 — `reuse_after_mma3_unproven`; CB-FIX-1 is `CPU_CONTRACT_CLOSED` (CPU model only), D8 still `DEVICE_ONLY` | C1 (store→read, supported), **C2 (read→store over same buffer, the open hardware question)**, C3 (supported direction, new context), C4/C5 (program order) |
+| CPU numerical result | registered arrays (rows 1–5 of §1) | six arrays bit-identical to streaming, verified 2026-11-07 (0/1024 diff on pos/neg/recon × Plain/B3; before that only recon was asserted while the table claimed all six) | identical bits (Plain pos/neg/recon digests equal streaming's) |
 | Device evidence | components: Mode 45 self-test (`R2_ACC_REUSE_SUPPORTED`, Mode 45 only) | none beyond Mode 45's direction; no full-tile run | none for C2 (`C2 NOT_RUN`); Mode 45 covers C1's direction |
-| Fail-closed diagnostics | contract gate + fault battery (14 faults) | + lifetime/alias checks (3 faults) | + C2 classifier with sentinel-based attribution, written-range ledger, independent Python audit (27 faults) |
+| Fail-closed diagnostics | contract gate + fault battery (14 faults) | + lifetime/alias checks + trace validator (3 faults, CB-FIX-1 controls) | + C2 classifier with sentinel-based attribution, written-range ledger, independent Python audit, C/Python differential (faults 18–30 of the shared battery) |
 | Implementation complexity | lowest (fresh buffers) | medium (aliasing bookkeeping) | highest (one buffer, L2 lifetime discipline, evidence evacuation) |
-| Unresolved synchronization | `B3_R2_SYNC_UNPROVEN` (full tile) | reuse-after-MMA-#3 undocumented; CB-FIX-1 | C2 unproven (`NOT_RUN`); C4/C5 device-untested |
+| Unresolved synchronization | `B3_R2_SYNC_UNPROVEN` (full tile) | reuse-after-MMA-#3 undocumented (D8); CB-FIX-1 CPU model closed | C2 unproven (`NOT_RUN`); C4/C5 device-untested |
 
 Read of the table: the three designs compute the same registered bits and
 differ in memory schedule and in *which* unproven cross-unit property they
-carry. Candidate B stays `CPU_VALIDATED_PREFERRED_DESIGN`. **Even if the C2
-minimal experiment one day returns `C2_MINIMAL_SEQUENCE_SUPPORTED`, that does
-not establish Candidate C**: C3 (the supported direction re-exercised in the
-shared-buffer context), C4 (in-place per-vector recon ordering), C5 (Plain
-evidence evacuation before the B3 re-pack), and a full-tile accuracy run would
-all still be open. A single clean C2 result can only fail to disprove C2
-(prereg §1).
+carry. Candidate B stays `CPU_VALIDATED_PREFERRED_DESIGN` after the 2026-11-07
+audit: its only remaining design-specific hazard is D8, its six CPU arrays are
+now actually asserted identical (not merely claimed), and its L2 cost is the
+smallest of the three. The ranking is **B > streaming > C** for a first device
+trial, and it is a ranking of *CPU-readiness and carried risk*, not of
+performance: no cycle, byte-per-second or speed-up figure is measured or
+implied. **Even if the C2 minimal experiment one day returns
+`C2_MINIMAL_SEQUENCE_SUPPORTED`, that does not establish Candidate C**: C3 (the
+supported direction re-exercised in the shared-buffer context), C4 (in-place
+per-vector recon ordering), C5 (Plain evidence evacuation before the B3
+re-pack), and a full-tile accuracy run would all still be open. A single clean
+C2 result can only fail to disprove C2 (prereg §1).
 
 ## 8. What remains unproven
 
 1. **C2** — the registered experiment asks the question; it has not run.
 2. **C1 / C3** — Mode 45 direction evidence only; not re-established here.
 3. **C4 / C5** — program-order properties, device-untested.
-4. **CB-FIX-1** — Candidate B's sentinel/ordinal inconsistency, open,
-   untouched by this audit.
+4. **CB-FIX-1** — `CB-FIX-1_CPU_CONTRACT_CLOSED` (commit `3d4e9f9`,
+   `docs/hmx-cb-fix-1-cpu-access-audit.md`): the Candidate B CPU model now
+   records the sentinel fills as access events and validates every later
+   overlapping write against each operand's last MMA read. This is a CPU
+   program-order statement only; it says nothing about device read completion.
 5. **Device-side address acceptance** of the revision 2 VTCM map (`+6016`
    guard, the 128 B gaps) — allocator behaviour is a separate audit that has
    not been done.
 6. **Mode 46** — unregistered, `NOT_RUN`; the ABI above is a design, not an
-   implementation.
+   implementation, and registering the trigger mode is a prerequisite.
 7. **`B3_R2_SYNC_UNPROVEN`** — unchanged by everything in this audit, by
    construction.
+8. **Untouched-byte zeroing on device** — the CPU model now requires the
+   prologue to zero the 5,376 unowned bytes over a dirty allocation (fault 28);
+   the device implementation must do the same, and its disassembly is the only
+   place that can be confirmed.
+9. **Differential scope** — 5,454 agreeing classifications establish that the C
+   and Python implementations read the registered text identically. They cannot
+   establish that the text models the hardware correctly.
 
-## 9. Reproduction record, host CPU only (2026-10-30)
+## 9. Reproduction record, host CPU only (2026-10-30; extended 2026-11-07)
 
 This section binds the numbers quoted above to the code that produced them, so
 a reviewer can re-run instead of trusting. **None of it is device evidence**: no
@@ -312,37 +395,44 @@ DSP binary was built, nothing ran on a phone, and `C2` stays `NOT_RUN`.
 
 | Evidence | Producer | Result | Bound to |
 | --- | --- | --- | --- |
-| C model + fault battery | `clang -std=gnu11 -O2 -Wall -Wextra -Werror -ffp-contract=off` on `hmx_b3_r2_full_tile_sim.c` | `b3_r2_checks=12776 fail=0`, `b3_r2_fault_injection=PASS detected=27/27` | classifier and gates of `bae32cf` |
+| C model + fault battery | gcc 15.2.0 `-O0`/`-O2` and clang 22.1.8 `-O2`, `-std=gnu11 -Wall -Wextra -Werror -ffp-contract=off` on `hmx_b3_r2_full_tile_sim.c` | `b3_r2_checks=12817 fail=0`, `b3_r2_fault_injection=PASS detected=30/30` | `f95d287` |
 | Map + written-range ledger | same run | `c2_prereg … vtcm_used=8960 margin=3328 rev2_overlaps=0 rev1_overlaps=1`, `c2_written_ranges count=7 bytes=6912 overlaps=0 mismatch_declared=0` | map in `b22836e`, ledger in `bae32cf` |
+| Untouched-byte zeroing | same run | `c2_observation_contract … unowned_bytes=5376 zeroed_by_prologue=5376 dirty_fill=0xA5`; fault 28 fails the contract when the zeroing is omitted | `f95d287` |
 | Nominal bits | same run | `c2_nominal p_diff=0 x_diff=0 class=C2_CPU_NOMINAL_MATCH`, `sha_p=82107d6e…`, `sha_x=3fcddb24…` | §1 digest inventory |
-| Independent classifier | `python host_tests/hmx_acc_residual_rpc/hmx_c2_independent_classifier_test.py` | `checks=67 fail=0`, `verdict=C2_INDEPENDENT_AUDIT_PASS` | `dfaed70` |
-| Class enum order | source review | numeric order now equals the §9 order; no behaviour change | d4cfbc2 |
+| Six-array Candidate B parity | same run | `cb_fix_1_six_array_parity … plain_pos=IDENTICAL plain_neg=IDENTICAL plain_recon=IDENTICAL b3_pos=IDENTICAL b3_neg=IDENTICAL b3_recon=IDENTICAL plain_diff_cells=0 b3_diff_cells=0` | `f95d287` |
+| Independent classifier | `python …/hmx_c2_independent_classifier_test.py` | `checks=67 fail=0`, `verdict=C2_INDEPENDENT_AUDIT_PASS` | `dfaed70` |
+| C/Python differential | `python …/hmx_c2_differential_test.py --clang-exe=…` (run by the HMX gate) | `c2_diff_impl=gcc-O2/-O0/clang-O2 cases=1818 mismatches=0`, `c2_diff_checks=5454 fail=0`, `c2_diff_mutation_detected=1` | `f95d287` |
+| Class enum order | runtime pins `c2_class_enum_*` | numeric order equals the §9 order: contract → `0xDEAD` → X → mixed → C1 → C2 → special → inconclusive → supported | `f95d287` |
 
-Toolchain used: clang 22.1.8 (LLVM), target `x86_64-pc-windows-msvc`, with the
-MSVC 2022 BuildTools environment supplying the UCRT headers.
+Toolchain used: gcc 15.2.0 (`x86_64-w64-mingw32`) for the gate-owning leg,
+clang 22.1.8 (LLVM), target `x86_64-pc-windows-msvc`, with the MSVC 2022
+BuildTools environment supplying the UCRT headers for the cross-check leg.
 
-Three things a re-runner must know:
+Five things a re-runner must know:
 
 1. **The gate needs gcc/g++ on `PATH`.** On the development machine they live in
    the MSYS2 UCRT64 tree (`C:\msys64\ucrt64\bin`; gcc/g++ 15.2.0,
    `x86_64-w64-mingw32`) but are not on the default `PATH`. Prepending that
    directory for the session is sufficient: no install and no script change.
    With it set, `scripts/run_hmx_b3_r2_sim.ps1` returns `b3_r2_sim=PASS`
-   (`b3_r2_sim_gcc_exit=0`) and `scripts/verify.ps1 -Profile Fast` returns
-   `verify-local-fast PASS` (PASS=10 FAIL=0 SKIP=21, `host-fast-contract`
-   PASS). Without it both report an environment failure, which must never be
-   read as a code defect. The runner's clang leg still prints
-   `SKIP (clang not found on PATH)`; the clang 22.1.8 numbers above come from
-   the equivalent manual invocation.
+   (`b3_r2_sim_gcc_exit=0`, `b3_r2_c2_python=PASS`) and
+   `scripts/verify.ps1 -Profile Fast` returns `verify-local-fast PASS`.
+   Without it both report an environment failure, which must never be read as a
+   code defect.
 2. On the MSVC target `-lm` resolves to `m.lib`, which does not exist; the
-   successful build omits `-lm`.
+   successful clang build omits `-lm`.
 3. `build/hmx_b3_r2_registered_arrays.txt` is regenerated by every run and is
-   gitignored. The Python audit re-hashes the sections it finds there, so its
-   `digests … re-hashed OK` line only shows that the dump and the pinned
-   constants agree. Regenerate the dump from the current source before trusting
-   the audit.
+   gitignored. The runner now creates `build/` before starting, because the
+   simulator's `fopen` used to fail silently on a clean checkout and turned the
+   Python audit into an exit-2 SKIP. The simulator also prints
+   `b3_r2_dump=written …` or `b3_r2_dump=not_written …` so this cannot regress
+   silently again.
 4. Cross-compiler agreement was checked directly: the gcc 15.2.0 build and the
-   clang 22.1.8 build of the same source produce byte-identical stdout (`diff`
-   clean, including all six SHA-256 lines and `b3_r2_checks=12776 fail=0`), so
-   the registered digests are not an artefact of one compiler's code
-   generation.
+   clang 22.1.8 build of the same source produce identical stdout for the
+   registered lines (all six SHA-256 values and `b3_r2_checks=12817 fail=0`),
+   so the registered digests are not an artefact of one compiler's code
+   generation. The same 1,818 differential cases agree under both compilers at
+   `-O0` and `-O2`.
+5. The Python differential test deliberately ignores `$CC`: on these machines
+   `CC` is often pinned to `cl.exe`, whose flags are incompatible with this
+   gcc-style source. Pass `--cc=<compiler>` to override explicitly.

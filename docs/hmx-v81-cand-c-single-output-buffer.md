@@ -355,19 +355,33 @@ only checks the recon bits would pass a run whose `out_neg` proof is gone.
 
 ## 8. Three-way comparison
 
-| Design | Operand overwritten between MMAs | Final operand reuse | Mid-kernel operand tiles | L2 | Output buffers | Unproven |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| Streaming (registered) | yes, 2 regions | yes | 3 | 6,144 B (+ plain save) | 3 | D1, D2, D3 |
-| Candidate B (phase reuse) | no | yes (`Ahi`, `Wlo`) | 0 | 2,048 B | 3 | D8 |
-| **Candidate C (shared output)** | **no** | **none** | **0** | **10,240 B** | **1** | **C2** |
+| Design | Operand overwritten between MMAs | Final operand reuse | Mid-kernel operand tiles | L2, split by role | Output buffers | Unproven |
+| --- | --- | --- | ---: | --- | ---: | --- |
+| Streaming (registered) | yes, 2 regions | yes | 3 | **6,144 B operand staging; 0 B output evidence in the model** | 3 | D1, D2, D3 |
+| Candidate B (phase reuse) | no | yes (`Ahi`, `Wlo`) | 0 | **0 B staging; 2,048 B output evidence** (Plain recon save) | 3 | D8 |
+| **Candidate C (shared output)** | **no** | **none** | **0** | **0 B staging; 10,240 B raw / 6,144 B folded output evidence** | **1** | **C2** |
+
+The L2 column was a single number per design until the 2026-11-07 audit. The
+numbers are **not the same resource**: streaming's 6,144 B is operand staging
+without which the kernel does not fit VTCM, while B's and C's numbers are
+evidence retention. They must not be ordered, added or converted into a speed
+claim. (The machine output now prints `l2_midkernel_staging` and
+`l2_output_evidence` separately.)
 
 CPU parity: all three produce the same six 1,024-cell arrays and the same six
-digests.
+digests. For Candidate B this parity is now **asserted on all six arrays**
+(2026-11-07); before that only the two reconstructed arrays were compared while
+this table claimed six.
 
 Costs of Candidate C, stated plainly:
 
-- **+8,192 B more L2 than Candidate B** (10,240 vs 2,048), or +4,096 B with the
-  folded-evidence policy;
+- **8,192 B more output-evidence retention than Candidate B** (10,240 vs
+  2,048), or 4,096 B more with the folded-evidence policy. This is not a
+  like-for-like penalty: C must retain `plain_pos`/`plain_neg` raw because its
+  single `OUT` is overwritten three times per subcase, whereas B keeps those
+  tiles in VTCM until the B3 prologue and only has to save the Plain recon.
+  The honest statement is "C retains a larger evidence set", not "+8 KiB more
+  memory for the same thing";
 - **five tile copies (10,240 B / 80 vectors)** that B does not need, on the same
   DRAM-free but not free-of-cost L2 path. Performance is **not** claimed to be
   better than B; it may be worse;

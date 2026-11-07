@@ -32,3 +32,9 @@ This describes CPU program order only. The CPU model does not establish when
 an asynchronous HMX operand read completes on a device. D8 remains
 `DEVICE_ONLY`, `B3_R2_SYNC_UNPROVEN` remains in force, and no device execution
 or training integration is authorized by this audit.
+
+Later audits extended the shared fault battery (27 at this commit, 30 after
+2026-11-07) and added the all-six-array parity assertion for Candidate B; see
+[the C2 CPU audit](hmx-c2-cpu-audit-2026-11-07.md). Neither changes the
+`CB-FIX-1_CPU_CONTRACT_CLOSED` scope: it is a statement about the CPU model's
+access trace, not about device read completion.
