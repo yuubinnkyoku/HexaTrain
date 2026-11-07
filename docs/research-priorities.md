@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-10-30 JST**
+> **研究内容の最終更新: 2026-11-08 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -13,6 +13,8 @@
 > **2026-10-30 研究候補追記**: [Stacking Your Transformers（NeurIPS 2024）](https://arxiv.org/abs/2405.15319)を踏まえ、**Progressive Depth Growth / Layer Stacking**をPhase 8へP1 host診断→P2実機比較の候補として追加。SNS上のQwen3.5-9B/27B重み継承説は独立未検証の着想と区別する。**実装・実機測定・baseline変更・学習実行は行っていない**。
 >
 > **2026-10-30 研究候補追記**: [Cartesia「From Tokens to Bytes」第1部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-1)・[第2部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-2)を踏まえ、文脈依存の学習型バイト分割 **H-Net** をText RepresentationのP2候補へ追加。まず小規模CPU検証と公平なbyte基準比較を行い、HTP移植は条件付きとする。**今回の変更は研究計画のみで、実装・実機測定・baseline変更・学習実行は行っていない**。
+>
+> **2026-11-08 研究候補追記**: [Thinking Machines Lab「Introducing Inkling 2 Small」](https://thinkingmachines.ai/news/inkling-2-small/)を踏まえ、段階的なデータ選別・終盤の高品質データ配分を既存Phase 13のP1成立性調査へ、NVFP4の数値配置を既存Phase 12のP2検証へ、外部教師の学習軌跡選別をP2〜P3へ統合。長時間の自動研究は研究方針（Phase 16）と開発基盤（`engineering-backlog.md` E2）に切り分ける。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -261,6 +263,15 @@ Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2
 
 **実験ゲート**: 既存6031 / G1 formal backwardの検証とは独立して、まずCPUでcausal convolutionのforward/backward・finite difference・padding/境界条件を数値照合する。QAIRT上の対応op / HTP・HVX代替を調べ、単体microbenchmarkで実wall・parity・転送量を判定。その後のみP2の短期matched A/Bへ進む。既存G1 checkpoint・negative control・正式証拠を上書きせず、QNN failure・fallback・nonfiniteではfail closedとする。長期runは未承認。
 
+### Inkling 2 Smallから見えるデータ配分・低精度化・自動研究の課題（2026-11-08）
+
+[Thinking Machines Labの発表](https://thinkingmachines.ai/news/inkling-2-small/)によると、594B総量/17B有効のMoEをH1（8.4T、広い事前学習）→H2（3.8T、新規かつ高品質）→H3（約320B、推論/agent軌跡と事前学習データの再投入）→H4（約34B、選別済み軌跡）で学習し、続いて統合RLを実施した。H3/H4の軌跡は過去の教師モデル等から生成し、正確性と振る舞いに基づき選別したもの。**H4の単独効果を示す比較ではなく、端末の小型scratch LMへ品質改善率を外挿しない**。
+
+- **前倒しするのは学習データの選別手順の検証**: Nicopediaの既存train内で、一様抽出・終盤の選別例重点配分・選別例＋一様再投入を、同一元UTF-8 byte budgetと同一学習recipeで比較する。選別は評価データのlossやfinal結果で行わず、重複・破損・文章のまとまり等を学習データだけで判定する。
+- **低精度化は形式と数値契約を分ける**: NVFP4はGB300上の事前学習実績であり、HTP V81の対応や精度を保証しない。既存Muon Newton–SchulzのHTP内部誤差を踏まえ、量子化保存・通常MatMul・活性化の個別検証から始め、HVX FP32 Original Muonは正式対照として維持する。
+- **自動研究は制御面を研究テーマにする**: 正答率だけでなく失敗の分類、独立オラクル、実機計測、停止・保全を要求する。Inkling 2 SmallのGPU kernel最適化・自動追加学習の能力をHTP/V81の実証済み能力とみなさない。実装上の管理は`engineering-backlog.md` E2に統合する。
+- **現行対象外**: 大規模MoE・画像入力・17M超rolloutの統合RL・長文脈prefix cache。通常のincremental KV-cacheやT拡大、外部教師trackの分離後に再評価する。
+
 ### 推論・Android基盤
 
 - model configの一般化、Material 3 Expressive UI、学習表示、推論GUIは実装済み。
@@ -500,6 +511,11 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 
 ### P1 Candidate Pool【空きslotが出たら昇格】
 
+- **Inkling 2 Small型・終盤データ品質配分の成立性調査【研究計画のみ】**
+  - Phase 13の既存Difficulty-Aware Samplingを拡張。まずtrain-onlyの選別基準・候補件数・重複率・元byte数の分布をhostで検査し、比較可能な学習量が確保できない場合はHOLD
+  - 評価engineを整備した後、uniform / 終盤選別重視 / 終盤選別＋uniform再投入を短期同条件で比較。詳細な実験契約は「Data / Post-Training Strategy」を正とする
+  - **NOWは増やさない**。優位な短期結果なしに長期run・新checkpoint形式・既存baseline変更へ進まない
+
 - **LFM3型短畳み込みの成立性調査【新規・未実装】**
   - CPU oracleでkernel3/7の因果的短畳み込み、gate、forward/backward、finite differenceを照合。最初は最小の単層演算から
   - L19中1/2/4層の候補配置とFull/Skip比較を事前登録。parameter-matchedと同一step/byte budgetは別比較にする
@@ -682,6 +698,7 @@ stress runは長期品質runの代替ではない。**安定領域と収束速�
 | モデル | 確認できた技術 | HexaTrainでの扱い |
 | --- | --- | --- |
 | **LFM3-1.7B（2026-10-27発表）** | 13 gated short conv + 5 SWA(window256) + 6 global、head-wise sigmoid gate、global Partial RoPE、Sandwich Norm、Hexagon NPUを含む14環境探索 | **短畳み込み成立性をP1候補へ、混成短期A/BをP2へ**。G1は既存研究基準を維持。SWA/GlobalはT拡大後P3、Sandwich NormはRMSNorm検証後P2。公表倍率をHTP学習へ外挿しない |
+| **Inkling 2 Small（2026-11-05発表）** | H1→H4の段階的なデータ配分（後半に選別済み軌跡）、NVFP4事前学習、統合RL、長時間自動研究・kernel最適化 | **train-onlyの終盤選別比較をP1成立性候補**、精度配置をP2、外部教師・RLをP2〜P3。AI実験の検証・停止はE2/Phase 16へ。H4単独の改善効果・HTPのNVFP4対応・MoEの小型効果は未確認 | 
 | **Muse Glimmer 30B（2026-10-19論文公開）** | 32GB inference memory制約でDense優位（対象ladder比）、Q32/KV2 GQA、Local×3/Global×1、Local RoPE/Global NoPE、Gated Attention、same-run checkpoint soup、top-256 logit蒸留→終盤CE、重み役割別PTQ、DFlash | **checkpoint soup評価専用pilotをP1候補へ**。MQA/parameter-matched searchはP1維持、蒸留/PTQはP2、local/global・DFlashはP3。MetaのGPU倍率・推論PTQ結果をHTP学習へ外挿しない |
 | **MiMo-V2.6** | AdamW pretrain → Muown mid-training、large-batch fully-async RL、1,568 prompts × 16 rollouts、GRS/GAR、MOPD²、mixed-task ratio安定化、MoE router freeze | **Muon→MuownをP0/P1へ昇格**。まずrow-geometry診断。MOPD²はP2、GRS/GARとrouter系はP3 |
 | **HySparse2** | two-level KV sharing（KV Bridging + KV Reuse）、token-level sparse selection、forced local window、MQA、self/cross-decoder early-exit prefill | **本格sparseはP3据え置き**。ただしHq2/Hkv1 MQAとCross-Layer Top-k Reuse診断をP0/P1へ前倒し。generationは通常KV cacheを先に成立させる |
@@ -2987,6 +3004,9 @@ Engram / N-gramを**静的・連想memory**、recurrent memoryを**動的memory*
 
 → **P2**
 
+Inkling 2 Smallの事前学習はNVIDIA GB300上でNVFP4を採用したが、発表時点で詳細recipeは追補予定。これは**HTP V81のNVFP4直接対応や、学習すべての演算を4bitで処理できる根拠ではない**。新しいformatを一括導入せず、storage dtypeとcompute dtype、scale、丸め、勾配の誤差をop単位で検証する。Muon NS5の正式HVX FP32経路は変更せず、HTP MatMulの既知の誤差増幅を回避する。
+
+
 Muse Glimmerの§7.1は**学習後の推論重み**についてQ4_K/Q5_K/Q6_Kをrole別に割り当て、校正KLの増分 / 節約byteを比較した。HexaTrainではまずoffline fake-quant感度・bpb・復元誤差を確認し、V81の対応形式・graph固定費・推論実wallを別途確認する。**学習activation / backward / optimizerの数値精度保証とは扱わない**。
 
 候補例:
@@ -3400,6 +3420,18 @@ HexaTrainでは同じNicopedia training setのwindowへ、直近modelによるlo
 
 有効なら将来のmulti-source data mixでもsource difficultyと組み合わせる。
 
+### Inkling 2 Smallを参考にした終盤データ選別【P1成立性 → Phase 13】
+
+大規模モデルのH1〜H4の比率や長文脈長をコピーしない。H2では新規・高品質データ、H3では過去データの再投入、H4では正確性等で選別した軌跡を使っているが、**H4単独の改善量は未提示**。HexaTrainで検証する仮説は「同じ端末学習予算で、後半に学習例の配分を変えるとVal/Devのbpbが改善するか」に限る。
+
+1. **A: uniform control** — 現行データ・順序の仕様に従った一様抽出を全期間維持。
+2. **B: late curated** — 最後の一定割合（例: 後半20%。事前登録で固定）のみtrain内の選別例の比率を上げる。
+3. **C: late curated + replay** — 後半に選別例と元の一様分布を固定比率で混合し、忘却・分布偏りを検証。
+
+選別指標はtrainの重複・文字化け・文書まとまり等の学習前情報を優先し、model lossによる難例抽出を併用するなら**別因子**として分離する。validation/development/finalの内容や指標で選別基準を調整しない。source manifest、selector version/hash、train sample IDs、source比率、order seed、stage境界、cursor、tokenizer/checkpoint identityを監査可能に固定し、resumeで選別列が変わる場合は**別実験identity**として扱う。
+
+最初はhost監査→seed固定の500/1000 step探索（必要なら複数seed）→Val/Devで合格した候補だけ2000/8000へ。**総stepだけでなく同一original UTF-8 byte処理量と端末wall time**でbpbを比較し、品質・非finite・6031/その他QNN障害・実行速度を併記する。評価engineの処理能力が足りない、または選別候補が少なすぎる場合は着手しない。untouched finalは候補選択に使用しない。
+
 ## Stable Multi-Source Data Mix
 
 → **P1〜P2 / 複数corpusを混ぜる時点**
@@ -3432,7 +3464,7 @@ HexaTrainへの縮約候補:
 4. studentをT32の既存training pathでdistill
 5. ordinary SFT / offline distillation / on-policy-liteを比較
 
-これは「端末だけで知識を獲得する」scratch-training trackとは研究目的が違うため、明示的に別trackとする。
+これは「端末だけで知識を獲得する」scratch-training trackとは研究目的が違うため、明示的に別trackとする。Inkling 2 SmallのH3/H4での外部モデル由来の軌跡選別（正確性・振る舞い）を参考にする際も、教師の語彙・出力確率とV1024の対応を無検証で流用せず、まず短い教師あり例を独立に試す。選別手順はtrain-onlyで固定し、最終評価結果で調整しない。
 
 参考:
 
@@ -3854,6 +3886,7 @@ QNN HTP内部精度の実測を無視して「FP32 tensorだから安全」と�
 scratch-training側:
 
 - difficulty-aware sampling / loss curriculum
+- Inkling 2 Small型の終盤データ選別（uniform / curated / curated+replay、同一byte・wall予算で比較。H4単独の優位は未証明）
 - deterministic source mix
 - sampler stateのcheckpoint identity化
 
@@ -3919,6 +3952,8 @@ long-horizon RLを始める場合のみGRS/GAR型reward設計を追加し、MoE�
 - data mix
 
 最終的にはPareto / Puzzle / MatFormer / QD / Evolutionary Searchへ接続する。
+
+Inkling 2 Smallの長時間自動研究・kernel最適化は、HexaTrainにおける**AIの候補提案能力ではなく、検証を通過した候補だけを残す制御設計**として取り込む。実行前に評価方法・計算予算・停止条件を固定し、CPU oracle→Fast/Host→短期実機→独立した品質判定の順に段階昇格する。性能はノード数や単体kernel倍率ではなく、数値許容差・end-to-end wall・bpb・RAM/電力・温度で判定。QNN失敗（6031を含む）・non-finite・fallback・identity mismatchでは**即停止・証拠保全・自動続行禁止**とし、既存のread-once finalや保護済み成果物を書き換えない。実装上の小規模試行は[engineering-backlog.md](engineering-backlog.md) E2に限定し、無人で学習を連続起動する仕組みはまだ作らない。
 
 ---
 
@@ -4195,6 +4230,11 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [Muse Glimmer 30B: An On-Device Agentic Model — Technical Report](https://arxiv.org/abs/2610.24628)（§2.3 Dense対MoE・MQA/GQA、§4.2 top-k蒸留・same-run soup、§7.1 PTQ、§7.2 DFlash）
 - [Meta公式論文ページ](https://ai.meta.com/research/publications/muse-glimmer-30b-an-on-device-agentic-model/)
 - [Muse Glimmer 30B model card](https://huggingface.co/meta-models/Muse-Glimmer-30B)
+
+## Thinking Machines Lab / Inkling 2 Small（2026-11-05追加）
+
+- [Introducing Inkling 2 Small — 原文](https://thinkingmachines.ai/news/inkling-2-small/)（H1〜H4・NVFP4・統合RL・自動研究・推論系の計測値）
+- [AlphaXiv overview](https://www.alphaxiv.org/overview/2611.inkling-2-smallv1)
 
 ## GLM / KDA / DSA / mHC
 
