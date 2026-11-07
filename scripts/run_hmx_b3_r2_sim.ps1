@@ -32,9 +32,18 @@ $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("hmx-b3-r2-sim-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
+# The simulator writes its registered-array dump to build/ relative to the repo
+# root, and silently skips the write when the directory is absent (build/ is
+# gitignored, so a clean checkout hits this). The Python audits need the dump.
+$BuildDir = Join-Path $Root "build"
+New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+
 $gccExit = 1
 $clangStatus = "SKIP (not evaluated)"
 $clangRunFailed = $false
+$clangExe = $null
+$pythonStatus = "SKIP (not evaluated)"
+$pythonRunFailed = $false
 
 try {
     # ---------------- gcc (PATH): gate-owning compiler ----------------
@@ -117,6 +126,39 @@ try {
             }
         }
     }
+
+    # ---------------- Python independent audits (CPU only) ----------------
+    # Both are optional in the sense that a machine without python must report
+    # SKIP, not FAIL; when python is present a failure is a gate failure.
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        $pythonStatus = "SKIP (python not found on PATH)"
+    } elseif ($gccExit -ne 0) {
+        $pythonStatus = "SKIP (gcc simulator run failed, no dump to audit)"
+    } else {
+        & $pythonCommand.Source `
+            (Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_c2_independent_classifier_test.py")
+        $indepExit = $LASTEXITCODE
+        Write-Host "b3_r2_c2_independent_exit=$indepExit"
+        $diffArgs = @(
+            (Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_c2_differential_test.py")
+        )
+        if ($clangExe -and (Test-Path -LiteralPath $clangExe)) {
+            $diffArgs += ("--clang-exe=" + $clangExe)
+        }
+        & $pythonCommand.Source @diffArgs
+        $diffExit = $LASTEXITCODE
+        Write-Host "b3_r2_c2_differential_exit=$diffExit"
+        if ($indepExit -eq 0 -and $diffExit -eq 0) {
+            $pythonStatus = "PASS (independent=exit0 differential=exit0)"
+            if ($diffArgs.Count -gt 1) {
+                $pythonStatus = "PASS (independent=exit0 differential=exit0 incl clang-O2)"
+            }
+        } else {
+            $pythonStatus = "FAIL (independent=$indepExit differential=$diffExit)"
+            $pythonRunFailed = $true
+        }
+    }
 } finally {
     if (Test-Path -LiteralPath $TempDir) {
         Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -124,11 +166,13 @@ try {
 }
 
 Write-Host "b3_r2_sim_clang=$clangStatus"
+Write-Host "b3_r2_c2_python=$pythonStatus"
 $exitCode = $gccExit
 if ($clangRunFailed) { $exitCode = 1 }
+if ($pythonRunFailed) { $exitCode = 1 }
 if ($exitCode -eq 0) {
     Write-Host "b3_r2_sim=PASS"
 } else {
-    Write-Host "b3_r2_sim=FAIL (gcc exit $gccExit; clang: $clangStatus)"
+    Write-Host "b3_r2_sim=FAIL (gcc exit $gccExit; clang: $clangStatus; python: $pythonStatus)"
 }
 exit $exitCode

@@ -257,15 +257,19 @@ typedef enum hmx_b3_r2_cc_sync {
 
 /* C2 observation classes. The numeric order IS the pinned evaluation order of
  * pre-registration section 9: c2_classify() returns the first class below whose
- * condition holds. The signature classes (MIXED/C1/C2) deliberately precede
- * SUBNORMAL_OR_ZERO_LOSS, because revision 2 pins "collect every signature over
- * all 1,024 cells, then fall back to the ambiguous card", so that a payload cell
- * which reads as zero cannot hijack a C1/C2 attribution. Do not reorder this
- * enum without changing section 9 and the fault-25 control expectations. */
+ * condition holds. COPY_NOT_EXECUTED precedes STORE2_PATH_BROKEN because the
+ * per-cell 0xDEAD residue test precedes the X interpretation (a run that is both
+ * X-broken and half-copied must stop as COPY_NOT_EXECUTED). The signature
+ * classes (MIXED/C1/C2) deliberately precede SUBNORMAL_OR_ZERO_LOSS, because
+ * revision 2 pins "collect every signature over all 1,024 cells, then fall back
+ * to the ambiguous card", so that a payload cell which reads as zero cannot
+ * hijack a C1/C2 attribution. Do not reorder this enum without changing
+ * section 9 and the fault-25 control expectations. The ordering is asserted at
+ * runtime by c2_verify_layout(). */
 typedef enum hmx_c2_class {
   HMX_C2_CLASS_CONTRACT_FAILED = 0, /* counts / Rs / guards / build mismatch */
-  HMX_C2_CLASS_STORE2_PATH_BROKEN = 1, /* X is not the negative payload at all */
-  HMX_C2_CLASS_COPY_NOT_EXECUTED = 2, /* any 0xDEAD residue, partial included */
+  HMX_C2_CLASS_COPY_NOT_EXECUTED = 1, /* any 0xDEAD residue, partial included */
+  HMX_C2_CLASS_STORE2_PATH_BROKEN = 2, /* X is not the negative payload at all */
   HMX_C2_CLASS_MIXED_SIGNATURE = 3,    /* both C1 and C2 evidence present */
   HMX_C2_CLASS_C1_SIGNATURE = 4,       /* P saw X before Store #1 */
   HMX_C2_CLASS_C2_SIGNATURE = 5,       /* P saw X after Store #2 */
@@ -279,6 +283,21 @@ typedef enum hmx_c2_class {
 #define HMX_C2_SENTINEL_G  0x5A5Au /* guard fill (bit 15 clear, not a payload) */
 #define HMX_C2_COPY_VECTORS 16
 #define HMX_C2_PREREG_REVISION 2
+
+/* Host-contract sizes for the future C2 mode, from
+ * docs/hmx-v81-cand-c-c2-device-evidence-contract.md section 5.2. They are
+ * registered here so the observation-array/tile correspondence is checked by
+ * the CPU model instead of living only in prose.
+ *   results  : 2,048 sequence<long> slots = 8,192 B
+ *              slots 0..1023 = P (zero-extended u16, decoded cell order)
+ *              slots 1024..2047 = X
+ *   metadata : 32 sequence<long> slots = 128 B
+ * Total 8,320 B, the same order as the existing Mode 45 allocation. */
+#define HMX_B3_R2_C2_RESULT_SLOTS 2048
+#define HMX_B3_R2_C2_P_SLOT_BASE 0
+#define HMX_B3_R2_C2_X_SLOT_BASE 1024
+#define HMX_B3_R2_C2_METADATA_WORDS 32
+#define HMX_B3_R2_C2_SLOT_BYTES 4
 
 /* Whi restore source enumeration for MMA #3. */
 #define HMX_B3_R2_WHI_RESTORE_NONE        0 /* not needed (single-MMA paths) */
@@ -391,7 +410,10 @@ typedef enum hmx_b3_r2_fault {
   HMX_FAULT_C2_COPY_PARTIAL = 24,            /* only half of X reaches P */
   HMX_FAULT_C2_MIXED_SIGNATURE = 25,         /* C1-looking and C2-looking cells */
   HMX_FAULT_C2_FTZ_ZERO_LOSS = 26,           /* FTZ zero read as a C2 signature */
-  HMX_FAULT_C2_L2_GUARD_OVERRUN = 27         /* copy destination shifted one vector into the L2 P guard */
+  HMX_FAULT_C2_L2_GUARD_OVERRUN = 27,        /* copy destination shifted one vector into the L2 P guard */
+  HMX_FAULT_C2_GAP_NOT_ZEROED = 28,          /* unowned VTCM bytes left at the dirty-allocation value */
+  HMX_FAULT_C2_L2_GUARD_UNDERRUN = 29,       /* copy destination shifted one vector below P */
+  HMX_FAULT_C2_VTCM_GUARD_DIRTY = 30         /* stray store dirties X's upper VTCM guard */
 } hmx_b3_r2_fault_t;
 
 static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
@@ -424,6 +446,9 @@ static inline const char *hmx_b3_r2_fault_name(hmx_b3_r2_fault_t f) {
     case HMX_FAULT_C2_MIXED_SIGNATURE: return "C2_MIXED_SIGNATURE";
     case HMX_FAULT_C2_FTZ_ZERO_LOSS: return "C2_FTZ_ZERO_LOSS";
     case HMX_FAULT_C2_L2_GUARD_OVERRUN: return "C2_L2_P_GUARD_OVERRUN";
+    case HMX_FAULT_C2_GAP_NOT_ZEROED: return "C2_GAP_NOT_ZEROED";
+    case HMX_FAULT_C2_L2_GUARD_UNDERRUN: return "C2_L2_P_GUARD_UNDERRUN";
+    case HMX_FAULT_C2_VTCM_GUARD_DIRTY: return "C2_VTCM_GUARD_DIRTY";
     default: return "UNKNOWN_FAULT";
   }
 }

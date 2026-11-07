@@ -1099,21 +1099,34 @@ static void run_phase_reused_subcase(hmx_full_tile_state_t *st,
 static void run_phase_reused_crosscheck(void) {
   static uint16_t stream_plain[T8_CELLS], stream_b3[T8_CELLS];
   static uint16_t pr_plain[T8_CELLS], pr_b3[T8_CELLS];
+  /* Audit 2026-11-07: the earlier crosscheck compared only the reconstructed
+   * array, while the evidence contract claimed all six arrays were identical.
+   * Compare the positive and negative halves too, on both subcases. */
+  static uint16_t stream_plain_pos[T8_CELLS], stream_plain_neg[T8_CELLS];
+  static uint16_t stream_b3_pos[T8_CELLS], stream_b3_neg[T8_CELLS];
+  static uint16_t pr_plain_pos[T8_CELLS], pr_plain_neg[T8_CELLS];
+  static uint16_t pr_b3_pos[T8_CELLS], pr_b3_neg[T8_CELLS];
 
   hmx_full_tile_state_t a;
   state_init(&a);
   run_plain_r2_subcase(&a, &g_ops_deploy);
   memcpy(stream_plain, a.vtcm.raw + HMX_B3_R2_RECON_OFFSET, 2048);
+  memcpy(stream_plain_pos, a.vtcm.raw + HMX_B3_R2_POS_OFFSET, 2048);
+  memcpy(stream_plain_neg, a.vtcm.raw + HMX_B3_R2_NEG_OFFSET, 2048);
 
   hmx_full_tile_state_t b;
   state_init(&b);
   run_b3_r2_subcase(&b, &g_ops_deploy, HMX_FAULT_NONE);
   memcpy(stream_b3, b.vtcm.raw + HMX_B3_R2_RECON_OFFSET, 2048);
+  memcpy(stream_b3_pos, b.vtcm.raw + HMX_B3_R2_POS_OFFSET, 2048);
+  memcpy(stream_b3_neg, b.vtcm.raw + HMX_B3_R2_NEG_OFFSET, 2048);
 
   hmx_full_tile_state_t p;
   pr_state_init(&p);
   run_pr_plain_subcase(&p, &g_ops_deploy);
   memcpy(pr_plain, p.vtcm.raw + HMX_B3_R2_PR_RECON_ALIAS_OWNER, 2048);
+  memcpy(pr_plain_pos, p.vtcm.raw + HMX_B3_R2_PR_POS_OFFSET, 2048);
+  memcpy(pr_plain_neg, p.vtcm.raw + HMX_B3_R2_PR_NEG_ALIAS_OWNER, 2048);
 
   /* The Plain output must leave VTCM before the B3 prologue re-packs +0. */
   const int save_required =
@@ -1125,9 +1138,24 @@ static void run_phase_reused_crosscheck(void) {
   pr_state_init(&q);
   run_phase_reused_subcase(&q, &g_ops_deploy, HMX_FAULT_NONE);
   memcpy(pr_b3, q.vtcm.raw + HMX_B3_R2_PR_RECON_ALIAS_OWNER, 2048);
+  memcpy(pr_b3_pos, q.vtcm.raw + HMX_B3_R2_PR_POS_OFFSET, 2048);
+  memcpy(pr_b3_neg, q.vtcm.raw + HMX_B3_R2_PR_NEG_ALIAS_OWNER, 2048);
 
   int plain_same = memcmp(stream_plain, pr_plain, 2048) == 0;
   int b3_same = memcmp(stream_b3, pr_b3, 2048) == 0;
+  int plain_pos_same = memcmp(stream_plain_pos, pr_plain_pos, 2048) == 0;
+  int plain_neg_same = memcmp(stream_plain_neg, pr_plain_neg, 2048) == 0;
+  int b3_pos_same = memcmp(stream_b3_pos, pr_b3_pos, 2048) == 0;
+  int b3_neg_same = memcmp(stream_b3_neg, pr_b3_neg, 2048) == 0;
+  int plain_cells = 0, b3_cells = 0;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    if (stream_plain_pos[i] != pr_plain_pos[i]) plain_cells++;
+    if (stream_plain_neg[i] != pr_plain_neg[i]) plain_cells++;
+    if (stream_plain[i] != pr_plain[i]) plain_cells++;
+    if (stream_b3_pos[i] != pr_b3_pos[i]) b3_cells++;
+    if (stream_b3_neg[i] != pr_b3_neg[i]) b3_cells++;
+    if (stream_b3[i] != pr_b3[i]) b3_cells++;
+  }
   int saved_same = memcmp(p.stage, pr_plain, HMX_B3_R2_PR_L2_SAVE_BYTES) == 0;
   /* The Plain output currently occupies the region the B3 prologue will pack
    * Ahi into, so the save is load bearing. */
@@ -1139,6 +1167,12 @@ static void run_phase_reused_crosscheck(void) {
   check_true("pr_b3_prologue_destroys_plain_region", save_is_load_bearing == 1);
   check_true("pr_plain_bits_identical_to_streaming", plain_same == 1);
   check_true("pr_b3_bits_identical_to_streaming", b3_same == 1);
+  check_true("pr_plain_pos_bits_identical_to_streaming", plain_pos_same == 1);
+  check_true("pr_plain_neg_bits_identical_to_streaming", plain_neg_same == 1);
+  check_true("pr_b3_pos_bits_identical_to_streaming", b3_pos_same == 1);
+  check_true("pr_b3_neg_bits_identical_to_streaming", b3_neg_same == 1);
+  check_int("pr_plain_cells_diff_six_arrays", plain_cells, 0);
+  check_int("pr_b3_cells_diff_six_arrays", b3_cells, 0);
   check_true("pr_nominal_no_operand_mutation", q.pr_operand_mutated_during_mma == 0);
   check_int("pr_nominal_midkernel_tiles", q.pr_midkernel_tiles, 0);
   check_true("pr_plain_trace_valid", pr_trace_valid(&p, 1));
@@ -1179,6 +1213,14 @@ static void run_phase_reused_crosscheck(void) {
          "save_load_bearing=%d\n",
          plain_same ? "IDENTICAL" : "DIFF", b3_same ? "IDENTICAL" : "DIFF",
          2 * T8_CELLS, save_required, save_is_load_bearing);
+  printf("cb_fix_1_six_array_parity plain_pos=%s plain_neg=%s plain_recon=%s "
+         "b3_pos=%s b3_neg=%s b3_recon=%s plain_diff_cells=%d "
+         "b3_diff_cells=%d\n",
+         plain_pos_same ? "IDENTICAL" : "DIFF",
+         plain_neg_same ? "IDENTICAL" : "DIFF",
+         plain_same ? "IDENTICAL" : "DIFF",
+         b3_pos_same ? "IDENTICAL" : "DIFF", b3_neg_same ? "IDENTICAL" : "DIFF",
+         b3_same ? "IDENTICAL" : "DIFF", plain_cells, b3_cells);
   printf("b3_r2_layout_compare streaming_vtcm=%d streaming_l2=%d "
          "streaming_midkernel_tiles=%d pr_vtcm_mma=%d pr_vtcm_peak=%d "
          "pr_l2=%d pr_midkernel_tiles=%d\n",
@@ -1389,13 +1431,15 @@ static void run_condition(const b3_r2_ops_t *ops, pair_metrics_t *pm,
 /* ---------------- CSV Raw Bits Export for Evidence Preservation ---------------- */
 
 static void export_full_tile_csv(const tile_metrics_t *mp, const tile_metrics_t *mb) {
+  /* build/ only. The old fallback wrote hmx_b3_r2_1024_cells.csv into the repo
+   * root when build/ was missing, leaving an untracked artifact outside the
+   * documented build/ area; the runner now creates build/ instead. */
   FILE *f = fopen("build/hmx_b3_r2_1024_cells.csv", "w");
   if (!f) {
-    /* Fallback if build directory not found */
-    f = fopen("hmx_b3_r2_1024_cells.csv", "w");
+    printf("b3_r2_csv=not_written path=build/hmx_b3_r2_1024_cells.csv "
+           "reason=open_failed\n");
+    return;
   }
-  if (!f) return;
-
   fprintf(f, "cell_idx,s,o,oracle_double,plain_recon_hex,b3_recon_hex,b3_pos_hex,b3_neg_hex,plain_abs_err,b3_abs_err,class\n");
   for (int s = 0; s < T8; ++s) {
     for (int o = 0; o < T8; ++o) {
@@ -1914,8 +1958,6 @@ static int cand_c_fault_detected(hmx_b3_r2_fault_t fault);
 static int c2_fault_detected(hmx_b3_r2_fault_t fault);
 
 static void run_fault_injection_tests(void) {
-  printf("===== Running 27 Fault Injection Tests =====\n");
-
   static const struct {
     hmx_b3_r2_fault_t fault;
     const char *desc;
@@ -1949,8 +1991,13 @@ static void run_fault_injection_tests(void) {
     {HMX_FAULT_C2_COPY_PARTIAL,            "C2: only half of X reaches the positive tile P"},
     {HMX_FAULT_C2_MIXED_SIGNATURE,         "C2: pre-Store-#1 and post-Store-#2 cells mixed"},
     {HMX_FAULT_C2_FTZ_ZERO_LOSS,           "C2: FTZ zero on a payload cell read as a C2 signature"},
-    {HMX_FAULT_C2_L2_GUARD_OVERRUN,        "C2: copy destination runs one vector past P into the L2 P guard"}
+    {HMX_FAULT_C2_L2_GUARD_OVERRUN,        "C2: copy destination runs one vector past P into the L2 P guard"},
+    {HMX_FAULT_C2_GAP_NOT_ZEROED,          "C2: prologue leaves unowned VTCM bytes at the dirty allocation value"},
+    {HMX_FAULT_C2_L2_GUARD_UNDERRUN,       "C2: copy destination runs one vector below P into the L2 P guard"},
+    {HMX_FAULT_C2_VTCM_GUARD_DIRTY,        "C2: stray store dirties the upper VTCM guard"}
   };
+  printf("===== Running %d Fault Injection Tests =====\n",
+         (int)(sizeof(faults) / sizeof(faults[0])));
 
   int total_faults = (int)(sizeof(faults) / sizeof(faults[0]));
   int detected_faults = 0;
@@ -2152,7 +2199,9 @@ static void run_evidence_digests(void) {
   check_str("sha_b3_expected_bits", sha_b3, EXPECT_SHA_B3_BITS);
   check_str("sha_operands_fp32", sha_fp32, EXPECT_SHA_FP32_OPS);
 
-  /* Human-readable audit copy (gitignored build/ only). */
+  /* Human-readable audit copy (gitignored build/ only). Print the outcome so a
+   * missing build/ directory cannot silently turn the Python audit into a SKIP
+   * on a clean checkout (audit 2026-11-07). */
   FILE *f = fopen("build/hmx_b3_r2_registered_arrays.txt", "w");
   if (f) {
     fprintf(f, "# B3+R2 registered evidence arrays (canonical LE serialisation)\n");
@@ -2182,6 +2231,11 @@ static void run_evidence_digests(void) {
       fprintf(f, "%02x%02x\n", b3_buf[i * 2], b3_buf[i * 2 + 1]);
     }
     fclose(f);
+    printf("b3_r2_dump=written path=build/hmx_b3_r2_registered_arrays.txt "
+           "sections=4\n");
+  } else {
+    printf("b3_r2_dump=not_written path=build/hmx_b3_r2_registered_arrays.txt "
+           "reason=open_failed note=create_the_build_directory_first\n");
   }
 }
 
@@ -2962,20 +3016,24 @@ static void run_cand_c_evaluation(void) {
              deps[1].id == HMX_CC_SYNC_C2 &&
                  deps[1].cls == HMX_CC_SYNC_DEVICE_ONLY);
 
-  /* Three-way design comparison (static facts only). */
+  /* Three-way design comparison (static facts only). The two L2 numbers are
+   * NOT the same resource: streaming spends L2 on mid-kernel operand staging
+   * (a prerequisite to run at all), while candidates B and C spend it on
+   * output evidence retention. Audit 2026-11-07 made the roles explicit. */
   printf("design_compare design=streaming operator_overwrite_between_mma=yes "
-         "final_operand_reuse=yes midkernel_operand_tiles=%d l2_staging=%d "
-         "unproven=D1,D2,D3\n",
+         "final_operand_reuse=yes midkernel_operand_tiles=%d "
+         "l2_midkernel_staging=%d l2_output_evidence=0 unproven=D1,D2,D3\n",
          HMX_B3_R2_STREAM_TILES_MIDKERNEL, HMX_B3_R2_STAGE_TOTAL);
   printf("design_compare design=candidate_b operator_overwrite_between_mma=no "
-         "final_operand_reuse=yes midkernel_operand_tiles=%d l2_staging=%d "
-         "unproven=D8\n",
+         "final_operand_reuse=yes midkernel_operand_tiles=%d "
+         "l2_midkernel_staging=0 l2_output_evidence=%d unproven=D8\n",
          HMX_B3_R2_PR_MIDKERNEL_TILES, HMX_B3_R2_PR_L2_SAVE_BYTES);
   printf("design_compare design=candidate_c operator_overwrite_between_mma=no "
-         "final_operand_reuse=no midkernel_operand_tiles=%d l2_staging=%d "
+         "final_operand_reuse=no midkernel_operand_tiles=%d "
+         "l2_midkernel_staging=0 l2_output_evidence=%d l2_folded=%d "
          "l2_copies=%d unproven=C2\n",
          HMX_B3_R2_CC_MIDKERNEL_OPERAND_TILES, HMX_B3_R2_CC_L2_PEAK_RAW_BYTES,
-         HMX_B3_R2_CC_L2_CLEAR_TOTAL);
+         HMX_B3_R2_CC_L2_PEAK_FOLD_BYTES, HMX_B3_R2_CC_L2_CLEAR_TOTAL);
   printf("cand_c_copy_static tiles=%d vectors=%d bytes=%d timing_claimed=none\n",
          HMX_B3_R2_CC_L2_CLEAR_TOTAL, HMX_B3_R2_CC_L2_CLEAR_VECTORS,
          HMX_B3_R2_CC_L2_CLEAR_TOTAL * 2048);
@@ -3204,6 +3262,10 @@ typedef struct {
   int wr_count;
   int wr_overlaps;
   int wr_mismatch_declared;
+  /* Prologue gap zeroing (audit 2026-11-07). A device VTCM allocation is not
+   * guaranteed zero, so the "bytes outside every declared region are 0x00"
+   * contract row is met by a prologue write, not by the harness's memset. */
+  int unowned_bytes;
   /* Observation census (filled by c2_observe). */
   int deadic_cells;
   int c1_cells;
@@ -3246,6 +3308,30 @@ static int c2_outside_nonzero(const c2_state_t *c) {
     if (owner[i] < 0 && c->core.vtcm.raw[i] != 0) bad++;
   }
   return bad;
+}
+
+/* Zero every VTCM byte that no declared region owns. Returns the byte count.
+ * This is a prologue step of the registered sequence, not a harness courtesy:
+ * the "bytes outside every declared region are 0x00" contract row has to hold
+ * on a real (non-zeroed) VTCM allocation, so the kernel must write the zeros
+ * and the model must not get them for free from its own memset. */
+static int c2_zero_unowned(c2_state_t *c) {
+  static unsigned char owned[HMX_B3_R2_VTCM_TOTAL];
+  memset(owned, 0, sizeof(owned));
+  for (int r = 0; r < C2_R_COUNT; ++r) {
+    for (int i = 0; i < c->lay.size[r]; ++i) {
+      int off = c->lay.off[r] + i;
+      if (off >= 0 && off < HMX_B3_R2_VTCM_TOTAL) owned[off] = 1;
+    }
+  }
+  int n = 0;
+  for (int i = 0; i < HMX_B3_R2_VTCM_TOTAL; ++i) {
+    if (!owned[i]) {
+      c->core.vtcm.raw[i] = 0x00u;
+      n++;
+    }
+  }
+  return n;
 }
 
 static void c2_bias_init(c2_state_t *c) {
@@ -3405,6 +3491,14 @@ static void c2_model_run(c2_state_t *c, hmx_b3_r2_fault_t fault) {
   memset(c, 0, sizeof(*c));
   c->lay = c2_layout_rev(fault == HMX_FAULT_C2_GUARD_LO_WEIGHT_OVERLAP ? 1 : 2);
   c->overlaps = c2_overlap_pairs(&c->lay, c->pairs, 8, &c->overlap_bytes);
+  /* Model a dirty device allocation, then the prologue's explicit zeroing of
+   * every byte no declared region owns. Skipping the zeroing is fault 28. */
+  memset(c->core.vtcm.raw, 0xA5, sizeof(c->core.vtcm.raw));
+  if (fault == HMX_FAULT_C2_GAP_NOT_ZEROED) {
+    c->unowned_bytes = 0;
+  } else {
+    c->unowned_bytes = c2_zero_unowned(c);
+  }
   memcpy(c->exp_pos, g_m_plain.raw_pos, sizeof(c->exp_pos));
   memcpy(c->exp_neg, g_m_plain.raw_neg, sizeof(c->exp_neg));
   for (int i = 0; i < T8_CELLS; ++i) {
@@ -3471,7 +3565,9 @@ static void c2_model_run(c2_state_t *c, hmx_b3_r2_fault_t fault) {
   int mid = HMX_C2_COPY_VECTORS; /* vectors read between Store #1 and #2 */
   int late = 0;     /* vectors read after Store #2 */
   const int dst_shift =
-      (fault == HMX_FAULT_C2_L2_GUARD_OVERRUN) ? 1 : 0;
+      (fault == HMX_FAULT_C2_L2_GUARD_OVERRUN) ? 1
+      : (fault == HMX_FAULT_C2_L2_GUARD_UNDERRUN) ? -1
+                                                  : 0;
   if (fault == HMX_FAULT_C2_MIXED_SIGNATURE) {
     pre = HMX_C2_COPY_VECTORS / 2;
     mid = pre;
@@ -3498,6 +3594,11 @@ static void c2_model_run(c2_state_t *c, hmx_b3_r2_fault_t fault) {
   c->store_addrs_identical = (store1_addr == store2_addr);
 
   c2_copy_vecs(c, mid, mid + late, dst_shift);
+  /* A stray store that dirties X's upper VTCM guard must be caught by content,
+   * not by a counter. */
+  if (fault == HMX_FAULT_C2_VTCM_GUARD_DIRTY) {
+    memset(c->core.vtcm.raw + g_hi, 0x00, 16);
+  }
   /* critical path end */
 
   cc_decode_tile((const uint16_t *)(c->l2 + HMX_B3_R2_C2_L2_P_OFFSET), c->p);
@@ -3584,6 +3685,41 @@ static void c2_verify_layout(void) {
              HMX_B3_R2_C2_L2_P_OFFSET + HMX_C2_COPY_VECTORS * 128 ==
                  HMX_B3_R2_C2_L2_P_GUARD_HI);
 
+  /* The enum numbering is a documented contract (hmx_b3_r2.h) and the only
+   * ordering a future implementer might follow instead of the if-chain, so pin
+   * it to section 9 rather than trusting the comment. Added 2026-11-07: the
+   * previous numbering had STORE2_PATH_BROKEN before COPY_NOT_EXECUTED while
+   * section 9 evaluates the 0xDEAD residue first. */
+  check_int("c2_class_enum_contract_first", (int)HMX_C2_CLASS_CONTRACT_FAILED, 0);
+  check_true("c2_class_enum_dead_before_x",
+             HMX_C2_CLASS_COPY_NOT_EXECUTED < HMX_C2_CLASS_STORE2_PATH_BROKEN);
+  check_true("c2_class_enum_x_before_signature_classes",
+             HMX_C2_CLASS_STORE2_PATH_BROKEN < HMX_C2_CLASS_MIXED_SIGNATURE);
+  check_true("c2_class_enum_signatures_before_special_value",
+             HMX_C2_CLASS_C2_SIGNATURE < HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS);
+  check_true("c2_class_enum_special_before_inconclusive",
+             HMX_C2_CLASS_SUBNORMAL_OR_ZERO_LOSS < HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+  check_true("c2_class_enum_inconclusive_before_supported",
+             HMX_C2_CLASS_CAUSE_INCONCLUSIVE < HMX_C2_CLASS_SUPPORTED);
+
+  /* Host ABI sizes and the observation-array/tile correspondence: P occupies
+   * the first 1,024 slots and X the second 1,024, so a future host cannot
+   * silently swap halves or size the buffers for one tile. */
+  check_int("c2_abi_result_slots", HMX_B3_R2_C2_RESULT_SLOTS, 2 * T8_CELLS);
+  check_int("c2_abi_p_slot_base", HMX_B3_R2_C2_P_SLOT_BASE, 0);
+  check_int("c2_abi_x_slot_base", HMX_B3_R2_C2_X_SLOT_BASE, T8_CELLS);
+  check_int("c2_abi_result_bytes", HMX_B3_R2_C2_RESULT_SLOTS *
+                                       HMX_B3_R2_C2_SLOT_BYTES, 8192);
+  check_int("c2_abi_metadata_bytes", HMX_B3_R2_C2_METADATA_WORDS *
+                                        HMX_B3_R2_C2_SLOT_BYTES, 128);
+  check_int("c2_abi_total_bytes", (HMX_B3_R2_C2_RESULT_SLOTS +
+                                    HMX_B3_R2_C2_METADATA_WORDS) *
+                                       HMX_B3_R2_C2_SLOT_BYTES, 8320);
+  check_true("c2_abi_x_slot_base_covers_p",
+             HMX_B3_R2_C2_X_SLOT_BASE == T8_CELLS &&
+                 HMX_B3_R2_C2_X_SLOT_BASE + T8_CELLS ==
+                     HMX_B3_R2_C2_RESULT_SLOTS);
+
   /* Revision 1 must be rejected by the same checker, and named exactly. */
   bytes = 0;
   int n1 = c2_overlap_pairs(&v1, pairs, 8, &bytes);
@@ -3628,6 +3764,10 @@ static void run_c2_prereg_evaluation(void) {
   check_int("c2_nominal_deadic_cells", st.deadic_cells, 0);
   check_int("c2_nominal_ambiguous_subnormal", st.ambiguous_subnormal, 0);
   check_int("c2_nominal_zero_loss_other", st.zero_loss_other, 0);
+  /* The 0x00 contract row is met by the prologue's own write over a dirty
+   * allocation, not by the harness. 12,288 - 6,912 declared bytes = 5,376. */
+  check_int("c2_nominal_unowned_bytes_zeroed", st.unowned_bytes,
+            HMX_B3_R2_VTCM_TOTAL - 6912);
   check_int("c2_nominal_c1_cells", st.c1_cells, 0);
   check_int("c2_nominal_c2_nonzero_cells", st.c2_nonzero_cells, 0);
   check_int("c2_nominal_c2_zero_cells", st.c2_zero_cells, 0);
@@ -3696,7 +3836,9 @@ static void run_c2_prereg_evaluation(void) {
          st.subnormal_pos_cells);
   printf("c2_observation_contract deadic=any_cell c1_signature=0xA5A5 "
          "c2_signature=nonzero_neg_payload zero_loss_before_signature=1 "
-         "forbidden_between_stores=checksums,fences,dummy_cvt,host_rpc\n");
+         "forbidden_between_stores=checksums,fences,dummy_cvt,host_rpc "
+         "unowned_bytes=5376 zeroed_by_prologue=%d dirty_fill=0xA5\n",
+         st.unowned_bytes);
 
   c2_classifier_controls(&st);
 }
@@ -3880,6 +4022,134 @@ static void c2_classifier_controls(const c2_state_t *nominal) {
              t.cls != HMX_C2_CLASS_SUPPORTED);
   const hmx_c2_class_t cls_p_decode_swap = t.cls;
 
+  /* ---- Multi-fault precedence and boundary controls (audit 2026-11-07) ---- */
+
+  /* 13. One 0xDEAD cell plus one non-zero negative payload: the copy stop
+   *     precedes the signature, so the run cannot be attributed to C2. */
+  t = *nominal;
+  t.p[0] = HMX_C2_SENTINEL_P;
+  {
+    int idx = -1;
+    for (int i = 1; i < T8_CELLS; ++i) {
+      if (t.exp_pos[i] != t.exp_neg[i] && t.exp_neg[i] != 0x0000u) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0) t.p[idx] = t.exp_neg[idx];
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_dead_plus_signature_stops", (int)t.cls,
+            HMX_C2_CLASS_COPY_NOT_EXECUTED);
+
+  /* 14. A contract failure outranks every content class, including 0xDEAD. */
+  t = *nominal;
+  t.contract_ok = 0;
+  t.p[T8_CELLS - 1] = HMX_C2_SENTINEL_P;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_contract_precedes_content", (int)t.cls,
+            HMX_C2_CLASS_CONTRACT_FAILED);
+
+  /* 15. C1 plus an unexplained bit pattern: inconclusive, not a C1 verdict. */
+  t = *nominal;
+  t.p[0] = HMX_C2_SENTINEL_X;
+  {
+    uint16_t v = 0x0001u;
+    while (v == 0x0000u || v == HMX_C2_SENTINEL_X || v == HMX_C2_SENTINEL_P ||
+           v == HMX_C2_SENTINEL_G || v == t.exp_pos[1] || v == t.exp_neg[1]) {
+      v++;
+    }
+    t.p[1] = v;
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_true("c2_control_c1_plus_unknown_has_unknown", t.unknown_cells >= 1);
+  check_int("c2_control_c1_plus_unknown_inconclusive", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+
+  /* 16. Subnormal zeros coexisting with a specific non-zero negative pattern:
+   *     the signature is attributed, because no zeroing law can produce that
+   *     pattern. This is the row-7-before-row-4 pin at cell level. */
+  t = *nominal;
+  {
+    int sub_seen = 0, strong_idx = -1;
+    for (int i = 0; i < T8_CELLS; ++i) {
+      if (t.exp_pos[i] != 0x0000u && is_subnormal_fp16(t.exp_pos[i])) {
+        t.p[i] = 0x0000u;
+        sub_seen++;
+      } else if (strong_idx < 0 && t.exp_pos[i] != t.exp_neg[i] &&
+                 t.exp_neg[i] != 0x0000u) {
+        strong_idx = i;
+      }
+    }
+    if (strong_idx >= 0) {
+      t.p[strong_idx] = t.exp_neg[strong_idx];
+    }
+    c2_observe(&t);
+    t.cls = c2_classify(&t);
+    check_true("c2_control_ftz_plus_signature_cells", sub_seen > 0);
+    check_int("c2_control_ftz_plus_signature_attributed", (int)t.cls,
+              HMX_C2_CLASS_C2_SIGNATURE);
+  }
+
+  /* 17. Every cell a C1 signature: still one C1 verdict. */
+  t = *nominal;
+  for (int i = 0; i < T8_CELLS; ++i) t.p[i] = HMX_C2_SENTINEL_X;
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_all_c1", (int)t.cls, HMX_C2_CLASS_C1_SIGNATURE);
+
+  /* 18. Every cell unexplained: never SUPPORTED, never a signature. */
+  t = *nominal;
+  for (int i = 0; i < T8_CELLS; ++i) {
+    uint16_t v = 0x0001u;
+    while (v == 0x0000u || v == HMX_C2_SENTINEL_X || v == HMX_C2_SENTINEL_P ||
+           v == HMX_C2_SENTINEL_G || v == t.exp_pos[i] || v == t.exp_neg[i]) {
+      v++;
+    }
+    t.p[i] = v;
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_all_unknown", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+
+  /* 19. A single non-zero negative payload cell is enough for a C2 verdict. */
+  t = *nominal;
+  {
+    int strong_idx = -1;
+    for (int i = 0; i < T8_CELLS; ++i) {
+      if (t.exp_pos[i] != t.exp_neg[i] && t.exp_neg[i] != 0x0000u) {
+        strong_idx = i;
+        break;
+      }
+    }
+    if (strong_idx >= 0) t.p[strong_idx] = t.exp_neg[strong_idx];
+  }
+  c2_observe(&t);
+  t.cls = c2_classify(&t);
+  check_int("c2_control_single_nonzero_c2_cell", (int)t.cls,
+            HMX_C2_CLASS_C2_SIGNATURE);
+
+  /* 20. Defensive branch: 1,023 matches and nothing else is unreachable from a
+   *     full observation (a non-match is always classified), but the decision
+   *     procedure must still refuse to call it SUPPORTED. */
+  t = *nominal;
+  t.deadic_cells = 0;
+  t.c1_cells = 0;
+  t.c2_nonzero_cells = 0;
+  t.c2_zero_cells = 0;
+  t.ambiguous_subnormal = 0;
+  t.zero_loss_other = 0;
+  t.unknown_cells = 0;
+  t.x_mismatch_cells = 0;
+  t.payload_match_cells = T8_CELLS - 1;
+  t.cls = c2_classify(&t);
+  check_int("c2_control_partial_match_only_inconclusive", (int)t.cls,
+            HMX_C2_CLASS_CAUSE_INCONCLUSIVE);
+
   {
     char l1[96], l2[96], l3[96], l4[96], l5[96], l6[96], l7[96], l8[96],
         l9[96], l10[96], l11[96], l12[96];
@@ -3986,23 +4256,177 @@ static int c2_fault_detected(hmx_b3_r2_fault_t fault) {
                st.copy_vectors_done == HMX_C2_COPY_VECTORS &&
                st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
   }
+  /* A device VTCM allocation is not guaranteed zero. If the prologue omits the
+   * zeroing of the 5,376 bytes no declared region owns, the untouched-bytes
+   * row must catch the dirty residue and fail the contract (audit 2026-11-07). */
+  if (fault == HMX_FAULT_C2_GAP_NOT_ZEROED) {
+    detected = st.unowned_bytes == 0 && st.outside_nonzero > 0 &&
+               st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
+  }
+  /* Symmetric guard coverage: an undershoot must be caught by the LOW L2 guard
+   * and the 0xDEAD residue at the top of P. */
+  if (fault == HMX_FAULT_C2_L2_GUARD_UNDERRUN) {
+    detected = st.p_guard_hits == 1 && st.deadic_cells == 64 &&
+               st.copy_vectors_done == HMX_C2_COPY_VECTORS &&
+               st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
+  }
+  /* A dirty VTCM guard must be caught by content alone. */
+  if (fault == HMX_FAULT_C2_VTCM_GUARD_DIRTY) {
+    detected = st.guard_hits == 1 && st.p_guard_hits == 0 &&
+               st.deadic_cells == 0 &&
+               st.cls == HMX_C2_CLASS_CONTRACT_FAILED;
+  }
 
   {
     char lbl[96];
     c2_cpu_label(st.cls, "fault_injected", lbl, sizeof(lbl));
     printf("c2_fault_detail=%s class=%s overlaps=%d wgt_tail_intact=%d mma=%d "
            "deadic=%d c1=%d c2_nonzero=%d c2_zero=%d copied_vectors=%d "
-           "wr_overlaps=%d\n",
+           "wr_overlaps=%d unowned_bytes=%d outside_nonzero=%d\n",
            hmx_b3_r2_fault_name(fault), lbl, st.overlaps, st.wgt_tail_intact,
            st.mma_count, st.deadic_cells, st.c1_cells, st.c2_nonzero_cells,
-           st.c2_zero_cells, st.copy_vectors_done, st.wr_overlaps);
+           st.c2_zero_cells, st.copy_vectors_done, st.wr_overlaps,
+           st.unowned_bytes, st.outside_nonzero);
   }
   return detected;
 }
 
+/* ---------------- CPU-only classifier replay (cross-implementation audit) ----------------
+ *
+ * `--c2-replay <file>` runs the shipped c2_observe()/c2_classify() over
+ * observations supplied by an independent implementation, so the two decision
+ * procedures can be compared on byte-identical inputs. This is a CPU-only
+ * mechanism: it touches no device, no DSP and no SDK, and the default program
+ * path is unchanged.
+ *
+ * File format (text; '#' comments and blank lines ignored):
+ *   counts <id> <contract_ok> <dead> <c1> <c2_nonzero> <c2_zero> <ambig>
+ *          <zero_loss> <match> <unknown> <x_mismatch>
+ *   arrays <id> <contract_ok>
+ *   P  <1024 hex u16, decoded cell order>
+ *   X  <1024 hex u16>
+ *   EP <1024 hex u16>
+ *   EN <1024 hex u16>
+ *
+ * Each case prints exactly one `replay <id> <class>` line. Exit 0 = all cases
+ * parsed, 2 = malformed input or unreadable file.
+ */
+static int c2_replay_words(const char *s, uint16_t *dst) {
+  for (int i = 0; i < T8_CELLS; ++i) {
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 16);
+    if (end == s) return 0;
+    dst[i] = (uint16_t)(v & 0xFFFFu);
+    s = end;
+  }
+  return 1;
+}
+
+static int c2_replay_next(char *buf, int cap, FILE *f) {
+  while (fgets(buf, cap, f)) {
+    char *line = buf;
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '\0' || *line == '\n' || *line == '#') continue;
+    if (line != buf) memmove(buf, line, strlen(line) + 1);
+    return 1;
+  }
+  return 0;
+}
+
+static int c2_replay_run(const char *path) {
+  FILE *f = fopen(path, "r");
+  if (!f) {
+    fprintf(stderr, "c2_replay=FAIL (cannot open %s)\n", path);
+    return 2;
+  }
+  static c2_state_t st;
+  static char buf[8192];
+  int cases = 0;
+  int malformed = 0;
+
+  while (c2_replay_next(buf, (int)sizeof(buf), f)) {
+    if (strncmp(buf, "counts ", 7) == 0) {
+      int id = 0;
+      int contract = 0;
+      unsigned dead = 0, c1 = 0, c2n = 0, c2z = 0, amb = 0, zl = 0;
+      unsigned match = 0, unk = 0, xm = 0;
+      if (sscanf(buf, "counts %d %d %u %u %u %u %u %u %u %u %u", &id,
+                 &contract, &dead, &c1, &c2n, &c2z, &amb, &zl, &match, &unk,
+                 &xm) != 11) {
+        malformed++;
+        continue;
+      }
+      memset(&st, 0, sizeof(st));
+      st.contract_ok = contract;
+      st.deadic_cells = (int)dead;
+      st.c1_cells = (int)c1;
+      st.c2_nonzero_cells = (int)c2n;
+      st.c2_zero_cells = (int)c2z;
+      st.ambiguous_subnormal = (int)amb;
+      st.zero_loss_other = (int)zl;
+      st.payload_match_cells = (int)match;
+      st.unknown_cells = (int)unk;
+      st.x_mismatch_cells = (int)xm;
+      printf("replay %d %s\n", id, c2_class_name(c2_classify(&st)));
+      cases++;
+    } else if (strncmp(buf, "arrays ", 7) == 0) {
+      int id = 0;
+      int contract = 0;
+      if (sscanf(buf, "arrays %d %d", &id, &contract) != 2) {
+        malformed++;
+        continue;
+      }
+      memset(&st, 0, sizeof(st));
+      st.contract_ok = contract;
+      int ok = 0;
+      if (c2_replay_next(buf, (int)sizeof(buf), f) && strncmp(buf, "P ", 2) == 0) {
+        ok = c2_replay_words(buf + 2, st.p);
+      }
+      if (ok && c2_replay_next(buf, (int)sizeof(buf), f) &&
+          strncmp(buf, "X ", 2) == 0) {
+        ok = c2_replay_words(buf + 2, st.x);
+      } else {
+        ok = 0;
+      }
+      if (ok && c2_replay_next(buf, (int)sizeof(buf), f) &&
+          strncmp(buf, "EP ", 3) == 0) {
+        ok = c2_replay_words(buf + 3, st.exp_pos);
+      } else {
+        ok = 0;
+      }
+      if (ok && c2_replay_next(buf, (int)sizeof(buf), f) &&
+          strncmp(buf, "EN ", 3) == 0) {
+        ok = c2_replay_words(buf + 3, st.exp_neg);
+      } else {
+        ok = 0;
+      }
+      if (!ok) {
+        malformed++;
+        continue;
+      }
+      c2_observe(&st);
+      printf("replay %d %s\n", id, c2_class_name(c2_classify(&st)));
+      cases++;
+    } else {
+      malformed++;
+    }
+  }
+  fclose(f);
+  printf("c2_replay cases=%d malformed=%d\n", cases, malformed);
+  return malformed == 0 ? 0 : 2;
+}
+
 /* ---------------- Main Entry Point ---------------- */
 
-int main(void) {
+int main(int argc, char **argv) {
+  if (argc == 3 && strcmp(argv[1], "--c2-replay") == 0) {
+    return c2_replay_run(argv[2]);
+  }
+  if (argc != 1) {
+    fprintf(stderr, "usage: %s [--c2-replay <file>]\n", argv[0]);
+    return 2;
+  }
+
   printf("b3_r2_full_tile_sim=START\n");
 
   run_full_tile_verification();
