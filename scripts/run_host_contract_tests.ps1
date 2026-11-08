@@ -129,6 +129,9 @@ Write-Host "probe_r2_mode45_selftest=PASS"
 # B3+R2 integrated full-tile precision simulator contract (1024 cells, PRM packing, 12k VTCM, 13 fault injections).
 Invoke-PhoneLmHostPwshScript -Label "HMX B3+R2 full-tile simulator contract" `
     -ScriptPath (Join-Path $Root "scripts\run_hmx_b3_r2_sim.ps1")
+# D8 minimal experiment CPU contract (Candidate B operand-reuse ordering).
+Invoke-PhoneLmHostPwshScript -Label "HMX D8 minimal experiment CPU contract" `
+    -ScriptPath (Join-Path $Root "scripts\run_hmx_d8_sim.ps1")
 
 if ($Suite -eq "Fast") {
     # Fast profile: generated-artifact staleness + CPU reference only.
