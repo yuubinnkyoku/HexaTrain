@@ -12,7 +12,7 @@
  *      operand fixture, using the shipped model's arithmetic;
  *   2. checks the safe reference against the existing B3 subcase output
  *      (g_m_b3 style) so the minimal sequence is provably the same arithmetic;
- *   3. runs the D8 access-trace validator and ten fault/control cases;
+ *   3. runs the D8 access-trace validator and sixteen fault/control families;
  *   4. exposes a classifier replay mode for the independent Python audit.
  *
  * CPU only: no device, no DSP, no SDK. The references are outcomes of a
@@ -30,6 +30,25 @@
 #define D8_TRACE_NOT_PROVIDED 0
 #define D8_TRACE_VALID 1
 #define D8_TRACE_INVALID 2
+
+/* Registered fill-mask bits (evidence contract sections 3.2 and 3.3):
+ *   bit0 = out_pos (+8192), bit1 = Wlo (+6144), bit2 = Ahi (+0).
+ * Condition A fills only the fresh out_pos; B reuses both operands; C only
+ * Wlo; D only Ahi. These four values are the contract, not a derived
+ * convenience: revision 1 listed C and D swapped and made B ambiguous. */
+#define D8_MASK_OUT 1
+#define D8_MASK_WLO 2
+#define D8_MASK_AHI 4
+
+static int d8_condition_mask(int cond) {
+  switch (cond) {
+    case D8_COND_A: return D8_MASK_OUT;
+    case D8_COND_B: return D8_MASK_OUT | D8_MASK_WLO | D8_MASK_AHI;
+    case D8_COND_C: return D8_MASK_OUT | D8_MASK_WLO;
+    case D8_COND_D: return D8_MASK_OUT | D8_MASK_AHI;
+    default: return 0;
+  }
+}
 
 typedef enum {
   D8_CLASS_CONTRACT_FAILED = 0,
@@ -133,16 +152,46 @@ static void d8_outcome(uint16_t *out, int corrupt_ahi, int corrupt_wlo) {
   cc_decode_tile((const uint16_t *)(st.vtcm.raw + D8_OUT_OFFSET), out);
 }
 
-/* Program-order sequence for the condition: MMAs first, then the scheduled
- * reuse fills, then Convert #1. Only the fills of the reuse conditions are
- * scheduled; the full Candidate B also stores Convert #2 into Wlo and the
- * recon into Ahi, but those writes are later than these fills, so the fills
- * are the tightest reuse point. */
-static void d8_program_order(hmx_full_tile_state_t *st, int cond) {
+/* Registered program order (revision 2): MMAs first, then the output phase.
+ * The out_pos sentinel is the first write of that phase, exactly as
+ * Candidate B's phase-reused subcase does (pos, then neg/Wlo, then
+ * recon/Ahi), followed by the condition's operand fills and Convert #1.
+ * Only the fills of the reuse conditions are scheduled; the full Candidate B
+ * also stores Convert #2 into Wlo and the recon into Ahi, but those writes
+ * are later than these fills, so the fills are the tightest reuse point. */
+static void d8_sequence_with_mask(hmx_full_tile_state_t *st, int fill_mask) {
   pr_state_init(st);
   d8_pack_operands(st, &g_ops_deploy);
   d8_mma_sequence(st);
-  pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1); /* out_pos sentinel */
+  if (fill_mask & D8_MASK_OUT) {
+    pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1); /* out_pos sentinel */
+  }
+  if (fill_mask & D8_MASK_WLO) {
+    pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
+  }
+  if (fill_mask & D8_MASK_AHI) {
+    pr_fill(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_TILE_BYTES, 3);
+  }
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
+                            HMX_B3_R2_PR_BIAS0_OFFSET,
+                            HMX_B3_R2_PR_BIAS1_OFFSET);
+}
+
+static void d8_program_order(hmx_full_tile_state_t *st, int cond) {
+  d8_sequence_with_mask(st, d8_condition_mask(cond));
+}
+
+/* Revision 1 sequence, kept only for the CPU comparison recorded in the
+ * pre-registration. It is NOT the registered sequence: the out_pos fill runs
+ * in the prologue, before mxclracc and the MMAs. Revision 2 rejects it with
+ * "fill_before_last_mma_read"; the numeric result is identical because the
+ * fill touches no operand region. Different instruction sequence, different
+ * experiment, even when the numbers agree. */
+static void d8_legacy_rev1_sequence(hmx_full_tile_state_t *st, int cond) {
+  pr_state_init(st);
+  d8_pack_operands(st, &g_ops_deploy);
+  pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1); /* rev1: prologue */
+  d8_mma_sequence(st);
   if (cond == D8_COND_B || cond == D8_COND_C) {
     pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
   }
@@ -158,9 +207,10 @@ static void d8_program_order(hmx_full_tile_state_t *st, int cond) {
 
 /* D8-specific version of the CB-FIX-1 rule. It derives the last MMA read of
  * each operand from the recorded events and rejects any later-overlapping
- * write that lands before that read. It also checks the condition's expected
- * fills and event counts, so a truncated or padded trace fails closed.
- * Returns 1 = valid, 0 = invalid; `why` receives a short reason. */
+ * write that lands before that read. It also checks the registered output
+ * phase order (out_pos, then Wlo, then Ahi), the condition's fill mask and the
+ * event counts, so a truncated, padded, reordered or C/D-swapped trace fails
+ * closed. Returns 1 = valid, 0 = invalid; `why` receives a short reason. */
 static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
                           const char **why) {
   const int ids[4] = {HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_ALO,
@@ -171,6 +221,8 @@ static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
   int pack[4] = {0}, last[4] = {0}, reads[4] = {0};
   int sentinel = 0, hmx_stores = 0, hvx_stores = 0, bias_writes = 0;
   int out_fill = 0, wlo_fill = 0, ahi_fill = 0;
+  int out_seq = 0, wlo_seq = 0, ahi_seq = 0;
+  int first_fill_seq = 0, last_mma_read_seq = 0;
   if (why) *why = "unset";
   if (!st->pr_trace_active || st->pr_trace_overflow ||
       st->pr_trace_count < 1 || st->pr_trace_count > PR_TRACE_CAP) {
@@ -203,6 +255,7 @@ static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
             if (!pack[j]) { if (why) *why = "read_before_pack"; return 0; }
             reads[j]++;
             last[j] = e->seq;
+            last_mma_read_seq = e->seq;
           }
           break;
         }
@@ -210,14 +263,18 @@ static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
       if (j == 4) { if (why) *why = "unknown_operand_object"; return 0; }
     } else if (e->kind == PR_SENTINEL) {
       sentinel++;
+      if (first_fill_seq == 0) first_fill_seq = e->seq;
       if (e->offset == D8_OUT_OFFSET && e->size == HMX_B3_R2_TILE_BYTES) {
         out_fill++;
+        out_seq = e->seq;
       } else if (e->offset == HMX_B3_R2_PR_WLO_OFFSET &&
                  e->size == HMX_B3_R2_TILE_BYTES) {
         wlo_fill++;
+        wlo_seq = e->seq;
       } else if (e->offset == HMX_B3_R2_PR_AHI_OFFSET &&
                  e->size == HMX_B3_R2_TILE_BYTES) {
         ahi_fill++;
+        ahi_seq = e->seq;
       } else {
         if (why) *why = "sentinel_outside_declared_regions";
         return 0;
@@ -238,11 +295,30 @@ static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
   if (hmx_stores != 1) { if (why) *why = "hmx_store_count"; return 0; }
   if (hvx_stores != 0) { if (why) *why = "unexpected_hvx_store"; return 0; }
   if (bias_writes != 2) { if (why) *why = "bias_count"; return 0; }
+  /* Revision 2: every registered fill belongs to the output phase, so none
+   * may precede the last MMA operand read. Revision 1 placed the out_pos fill
+   * in the prologue; that sequence is a different experiment and fails here. */
+  if (first_fill_seq != 0 && last_mma_read_seq != 0 &&
+      first_fill_seq < last_mma_read_seq) {
+    if (why) *why = "fill_before_last_mma_read";
+    return 0;
+  }
+  /* Candidate B output-phase order: out_pos first, then Wlo, then Ahi. */
+  if (out_fill == 1 && wlo_fill == 1 && wlo_seq < out_seq) {
+    if (why) *why = "fill_order_wlo_before_out";
+    return 0;
+  }
+  if (ahi_fill == 1) {
+    int prior = (wlo_fill == 1) ? wlo_seq : out_seq;
+    if (ahi_seq < prior) { if (why) *why = "fill_order_ahi"; return 0; }
+  }
   {
-    int want_wlo = (cond == D8_COND_B || cond == D8_COND_C);
-    int want_ahi = (cond == D8_COND_B || cond == D8_COND_D);
-    if (wlo_fill != want_wlo || ahi_fill != want_ahi) {
-      if (why) *why = "condition_fill_mismatch";
+    /* The mask is derived from the observed fills, then compared with the
+     * registered per-condition value. A C/D swap (C filling Ahi) and a B path
+     * that drops one operand fill both fail here. */
+    int observed = (out_fill ? 1 : 0) | (wlo_fill ? 2 : 0) | (ahi_fill ? 4 : 0);
+    if (observed != d8_condition_mask(cond)) {
+      if (why) *why = "condition_fill_mask";
       return 0;
     }
   }
@@ -288,12 +364,17 @@ static int d8_match_ref(const uint16_t *obs, const d8_refs_t *r) {
 
 /* Registered classification order (prereg section 6):
  *   contract -> trace -> numeric. A trace anomaly overrides a matching numeric
- *   result; an unmatched numeric result is never read as "no violation". */
+ *   result; an unmatched numeric result is never read as "no violation". The
+ *   contract gate includes the echoed fill mask: a C run that reports D's mask
+ *   (or a B run that dropped one operand fill) is a contract failure, never a
+ *   numeric attribution. */
 static d8_class_t d8_classify(int cond, const uint16_t *obs, int trace_status,
                               int evidence_ok, int ids_ok, int lengths_ok,
-                              const d8_refs_t *r, int *matched_out) {
+                              int fill_mask, const d8_refs_t *r,
+                              int *matched_out) {
   int matched;
   if (!evidence_ok || !ids_ok || !lengths_ok) return D8_CLASS_CONTRACT_FAILED;
+  if (fill_mask != d8_condition_mask(cond)) return D8_CLASS_CONTRACT_FAILED;
   if (trace_status == D8_TRACE_INVALID) return D8_CLASS_INCONCLUSIVE_TRACE;
   matched = d8_match_ref(obs, r);
   if (matched_out) *matched_out = matched;
@@ -316,6 +397,92 @@ static d8_class_t d8_classify(int cond, const uint16_t *obs, int trace_status,
       return D8_CLASS_INCONCLUSIVE_NUMERIC;
     default:
       return D8_CLASS_CONTRACT_FAILED;
+  }
+}
+
+/* ---------------- registered event signature ---------------- */
+
+/* The evidence contract fixes one output-phase order: out_pos, then Wlo, then
+ * Ahi, all after the third MMA. The signature below is derived from the
+ * recorded access events (not from the call sites), so a reordered or
+ * truncated trace changes it. The Python audit extracts the same ordered list
+ * from the pre-registration and compares it with `--d8-sequence`. */
+
+static const char *d8_operand_name(int id) {
+  switch (id) {
+    case HMX_B3_R2_OP_AHI: return "AHI";
+    case HMX_B3_R2_OP_ALO: return "ALO";
+    case HMX_B3_R2_OP_WHI: return "WHI";
+    case HMX_B3_R2_OP_WLO: return "WLO";
+    default: return "?";
+  }
+}
+
+static const char *d8_fill_region(int offset) {
+  if (offset == D8_OUT_OFFSET) return "OUT";
+  if (offset == HMX_B3_R2_PR_WLO_OFFSET) return "WLO";
+  if (offset == HMX_B3_R2_PR_AHI_OFFSET) return "AHI";
+  return "?";
+}
+
+static void d8_sig_append(char *buf, size_t cap, size_t *n, const char *token) {
+  if (*n >= cap - 1) return;
+  int written = snprintf(buf + *n, cap - *n, "%s%s", *n ? "," : "", token);
+  if (written > 0 && (size_t)written < cap - *n) *n += (size_t)written;
+}
+
+static void d8_print_sequence(const hmx_full_tile_state_t *st, int cond) {
+  char sig[1024];
+  size_t n = 0;
+  int reads = 0, act = 0;
+  char token[64];
+  sig[0] = '\0';
+  for (int i = 0; i < st->pr_trace_count; ++i) {
+    const pr_event_t *e = &st->pr_trace[i];
+    switch (e->kind) {
+      case PR_PACK:
+        snprintf(token, sizeof(token), "PACK:%s", d8_operand_name(e->object));
+        d8_sig_append(sig, sizeof(sig), &n, token);
+        break;
+      case PR_BIAS_WRITE:
+        snprintf(token, sizeof(token), "BIAS:%d", e->object);
+        d8_sig_append(sig, sizeof(sig), &n, token);
+        break;
+      case PR_MMA_READ:
+        if ((reads & 1) == 0) {
+          act = e->object;
+        } else {
+          snprintf(token, sizeof(token), "MMA:%d:%s:%s", reads / 2 + 1,
+                   d8_operand_name(act), d8_operand_name(e->object));
+          d8_sig_append(sig, sizeof(sig), &n, token);
+        }
+        reads++;
+        break;
+      case PR_SENTINEL:
+        snprintf(token, sizeof(token), "FILL:%s", d8_fill_region(e->offset));
+        d8_sig_append(sig, sizeof(sig), &n, token);
+        break;
+      case PR_HMX_STORE:
+        /* The shared model records Convert + Store as one HMX store event;
+         * the registered sequence names both operations. */
+        d8_sig_append(sig, sizeof(sig), &n, "CONVERT:1");
+        d8_sig_append(sig, sizeof(sig), &n, "STORE:OUT");
+        break;
+      default:
+        break;
+    }
+  }
+  printf("d8_seq cond=%c events=%s\n", 'A' + cond, sig);
+}
+
+static void d8_print_sequences(void) {
+  static hmx_full_tile_state_t st;
+  printf("d8_fill_mask A=%d B=%d C=%d D=%d\n",
+         d8_condition_mask(D8_COND_A), d8_condition_mask(D8_COND_B),
+         d8_condition_mask(D8_COND_C), d8_condition_mask(D8_COND_D));
+  for (int c = 0; c < 4; ++c) {
+    d8_sequence_with_mask(&st, d8_condition_mask(c));
+    d8_print_sequence(&st, c);
   }
 }
 
@@ -443,6 +610,30 @@ static void d8_early_sequence(hmx_full_tile_state_t *st, int early_ahi,
                             HMX_B3_R2_PR_BIAS1_OFFSET);
 }
 
+/* Full program order with the two operand fills or the out_pos fill moved to
+ * the wrong point. Used only to prove that the revision-2 order rule rejects a
+ * reordered output phase; the numeric result is unchanged because the fills
+ * still write the same regions. */
+static void d8_reordered_sequence(hmx_full_tile_state_t *st, int variant) {
+  pr_state_init(st);
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mma_sequence(st);
+  if (variant == 0) {
+    /* Condition B with Ahi filled before Wlo. */
+    pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1);
+    pr_fill(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_TILE_BYTES, 3);
+    pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
+  } else {
+    /* Condition B with the out_pos fill after both operand fills. */
+    pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
+    pr_fill(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_TILE_BYTES, 3);
+    pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1);
+  }
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
+                            HMX_B3_R2_PR_BIAS0_OFFSET,
+                            HMX_B3_R2_PR_BIAS1_OFFSET);
+}
+
 static int d8_run_controls(void) {
   static hmx_full_tile_state_t st;
   static uint16_t out[T8_CELLS];
@@ -494,24 +685,33 @@ static int d8_run_controls(void) {
   printf("d8_fault=05 sentinel_early trace_invalid=%d why=%s numeric_wlo=%d\n",
          ok, why, d8_array_equal(out, g_d8_refs.wlo));
 
-  /* 6. Normal post-last-use reuse: every condition's program order is valid,
-   *    and the numerical result equals the safe reference. */
+  /* 6. Normal post-last-use reuse: every condition's registered order is
+   *    valid, the numeric result equals the safe reference, and the
+   *    classifier accepts the registered mask. */
   for (int c = 0; c < 4; ++c) {
-    int valid;
+    int valid, m = -1;
+    d8_class_t cls;
     d8_program_order(&st, c);
     valid = d8_trace_valid(&st, c, &why);
     cc_decode_tile((const uint16_t *)(st.vtcm.raw + D8_OUT_OFFSET), out);
-    d8_check(valid && d8_array_equal(out, g_d8_refs.safe),
+    cls = d8_classify(c, out, D8_TRACE_VALID, 1, 1, 1,
+                      d8_condition_mask(c), &g_d8_refs, &m);
+    d8_check(valid && d8_array_equal(out, g_d8_refs.safe) &&
+                 cls == (c == D8_COND_A ? D8_CLASS_CONTROL_SAFE
+                                        : D8_CLASS_NO_VIOLATION),
              "d8_fault_06_normal_order");
-    printf("d8_fault=06 condition=%s trace_valid=%d numeric_safe=%d\n",
-           d8_condition_name(c), valid, d8_array_equal(out, g_d8_refs.safe));
+    printf("d8_fault=06 condition=%s trace_valid=%d mask=%d numeric_safe=%d "
+           "class=%s\n",
+           d8_condition_name(c), valid, d8_condition_mask(c),
+           d8_array_equal(out, g_d8_refs.safe), d8_class_name(cls));
   }
 
   /* 7. Numeric safe + trace invalid: must not be read as no violation. */
   {
     int m = -1;
     d8_class_t c = d8_classify(D8_COND_C, g_d8_refs.safe, D8_TRACE_INVALID,
-                               1, 1, 1, &g_d8_refs, &m);
+                               1, 1, 1, d8_condition_mask(D8_COND_C),
+                               &g_d8_refs, &m);
     ok = (c == D8_CLASS_INCONCLUSIVE_TRACE);
     d8_check(ok, "d8_fault_07_safe_numeric_bad_trace");
     printf("d8_fault=07 safe_numeric_bad_trace class=%s detected=%d\n",
@@ -522,7 +722,8 @@ static int d8_run_controls(void) {
   {
     int m = -1;
     d8_class_t c = d8_classify(D8_COND_C, g_d8_refs.wlo, D8_TRACE_VALID,
-                               1, 1, 1, &g_d8_refs, &m);
+                               1, 1, 1, d8_condition_mask(D8_COND_C),
+                               &g_d8_refs, &m);
     ok = (c == D8_CLASS_VIOLATION_WLO);
     d8_check(ok, "d8_fault_08_corrupt_numeric_good_trace");
     printf("d8_fault=08 corrupt_numeric_good_trace class=%s detected=%d\n",
@@ -533,7 +734,8 @@ static int d8_run_controls(void) {
   {
     int m = -1;
     d8_class_t c = d8_classify(D8_COND_A, g_d8_refs.safe, D8_TRACE_VALID,
-                               0, 1, 1, &g_d8_refs, &m);
+                               0, 1, 1, d8_condition_mask(D8_COND_A),
+                               &g_d8_refs, &m);
     ok = (c == D8_CLASS_CONTRACT_FAILED);
     d8_check(ok, "d8_fault_09_missing_evidence");
     printf("d8_fault=09 missing_evidence class=%s detected=%d\n",
@@ -544,13 +746,134 @@ static int d8_run_controls(void) {
   {
     int m = -1;
     d8_class_t c1 = d8_classify(D8_COND_A, g_d8_refs.safe, D8_TRACE_VALID,
-                                1, 0, 1, &g_d8_refs, &m);
+                                1, 0, 1, d8_condition_mask(D8_COND_A),
+                                &g_d8_refs, &m);
     d8_class_t c2 = d8_classify(D8_COND_A, g_d8_refs.safe, D8_TRACE_VALID,
-                                1, 1, 0, &g_d8_refs, &m);
+                                1, 1, 0, d8_condition_mask(D8_COND_A),
+                                &g_d8_refs, &m);
     ok = (c1 == D8_CLASS_CONTRACT_FAILED && c2 == D8_CLASS_CONTRACT_FAILED);
     d8_check(ok, "d8_fault_10_length_id_mismatch");
     printf("d8_fault=10 length_id_mismatch bad_id=%s bad_len=%s detected=%d\n",
            d8_class_name(c1), d8_class_name(c2), ok);
+  }
+
+  /* 11. Missing out_pos sentinel: a store cannot be distinguished from an
+   *     unwritten region, so the run is a contract failure. */
+  {
+    int m = -1, trace_bad, contract;
+    d8_class_t cls;
+    d8_sequence_with_mask(&st, D8_MASK_WLO | D8_MASK_AHI); /* B without out */
+    trace_bad = !d8_trace_valid(&st, D8_COND_B, &why);
+    cls = d8_classify(D8_COND_B, g_d8_refs.safe, D8_TRACE_VALID, 1, 1, 1,
+                      D8_MASK_WLO | D8_MASK_AHI, &g_d8_refs, &m);
+    contract = (cls == D8_CLASS_CONTRACT_FAILED);
+    ok = trace_bad && strcmp(why, "missing_out_fill") == 0 && contract;
+    d8_check(ok, "d8_fault_11_missing_out_fill");
+    printf("d8_fault=11 missing_out_fill trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", trace_bad, why, d8_class_name(cls), ok);
+  }
+
+  /* 12. C/D swap: condition C executed with D's mask (Ahi filled instead of
+   *     Wlo) and condition D with C's mask. Both fail the mask contract. */
+  {
+    int m = -1, tb, contract;
+    d8_class_t cls;
+    d8_sequence_with_mask(&st, d8_condition_mask(D8_COND_D)); /* 5 */
+    tb = !d8_trace_valid(&st, D8_COND_C, &why);
+    cls = d8_classify(D8_COND_C, g_d8_refs.ahi, D8_TRACE_VALID, 1, 1, 1,
+                      d8_condition_mask(D8_COND_D), &g_d8_refs, &m);
+    contract = (cls == D8_CLASS_CONTRACT_FAILED);
+    ok = tb && strcmp(why, "condition_fill_mask") == 0 && contract;
+    d8_check(ok, "d8_fault_12_c_uses_d_mask");
+    printf("d8_fault=12 c_uses_d_mask trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", tb, why, d8_class_name(cls), ok);
+
+    d8_sequence_with_mask(&st, d8_condition_mask(D8_COND_C)); /* 3 */
+    tb = !d8_trace_valid(&st, D8_COND_D, &why);
+    cls = d8_classify(D8_COND_D, g_d8_refs.wlo, D8_TRACE_VALID, 1, 1, 1,
+                      d8_condition_mask(D8_COND_C), &g_d8_refs, &m);
+    contract = (cls == D8_CLASS_CONTRACT_FAILED);
+    ok = tb && strcmp(why, "condition_fill_mask") == 0 && contract;
+    d8_check(ok, "d8_fault_12_d_uses_c_mask");
+    printf("d8_fault=12 d_uses_c_mask trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", tb, why, d8_class_name(cls), ok);
+  }
+
+  /* 13. B with one operand fill missing, either side. */
+  {
+    int m = -1, tb, contract;
+    d8_class_t cls;
+    d8_sequence_with_mask(&st, D8_MASK_OUT | D8_MASK_WLO); /* missing Ahi */
+    tb = !d8_trace_valid(&st, D8_COND_B, &why);
+    cls = d8_classify(D8_COND_B, g_d8_refs.wlo, D8_TRACE_VALID, 1, 1, 1,
+                      D8_MASK_OUT | D8_MASK_WLO, &g_d8_refs, &m);
+    contract = (cls == D8_CLASS_CONTRACT_FAILED);
+    ok = tb && strcmp(why, "condition_fill_mask") == 0 && contract;
+    d8_check(ok, "d8_fault_13_b_missing_ahi");
+    printf("d8_fault=13 b_missing_ahi trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", tb, why, d8_class_name(cls), ok);
+
+    d8_sequence_with_mask(&st, D8_MASK_OUT | D8_MASK_AHI); /* missing Wlo */
+    tb = !d8_trace_valid(&st, D8_COND_B, &why);
+    cls = d8_classify(D8_COND_B, g_d8_refs.ahi, D8_TRACE_VALID, 1, 1, 1,
+                      D8_MASK_OUT | D8_MASK_AHI, &g_d8_refs, &m);
+    contract = (cls == D8_CLASS_CONTRACT_FAILED);
+    ok = tb && strcmp(why, "condition_fill_mask") == 0 && contract;
+    d8_check(ok, "d8_fault_13_b_missing_wlo");
+    printf("d8_fault=13 b_missing_wlo trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", tb, why, d8_class_name(cls), ok);
+  }
+
+  /* 14. Condition A (control) with an operand fill: the control must not
+   *     reuse an operand. */
+  {
+    int m = -1;
+    d8_class_t cls;
+    int tb;
+    d8_sequence_with_mask(&st, d8_condition_mask(D8_COND_B)); /* 7 on A */
+    tb = !d8_trace_valid(&st, D8_COND_A, &why);
+    cls = d8_classify(D8_COND_A, g_d8_refs.both, D8_TRACE_VALID, 1, 1, 1,
+                      d8_condition_mask(D8_COND_B), &g_d8_refs, &m);
+    ok = tb && strcmp(why, "condition_fill_mask") == 0 &&
+         cls == D8_CLASS_CONTRACT_FAILED;
+    d8_check(ok, "d8_fault_14_a_extra_fill");
+    printf("d8_fault=14 a_extra_fill trace_invalid=%d why=%s class=%s "
+           "detected=%d\n", tb, why, d8_class_name(cls), ok);
+  }
+
+  /* 15. Registered output-phase order: Ahi before Wlo, and the out_pos fill
+   *     after the operand fills, are both rejected. */
+  {
+    int tb;
+    d8_reordered_sequence(&st, 0);
+    tb = !d8_trace_valid(&st, D8_COND_B, &why);
+    ok = tb && strcmp(why, "fill_order_ahi") == 0;
+    d8_check(ok, "d8_fault_15_ahi_before_wlo");
+    printf("d8_fault=15 ahi_before_wlo trace_invalid=%d why=%s detected=%d\n",
+           tb, why, ok);
+
+    d8_reordered_sequence(&st, 1);
+    tb = !d8_trace_valid(&st, D8_COND_B, &why);
+    ok = tb && strcmp(why, "fill_order_wlo_before_out") == 0;
+    d8_check(ok, "d8_fault_15_out_after_fills");
+    printf("d8_fault=15 out_after_fills trace_invalid=%d why=%s detected=%d\n",
+           tb, why, ok);
+  }
+
+  /* 16. Revision 1 sequence (out_pos fill in the prologue): numerically
+   *     identical, but a different instruction sequence and therefore
+   *     rejected by the revision-2 order rule. */
+  {
+    int tb, why_ok, safe;
+    d8_legacy_rev1_sequence(&st, D8_COND_A);
+    tb = !d8_trace_valid(&st, D8_COND_A, &why);
+    why_ok = (strcmp(why, "fill_before_last_mma_read") == 0);
+    cc_decode_tile((const uint16_t *)(st.vtcm.raw + D8_OUT_OFFSET), out);
+    safe = d8_array_equal(out, g_d8_refs.safe);
+    d8_check(tb && why_ok, "d8_fault_16_legacy_rev1_rejected");
+    d8_check(safe, "d8_fault_16_legacy_rev1_numeric_safe");
+    printf("d8_fault=16 legacy_rev1 trace_invalid=%d why=%s numeric_safe=%d\n",
+           tb, why, safe);
   }
   return g_d8_fail == 0;
 }
@@ -590,8 +913,9 @@ static int d8_replay_run(const char *path) {
   }
   while (d8_next_noncomment(buf, (int)sizeof(buf), f)) {
     int id = 0, cond = 0, trace = 0, evidence = 0, ids = 0, lengths = 0;
-    if (sscanf(buf, "case %d %d %d %d %d %d", &id, &cond, &trace, &evidence,
-               &ids, &lengths) != 6) {
+    int fill_mask = 0;
+    if (sscanf(buf, "case %d %d %d %d %d %d %d", &id, &cond, &trace, &evidence,
+               &ids, &lengths, &fill_mask) != 7) {
       malformed++;
       continue;
     }
@@ -603,7 +927,7 @@ static int d8_replay_run(const char *path) {
     }
     printf("replay %d %s\n", id,
            d8_class_name(d8_classify(cond, obs, trace, evidence, ids, lengths,
-                                     &g_d8_refs, NULL)));
+                                     fill_mask, &g_d8_refs, NULL)));
     cases++;
   }
   fclose(f);
@@ -620,14 +944,32 @@ int main(int argc, char **argv) {
     d8_build_references();
     return d8_replay_run(argv[2]);
   }
+  if (argc == 2 && strcmp(argv[1], "--d8-sequence") == 0) {
+    build_truth_fixture();
+    build_fixture_conditions();
+    d8_build_references();
+    d8_print_sequences();
+    return 0;
+  }
   if (argc != 1) {
-    fprintf(stderr, "usage: %s [--d8-replay <file>]\n", argv[0]);
+    fprintf(stderr, "usage: %s [--d8-replay <file>] [--d8-sequence]\n", argv[0]);
     return 2;
   }
 
   build_truth_fixture();
   build_fixture_conditions();
   d8_build_references();
+
+  /* Registered fill masks. These four values are the contract; the trace
+   * validator and the classifier derive their expectation from the same
+   * function, so a change here is a change to the experiment. */
+  d8_check(d8_condition_mask(D8_COND_A) == 1, "d8_fill_mask_A");
+  d8_check(d8_condition_mask(D8_COND_B) == 7, "d8_fill_mask_B");
+  d8_check(d8_condition_mask(D8_COND_C) == 3, "d8_fill_mask_C");
+  d8_check(d8_condition_mask(D8_COND_D) == 5, "d8_fill_mask_D");
+  printf("d8_fill_mask A=%d B=%d C=%d D=%d\n",
+         d8_condition_mask(D8_COND_A), d8_condition_mask(D8_COND_B),
+         d8_condition_mask(D8_COND_C), d8_condition_mask(D8_COND_D));
 
   printf("=== D8 minimal experiment CPU model ===\n");
   printf("d8_condition A=%s B=%s C=%s D=%s\n",

@@ -1,14 +1,20 @@
 # Candidate B — D8 Device Experiment: Evidence Contract and Audit Record
 
-Status: **DESIGN AND AUDIT RECORD, CPU-ONLY**, 2026-11-08. Companion to
-`docs/hmx-v81-cand-b-d8-device-prereg.md` (revision 1). This document authorises
-nothing: no DSP source, no DSP build, no QAIRT invocation, no ADB, no device
-contact, no Mode 46.
+Status: **DESIGN AND AUDIT RECORD, CPU-ONLY**, revision 2, 2026-11-09. Companion
+to `docs/hmx-v81-cand-b-d8-device-prereg.md` (revision 2). This document
+authorises nothing: no DSP source, no DSP build, no QAIRT invocation, no ADB, no
+device contact, no Mode 46.
+
+Revision 2 corrects two revision-1 inconsistencies: the fill mask is now
+A=`1`, B=`7`, C=`3`, D=`5` (bit0 out_pos, bit1 Wlo, bit2 Ahi), and the out_pos
+sentinel fill is the first write of the output phase, after MMA #3. The four
+registered reference-array digests are unchanged. The pre-registration's
+revision record has the before/after table; where the two documents differ, the
+pre-registration wins.
 
 It exists so that the single registered D8 attempt, if the user ever approves
 it, has an unambiguous observation contract, a complete digest inventory and a
-pre-written disassembly audit. It does not replace the pre-registration; where
-the two differ, the pre-registration wins.
+pre-written disassembly audit. It does not replace the pre-registration.
 
 ---
 
@@ -42,12 +48,15 @@ host must preserve all of the following.
    bias-set writes** into `+10240`, `+10496`, before `mxclracc`.
 3. **One Convert** (`Rs = 0x0001`, bias set 0, shape 0, scale 64) and **one HMX
    Store** into `+8192`. No Convert #2, no HVX reconstruction.
-4. **One out_pos sentinel fill** at `+8192` (2,048 B, `0xA5A5`), and the
-   condition's operand fills at `+6144` (B/C) and/or `+0` (B/D), each 2,048 B
-   of `0xA5A5` and each **16 × 128 B HVX vector stores**.
-5. **Fill order is after MMA #3** and before Convert #1. No fill of `+0` or
-   `+6144` may execute before the third MMA packet. No branch may skip it for a
-   condition that requires it.
+4. **One out_pos sentinel fill** at `+8192` (2,048 B, `0xA5A5`), executed **after
+   MMA #3 and before the condition's operand fills**, then the condition's
+   operand fills at `+6144` (B/C) and/or `+0` (B/D), each 2,048 B of `0xA5A5`
+   and each **16 × 128 B HVX vector stores**. The registered output-phase order
+   is out_pos → Wlo → Ahi.
+5. **Fill order is after MMA #3** and before Convert #1. No fill of `+8192`,
+   `+0` or `+6144` may execute before the third MMA packet. No branch may skip
+   a fill for a condition that requires it, and no branch may execute an
+   operand fill for condition A. The mask must be A=`1`, B=`7`, C=`3`, D=`5`.
 6. **No synchronization construct** anywhere in the critical interval:
    no `syncht`, `barrier`, DMA sync intrinsic, dummy `cvt.hf = acc` wait, host
    RPC, checksum loop, scalar byte read of `+0`/`+6144`/`+8192`, or any other
@@ -101,7 +110,7 @@ until an approved implementation is audited.
 | 7 | HMX Store count | 1 |
 | 8 | operand packs | 4 |
 | 9 | bias sets written | 2 |
-| 10 | fill mask (bit0 out, bit1 Wlo, bit2 Ahi) | 1 / 3 / 5 / 7 for A/B/C/D |
+| 10 | fill mask (bit0 out, bit1 Wlo, bit2 Ahi) | A=1, B=7, C=3, D=5 |
 | 11 | fill word | `0x0000A5A5` |
 | 12 | store target offset | 8192 |
 | 13 | out_pos fill offset | 8192 |
@@ -126,7 +135,20 @@ bit 2 is the presence flag, and the disassembly audit confirms the address.
 - The host asserts `resultsLen == 1024` and `metadataLen == 32` **before**
   reading any slot. A short or long return is `D8_CONTRACT_FAILED`.
 - The condition echo must equal the requested condition.
-- The Fill mask must equal: A→`1`, B→`7`, C→`5`, D→`3`.
+- The fill mask must equal the registered value. The machine-checked table is:
+
+  <!-- d8-fill-mask:begin -->
+  A 1
+  B 7
+  C 3
+  D 5
+  <!-- d8-fill-mask:end -->
+
+  Bit 0 is `out_pos` (+8192), bit 1 `Wlo` (+6144), bit 2 `Ahi` (+0). Condition A
+  therefore echoes `1`, B `7`, C `3`, D `5`. The C trace validator derives the
+  mask from the observed fills and the Python audit parses this block; a C/D
+  swap or a B run with one operand fill missing fails the contract before any
+  numeric comparison.
 - The operand FNVs and Build ID must match the registration.
 - A mismatch stops the run; it is never "close enough".
 
@@ -199,8 +221,10 @@ The stamped DSP binary is audited **statically before** the run:
 4. the out fill and the condition fills are 16 × 128 B vector stores each, at
    `+8192`, `+6144`, `+0`; no scalar or widened forms;
 5. **every fill is after the third MMA packet in object order**, and no branch
-   reaches a fill before it; the four condition paths have the registered masks
-   (A: out only; B: out+Wlo+Ahi; C: out+Wlo; D: out+Ahi);
+   reaches a fill before it. The out_pos fill comes first, then Wlo (B/C), then
+   Ahi (B/D). The four condition paths have the registered masks
+   (A: out only = `1`; B: out+Wlo+Ahi = `7`; C: out+Wlo = `3`;
+   D: out+Ahi = `5`);
 6. no `syncht`, barrier packet attribute, DMA-sync intrinsic, dummy
    `cvt.hf = acc`, checksum, scalar byte read of the operand/out regions, or
    host RPC between the third MMA and the fills, or between the fills and
@@ -234,15 +258,17 @@ Two honesty rules bound the audit:
 
 ---
 
-## 8. Reproduction record (host CPU only, 2026-11-08)
+## 8. Reproduction record (host CPU only, revision 2, 2026-11-09)
 
 | Evidence | Producer | Result |
 | --- | --- | --- |
-| C model + controls | gcc 15.2.0 `-O0`/`-O2`, clang 22.1.8 `-O2`, `-std=gnu11 -Wall -Wextra -Werror -ffp-contract=off` | `d8_checks=20 fail=0`, `d8_verdict=D8_CPU_READY`, four references and six diffs printed |
-| Independent Python | `hmx_d8_independent_test.py` | `checks=20 fail=0`, `D8_INDEPENDENT_AUDIT_PASS` |
-| Differential | C `--d8-replay` vs Python | `cases=119`, 0 mismatches, comparator mutation detected |
-| Mutation regression | `run_hmx_d8_mutation_check.ps1` | 3/3 mutants detected |
-| Existing regressions | B3/R2 + C2 gates | unchanged (see the PR report) |
+| C model + controls | gcc 15.2.0 `-O0`/`-O2`, clang 22.1.8 `-O2`, `-std=gnu11 -Wall -Wextra -Werror -ffp-contract=off` | `d8_checks=34 fail=0`, `d8_verdict=D8_CPU_READY`, `d8_fill_mask A=1 B=7 C=3 D=5`, four references and six diffs printed |
+| Registered sequence | `hmx_d8_sim --d8-sequence` vs the pre-registration §3.3 block | four condition signatures match |
+| Independent Python | `hmx_d8_independent_test.py` | `checks=29 fail=0`, `D8_INDEPENDENT_AUDIT_PASS` |
+| Differential | C `--d8-replay` vs Python | `cases=125`, 0 mismatches, comparator mutation detected |
+| Mutation regression | `run_hmx_d8_mutation_check.ps1` | 5/5 mutants detected |
+| Digest invariance | revision 2 vs the four revision-1 reference digests | identical |
+| Existing regressions | B3/R2 + C2 + CB-FIX-1 gates | unchanged (see the PR report) |
 | Fast / Host | `scripts/verify.ps1 -Profile Fast` / `-Profile Host` | Fast PASS (PASS=10 FAIL=0 SKIP=21); Host PASS (exit 0, `run_host_tests=PASS`) |
 
 The CPU references and the safe → shipped-B3 cross-check are the only numerical

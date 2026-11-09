@@ -1,6 +1,6 @@
 # Candidate B — D8 Minimal Device Experiment Pre-Registration
 
-Status: **PRE-REGISTERED, NOT AUTHORISED, CPU-ONLY**, 2026-11-08.
+Status: **PRE-REGISTERED (REVISION 2), NOT AUTHORISED, CPU-ONLY**, 2026-11-09.
 Scope: the minimal device experiment that isolates **D8**, the last
 design-specific synchronization question of Candidate B (phase-reused VTCM).
 
@@ -21,7 +21,58 @@ not modified by this document.
 
 | Revision | Date | State | What changed |
 | --- | --- | --- | --- |
-| 1 | 2026-11-08 | current | first registration; four conditions A–D, CPU references, trace validator, contract gate |
+| 1 | 2026-11-08 | superseded | first registration; four conditions A–D, CPU references, trace validator, contract gate. The out_pos fill sat in the prologue (before the MMAs) and the evidence contract listed the fill mask inconsistently (C/D swapped, B ambiguous). |
+| 2 | 2026-11-09 | current | out_pos fill moved into the output phase after MMA #3; fill mask fixed to A=1/B=7/C=3/D=5 (bit0 out_pos, bit1 Wlo, bit2 Ahi); mask and event-order validation added to the C model and the independent Python judge; revision-1 sequence kept and CPU-compared; no registered numeric value changed. |
+
+### Revision 2 change record
+
+**Why this revision exists.** Two inconsistencies were found in the revision-1
+registration, both in the boundary between the document and the executable
+model:
+
+1. **Fill mask.** The contract's metadata word 10 listed the masks as
+   `1 / 3 / 5 / 7` for A/B/C/D and §3.3 listed `C→5, D→3`. With bit0 = out_pos,
+   bit1 = Wlo and bit2 = Ahi, condition C (Wlo only) is `3` and condition D
+   (Ahi only) is `5`. The revision-1 text therefore swapped C and D and
+   mislabelled B. A device build that echoed the text's mask would have passed
+   the mask gate while filling the wrong region.
+2. **out_pos initialisation order.** The pseudo-code placed the out_pos
+   sentinel fill in the prologue, before `mxclracc` and the MMAs, while the CPU
+   model (and Candidate B's phase-reused subcase) performs it as the first
+   write of the output phase, after MMA #3 and before the Wlo/Ahi fills.
+   Program order is part of the experiment's identity: the same numbers from a
+   different instruction sequence are a different experiment.
+
+**Before / after.**
+
+| Item | Revision 1 | Revision 2 |
+| --- | --- | --- |
+| out_pos fill position | prologue, before `mxclracc` | output phase, after MMA #3, before Wlo/Ahi fills |
+| first fill after MMA #3 | Wlo (B/C) or Ahi (D) | out_pos (all conditions) |
+| fill mask A/B/C/D | `1 / 3 / 5 / 7` (word 10), `C→5, D→3` (§3.3) | `1 / 7 / 3 / 5` |
+| C model order check | operand fills only | all fills after last MMA read; out_pos < Wlo < Ahi |
+| mask validation | none | C trace validator, C classifier contract gate, Python classifier, document block |
+| event-order check | none | pre-registration block vs C `--d8-sequence` |
+
+**Affected contract items.** Evidence contract §2 items 4–5 (fill order and
+masks), §3.2 word 10, §3.3 (mask requirements), §6 item 5 (disassembly order),
+and pre-registration §3, §4, §6, §8, §10.
+
+**Unaffected registered numbers.** The operand fixture SHA-256, the four packed
+tile FNVs, the four reference-array SHA-256 values, the six pairwise
+differences and the safe = shipped B3 positive cross-check are **unchanged**.
+The out_pos fill writes no operand region and the store comes after it, so the
+reference arithmetic is independent of its position. The values were re-derived
+and re-hashed in this revision; they were not replaced.
+
+**Additional verification required.** Condition-mask consistency (document, C,
+Python), C/D-swap detection, B-missing-fill detection, out_pos order rejection,
+pre-registration-vs-CPU event-order equality, and revision-1 sequence rejection
+with identical numbers. All are in §10.
+
+**Approval status.** Still **NOT GRANTED**. Revision 2 is a CPU-side
+correction of an unapproved experiment; it is not a device result and does not
+retire `B3_R2_SYNC_UNPROVEN`.
 
 ---
 
@@ -158,13 +209,15 @@ pack Whi -> VTCM +4096
 pack Wlo -> VTCM +6144
 build bias set 0 (+10240): scale 0x5400 (+64), shape 0 (x), bo 0
 build bias set 1 (+10496): scale 0x5400 (+64), shape 4 (-x), bo 0
-fill out_pos (+8192, 2048 B) = 0xA5A5
 
-# critical path (fixed)
+# critical path (fixed; revision 2 order)
 mxclracc
 MMA #1: activation = mxmem(+0)   ; weight = mxmem(+4096)   # Ahi x Whi
 MMA #2: activation = mxmem(+0)   ; weight = mxmem(+6144)   # Ahi x Wlo
 MMA #3: activation = mxmem(+2048); weight = mxmem(+4096)   # Alo x Whi
+# output phase begins. Candidate B's phase-reused subcase writes its sentinel
+# fills in the order pos, neg (Wlo), recon (Ahi); revision 2 follows it.
+fill out_pos (+8192, 2048 B) = 0xA5A5
 # condition-dependent reuse fills (16 x 128 B HVX vector stores each):
 #   A: none
 #   B: fill Wlo (+6144) = 0xA5A5 ; fill Ahi (+0) = 0xA5A5
@@ -185,12 +238,16 @@ Registration notes:
   (§6 of the evidence contract) pins the actual form. The CPU model records the
   fill as one 2,048 B range event; vector granularity is a device property and is
   checked in the disassembly, not in the CPU trace.
-- The fills happen **after MMA #3**. A branch or predication that skips a fill
-  for the wrong condition is a contract violation, not a D8 result.
+- **The out_pos fill is the first write of the output phase**, immediately after
+  MMA #3 and before the condition's operand fills. This matches Candidate B's
+  phase-reused subcase (`pr_fill(pos)`, `pr_fill(neg/Wlo)`, `pr_fill(recon/Ahi)`,
+  then Convert #1). It is not an operand reuse write: `+8192` is a fresh region
+  and it only makes an unwritten store detectable.
+- **All fills happen after MMA #3** and before Convert #1. A branch or
+  predication that skips a fill for the wrong condition is a contract violation,
+  not a D8 result.
 - Convert #1 and Store #1 are after the fills. They do not write any operand
   region, so they cannot rescue a read that the fill already corrupted.
-- The out_pos fill is not a reuse write: `+8192` is not an operand region. It
-  only makes an unwritten store detectable.
 - The full Candidate B also stores Convert #2 into `Wlo` and the HVX recon into
   `Ahi`. Those writes are later than the fills, so a safe fill does not
   automatically prove them safe. This is a stated scope limit, not a hidden
@@ -198,6 +255,15 @@ Registration notes:
 - No `syncht`, barrier, dummy `cvt` wait or host RPC may appear between MMA #3
   and the fills, or between the fills and Convert #1. Adding one changes the
   experiment.
+
+**Why the order is registered rather than left to the implementation.** A fill
+placed immediately after MMA #3, with no out_pos fill in between, would be a
+tighter race window. It would also be a different sequence from the one
+Candidate B executes, so a safe result would not describe Candidate B. Revision
+1 made exactly that mistake on paper: its prologue fill shortened the
+registered distance by one 2,048 B fill (16 × 128 B stores) and did not match
+the model. Revision 2 registers the Candidate B order and rejects the shorter
+sequence, even though both produce the same 1,024 numbers (see §3.4).
 
 ### 3.1 What the minimal sequence is not
 
@@ -224,17 +290,79 @@ The four conditions differ only in which of two fills execute. A static audit
 can confirm from the object that each condition's fill set matches the table
 above. No allocator behaviour, stack usage or timing is claimed.
 
+### 3.3 Registered event order (machine-checked)
+
+The order below is the registration. `hmx_d8_min_sim.c` derives the same list
+from its recorded access events (`--d8-sequence`), and
+`hmx_d8_independent_test.py` parses this block and requires all four condition
+signatures to match. A different order is a different experiment even if the
+1,024 numbers agree.
+
+<!-- d8-sequence:begin -->
+PACK AHI
+PACK ALO
+PACK WHI
+PACK WLO
+BIAS 0
+BIAS 1
+MMA 1 AHI WHI
+MMA 2 AHI WLO
+MMA 3 ALO WHI
+FILL OUT
+FILL WLO B C
+FILL AHI B D
+CONVERT 1
+STORE OUT
+<!-- d8-sequence:end -->
+
+`FILL WLO B C` means the Wlo fill is present only for conditions B and C;
+`FILL AHI B D` only for B and D. The CPU trace records Convert #1 and Store #1
+as one HMX store event; the signature expands it into the two registered
+operations.
+
+### 3.4 Revision 1 sequence, kept for comparison
+
+Revision 1 placed `FILL OUT` before `mxclracc`:
+
+```text
+rev1: pack x4, bias x2, FILL OUT, mxclracc, MMA #1..#3, condition fills,
+      Convert #1, Store #1
+rev2: pack x4, bias x2, mxclracc, MMA #1..#3, FILL OUT, condition fills,
+      Convert #1, Store #1
+```
+
+The CPU model runs both. They produce the **same** 1,024-cell output (the fill
+touches no operand and the store overwrites `out_pos`), but they are not the
+same experiment:
+
+| Property | rev1 (prologue fill) | rev2 (registered) |
+| --- | --- | --- |
+| First write after MMA #3 | a condition operand fill | the out_pos fill |
+| Distance from MMA #3 to the first operand fill | 0 modelled operations | 1 fill (16 × 128 B stores) |
+| Trace accepted by the revision-2 validator | no (`fill_before_last_mma_read`) | yes |
+| Applies to Candidate B's actual phase order | no | yes |
+| Identification power | tighter window, wrong sequence | the window Candidate B actually runs |
+
+`d8_fault=16` records this: revision 1 is numerically safe and structurally
+rejected. A revision-1 build must not be reported as a revision-2 D8 run.
+
 ---
 
 ## 4. Conditions
 
-| Condition | Operand fills after MMA #3 | Purpose | What a match to the safe array means |
-| --- | --- | --- | --- |
-| **A** | none | numeric control | the minimal sequence is correct in this build |
-| **B** | Wlo and Ahi | Candidate B's reuse | both reads completed before their fills |
-| **C** | Wlo only | isolates D8a | the Wlo read completed before its fill |
-| **D** | Ahi only | isolates D8b | the Ahi read completed before its fill |
-| **E** | CPU only | detector proof | never a device condition |
+| Condition | Operand fills after MMA #3 | Fill mask (bit0 out, bit1 Wlo, bit2 Ahi) | Purpose | What a match to the safe array means |
+| --- | --- | ---: | --- | --- |
+| **A** | none | `1` | numeric control | the minimal sequence is correct in this build |
+| **B** | Wlo and Ahi | `7` | Candidate B's reuse | both reads completed before their fills |
+| **C** | Wlo only | `3` | isolates D8a | the Wlo read completed before its fill |
+| **D** | Ahi only | `5` | isolates D8b | the Ahi read completed before its fill |
+| **E** | CPU only | n/a | detector proof | never a device condition |
+
+The `out_pos` fill is present in every condition (bit0); only the two operand
+bits vary. The mask is the metadata echo checked by the contract gate, and the
+C trace validator derives the same mask from the observed fills. In particular,
+condition C must echo `3` (out_pos + Wlo) and condition D must echo `5`
+(out_pos + Ahi); swapping them is a contract failure, not a D8 result.
 
 Condition E is a CPU fault-injection control: it writes an operand before the
 MMA read and requires the trace validator and the numeric classifier to detect
@@ -362,6 +490,13 @@ condition D
 
 Rules:
 
+- **The contract gate includes the fill mask.** The echoed mask must be
+  A=`1`, B=`7`, C=`3`, D=`5`; a C run that reports `5` or a D run that reports
+  `3` is a contract failure, not an attribution. A B run with mask `3` or `5`
+  (one operand fill missing) is likewise a contract failure.
+- **The output-phase order is registered.** All fills follow MMA #3, with the
+  out_pos fill first, then Wlo, then Ahi. A different order is a contract
+  failure (and a different experiment), even when the numbers match.
 - **A trace anomaly overrides a matching numeric result.** A safe array with an
   invalid access trace is not "no violation".
 - **An unmatched numeric result is never "no violation".** Partial corruption,
@@ -429,7 +564,10 @@ The run stops immediately, with no retry, if any of the following holds:
 - MMA count ≠ 3, Convert count ≠ 1, Store count ≠ 1, pack count ≠ 4, bias sets
   ≠ 2, readbacks ≠ 1;
 - the store target ≠ `+8192`;
-- the condition fill mask / fill word mismatch;
+- the condition fill mask / fill word mismatch, including a C/D swap
+  (C=`3`, D=`5`) or a B run missing one operand fill (B=`7`);
+- a fill is not the registered 16 × 128 B form, or the output-phase order is
+  not out_pos → Wlo → Ahi, or any fill precedes MMA #3;
 - any guard or untouched-region check fails;
 - the condition selector echo differs from the requested condition;
 - a disassembly audit condition of the evidence contract §6 fails;
@@ -463,7 +601,7 @@ distance sweep, a full-tile run or training integration.
 
 ---
 
-## 10. CPU-side validation performed (2026-11-08)
+## 10. CPU-side validation performed (2026-11-09)
 
 Executable in `host_tests/hmx_acc_residual_rpc/hmx_d8_min_sim.c` and
 `hmx_d8_independent_test.py`; run by `scripts/run_hmx_d8_sim.ps1` in the Fast /
@@ -472,15 +610,20 @@ Host gate.
 | Check family | What it establishes | Result |
 | --- | --- | --- |
 | reference build | safe equals the shipped B3 positive output cell-for-cell; four digests match the independent Python derivation | PASS |
+| digest invariance | revision 2 re-derives the same four reference SHA-256 values as revision 1; no registered number was replaced | PASS |
 | distinctness | six pairwise array differences are non-zero; Wlo vs Ahi = 726 cells | PASS |
-| access trace | D8-specific validator over the recorded pack / read / fill / store events; writes before the last read, one-byte overlaps, wrong counts and wrong fills fail | PASS |
+| fill mask | document block, C table and Python table all say A=`1`, B=`7`, C=`3`, D=`5`; C and Python each derive the mask from the condition's fills and cross-check the table | PASS |
+| access trace | D8-specific validator over the recorded pack / read / fill / store events; writes before the last read, one-byte overlaps, wrong counts, wrong masks and reordered fills fail | PASS |
+| output order | out_pos fill first, then Wlo, then Ahi, all after MMA #3; reordering either operand or the out fill is rejected | PASS |
+| pre-registration sequence | the four condition event signatures derived from the C trace equal the block transcribed in §3.3 | PASS |
 | faults 1–5 | Wlo early, Ahi early, both early, one-byte boundary, sentinel-value early: trace invalid, numeric not safe; sentinel case equals the `wlo` reference | PASS |
-| fault 6 | normal post-last-use reuse under A/B/C/D: trace valid and numeric safe | PASS |
+| fault 6 | normal post-last-use reuse under A/B/C/D: trace valid, numeric safe, classifier accepts the registered mask | PASS |
 | faults 7–10 | safe numeric + bad trace, corrupt numeric + good trace, missing evidence, length/ID mismatch | PASS |
-| independent Python | re-derives arithmetic and references, 20 checks, 119 differential cases vs the C classifier | PASS |
-| mutation regression | 3 classifier mutations (trace override removed, unknown read as safe, contract removed) all detected | PASS |
+| faults 11–16 | missing out_pos fill; C with D's mask and D with C's mask; B missing either operand fill; A with an operand fill; Ahi-before-Wlo and out-fill-last reorderings; revision-1 sequence rejected while numerically safe | PASS |
+| independent Python | re-derives arithmetic and references, 29 checks, 125 differential cases vs the C classifier | PASS |
+| mutation regression | 5 classifier mutations (trace override removed, unknown read as safe, contract removed, C/D mask swap, mask gate removed) all detected | PASS |
 | toolchains | gcc `-O0`, gcc `-O2`, clang `-O2` | PASS |
-| existing regressions | B3/R2 12,828 checks, 30/30 faults, C2 differential, six digests | unchanged |
+| existing regressions | B3/R2 12,828 checks, 30/30 faults, C2 differential, CB-FIX-1, six digests | unchanged |
 | Fast / Host | `scripts/verify.ps1 -Profile Fast` / `-Profile Host` | Fast PASS (PASS=10 FAIL=0 SKIP=21); Host PASS (exit 0) |
 
 `D8_CPU_PREREG_READY` is recorded on this basis. It is a CPU-preparation
@@ -509,6 +652,10 @@ not a retirement of `B3_R2_SYNC_UNPROVEN`.
    document (`docs/hmx-v81-d8-vs-c2-experiment-order.md`).
 9. **Full-tile accuracy and performance** — untouched.
 10. **Training integration** — untouched.
+11. **Revision identity** — revision 1 remains in the history table and its
+    sequence is compared in §3.4, but it is not an executable registration. A
+    build produced from the revision-1 document must be re-registered or
+    discarded, not reported as a revision-2 run.
 
 ---
 
@@ -521,8 +668,15 @@ $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
 python host_tests\hmx_acc_residual_rpc\hmx_d8_independent_test.py
 ```
 
+The model also exposes the registered event signatures:
+
+```powershell
+.\build\hmx_d8_sim.exe --d8-sequence
+```
+
 Key output lines: four `d8_ref` digests, `d8_operand_fnv`, `d8_diff`,
-`d8_fault=01..10`, `d8_checks=20 fail=0`, `d8_verdict=D8_CPU_READY`,
-`d8_differential=PASS`, `d8_mutation_check=PASS mutants=3`.
+`d8_fill_mask A=1 B=7 C=3 D=5`, `d8_seq cond=A..D`,
+`d8_fault=01..16`, `d8_checks=34 fail=0`, `d8_verdict=D8_CPU_READY`,
+`d8_differential=PASS cases=125`, `d8_mutation_check=PASS mutants=5`.
 
 Artifacts under `build/` are gitignored and are not device evidence.

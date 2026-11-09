@@ -35,6 +35,8 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 BUILD = os.path.join(REPO, "build")
 CASE_FILE = os.path.join(BUILD, "hmx_d8_replay_cases.txt")
 C_DUMP = os.path.join(BUILD, "hmx_d8_reference_arrays.txt")
+PREREG = os.path.join(REPO, "docs", "hmx-v81-cand-b-d8-device-prereg.md")
+CONTRACT = os.path.join(REPO, "docs", "hmx-v81-cand-b-d8-evidence-contract.md")
 
 T8 = 32
 CELLS = T8 * T8
@@ -59,6 +61,14 @@ REG_FNV = {
 }
 COND_A, COND_B, COND_C, COND_D = 0, 1, 2, 3
 TRACE_NOT_PROVIDED, TRACE_VALID, TRACE_INVALID = 0, 1, 2
+
+# Registered fill masks (evidence contract sections 3.2 and 3.3). Bit 0 is
+# out_pos, bit 1 Wlo, bit 2 Ahi. Revision 1 listed C and D swapped and made B
+# ambiguous; revision 2 fixes A=1, B=7, C=3, D=5. The value below is a
+# transcription of the contract document, not a copy of the C table: main()
+# also parses the document's machine-checked block and compares both.
+MASK = {COND_A: 1, COND_B: 7, COND_C: 3, COND_D: 5}
+FILL_BIT_OUT, FILL_BIT_WLO, FILL_BIT_AHI = 1, 2, 4
 
 CHECKS = {"n": 0, "fail": 0}
 
@@ -234,9 +244,26 @@ def match_ref(obs, refs):
     return -1
 
 
-def classify(cond, obs, trace, evidence_ok, ids_ok, lengths_ok, refs):
+def mask_ok(cond, fill_mask):
+    """The contract gate: the echoed mask must be the registered one."""
+    return fill_mask == MASK.get(cond)
+
+
+def derive_mask(cond):
+    """Build the mask from the condition's operand fills, bit by bit."""
+    m = FILL_BIT_OUT
+    if cond in (COND_B, COND_C):
+        m |= FILL_BIT_WLO
+    if cond in (COND_B, COND_D):
+        m |= FILL_BIT_AHI
+    return m
+
+
+def classify(cond, obs, trace, evidence_ok, ids_ok, lengths_ok, fill_mask, refs):
     """Prereg section 6 order: contract -> trace -> numeric."""
     if not (evidence_ok and ids_ok and lengths_ok):
+        return "D8_CONTRACT_FAILED"
+    if not mask_ok(cond, fill_mask):
         return "D8_CONTRACT_FAILED"
     if trace == TRACE_INVALID:
         return "D8_INCONCLUSIVE_TRACE"
@@ -264,10 +291,12 @@ def classify(cond, obs, trace, evidence_ok, ids_ok, lengths_ok, refs):
 def build_cases(refs):
     cases = []
 
-    def add(desc, cond, obs, trace=TRACE_VALID, evidence=1, ids=1, lengths=1):
+    def add(desc, cond, obs, trace=TRACE_VALID, evidence=1, ids=1, lengths=1,
+            mask=None):
         cases.append({
             "desc": desc, "cond": cond, "obs": list(obs), "trace": trace,
             "evidence": evidence, "ids": ids, "lengths": lengths,
+            "mask": MASK[cond] if mask is None else mask,
         })
 
     # Every condition against every reference: 16 combinations. Some are
@@ -280,6 +309,17 @@ def build_cases(refs):
     # Trace anomaly overrides a safe numeric result.
     for cond in (COND_A, COND_B, COND_C, COND_D):
         add("trace_invalid_cond%d" % cond, cond, refs["safe"], trace=TRACE_INVALID)
+
+    # Mask contract: correct numeric result and clean trace, wrong mask echo.
+    # A C run that reports D's mask (5) fills Ahi; a D run that reports C's
+    # mask (3) fills Wlo; a B run that dropped one fill reports 3 or 5; a B
+    # run with no operand fill reports 1; an A control with operand fills 7.
+    add("mask_c_uses_d", COND_C, refs["ahi"], mask=5)
+    add("mask_d_uses_c", COND_D, refs["wlo"], mask=3)
+    add("mask_b_missing_ahi", COND_B, refs["wlo"], mask=3)
+    add("mask_b_missing_wlo", COND_B, refs["ahi"], mask=5)
+    add("mask_b_no_operand_fill", COND_B, refs["safe"], mask=1)
+    add("mask_a_extra_fill", COND_A, refs["both"], mask=7)
 
     # Contract failures.
     add("no_evidence", COND_C, refs["safe"], evidence=0)
@@ -311,9 +351,9 @@ def write_cases(cases):
     with open(CASE_FILE, "w") as fh:
         fh.write("# D8 classifier replay cases (CPU only)\n")
         for cid, c in enumerate(cases):
-            fh.write("case %d %d %d %d %d %d\n" % (
+            fh.write("case %d %d %d %d %d %d %d\n" % (
                 cid, c["cond"], c["trace"], c["evidence"], c["ids"],
-                c["lengths"]))
+                c["lengths"], c["mask"]))
             fh.write("O %s\n" % " ".join("%04x" % v for v in c["obs"]))
 
 
@@ -335,6 +375,96 @@ def run_replay(exe):
                 if token.startswith("malformed="):
                     malformed = int(token.split("=", 1)[1])
     return proc.returncode, answers, malformed, proc.stdout
+
+
+# ------------------------------------------------- pre-registration checks
+def read_marked_block(path, marker):
+    """Return the lines between <!-- marker:begin --> and <!-- marker:end -->."""
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    inside = False
+    block = []
+    for line in lines:
+        if ("%s:begin" % marker) in line:
+            inside = True
+            continue
+        if ("%s:end" % marker) in line:
+            break
+        if inside:
+            block.append(line)
+    return block
+
+
+def parse_mask_block(path):
+    table = {}
+    for line in read_marked_block(path, "d8-fill-mask"):
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("A", "B", "C", "D"):
+            table[parts[0]] = int(parts[1], 0)
+    return table
+
+
+def parse_sequence_block(path):
+    tokens = []
+    for line in read_marked_block(path, "d8-sequence"):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        kind = parts[0]
+        if kind == "PACK" and len(parts) == 2:
+            tokens.append(("PACK", parts[1], None))
+        elif kind == "BIAS" and len(parts) == 2:
+            tokens.append(("BIAS", parts[1], None))
+        elif kind == "MMA" and len(parts) == 4:
+            tokens.append(("MMA", parts[1], (parts[2], parts[3])))
+        elif kind == "FILL" and len(parts) >= 2:
+            tokens.append(("FILL", parts[1], tuple(parts[2:])))
+        elif kind == "CONVERT" and len(parts) == 2:
+            tokens.append(("CONVERT", parts[1], None))
+        elif kind == "STORE" and len(parts) == 2:
+            tokens.append(("STORE", parts[1], None))
+        else:
+            tokens.append(("UNKNOWN", line, None))
+    return tokens
+
+
+def expected_signature(tokens, cond_letter):
+    """Expand the registered block into the C model's event tokens."""
+    out = []
+    for kind, a, b in tokens:
+        if kind == "PACK":
+            out.append("PACK:%s" % a)
+        elif kind == "BIAS":
+            out.append("BIAS:%s" % a)
+        elif kind == "MMA":
+            out.append("MMA:%s:%s:%s" % (a, b[0], b[1]))
+        elif kind == "FILL":
+            conds = b or ("A", "B", "C", "D")
+            if cond_letter in conds:
+                out.append("FILL:%s" % a)
+        elif kind == "CONVERT":
+            out.append("CONVERT:%s" % a)
+        elif kind == "STORE":
+            out.append("STORE:%s" % a)
+    return out
+
+
+def run_sequence(exe):
+    proc = subprocess.run([exe, "--d8-sequence"], stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True)
+    masks, seqs = None, {}
+    for line in proc.stdout.splitlines():
+        if line.startswith("d8_fill_mask "):
+            masks = {}
+            for token in line.split()[1:]:
+                key, value = token.split("=", 1)
+                masks[key] = int(value)
+        elif line.startswith("d8_seq cond="):
+            head, events = line.split(" events=", 1)
+            letter = head.split("cond=", 1)[1]
+            seqs[letter] = events.split(",") if events else []
+    return proc.returncode, masks, seqs, proc.stdout
 
 
 def main():
@@ -379,7 +509,8 @@ def main():
     expected = {}
     for cid, c in enumerate(cases):
         expected[cid] = classify(c["cond"], c["obs"], c["trace"],
-                                 c["evidence"], c["ids"], c["lengths"], refs)
+                                 c["evidence"], c["ids"], c["lengths"],
+                                 c["mask"], refs)
 
     exe = None
     for arg in sys.argv[1:]:
@@ -390,6 +521,37 @@ def main():
     if not os.path.isfile(exe):
         print("SKIP (no C replay binary at %s)" % exe)
         return 2
+
+    # ---- pre-registration vs CPU event order and fill masks ----
+    # The contract's mask table is parsed from the document, not copied from
+    # the C model. The registered event order is parsed from the
+    # pre-registration and compared with the C trace for each condition.
+    doc_mask = parse_mask_block(CONTRACT)
+    check(doc_mask == {"A": 1, "B": 7, "C": 3, "D": 5},
+          "contract_fill_mask_table")
+    doc_mask_int = {COND_A: doc_mask.get("A"), COND_B: doc_mask.get("B"),
+                    COND_C: doc_mask.get("C"), COND_D: doc_mask.get("D")}
+    check(doc_mask_int == MASK and
+          all(derive_mask(c) == MASK[c] for c in MASK),
+          "python_mask_matches_contract")
+
+    tokens = parse_sequence_block(PREREG)
+    check(len(tokens) > 0, "prereg_sequence_block_present")
+    seq_rc, c_masks, c_seqs, seq_out = run_sequence(exe)
+    check(seq_rc == 0, "c_sequence_exit")
+    if c_masks is None:
+        c_masks = {}
+    c_mask_int = {COND_A: c_masks.get("A"), COND_B: c_masks.get("B"),
+                  COND_C: c_masks.get("C"), COND_D: c_masks.get("D")}
+    check(c_mask_int == MASK, "c_fill_mask_matches_python")
+    for letter in ("A", "B", "C", "D"):
+        check(c_seqs.get(letter) == expected_signature(tokens, letter),
+              "sequence_%s" % letter)
+    if any(c_seqs.get(letter) != expected_signature(tokens, letter)
+           for letter in ("A", "B", "C", "D")):
+        print("prereg_sequence=%s" % " ".join(
+            "%s:%s" % (k, ",".join(v)) for k, v in sorted(c_seqs.items())))
+        print(seq_out[-1500:])
 
     rc, answers, malformed, out = run_replay(exe)
     if rc != 0 or malformed:

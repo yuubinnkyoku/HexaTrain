@@ -2,7 +2,7 @@
 #
 # The D8 classifier and its independent Python implementation must agree on the
 # fixed battery, but agreement alone does not prove the cases discriminate a
-# broken classifier. Three deliberate mutations are applied to scratch copies
+# broken classifier. Five deliberate mutations are applied to scratch copies
 # of the simulator (never to tracked source); each mutant must be rejected by
 # the independent differential.
 #
@@ -10,7 +10,9 @@
 #   1. ignore an invalid access trace (a safe numeric result with a bad trace
 #      would be read as "no violation");
 #   2. map an unexplained numeric result under condition C to "no violation";
-#   3. ignore the contract flags (missing evidence / wrong ids / wrong length).
+#   3. ignore the contract flags (missing evidence / wrong ids / wrong length);
+#   4. swap the C and D fill masks (the revision-1 defect);
+#   5. ignore the fill-mask contract gate.
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot)
 )
@@ -51,6 +53,18 @@ $mutations = @(
         Needle = "if (!evidence_ok || !ids_ok || !lengths_ok) return D8_CLASS_CONTRACT_FAILED;"
         Replacement = "(void)evidence_ok; (void)ids_ok; (void)lengths_ok; if (0) return D8_CLASS_CONTRACT_FAILED; /* mutant */"
         Expect = "no_evidence"
+    },
+    @{
+        Name = "mask_cd_swapped"
+        Needle = "    case D8_COND_C: return D8_MASK_OUT | D8_MASK_WLO;`n    case D8_COND_D: return D8_MASK_OUT | D8_MASK_AHI;"
+        Replacement = "    case D8_COND_C: return D8_MASK_OUT | D8_MASK_AHI;`n    case D8_COND_D: return D8_MASK_OUT | D8_MASK_WLO; /* mutant */"
+        Expect = "mask_c_uses_d"
+    },
+    @{
+        Name = "mask_gate_removed"
+        Needle = "if (fill_mask != d8_condition_mask(cond)) return D8_CLASS_CONTRACT_FAILED;"
+        Replacement = "(void)fill_mask; if (0) return D8_CLASS_CONTRACT_FAILED; /* mutant */"
+        Expect = "mask_c_uses_d"
     }
 )
 

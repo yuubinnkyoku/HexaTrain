@@ -1,7 +1,7 @@
 # D8 minimal experiment — CPU model runner (CPU only).
 #
 # Source: host_tests/hmx_acc_residual_rpc/hmx_d8_min_sim.c
-# Scope: D8a/D8b reference bits, access-trace validator, ten fault/control
+# Scope: D8a/D8b reference bits, access-trace validator, sixteen fault/control
 # cases, and the independent Python differential. It never touches a device,
 # adb, the Hexagon SDK, QAIRT or Mode 46.
 #
@@ -58,7 +58,7 @@ try {
             $gccExit = $LASTEXITCODE
             Write-Host "d8_sim_gcc_exit=$gccExit"
             $gccOut.TrimEnd().Split("`n") | ForEach-Object {
-                if ($_ -match '^(d8_ref|d8_diff|d8_safe_vs|d8_fault=|d8_checks=|d8_verdict=|d8_dump=)') {
+                if ($_ -match '^(d8_ref|d8_diff|d8_safe_vs|d8_fault=|d8_fill_mask|d8_checks=|d8_verdict=|d8_dump=)') {
                     Write-Host $_.Trim()
                 }
             }

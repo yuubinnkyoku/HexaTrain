@@ -4,7 +4,7 @@ Status: **CPU-ONLY RESEARCH NOTE**, 2026-11-08. This document compares the two
 minimal device experiments already pre-registered:
 
 - **C2** — `docs/hmx-v81-cand-c-c2-device-prereg.md` (revision 2, `NOT_RUN`);
-- **D8** — `docs/hmx-v81-cand-b-d8-device-prereg.md` (revision 1, `NOT_RUN`).
+- **D8** — `docs/hmx-v81-cand-b-d8-device-prereg.md` (revision 2, `NOT_RUN`).
 
 Neither is authorised. This note does not change either pre-registration and
 does not change the Candidate B preference. It only records which experiment
@@ -50,7 +50,7 @@ substitutes at any confidence level.
 | Condition selector | not needed | proposed via `q`; not implemented |
 | Evidence complexity | higher: P/X, guards, sentinels, L2 lifetimes, 2 store addresses | lower per run: one output, one store, four FNVs |
 | Failure modes | contract (RPC, map, guards), C1, C2, FTZ/zero, inconclusive | contract (counts, FNV, mask), A/B/C/D, inconclusive |
-| CPU validation | 12,828 C checks, 81 Python checks, 5,460 differential comparisons, 30/30 faults, 2-mutant regression | 20 C checks, 20 Python checks, 119 differential cases, 10 controls, 3-mutant regression |
+| CPU validation | 12,828 C checks, 81 Python checks, 5,460 differential comparisons, 30/30 faults, 2-mutant regression | 34 C checks, 29 Python checks, 125 differential cases, 16 control families, 5-mutant regression |
 | Path to the full tile | Candidate C's C3/C4/C5 and full-tile accuracy remain | the safe sequence **is** the B3 positive path; the full B run extends it |
 | Design priority | Candidate C is third (`B > streaming > C`) | Candidate B is first |
 | Existing device evidence | Mode 45 covers C1's direction only | Mode 45 covers none of D8 |
@@ -143,6 +143,13 @@ Reasons, in order of weight:
 
 Conditions that would flip the order are listed in §3.2. If the user later
 approves only one device run, run C2 and re-register D8 for a four-run budget.
+
+Revision 2 of the D8 pre-registration corrected the fill-mask table and moved
+the out_pos fill into Candidate B's output phase. Neither correction changes
+the comparison above: D8 still uses four runs, three MMAs and one 1,024-cell
+output, and it still tests Candidate B's only remaining device-specific
+blocker. The revision makes the registered sequence match the design it is
+supposed to measure; it does not change the design ranking or the run budget.
 
 This recommendation is about experiment order only. It does not register a
 mode, authorise a build, approve a device session, or change any label.
