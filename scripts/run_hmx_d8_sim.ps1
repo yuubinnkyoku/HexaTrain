@@ -2,8 +2,9 @@
 #
 # Source: host_tests/hmx_acc_residual_rpc/hmx_d8_min_sim.c
 # Scope: D8a/D8b reference bits, access-trace validator, sixteen fault/control
-# cases, and the independent Python differential. It never touches a device,
-# adb, the Hexagon SDK, QAIRT or Mode 46.
+# cases, the independent Python differential, and the static
+# implementation-feasibility audit. It never touches a device, adb, the
+# Hexagon SDK, QAIRT or Mode 46.
 #
 # Exit-code policy (mirrors run_hmx_b3_r2_sim.ps1):
 #   - gcc compile/run failure -> that exit code,
@@ -15,6 +16,7 @@
 #   d8_sim_gcc_checks=...
 #   d8_sim_o0=PASS|FAIL|SKIP
 #   d8_sim_clang=PASS|FAIL|SKIP ...
+#   d8_feasibility=PASS|FAIL|SKIP ...
 #   d8_python=PASS|FAIL|SKIP ...
 #   d8_sim=PASS|FAIL
 $ErrorActionPreference = "Stop"
@@ -38,6 +40,7 @@ $gccExit = 1
 $gccChecks = "unknown"
 $o0Status = "SKIP (not evaluated)"
 $clangStatus = "SKIP (not evaluated)"
+$feasStatus = "SKIP (not evaluated)"
 $pythonStatus = "SKIP (not evaluated)"
 $failed = $false
 
@@ -143,6 +146,27 @@ try {
     }
     Write-Host "d8_sim_clang=$clangStatus"
 
+    # ---------------- implementation feasibility (static, CPU only) ----------------
+    # Independent of gcc: reads the D8 documents and the existing DSP/host
+    # interface. It records the pre-implementation gaps; a non-zero exit is a
+    # broken invariant (layout/mask/sequence/interface drift), not a device
+    # result. See docs/hmx-v81-d8-implementation-feasibility-audit.md.
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) {
+        $feasStatus = "SKIP (python not found on PATH)"
+    } else {
+        & $python.Source (Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_d8_implementation_feasibility_test.py")
+        $feasExit = $LASTEXITCODE
+        Write-Host "d8_feasibility_exit=$feasExit"
+        if ($feasExit -eq 0) {
+            $feasStatus = "PASS (static audit)"
+        } else {
+            $feasStatus = "FAIL (exit $feasExit)"
+            $failed = $true
+        }
+    }
+    Write-Host "d8_feasibility=$feasStatus"
+
     # ---------------- independent Python differential ----------------
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python) {
@@ -173,7 +197,7 @@ try {
 Write-Host "d8_sim_gcc_checks=$gccChecks"
 if ($gccExit -ne 0) { $failed = $true }
 if ($failed) {
-    Write-Host "d8_sim=FAIL (gcc=$gccExit o0='$o0Status' clang='$clangStatus' python='$pythonStatus')"
+    Write-Host "d8_sim=FAIL (gcc=$gccExit o0='$o0Status' clang='$clangStatus' feasibility='$feasStatus' python='$pythonStatus')"
     exit 1
 }
 Write-Host "d8_sim=PASS"
