@@ -27,6 +27,13 @@ and the existing `run()` metadata/selector machinery conflict in ways that must
 be amended before an implementation can be honest; it is **not** blocked by the
 IDL, by a missing instruction, or by a proven hardware limitation.
 
+> **Revision-3 addendum (2026-11-10).** Section 14 re-evaluates the findings
+> below against the `D8_REV3_PROPOSED_CPU_ONLY` contract. Sections 1–13 are the
+> revision-2 audit record and are not rewritten. The revision-2 verdict
+> `D8_IMPLEMENTATION_BLOCKED` still describes revision 2; revision 3 resolves
+> the CPU-side defects and leaves Mode 46, the stamped build, the real
+> disassembly and the device questions open.
+
 ---
 
 ## 1. Baseline, scope and evidence read
@@ -912,3 +919,130 @@ no Draft release, no approval-state change.
 The final HEAD SHA, the PR head update and the Fast/Host results are reported
 in the PR #14 comment and the session report. The audit base remains
 `5a20fd858a72c252c20606fc55f318e14c127189`.
+
+---
+
+## 14. Revision-3 re-evaluation (2026-11-10)
+
+Status of this section: **CPU-only re-evaluation of the 13 findings against the
+`D8_REV3_PROPOSED_CPU_ONLY` contract.** It does not authorise a DSP change, a
+DSP build, Mode 46, a device run or a PR merge. The registered revision remains
+revision 2; the revision-3 documents are proposals.
+
+### 14.1 What was produced
+
+| Artefact | Purpose |
+| --- | --- |
+| `docs/hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md` | revision-3 pre-registration proposal, q=6..9, guard sequence, failure states |
+| `docs/hmx-v81-cand-b-d8-evidence-contract-rev3-proposal.md` | 32-word layout, ownership, sample vectors, host gate |
+| `docs/hmx-v81-d8-fastrpc-failure-contract.md` | S0–S6 failure states, return-0 rule, cleanup exception, evidence matrix |
+| `docs/hmx-v81-d8-disasm-audit-spec.md` | D8 disassembly rules, fail-closed grammar, synthetic-test scope |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_contract.h` | machine-readable indices, masks, q mapping, guard digest, contract gate |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_rev3_selftest.c` | 104-check CPU contract self-test and C replay |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_rev3_contract_test.py` | 140-check independent Python audit, 244-case differential |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_min_sim.c` | issued-operation validator, guard sequence, order/guard faults 17–38 |
+| `scripts/audit_hmx_d8_disasm.ps1` | D8 disassembly rule engine |
+| `scripts/test_hmx_d8_disasm_audit.ps1` | synthetic 4 clean + 12 mutant test |
+| `scripts/run_hmx_d8_sim.ps1` | runs the new gates (`d8_rev3`, `d8_rev3_python`, `d8_disasm_rules`) |
+
+### 14.2 Finding-by-finding status
+
+| # | Finding (section 9) | Revision-2 class | Revision-3 status | Evidence |
+| --: | --- | --- | --- | --- |
+| 1 | `mode46_unregistered` | BLOCKED | **BLOCKED_GOVERNANCE** | Mode 46 remains unregistered; a trigger mode is a prerequisite |
+| 2 | `metadata_ownership_collision` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | words 9..31 only; 23-word block; header + document parsed; 104 C + 140 Python checks |
+| 3 | `q_selector_encoding` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | q=6..9, condition=q-6, q=5/10 rejected; identity is a separate q=6 call |
+| 4 | `results_length_unobservable` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | exact host allocation, DSP `==1024/32`, no short/long return; slots + self-report limit documented |
+| 5 | `error_path_raw_loss` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | S0–S6 table; return 0 after start; cleanup word 30 + mode-46 exception; transport loss explicit |
+| 6 | `guard_tail_no_channel` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | 12×128 B zero init, pre/post FNV, status, first bad byte; faults 31–38 |
+| 7 | `fixture_packing_new` | CHANGE_REQUIRED | **OPEN_IMPLEMENTATION** | the DSP still must write packed lo tiles at +2048/+6144; no source change was made |
+| 8 | `fnv_timing` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | prereg §3 places the operand FNV before MMA #1; contract records the rule |
+| 9 | `bias_position_template` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | mode-45 prologue order registered; mode-42 bias-after-MMA explicitly rejected |
+| 10 | `mode45_bias2_tail` | CHANGE_REQUIRED | **RESOLVED_IN_PROPOSAL_CPU** | bias set 2 forbidden; guard ownership rule rejects any write at +10752..+12288 (fault 36) |
+| 11 | `fill_form_unproven` | INSUFFICIENT | **OPEN_DISASSEMBLY** | the form field is a self-report; only a real object audit can prove 16×128 B |
+| 12 | `disasm_audit_fill_gap` | INSUFFICIENT | **ADDRESSED_RULES_ONLY** | new rule engine + 16 synthetic cases; no V81 object exists here |
+| 13 | `dsp_build_env_absent` | INSUFFICIENT | **OPEN_ENVIRONMENT** | no Hexagon SDK, objdump or skel in this checkout |
+
+Summary: **9 of 9 CPU-fixable findings are resolved in the proposal**; the four
+non-CPU items are 1 governance block, 1 implementation item, 1 disassembly
+item and 1 environment item.
+
+### 14.3 Verdict
+
+**`D8_REV3_CPU_CONTRACT_READY`** — the proposed metadata layout, q selector,
+length semantics, failure states, guard evidence and issued order are
+machine-checked and mutually consistent on the CPU.
+
+This is **not** `D8_IMPLEMENTATION_BLOCKED` for revision 3's CPU contract, and
+it is **not** a device or implementation approval. The overall implementation
+remains blocked by:
+
+1. Mode 46 registration (governance);
+2. a stamped DSP build (environment and implementation);
+3. the real 16×128 B fill lowering and address audit (disassembly);
+4. the device-only D8 question itself.
+
+The revision-2 verdict `D8_IMPLEMENTATION_BLOCKED` remains correct for the
+revision-2 documents. Revision 3 is a proposal that removes the CPU-side
+blockers; it does not run anything.
+
+### 14.4 Verification record
+
+| Check | Result |
+| --- | --- |
+| D8 numeric model (`gcc -O2`, `-O0`, clang `-O2`) | `d8_checks=79 fail=0`, `d8_verdict=D8_CPU_READY` |
+| D8 revision-3 contract self-test (3 compilers) | `d8_rev3_checks=104 fail=0`, `D8_REV3_CPU_CONTRACT_READY` |
+| Independent Python contract audit | `checks=140 fail=0`, 244 replay cases, 0 mismatches |
+| Revision-2 independent Python | `checks=29 fail=0`, 125 differential cases |
+| D8 mutation check | 5/5 mutants detected |
+| Disassembly rule test | clean 4/4 pass, 12/12 mutants rejected |
+| Registered digests | four reference SHA-256 and four FNVs unchanged |
+| B3/R2 regression | 12,828 checks, 30/30 faults, six digests unchanged |
+| C2 regression | 81 checks, 5,460 differential cases, 2/2 mutants |
+| CB-FIX-1 | access-trace controls unchanged |
+| Fast profile | PASS (PASS=10 FAIL=0 SKIP=21, 221.6 s, exit 0) |
+| Host profile | PASS (exit 0, `run_host_tests=PASS (contract+diagnostic)`) |
+
+### 14.5 What is still not proven
+
+1. **D8 itself** — no device run; `B3_R2_SYNC_UNPROVEN` stands.
+2. **Real instruction form** — the compiler may emit a loop, a different
+   address form or a different fill width; only the stamped object's audit can
+   decide.
+3. **Allocator behaviour** — 12,288 B and 2 KiB alignment are assertions.
+4. **Guard honesty** — the digests are DSP self-reports; the disassembly and
+   the numeric outcome are the independent checks.
+5. **Mode 46** — unregistered; the new `run()` dispatch, `metadata[7]/[8]`
+   writes and word-30 cleanup exception are design requirements, not code.
+6. **Training integration, performance, full-tile accuracy** — untouched.
+
+### 14.6 Change inventory
+
+| Path | Change |
+| --- | --- |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_min_sim.c` | issued-order record, bias/mxclracc/MMA/Convert/Store validation, guard sequence, faults 17–38 |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_contract.h` | new 32-word metadata/q/failure/guard contract |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_rev3_selftest.c` | new 104-check contract self-test + replay |
+| `host_tests/hmx_acc_residual_rpc/hmx_d8_rev3_contract_test.py` | new independent audit |
+| `docs/hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md` | new revision-3 proposal |
+| `docs/hmx-v81-cand-b-d8-evidence-contract-rev3-proposal.md` | new evidence contract proposal |
+| `docs/hmx-v81-d8-fastrpc-failure-contract.md` | new failure-state design |
+| `docs/hmx-v81-d8-disasm-audit-spec.md` | new disassembly audit spec |
+| `docs/hmx-v81-d8-implementation-feasibility-audit.md` | this addendum |
+| `scripts/audit_hmx_d8_disasm.ps1` | new rule engine |
+| `scripts/test_hmx_d8_disasm_audit.ps1` | new synthetic test |
+| `scripts/run_hmx_d8_sim.ps1` | new gates |
+
+No registered expectation, digest, mask, reference array, CPU check count or
+approval state was modified. No DSP source, DSP binary, Mode 46 registration,
+device command or QAIRT invocation was made.
+
+### 14.7 Commits and PR
+
+The verified CPU-side changes are committed to
+`codex/hmx-d8-feasibility-audit-20261110` and pushed fast-forward. PR #14 stays
+**Draft**; the result is reported as a PR comment. No merge, no Draft release,
+no approval-state change.
+
+The audit base remains `5a20fd858a72c252c20606fc55f318e14c127189`; the
+revision-3 work starts from `fa1111afc2b2037f35ff7fd7d7a38eaf544a7651`.
