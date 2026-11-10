@@ -1,0 +1,191 @@
+# HMX V81 B3+R2 full-tile precision simulator runner (CPU only).
+#
+# Source: host_tests/hmx_acc_residual_rpc/hmx_b3_r2_full_tile_sim.c
+# Scope: B3+R2 pre-registration CPU-only evidence. Evaluates the 1024-cell
+# 32x32 GEMM tile, PRM crouton packing, sequential operand streaming in 12 KiB VTCM,
+# and 13 fault injection models. It never touches a device, adb, or the Hexagon SDK.
+#
+# Exit-code policy (mirrors run_hmx_signed_output_oracle.ps1):
+#   - gcc compile failure or a failing gcc run -> that exit code,
+#   - a clang RUN failure -> exit 1,
+#   - missing clang / missing MSVC environment -> status line only.
+#
+# Output contract (stable keys):
+#   b3_r2_sim_gcc_version=...
+#   b3_r2_sim_gcc_compile=...
+#   b3_r2_sim_gcc_exit=<n>
+#   b3_r2_sim_clang=<status>
+#   b3_r2_sim=PASS|FAIL
+$ErrorActionPreference = "Stop"
+if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+$Root = Split-Path -Parent $PSScriptRoot
+$Source = Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_b3_r2_full_tile_sim.c"
+if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+    Write-Host "b3_r2_sim=FAIL (missing source $Source)"
+    exit 1
+}
+
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("hmx-b3-r2-sim-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
+
+# The simulator writes its registered-array dump to build/ relative to the repo
+# root, and silently skips the write when the directory is absent (build/ is
+# gitignored, so a clean checkout hits this). The Python audits need the dump.
+$BuildDir = Join-Path $Root "build"
+New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+
+$gccExit = 1
+$clangStatus = "SKIP (not evaluated)"
+$clangRunFailed = $false
+$clangExe = $null
+$pythonStatus = "SKIP (not evaluated)"
+$pythonRunFailed = $false
+
+try {
+    # ---------------- gcc (PATH): gate-owning compiler ----------------
+    $gccCommand = Get-Command gcc -ErrorAction SilentlyContinue
+    if (-not $gccCommand) {
+        Write-Host "b3_r2_sim_gcc=FAIL (gcc not found on PATH)"
+    } else {
+        Write-Host ("b3_r2_sim_gcc_version=" +
+            ((& $gccCommand.Source --version | Select-Object -First 1)))
+        Write-Host ("b3_r2_sim_gcc_triple=" +
+            ((& $gccCommand.Source -dumpmachine)))
+        $gccExe = Join-Path $TempDir "hmx_b3_r2_full_tile_sim_gcc.exe"
+        Write-Host ("b3_r2_sim_gcc_compile=gcc -std=gnu11 -O2 -Wall -Wextra" +
+            " -Werror -ffp-contract=off -I host_tests\hmx_acc_residual_rpc -o <temp>\hmx_b3_r2_full_tile_sim_gcc.exe" +
+            " host_tests\hmx_acc_residual_rpc\hmx_b3_r2_full_tile_sim.c -lm")
+        & $gccCommand.Source "-std=gnu11" "-O2" "-Wall" "-Wextra" "-Werror" `
+            "-ffp-contract=off" "-I" (Join-Path $Root "host_tests\hmx_acc_residual_rpc") `
+            "-o" $gccExe $Source "-lm"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "b3_r2_sim_gcc=FAIL (compile exit $LASTEXITCODE)"
+        } else {
+            & $gccExe
+            $gccExit = $LASTEXITCODE
+            Write-Host "b3_r2_sim_gcc_exit=$gccExit"
+        }
+    }
+
+    # ---------------- clang: cross-check ----------------
+    $clangCommand = Get-Command clang -ErrorAction SilentlyContinue
+    if (-not $clangCommand) {
+        $clangStatus = "SKIP (clang not found on PATH)"
+    } else {
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+            "Microsoft Visual Studio\Installer\vswhere.exe"
+        $vcvars = $null
+        if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+            $vsInstall = & $vswhere -latest -prerelease `
+                -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                -property installationPath
+            if ($vsInstall) {
+                $candidate = Join-Path $vsInstall `
+                    "VC\Auxiliary\Build\vcvars64.bat"
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $vcvars = $candidate
+                }
+            }
+        }
+        if (-not $vcvars) {
+            $clangStatus = "SKIP (MSVC environment not found)"
+        } else {
+            $clangExe = Join-Path $TempDir "hmx_b3_r2_full_tile_sim_clang.exe"
+            $clangTriple = "x86_64-pc-windows-msvc19.44.35229"
+            $cmd = ('@echo off & call "{0}" >nul 2>&1 & "{1}" --version & ' +
+                    '"{1}" -dumpmachine & ' +
+                    '"{1}" -std=gnu11 -O2 -Wall -Wextra -Werror -ffp-contract=off ' +
+                    '-I "{2}" -rtlib=compiler-rt -o "{3}" "{4}"') -f `
+                $vcvars, $clangCommand.Source,
+                (Join-Path $Root "host_tests\hmx_acc_residual_rpc"),
+                $clangExe, $Source
+            $buildOut = & cmd.exe /c $cmd 2>&1
+            $buildExit = $LASTEXITCODE
+            $clangVersionLine = ($buildOut | Select-Object -First 1)
+            $clangTripleLine = ($buildOut | Select-Object -Skip 1 -First 1)
+            Write-Host "b3_r2_sim_clang_version=$clangVersionLine"
+            Write-Host "b3_r2_sim_clang_triple=$clangTripleLine"
+            Write-Host ("b3_r2_sim_clang_compile=clang -std=gnu11 -O2 -Wall -Wextra" +
+                " -Werror -ffp-contract=off -I host_tests\hmx_acc_residual_rpc -rtlib=compiler-rt -o <temp>\hmx_b3_r2_full_tile_sim_clang.exe" +
+                " host_tests\hmx_acc_residual_rpc\hmx_b3_r2_full_tile_sim.c")
+            if ($buildExit -ne 0) {
+                $clangStatus = "SKIP (clang build failed: $buildOut)"
+            } else {
+                & $clangExe
+                $clangRunExit = $LASTEXITCODE
+                if ($clangRunExit -eq 0) {
+                    $clangStatus = "PASS (sim exit 0, triple=$clangTripleLine)"
+                } else {
+                    $clangStatus = "FAIL (sim exit $clangRunExit)"
+                    $clangRunFailed = $true
+                }
+            }
+        }
+    }
+
+    # ---------------- Python independent audits (CPU only) ----------------
+    # Three legs: the independent classifier audit, the C/Python differential,
+    # and a mutation regression that must be detected by the differential. They
+    # are optional in the sense that a machine without python must report SKIP,
+    # not FAIL; when python is present a failure is a gate failure.
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        $pythonStatus = "SKIP (python not found on PATH)"
+    } elseif ($gccExit -ne 0) {
+        $pythonStatus = "SKIP (gcc simulator run failed, no dump to audit)"
+    } else {
+        & $pythonCommand.Source `
+            (Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_c2_independent_classifier_test.py")
+        $indepExit = $LASTEXITCODE
+        Write-Host "b3_r2_c2_independent_exit=$indepExit"
+        $diffArgs = @(
+            (Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_c2_differential_test.py")
+        )
+        if ($clangExe -and (Test-Path -LiteralPath $clangExe)) {
+            $diffArgs += ("--clang-exe=" + $clangExe)
+        }
+        & $pythonCommand.Source @diffArgs
+        $diffExit = $LASTEXITCODE
+        Write-Host "b3_r2_c2_differential_exit=$diffExit"
+        # Mutation regression: two deliberate classifier/observer mutations must
+        # be detected by the differential. Only meaningful when the differential
+        # itself passed, so a failure there is not masked by this leg.
+        $mutationExit = 0
+        if ($diffExit -eq 0) {
+            & (Join-Path $Root "scripts\run_hmx_c2_mutation_check.ps1")
+            $mutationExit = $LASTEXITCODE
+        } else {
+            Write-Host "c2_mutation_check=SKIP (differential failed)"
+        }
+        Write-Host "b3_r2_c2_mutation_exit=$mutationExit"
+        if ($indepExit -eq 0 -and $diffExit -eq 0 -and $mutationExit -eq 0) {
+            $pythonStatus = "PASS (independent=exit0 differential=exit0 mutation=exit0)"
+            if ($diffArgs.Count -gt 1) {
+                $pythonStatus = "PASS (independent=exit0 differential=exit0 mutation=exit0 incl clang-O2)"
+            }
+        } else {
+            $pythonStatus = "FAIL (independent=$indepExit differential=$diffExit mutation=$mutationExit)"
+            $pythonRunFailed = $true
+        }
+    }
+} finally {
+    if (Test-Path -LiteralPath $TempDir) {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "b3_r2_sim_clang=$clangStatus"
+Write-Host "b3_r2_c2_python=$pythonStatus"
+$exitCode = $gccExit
+if ($clangRunFailed) { $exitCode = 1 }
+if ($pythonRunFailed) { $exitCode = 1 }
+if ($exitCode -eq 0) {
+    Write-Host "b3_r2_sim=PASS"
+} else {
+    Write-Host "b3_r2_sim=FAIL (gcc exit $gccExit; clang: $clangStatus; python: $pythonStatus)"
+}
+exit $exitCode
