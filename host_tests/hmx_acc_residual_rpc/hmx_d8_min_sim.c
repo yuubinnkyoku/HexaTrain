@@ -12,8 +12,11 @@
  *      operand fixture, using the shipped model's arithmetic;
  *   2. checks the safe reference against the existing B3 subcase output
  *      (g_m_b3 style) so the minimal sequence is provably the same arithmetic;
- *   3. runs the D8 access-trace validator and sixteen fault/control families;
- *   4. exposes a classifier replay mode for the independent Python audit.
+ *   3. runs the D8 access-trace and issued-order validators and the
+ *      fault/control families (01-16 numeric/access; 17-38 revision-3
+ *      order/guard), including the metadata/q/failure contract model;
+ *   4. exposes a classifier replay mode for the independent Python audit and
+ *      a revision-3 issued-order signature mode.
  *
  * CPU only: no device, no DSP, no SDK. The references are outcomes of a
  * hypothetical read/write race, not a proposed program order for the device.
@@ -21,6 +24,8 @@
 #define main hmx_b3_r2_full_tile_sim_original_main
 #include "hmx_b3_r2_full_tile_sim.c"
 #undef main
+
+#include "hmx_d8_contract.h"
 
 #define D8_OUT_OFFSET HMX_B3_R2_PR_POS_OFFSET /* +8192, not an operand region */
 #define D8_COND_A 0 /* no operand reuse (control) */
@@ -106,28 +111,207 @@ static void d8_check(int cond, const char *tag) {
   }
 }
 
+/* ---------------- program-order record (revision 3) ---------------- */
+
+/* The shared model's access trace records memory accesses. It cannot show
+ * mxclracc (no memory access), and it fuses Convert + Store into one HMX store
+ * event. Revision 3 therefore records the *issued operation list* next to the
+ * access trace and validates the two independently:
+ *
+ *   - the operation list fixes the order and the operands of mxclracc, the
+ *     three MMA packets, the bias writes, Convert and Store;
+ *   - the access trace fixes the actual byte ranges that were read/written.
+ *
+ * A fault that only edits one record is caught by the cross-check; a fault
+ * that reorders real operations is caught by the list; a fault that skips an
+ * operation is caught by the list and by the execution counters. This is
+ * deliberately independent of the numeric result and of any fault flag.
+ */
+
+typedef enum {
+  D8_OP_PACK = 1,
+  D8_OP_BIAS,
+  D8_OP_GUARD_INIT,
+  D8_OP_GUARD_PRE,
+  D8_OP_MXCLRACC,
+  D8_OP_MMA,
+  D8_OP_FILL,
+  D8_OP_CONVERT,
+  D8_OP_STORE,
+  D8_OP_GUARD_POST
+} d8_op_kind_t;
+
+typedef struct {
+  int kind;
+  int a;
+  int b;
+  int c;
+} d8_op_t;
+
+#define D8_OPLOG_CAP 64
+
+typedef struct {
+  d8_op_t op[D8_OPLOG_CAP];
+  int count;
+  int overflow;
+  int enabled;
+} d8_oplog_t;
+
+static d8_oplog_t g_d8_log;
+static int g_d8_guard_pre_fnv;
+static int g_d8_guard_pre_ok;
+
+static void d8_log_begin(void) {
+  memset(&g_d8_log, 0, sizeof(g_d8_log));
+  g_d8_log.enabled = 1;
+}
+
+static void d8_log_add(int kind, int a, int b, int c) {
+  int n;
+  if (!g_d8_log.enabled) return;
+  if (g_d8_log.count >= D8_OPLOG_CAP) {
+    g_d8_log.overflow = 1;
+    return;
+  }
+  n = g_d8_log.count++;
+  g_d8_log.op[n].kind = kind;
+  g_d8_log.op[n].a = a;
+  g_d8_log.op[n].b = b;
+  g_d8_log.op[n].c = c;
+}
+
+static const char *d8_op_name(int kind) {
+  switch (kind) {
+    case D8_OP_PACK: return "PACK";
+    case D8_OP_BIAS: return "BIAS";
+    case D8_OP_GUARD_INIT: return "GUARD_INIT";
+    case D8_OP_GUARD_PRE: return "GUARD_PRE";
+    case D8_OP_MXCLRACC: return "MXCLRACC";
+    case D8_OP_MMA: return "MMA";
+    case D8_OP_FILL: return "FILL";
+    case D8_OP_CONVERT: return "CONVERT";
+    case D8_OP_STORE: return "STORE";
+    case D8_OP_GUARD_POST: return "GUARD_POST";
+    default: return "?";
+  }
+}
+
 /* ---------------- sequence primitives ---------------- */
+
+/* One bias set at an explicit offset, logged. The registered pair is
+ * (set 0 -> +10240, set 1 -> +10496); the offset parameter exists only so a
+ * fault can write the wrong set at a registered offset. */
+static void d8_bias_write(hmx_full_tile_state_t *st, int set, int off) {
+  uint8_t *b = st->vtcm.raw + off;
+  pr_event(st, PR_BIAS_WRITE, off, 256, 1, set);
+  for (int o = 0; o < T8; ++o) {
+    uint32_t lo = bias20_lo_cell(HMX_B3_R2_SCALE_BITS, HMX_B3_R2_OUT_BIAS);
+    uint32_t hi = bias20_hi_cell(set ? HMX_B3_R2_SHAPE4 : HMX_B3_R2_SHAPE0,
+                                 0, 0);
+    memcpy(b + o * 4, &lo, 4);
+    memcpy(b + 128 + o * 4, &hi, 4);
+  }
+  d8_log_add(D8_OP_BIAS, set, off, 1);
+}
+
+static void d8_bias_pair(hmx_full_tile_state_t *st) {
+  d8_bias_write(st, 0, HMX_B3_R2_PR_BIAS0_OFFSET);
+  d8_bias_write(st, 1, HMX_B3_R2_PR_BIAS1_OFFSET);
+}
+
+static void d8_pack_tiles(hmx_full_tile_state_t *st, const b3_r2_ops_t *ops) {
+  pr_pack(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_OP_AHI, ops->ahi, 0);
+  d8_log_add(D8_OP_PACK, HMX_B3_R2_OP_AHI, HMX_B3_R2_PR_AHI_OFFSET, 0);
+  pr_pack(st, HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_OP_ALO, ops->alo, 0);
+  d8_log_add(D8_OP_PACK, HMX_B3_R2_OP_ALO, HMX_B3_R2_PR_ALO_OFFSET, 0);
+  pr_pack(st, HMX_B3_R2_PR_WHI_OFFSET, HMX_B3_R2_OP_WHI, ops->whi, 1);
+  d8_log_add(D8_OP_PACK, HMX_B3_R2_OP_WHI, HMX_B3_R2_PR_WHI_OFFSET, 0);
+  pr_pack(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_OP_WLO, ops->wlo, 1);
+  d8_log_add(D8_OP_PACK, HMX_B3_R2_OP_WLO, HMX_B3_R2_PR_WLO_OFFSET, 0);
+}
 
 static void d8_pack_operands(hmx_full_tile_state_t *st,
                              const b3_r2_ops_t *ops) {
-  pr_pack(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_OP_AHI, ops->ahi, 0);
-  pr_pack(st, HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_OP_ALO, ops->alo, 0);
-  pr_pack(st, HMX_B3_R2_PR_WHI_OFFSET, HMX_B3_R2_OP_WHI, ops->whi, 1);
-  pr_pack(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_OP_WLO, ops->wlo, 1);
-  pr_bias_init(st);
+  d8_pack_tiles(st, ops);
+  d8_bias_pair(st);
+}
+
+static void d8_mma_packet(hmx_full_tile_state_t *st, int act_id, int wgt_id,
+                          int act_off, int wgt_off) {
+  st->act_id = act_id;
+  st->wgt_id = wgt_id;
+  exec_mma_packet_at(st, act_off, wgt_off);
+  d8_log_add(D8_OP_MMA, act_off, wgt_off, 0);
+}
+
+static void d8_mxclracc(hmx_full_tile_state_t *st) {
+  exec_mxclracc(st);
+  d8_log_add(D8_OP_MXCLRACC, 0, 0, 0);
 }
 
 static void d8_mma_sequence(hmx_full_tile_state_t *st) {
-  exec_mxclracc(st);
-  st->act_id = HMX_B3_R2_OP_AHI;
-  st->wgt_id = HMX_B3_R2_OP_WHI;
-  exec_mma_packet_at(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
-  st->act_id = HMX_B3_R2_OP_AHI;
-  st->wgt_id = HMX_B3_R2_OP_WLO;
-  exec_mma_packet_at(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
-  st->act_id = HMX_B3_R2_OP_ALO;
-  st->wgt_id = HMX_B3_R2_OP_WHI;
-  exec_mma_packet_at(st, HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+}
+
+static void d8_fill(hmx_full_tile_state_t *st, int off, int object) {
+  pr_fill(st, off, HMX_B3_R2_TILE_BYTES, object);
+  d8_log_add(D8_OP_FILL, off, object, HMX_B3_R2_TILE_BYTES);
+}
+
+static void d8_convert_store(hmx_full_tile_state_t *st) {
+  d8_log_add(D8_OP_CONVERT, (int)HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET, 0);
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
+                            HMX_B3_R2_PR_BIAS0_OFFSET,
+                            HMX_B3_R2_PR_BIAS1_OFFSET);
+  d8_log_add(D8_OP_STORE, D8_OUT_OFFSET, 0, 0);
+}
+
+/* ---------------- guard evidence (revision 3) ---------------- */
+
+/* The guard is +10752..+12288 (1,536 B, 12 x 128 B). It is initialised to
+ * zero before mxclracc, hashed immediately after the init, hashed again after
+ * Store #1, and the two digests plus the first differing byte are echoed.
+ * Both the init and the checks are outside the MMA #3 -> fill -> Convert
+ * interval, so they cannot shorten the registered reuse distance. */
+static void d8_guard_init(hmx_full_tile_state_t *st) {
+  pr_event(st, PR_INIT_WRITE, HMX_D8_GUARD_OFFSET, HMX_D8_GUARD_BYTES, 1, 7);
+  memset(st->vtcm.raw + HMX_D8_GUARD_OFFSET, 0, HMX_D8_GUARD_BYTES);
+  d8_log_add(D8_OP_GUARD_INIT, HMX_D8_GUARD_VECTORS, HMX_D8_GUARD_BYTES,
+             HMX_D8_GUARD_INIT_HVX12);
+}
+
+static void d8_guard_pre(hmx_full_tile_state_t *st) {
+  unsigned int h = hmx_d8_fnv1a32(st->vtcm.raw + HMX_D8_GUARD_OFFSET,
+                                  HMX_D8_GUARD_BYTES);
+  g_d8_guard_pre_fnv = (int)h;
+  g_d8_guard_pre_ok = (h == hmx_d8_guard_zero_fnv());
+  d8_log_add(D8_OP_GUARD_PRE, (int)h, g_d8_guard_pre_ok, 0);
+}
+
+static void d8_guard_post(hmx_full_tile_state_t *st) {
+  unsigned int h = hmx_d8_fnv1a32(st->vtcm.raw + HMX_D8_GUARD_OFFSET,
+                                  HMX_D8_GUARD_BYTES);
+  int first_bad = HMX_D8_GUARD_FIRST_BAD_NONE;
+  int status = HMX_D8_GUARD_STATUS_OK;
+  for (int i = 0; i < HMX_D8_GUARD_BYTES; ++i) {
+    if (st->vtcm.raw[HMX_D8_GUARD_OFFSET + i] != 0) {
+      first_bad = i;
+      break;
+    }
+  }
+  if (!g_d8_guard_pre_ok) {
+    status = HMX_D8_GUARD_STATUS_PRE_NONZERO;
+  } else if (h != (unsigned int)g_d8_guard_pre_fnv ||
+             first_bad != HMX_D8_GUARD_FIRST_BAD_NONE) {
+    status = HMX_D8_GUARD_STATUS_POST_CHANGED;
+  }
+  d8_log_add(D8_OP_GUARD_POST, (int)h, status, first_bad);
 }
 
 /* Numerical reference for "the read lost the race": the affected operand tile
@@ -161,20 +345,37 @@ static void d8_outcome(uint16_t *out, int corrupt_ahi, int corrupt_wlo) {
  * are later than these fills, so the fills are the tightest reuse point. */
 static void d8_sequence_with_mask(hmx_full_tile_state_t *st, int fill_mask) {
   pr_state_init(st);
+  d8_log_begin();
   d8_pack_operands(st, &g_ops_deploy);
   d8_mma_sequence(st);
   if (fill_mask & D8_MASK_OUT) {
-    pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1); /* out_pos sentinel */
+    d8_fill(st, D8_OUT_OFFSET, 1); /* out_pos sentinel */
   }
   if (fill_mask & D8_MASK_WLO) {
-    pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
+    d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
   }
   if (fill_mask & D8_MASK_AHI) {
-    pr_fill(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_TILE_BYTES, 3);
+    d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
   }
-  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
-                            HMX_B3_R2_PR_BIAS0_OFFSET,
-                            HMX_B3_R2_PR_BIAS1_OFFSET);
+  d8_convert_store(st);
+}
+
+/* Revision-3 candidate: the revision-2 order plus the guard init and the two
+ * guard digests. Guard init/hash happen before mxclracc; the post hash happens
+ * after Store #1. The critical interval is unchanged. */
+static void d8_rev3_sequence(hmx_full_tile_state_t *st, int cond) {
+  int fill_mask = d8_condition_mask(cond);
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_guard_init(st);
+  d8_guard_pre(st);
+  d8_mma_sequence(st);
+  if (fill_mask & D8_MASK_OUT) d8_fill(st, D8_OUT_OFFSET, 1);
+  if (fill_mask & D8_MASK_WLO) d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  if (fill_mask & D8_MASK_AHI) d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+  d8_guard_post(st);
 }
 
 static void d8_program_order(hmx_full_tile_state_t *st, int cond) {
@@ -189,18 +390,17 @@ static void d8_program_order(hmx_full_tile_state_t *st, int cond) {
  * experiment, even when the numbers agree. */
 static void d8_legacy_rev1_sequence(hmx_full_tile_state_t *st, int cond) {
   pr_state_init(st);
+  d8_log_begin();
   d8_pack_operands(st, &g_ops_deploy);
-  pr_fill(st, D8_OUT_OFFSET, HMX_B3_R2_TILE_BYTES, 1); /* rev1: prologue */
+  d8_fill(st, D8_OUT_OFFSET, 1); /* rev1: prologue */
   d8_mma_sequence(st);
   if (cond == D8_COND_B || cond == D8_COND_C) {
-    pr_fill(st, HMX_B3_R2_PR_WLO_OFFSET, HMX_B3_R2_TILE_BYTES, 2);
+    d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
   }
   if (cond == D8_COND_B || cond == D8_COND_D) {
-    pr_fill(st, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_TILE_BYTES, 3);
+    d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
   }
-  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
-                            HMX_B3_R2_PR_BIAS0_OFFSET,
-                            HMX_B3_R2_PR_BIAS1_OFFSET);
+  d8_convert_store(st);
 }
 
 /* ---------------- D8 access-trace validator ---------------- */
@@ -211,8 +411,8 @@ static void d8_legacy_rev1_sequence(hmx_full_tile_state_t *st, int cond) {
  * phase order (out_pos, then Wlo, then Ahi), the condition's fill mask and the
  * event counts, so a truncated, padded, reordered or C/D-swapped trace fails
  * closed. Returns 1 = valid, 0 = invalid; `why` receives a short reason. */
-static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
-                          const char **why) {
+static int d8_trace_only_valid(const hmx_full_tile_state_t *st, int cond,
+                               const char **why) {
   const int ids[4] = {HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_ALO,
                       HMX_B3_R2_OP_WHI, HMX_B3_R2_OP_WLO};
   const int offsets[4] = {HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_ALO_OFFSET,
@@ -342,6 +542,409 @@ static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
   }
   if (why) *why = "ok";
   return 1;
+}
+
+/* ---------------- revision-3 program-order validator ---------------- */
+
+/* The expected issued-operation list for a condition. GUARD_PRE/GUARD_POST
+ * carry runtime values, so only their presence and kind are compared here;
+ * their payload is validated against the memory image below. */
+static int d8_expected_ops(int cond, int require_guard, d8_op_t *out) {
+  int n = 0;
+  const int mask = d8_condition_mask(cond);
+#define D8_EXP(k, aa, bb, cc)                       \
+  do {                                              \
+    out[n].kind = (k);                              \
+    out[n].a = (aa);                                \
+    out[n].b = (bb);                                \
+    out[n].c = (cc);                                \
+    ++n;                                            \
+  } while (0)
+  D8_EXP(D8_OP_PACK, HMX_B3_R2_OP_AHI, HMX_B3_R2_PR_AHI_OFFSET, 0);
+  D8_EXP(D8_OP_PACK, HMX_B3_R2_OP_ALO, HMX_B3_R2_PR_ALO_OFFSET, 0);
+  D8_EXP(D8_OP_PACK, HMX_B3_R2_OP_WHI, HMX_B3_R2_PR_WHI_OFFSET, 0);
+  D8_EXP(D8_OP_PACK, HMX_B3_R2_OP_WLO, HMX_B3_R2_PR_WLO_OFFSET, 0);
+  D8_EXP(D8_OP_BIAS, 0, HMX_B3_R2_PR_BIAS0_OFFSET, 1);
+  D8_EXP(D8_OP_BIAS, 1, HMX_B3_R2_PR_BIAS1_OFFSET, 1);
+  if (require_guard) {
+    D8_EXP(D8_OP_GUARD_INIT, HMX_D8_GUARD_VECTORS, HMX_D8_GUARD_BYTES,
+           HMX_D8_GUARD_INIT_HVX12);
+    D8_EXP(D8_OP_GUARD_PRE, 0, 0, 0);
+  }
+  D8_EXP(D8_OP_MXCLRACC, 0, 0, 0);
+  D8_EXP(D8_OP_MMA, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET, 0);
+  D8_EXP(D8_OP_MMA, HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET, 0);
+  D8_EXP(D8_OP_MMA, HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET, 0);
+  if (mask & D8_MASK_OUT) D8_EXP(D8_OP_FILL, D8_OUT_OFFSET, 1, HMX_B3_R2_TILE_BYTES);
+  if (mask & D8_MASK_WLO)
+    D8_EXP(D8_OP_FILL, HMX_B3_R2_PR_WLO_OFFSET, 2, HMX_B3_R2_TILE_BYTES);
+  if (mask & D8_MASK_AHI)
+    D8_EXP(D8_OP_FILL, HMX_B3_R2_PR_AHI_OFFSET, 3, HMX_B3_R2_TILE_BYTES);
+  D8_EXP(D8_OP_CONVERT, (int)HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET, 0);
+  D8_EXP(D8_OP_STORE, D8_OUT_OFFSET, 0, 0);
+  if (require_guard) D8_EXP(D8_OP_GUARD_POST, 0, 0, 0);
+#undef D8_EXP
+  return n;
+}
+
+static int d8_op_equal(const d8_op_t *a, const d8_op_t *b) {
+  if (a->kind != b->kind) return 0;
+  if (a->kind == D8_OP_GUARD_PRE || a->kind == D8_OP_GUARD_POST) return 1;
+  return a->a == b->a && a->b == b->b && a->c == b->c;
+}
+
+static int d8_count_ops(int kind) {
+  int n = 0;
+  for (int i = 0; i < g_d8_log.count; ++i) {
+    if (g_d8_log.op[i].kind == kind) n++;
+  }
+  return n;
+}
+
+static const d8_op_t *d8_find_op(int kind) {
+  for (int i = 0; i < g_d8_log.count; ++i) {
+    if (g_d8_log.op[i].kind == kind) return &g_d8_log.op[i];
+  }
+  return 0;
+}
+
+static int d8_validate_program(const hmx_full_tile_state_t *st, int cond,
+                               int require_guard, const char **why) {
+  d8_op_t expected[D8_OPLOG_CAP];
+  int expected_n = d8_expected_ops(cond, require_guard, expected);
+  int fills = 0;
+  int first_mma_read = 0, last_mma_read = 0, last_fill = 0, store_seq = 0;
+  int bias_n = 0, bias_off[2] = {0, 0}, bias_seq[2] = {0, 0};
+  int guard_init_events = 0;
+  int sentinel_n = 0;
+  int sentinel_seq[4] = {0, 0, 0, 0};
+  int sentinel_off[4] = {0, 0, 0, 0};
+  int mma_seq[6] = {0, 0, 0, 0, 0, 0};
+  int mma_off[6] = {0, 0, 0, 0, 0, 0};
+  int mma_n = 0;
+
+  if (!st->pr_trace_active || st->pr_trace_overflow ||
+      st->pr_trace_count < 1 || st->pr_trace_count > PR_TRACE_CAP) {
+    if (why) *why = "trace_missing_or_overflow";
+    return 0;
+  }
+  /* Guard ownership before any other rule: only the model's whole-VTCM setup
+   * write and (in revision 3) the registered 1,536 B zero init may touch
+   * +10752..+12288. This makes a mode-45-style third bias set fail as a
+   * region violation, not merely as a bias count. */
+  for (int i = 0; i < st->pr_trace_count; ++i) {
+    const pr_event_t *e = &st->pr_trace[i];
+    if (e->offset < HMX_D8_GUARD_OFFSET + HMX_D8_GUARD_BYTES &&
+        HMX_D8_GUARD_OFFSET < e->offset + e->size) {
+      if (e->kind == PR_INIT_WRITE && e->offset == 0 &&
+          e->size == HMX_B3_R2_VTCM_TOTAL) {
+        continue;
+      }
+      if (require_guard && e->kind == PR_INIT_WRITE &&
+          e->offset == HMX_D8_GUARD_OFFSET &&
+          e->size == HMX_D8_GUARD_BYTES) {
+        continue;
+      }
+      if (why) *why = "outside_declared_regions";
+      return 0;
+    }
+  }
+  if (!d8_trace_only_valid(st, cond, why)) return 0;
+
+  for (int i = 0; i < st->pr_trace_count; ++i) {
+    const pr_event_t *e = &st->pr_trace[i];
+    if (e->kind == PR_MMA_READ) {
+      if (!first_mma_read) first_mma_read = e->seq;
+      last_mma_read = e->seq;
+      if (mma_n < 6) {
+        mma_seq[mma_n] = e->seq;
+        mma_off[mma_n] = e->offset;
+        mma_n++;
+      }
+    } else if (e->kind == PR_SENTINEL) {
+      if (e->offset == D8_OUT_OFFSET || e->offset == HMX_B3_R2_PR_WLO_OFFSET ||
+          e->offset == HMX_B3_R2_PR_AHI_OFFSET) {
+        if (sentinel_n < 4) {
+          sentinel_seq[sentinel_n] = e->seq;
+          sentinel_off[sentinel_n] = e->offset;
+          sentinel_n++;
+        }
+        last_fill = e->seq;
+      }
+    } else if (e->kind == PR_BIAS_WRITE) {
+      if (bias_n < 2) {
+        bias_off[bias_n] = e->offset;
+        bias_seq[bias_n] = e->seq;
+      }
+      bias_n++;
+    } else if (e->kind == PR_HMX_STORE) {
+      store_seq = e->seq;
+    }
+    /* Guard-region ownership: only the model's whole-VTCM setup write (and,
+     * in revision 3, the registered 1,536 B zero init) may touch the tail. */
+    if (e->offset < HMX_D8_GUARD_OFFSET + HMX_D8_GUARD_BYTES &&
+        HMX_D8_GUARD_OFFSET < e->offset + e->size) {
+      if (e->kind == PR_INIT_WRITE && e->offset == 0 &&
+          e->size == HMX_B3_R2_VTCM_TOTAL) {
+        /* model initialisation, not a device instruction */
+      } else if (require_guard && e->kind == PR_INIT_WRITE &&
+                 e->offset == HMX_D8_GUARD_OFFSET &&
+                 e->size == HMX_D8_GUARD_BYTES) {
+        guard_init_events++;
+      } else {
+        if (why) *why = "outside_declared_regions";
+        return 0;
+      }
+    }
+  }
+
+  fills = sentinel_n;
+  if (fills != ((d8_condition_mask(cond) & 1) + ((d8_condition_mask(cond) >> 1) & 1) +
+                ((d8_condition_mask(cond) >> 2) & 1))) {
+    if (why) *why = "fill_event_count";
+    return 0;
+  }
+  if (require_guard && guard_init_events != 1) {
+    if (why) *why = "guard_init_event";
+    return 0;
+  }
+  if (!require_guard && guard_init_events != 0) {
+    if (why) *why = "unexpected_guard_init";
+    return 0;
+  }
+
+  /* Bias writes: set 0 then set 1, at the registered offsets, before the
+   * first MMA read. A bias write after mxclracc would still convert correctly
+   * because Convert reads the bias, so only the order check catches it. */
+  if (bias_n != 2 || bias_off[0] != HMX_B3_R2_PR_BIAS0_OFFSET ||
+      bias_off[1] != HMX_B3_R2_PR_BIAS1_OFFSET) {
+    if (why) *why = "bias_offset";
+    return 0;
+  }
+  if (bias_seq[0] >= bias_seq[1]) {
+    if (why) *why = "bias_order";
+    return 0;
+  }
+  if (first_mma_read != 0 && bias_seq[1] > first_mma_read) {
+    if (why) *why = "bias_after_mma";
+    return 0;
+  }
+
+  /* Issued-operation record: present, not overflowed, then per-kind counts.
+   * Checking counts before order means a skipped operation names the
+   * operation ("convert_count") instead of a generic order failure. */
+  if (!g_d8_log.enabled) { if (why) *why = "oplog_missing"; return 0; }
+  if (g_d8_log.overflow) { if (why) *why = "oplog_overflow"; return 0; }
+  if (st->count_mxclracc != 1 || d8_count_ops(D8_OP_MXCLRACC) != 1) {
+    if (why) *why = "mxclracc_count";
+    return 0;
+  }
+  if (st->count_mma != 3 || d8_count_ops(D8_OP_MMA) != 3) {
+    if (why) *why = "mma_count";
+    return 0;
+  }
+  if (st->count_convert != 1 || d8_count_ops(D8_OP_CONVERT) != 1) {
+    if (why) *why = "convert_count";
+    return 0;
+  }
+  if (st->count_store != 1 || d8_count_ops(D8_OP_STORE) != 1) {
+    if (why) *why = "store_count";
+    return 0;
+  }
+  if (d8_count_ops(D8_OP_PACK) != 4 || d8_count_ops(D8_OP_BIAS) != 2) {
+    if (why) *why = "input_op_count";
+    return 0;
+  }
+
+  /* Bias order and position in the issued list: both sets before mxclracc.
+   * Convert reads the bias, so a bias write moved after the MMAs still
+   * produces the safe numbers; only the order rule rejects it. */
+  {
+    int bias_i = 0, mx_i = -1, bias_set0_i = -1, bias_set1_i = -1;
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      if (g_d8_log.op[i].kind == D8_OP_MXCLRACC) mx_i = i;
+      if (g_d8_log.op[i].kind == D8_OP_BIAS) {
+        if (g_d8_log.op[i].a == 0) bias_set0_i = i;
+        if (g_d8_log.op[i].a == 1) bias_set1_i = i;
+        bias_i++;
+      }
+    }
+    if (bias_i != 2 || bias_set0_i < 0 || bias_set1_i < 0) {
+      if (why) *why = "bias_op_count";
+      return 0;
+    }
+    if (bias_set1_i < bias_set0_i) { if (why) *why = "bias_op_order"; return 0; }
+    if (mx_i >= 0 && bias_set1_i > mx_i) {
+      if (why) *why = "bias_after_mxclracc";
+      return 0;
+    }
+  }
+
+  /* Convert must follow every fill, and Store must follow Convert. The access
+   * trace sees Convert+Store as one HMX store event, so use the issued list
+   * for the Convert/Store order and the trace for the fill positions. */
+  {
+    const d8_op_t *cvt = d8_find_op(D8_OP_CONVERT);
+    const d8_op_t *store = d8_find_op(D8_OP_STORE);
+    int cvt_index = -1, store_index = -1, fill_last_index = -1;
+    int fill_first_index = -1;
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      if (g_d8_log.op[i].kind == D8_OP_CONVERT) cvt_index = i;
+      if (g_d8_log.op[i].kind == D8_OP_STORE) store_index = i;
+      if (g_d8_log.op[i].kind == D8_OP_FILL) {
+        if (fill_first_index < 0) fill_first_index = i;
+        fill_last_index = i;
+      }
+    }
+    if (!cvt || !store || cvt_index < 0 || store_index < 0 ||
+        fill_last_index < 0) {
+      if (why) *why = "output_phase_missing";
+      return 0;
+    }
+    if (fill_first_index < cvt_index && fill_last_index > cvt_index) {
+      if (why) *why = "convert_between_fills";
+      return 0;
+    }
+    if (last_fill > store_seq && store_seq != 0) {
+      if (why) *why = "store_before_fill";
+      return 0;
+    }
+    if (cvt_index > store_index) {
+      if (why) *why = "store_before_convert";
+      return 0;
+    }
+  }
+
+  /* Guard payload: recompute from memory. A false self-report (a clean status
+   * with a dirty tail) fails here, not at the status check. */
+  if (require_guard) {
+    const d8_op_t *pre = d8_find_op(D8_OP_GUARD_PRE);
+    const d8_op_t *post = d8_find_op(D8_OP_GUARD_POST);
+    unsigned int zero_fnv = hmx_d8_guard_zero_fnv();
+    unsigned int now = hmx_d8_fnv1a32(st->vtcm.raw + HMX_D8_GUARD_OFFSET,
+                                      HMX_D8_GUARD_BYTES);
+    if (!pre || !post) { if (why) *why = "guard_op_missing"; return 0; }
+    if ((unsigned int)pre->a != zero_fnv || pre->b != 1) {
+      if (why) *why = "guard_pre_nonzero";
+      return 0;
+    }
+    if (post->b != HMX_D8_GUARD_STATUS_OK ||
+        post->c != HMX_D8_GUARD_FIRST_BAD_NONE ||
+        (unsigned int)post->a != now) {
+      if (why) *why = "guard_post_mismatch";
+      return 0;
+    }
+    if (now != zero_fnv) { if (why) *why = "guard_tail_dirty"; return 0; }
+  } else {
+    if (d8_find_op(D8_OP_GUARD_INIT) || d8_find_op(D8_OP_GUARD_PRE) ||
+        d8_find_op(D8_OP_GUARD_POST)) {
+      if (why) *why = "unexpected_guard_op";
+      return 0;
+    }
+  }
+
+  /* Exact access-event count: a dropped, duplicated or padded event fails
+   * even when every remaining event looks well formed. */
+  {
+    int expected_events = 6 + 4 + 2 + 6 + fills + 1 + (require_guard ? 1 : 0);
+    if (st->pr_trace_count != expected_events) {
+      if (why) *why = "event_count";
+      return 0;
+    }
+  }
+
+  /* Exact issued-operation list: count and every field, in order. */
+  if (g_d8_log.count != expected_n) {
+    if (why) *why = "oplog_count";
+    return 0;
+  }
+  for (int i = 0; i < expected_n; ++i) {
+    if (!d8_op_equal(&g_d8_log.op[i], &expected[i])) {
+      if (why) *why = "oplog_order";
+      return 0;
+    }
+  }
+
+  /* Cross-check the two records: operation list vs access events. */
+  {
+    int fill_i = 0;
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      if (g_d8_log.op[i].kind != D8_OP_FILL) continue;
+      if (fill_i >= sentinel_n ||
+          g_d8_log.op[i].a != sentinel_off[fill_i]) {
+        if (why) *why = "fill_record_mismatch";
+        return 0;
+      }
+      fill_i++;
+    }
+    if (fill_i != sentinel_n) { if (why) *why = "fill_record_mismatch"; return 0; }
+  }
+  {
+    int mma_i = 0;
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      if (g_d8_log.op[i].kind != D8_OP_MMA) continue;
+      if (mma_i + 1 >= mma_n ||
+          g_d8_log.op[i].a != mma_off[mma_i] ||
+          g_d8_log.op[i].b != mma_off[mma_i + 1] ||
+          mma_seq[mma_i] >= mma_seq[mma_i + 1]) {
+        if (why) *why = "mma_record_mismatch";
+        return 0;
+      }
+      mma_i += 2;
+    }
+    if (mma_i != mma_n) { if (why) *why = "mma_record_mismatch"; return 0; }
+  }
+
+  /* Every registered fill is in the output phase: the first fill event must
+   * follow the last MMA read. trace_only_valid checks the same property from
+   * its own last-read state; this duplicate is kept explicit because a future
+   * change to that function must not silently drop the rule. */
+  if (last_mma_read != 0 && sentinel_seq[0] != 0 &&
+      sentinel_seq[0] < last_mma_read) {
+    if (why) *why = "fill_before_last_mma_read";
+    return 0;
+  }
+
+  /* Guard payload: recompute from memory. A false self-report (a clean status
+   * with a dirty tail) fails here, not at the status check. */
+  if (require_guard) {
+    const d8_op_t *pre = d8_find_op(D8_OP_GUARD_PRE);
+    const d8_op_t *post = d8_find_op(D8_OP_GUARD_POST);
+    unsigned int zero_fnv = hmx_d8_guard_zero_fnv();
+    unsigned int now = hmx_d8_fnv1a32(st->vtcm.raw + HMX_D8_GUARD_OFFSET,
+                                      HMX_D8_GUARD_BYTES);
+    if (!pre || !post) { if (why) *why = "guard_op_missing"; return 0; }
+    if ((unsigned int)pre->a != zero_fnv || pre->b != 1) {
+      if (why) *why = "guard_pre_nonzero";
+      return 0;
+    }
+    if (post->b != HMX_D8_GUARD_STATUS_OK ||
+        post->c != HMX_D8_GUARD_FIRST_BAD_NONE ||
+        (unsigned int)post->a != now) {
+      if (why) *why = "guard_post_mismatch";
+      return 0;
+    }
+    if (now != zero_fnv) { if (why) *why = "guard_tail_dirty"; return 0; }
+  } else {
+    if (d8_find_op(D8_OP_GUARD_INIT) || d8_find_op(D8_OP_GUARD_PRE) ||
+        d8_find_op(D8_OP_GUARD_POST)) {
+      if (why) *why = "unexpected_guard_op";
+      return 0;
+    }
+  }
+
+  if (why) *why = "ok";
+  return 1;
+}
+
+static int d8_trace_valid(const hmx_full_tile_state_t *st, int cond,
+                          const char **why) {
+  return d8_validate_program(st, cond, 0, why);
+}
+
+static int d8_rev3_valid(const hmx_full_tile_state_t *st, int cond,
+                         const char **why) {
+  return d8_validate_program(st, cond, 1, why);
 }
 
 /* ---------------- classifier ---------------- */
@@ -486,6 +1089,75 @@ static void d8_print_sequences(void) {
   }
 }
 
+/* Revision-3 issued-operation signature, derived from the recorder (not from
+ * the call sites). The Python audit parses the matching block in the rev3
+ * pre-registration and requires all four condition signatures to be equal. */
+static int d8_id_from_offset(int off) {
+  switch (off) {
+    case HMX_B3_R2_PR_AHI_OFFSET: return HMX_B3_R2_OP_AHI;
+    case HMX_B3_R2_PR_ALO_OFFSET: return HMX_B3_R2_OP_ALO;
+    case HMX_B3_R2_PR_WHI_OFFSET: return HMX_B3_R2_OP_WHI;
+    case HMX_B3_R2_PR_WLO_OFFSET: return HMX_B3_R2_OP_WLO;
+    default: return 0;
+  }
+}
+
+static void d8_print_rev3_sequences(void) {
+  static hmx_full_tile_state_t st;
+  char sig[2048];
+  for (int c = 0; c < 4; ++c) {
+    size_t n = 0;
+    int mma_index = 0;
+    sig[0] = '\0';
+    d8_rev3_sequence(&st, c);
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      char token[80];
+      const d8_op_t *op = &g_d8_log.op[i];
+      switch (op->kind) {
+        case D8_OP_PACK:
+          snprintf(token, sizeof(token), "PACK:%s",
+                   d8_operand_name(op->a));
+          break;
+        case D8_OP_BIAS:
+          snprintf(token, sizeof(token), "BIAS:%d", op->a);
+          break;
+        case D8_OP_GUARD_INIT:
+          snprintf(token, sizeof(token), "GUARD:INIT:%d", op->a);
+          break;
+        case D8_OP_GUARD_PRE:
+          snprintf(token, sizeof(token), "GUARD:PRE");
+          break;
+        case D8_OP_GUARD_POST:
+          snprintf(token, sizeof(token), "GUARD:POST");
+          break;
+        case D8_OP_MXCLRACC:
+          snprintf(token, sizeof(token), "MXCLRACC");
+          break;
+        case D8_OP_MMA:
+          snprintf(token, sizeof(token), "MMA:%d:%s:%s", ++mma_index,
+                   d8_operand_name(d8_id_from_offset(op->a)),
+                   d8_operand_name(d8_id_from_offset(op->b)));
+          break;
+        case D8_OP_FILL:
+          snprintf(token, sizeof(token), "FILL:%s",
+                   d8_fill_region(op->a));
+          break;
+        case D8_OP_CONVERT:
+          snprintf(token, sizeof(token), "CONVERT:1");
+          break;
+        case D8_OP_STORE:
+          snprintf(token, sizeof(token), "STORE:OUT");
+          break;
+        default:
+          snprintf(token, sizeof(token), "?");
+          break;
+      }
+      d8_sig_append(sig, sizeof(sig), &n, token);
+    }
+    printf("d8_rev3_seq cond=%c events=%s\n", 'A' + c, sig);
+  }
+}
+
 /* ---------------- references ---------------- */
 
 static void d8_build_references(void) {
@@ -584,6 +1256,7 @@ static void d8_early_sequence(hmx_full_tile_state_t *st, int early_ahi,
                               int early_wlo, int byte_ahi, int byte_wlo,
                               int partial_byte) {
   pr_state_init(st);
+  d8_log_begin();
   d8_pack_operands(st, &g_ops_deploy);
   if (partial_byte) {
     /* One byte of the last Whi byte, written after the pack and before the
@@ -616,6 +1289,7 @@ static void d8_early_sequence(hmx_full_tile_state_t *st, int early_ahi,
  * still write the same regions. */
 static void d8_reordered_sequence(hmx_full_tile_state_t *st, int variant) {
   pr_state_init(st);
+  d8_log_begin();
   d8_pack_operands(st, &g_ops_deploy);
   d8_mma_sequence(st);
   if (variant == 0) {
@@ -878,6 +1552,406 @@ static int d8_run_controls(void) {
   return g_d8_fail == 0;
 }
 
+/* ---------------- revision-3 order / guard faults ---------------- */
+
+static int d8_out_is_safe(const hmx_full_tile_state_t *st) {
+  static uint16_t out[T8_CELLS];
+  cc_decode_tile((const uint16_t *)(st->vtcm.raw + D8_OUT_OFFSET), out);
+  return d8_array_equal(out, g_d8_refs.safe);
+}
+
+static void d8_print_oplog(void) {
+  printf("d8_oplog count=%d overflow=%d:", g_d8_log.count, g_d8_log.overflow);
+  for (int i = 0; i < g_d8_log.count; ++i) {
+    printf(" %s(%d,%d,%d)", d8_op_name(g_d8_log.op[i].kind),
+           g_d8_log.op[i].a, g_d8_log.op[i].b, g_d8_log.op[i].c);
+  }
+  printf("\n");
+}
+
+static void d8_expect_reject(const hmx_full_tile_state_t *st, int cond,
+                             int require_guard, const char *tag,
+                             int expect_numeric_safe) {
+  const char *why = NULL;
+  char safe_tag[128];
+  int valid = require_guard ? d8_rev3_valid(st, cond, &why)
+                            : d8_trace_valid(st, cond, &why);
+  d8_check(!valid, tag);
+  snprintf(safe_tag, sizeof(safe_tag), "%s_numeric_safe", tag);
+  if (expect_numeric_safe) d8_check(d8_out_is_safe(st), safe_tag);
+  printf("d8_order_fault=%s guard=%d rejected=%d why=%s numeric_safe=%d\n",
+         tag, require_guard, !valid, why ? why : "?", d8_out_is_safe(st));
+  if (valid) d8_print_oplog();
+}
+
+static void d8_fault_bias_after_mma(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_tiles(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_bias_pair(st); /* wrong: bias belongs before mxclracc */
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_bias_swapped(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_tiles(st, &g_ops_deploy);
+  d8_bias_write(st, 1, HMX_B3_R2_PR_BIAS0_OFFSET);
+  d8_bias_write(st, 0, HMX_B3_R2_PR_BIAS1_OFFSET);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_bias_missing(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_tiles(st, &g_ops_deploy);
+  d8_bias_write(st, 0, HMX_B3_R2_PR_BIAS0_OFFSET); /* set 1 omitted */
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_no_mxclracc(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_double_mxclracc(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mxclracc(st); /* duplicate */
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_two_mma(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_mma_swapped(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+}
+
+static void d8_fault_no_convert(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  /* no Convert, no Store */
+}
+
+static void d8_fault_double_convert(hmx_full_tile_state_t *st) {
+  d8_program_order(st, D8_COND_B);
+  st->count_convert++;
+  d8_log_add(D8_OP_CONVERT, (int)HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET, 0);
+}
+
+static void d8_fault_store_before_convert(hmx_full_tile_state_t *st) {
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_fill(st, D8_OUT_OFFSET, 1);
+  d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_log_add(D8_OP_STORE, D8_OUT_OFFSET, 0, 0);
+  d8_log_add(D8_OP_CONVERT, (int)HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET, 0);
+  exec_convert_and_store_at(st, HMX_B3_R2_RS_CVT1, D8_OUT_OFFSET,
+                            HMX_B3_R2_PR_BIAS0_OFFSET,
+                            HMX_B3_R2_PR_BIAS1_OFFSET);
+}
+
+static void d8_fault_drop_op_event(hmx_full_tile_state_t *st) {
+  int victim = -1;
+  d8_program_order(st, D8_COND_B);
+  for (int i = 0; i < g_d8_log.count; ++i) {
+    if (g_d8_log.op[i].kind == D8_OP_BIAS) { victim = i; break; }
+  }
+  if (victim >= 0 && victim + 1 < g_d8_log.count) {
+    memmove(&g_d8_log.op[victim], &g_d8_log.op[victim + 1],
+            sizeof(d8_op_t) * (size_t)(g_d8_log.count - victim - 1));
+    g_d8_log.count--;
+  }
+}
+
+static void d8_fault_drop_trace_event(hmx_full_tile_state_t *st) {
+  d8_program_order(st, D8_COND_B);
+  if (st->pr_trace_count > 1) st->pr_trace_count--;
+}
+
+static void d8_fault_duplicate_trace_event(hmx_full_tile_state_t *st) {
+  d8_program_order(st, D8_COND_B);
+  if (st->pr_trace_count < PR_TRACE_CAP) {
+    st->pr_trace[st->pr_trace_count] = st->pr_trace[st->pr_trace_count - 1];
+    st->pr_trace[st->pr_trace_count].seq = st->pr_trace_count + 1;
+    st->pr_trace_count++;
+  }
+}
+
+/* Revision-3 sequence with one guard/order defect. The defects are applied to
+ * a real sequence, not to a metadata array, so the numeric result is produced
+ * by the same arithmetic as the clean run. */
+static void d8_rev3_fault_sequence(hmx_full_tile_state_t *st, int cond,
+                                   int dirty_tail, int skip_init,
+                                   int broken_init, int corrupt_at,
+                                   int skip_post, int bias2, int false_post) {
+  int mask = d8_condition_mask(cond);
+  pr_state_init(st);
+  d8_log_begin();
+  d8_pack_operands(st, &g_ops_deploy);
+  if (dirty_tail) {
+    memset(st->vtcm.raw + HMX_D8_GUARD_OFFSET, 0x5A, HMX_D8_GUARD_BYTES);
+  }
+  if (bias2) {
+    /* Mode 45's third bias set lives at +10752, inside the D8 guard. */
+    pr_event(st, PR_BIAS_WRITE, HMX_D8_GUARD_OFFSET, 256, 1, 2);
+    memset(st->vtcm.raw + HMX_D8_GUARD_OFFSET, 0x11, 256);
+  }
+  if (!skip_init) {
+    if (broken_init) {
+      /* Claim the init without zeroing: a false self-report. */
+      pr_event(st, PR_INIT_WRITE, HMX_D8_GUARD_OFFSET, HMX_D8_GUARD_BYTES, 1,
+               7);
+      d8_log_add(D8_OP_GUARD_INIT, HMX_D8_GUARD_VECTORS,
+                 HMX_D8_GUARD_BYTES, HMX_D8_GUARD_INIT_HVX12);
+    } else {
+      d8_guard_init(st);
+    }
+  }
+  d8_guard_pre(st);
+  d8_mxclracc(st);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_AHI, HMX_B3_R2_OP_WLO,
+                HMX_B3_R2_PR_AHI_OFFSET, HMX_B3_R2_PR_WLO_OFFSET);
+  d8_mma_packet(st, HMX_B3_R2_OP_ALO, HMX_B3_R2_OP_WHI,
+                HMX_B3_R2_PR_ALO_OFFSET, HMX_B3_R2_PR_WHI_OFFSET);
+  if (mask & D8_MASK_OUT) d8_fill(st, D8_OUT_OFFSET, 1);
+  if (mask & D8_MASK_WLO) d8_fill(st, HMX_B3_R2_PR_WLO_OFFSET, 2);
+  if (mask & D8_MASK_AHI) d8_fill(st, HMX_B3_R2_PR_AHI_OFFSET, 3);
+  d8_convert_store(st);
+  if (corrupt_at >= 0) {
+    st->vtcm.raw[HMX_D8_GUARD_OFFSET + corrupt_at] ^= 0xFF;
+  }
+  if (!skip_post) d8_guard_post(st);
+  if (false_post) {
+    for (int i = 0; i < g_d8_log.count; ++i) {
+      if (g_d8_log.op[i].kind == D8_OP_GUARD_POST) {
+        g_d8_log.op[i].a = g_d8_guard_pre_fnv;
+        g_d8_log.op[i].b = HMX_D8_GUARD_STATUS_OK;
+        g_d8_log.op[i].c = HMX_D8_GUARD_FIRST_BAD_NONE;
+      }
+    }
+  }
+}
+
+static int d8_run_rev3_controls(void) {
+  static hmx_full_tile_state_t st;
+  const char *why = NULL;
+  int valid;
+
+  printf("=== D8 revision-3 order and guard controls ===\n");
+
+  /* 17. Clean revision-3 sequence for every condition: guard ops, numbers and
+   *     program order all accepted. */
+  for (int c = 0; c < 4; ++c) {
+    d8_rev3_sequence(&st, c);
+    valid = d8_rev3_valid(&st, c, &why);
+    d8_check(valid && d8_out_is_safe(&st), "d8_fault_17_rev3_clean");
+    printf("d8_fault=17 condition=%s rev3_valid=%d numeric_safe=%d why=%s\n",
+           d8_condition_name(c), valid, d8_out_is_safe(&st), why);
+  }
+
+  /* 18. Bias written after MMA #1: the converted numbers are unchanged
+   *     because Convert reads the bias, so only the order rule can reject. */
+  d8_fault_bias_after_mma(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_18_bias_after_mma", 1);
+
+  /* 19. Bias sets 0 and 1 swapped between the two registered offsets. */
+  d8_fault_bias_swapped(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_19_bias_swapped", 0);
+
+  /* 20. One bias set omitted: Convert uses set 0, so omitting set 1 leaves
+   *     the safe numbers. The count rule rejects. */
+  d8_fault_bias_missing(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_20_bias_missing", 1);
+
+  /* 21. mxclracc omitted. ACC starts zero in the model, so the first MMA adds
+   *     to zero exactly as after mxclracc; the numbers are safe. */
+  d8_fault_no_mxclracc(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_21_no_mxclracc", 1);
+
+  /* 22. mxclracc duplicated: same numbers, wrong count. */
+  d8_fault_double_mxclracc(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_22_double_mxclracc", 1);
+
+  /* 23. MMA #3 omitted: the ALO x WHI contribution is missing. */
+  d8_fault_two_mma(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_23_two_mma", 0);
+
+  /* 24. MMA #1 and #2 swapped: same packet count, different order. */
+  d8_fault_mma_swapped(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_24_mma_swapped", 0);
+
+  /* 25. Convert omitted: no store event at all. */
+  d8_fault_no_convert(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_25_no_convert", 0);
+
+  /* 26. Convert duplicated: one store, two Convert records. */
+  d8_fault_double_convert(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_26_double_convert", 1);
+
+  /* 27. Store issued before Convert: the numbers are still produced by the
+   *     same fused primitive, so only the recorded order rejects. */
+  d8_fault_store_before_convert(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_27_store_before_convert", 1);
+
+  /* 28. Event record only dropped (operation log loses one bias entry). */
+  d8_fault_drop_op_event(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_28_drop_op_event", 1);
+
+  /* 29. Access-trace record only dropped. */
+  d8_fault_drop_trace_event(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_29_drop_trace_event", 1);
+
+  /* 30. Access-trace record duplicated. */
+  d8_fault_duplicate_trace_event(&st);
+  d8_expect_reject(&st, D8_COND_B, 0, "d8_fault_30_duplicate_trace_event", 1);
+
+  /* 31. Guard clean: dirty entry is repaired by the registered init. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 1, 0, 0, -1, 0, 0, 0);
+  valid = d8_rev3_valid(&st, D8_COND_B, &why);
+  d8_check(valid && d8_out_is_safe(&st), "d8_fault_31_guard_init_repairs");
+  printf("d8_fault=31 dirty_entry_init validated=%d why=%s\n", valid, why);
+
+  /* 32. Guard init omitted on a dirty entry. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 1, 1, 0, -1, 0, 0, 0);
+  d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_32_guard_init_missing", 1);
+
+  /* 33. Guard init claimed but not performed on a dirty entry: the pre digest
+   *     exposes the false report. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 1, 0, 1, -1, 0, 0, 0);
+  d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_33_guard_broken_init", 1);
+
+  /* 34. One guard byte corrupted during the run (head, middle, tail). The
+   *     output is unaffected, so the numeric comparison alone cannot see it. */
+  for (int at = 0; at < 3; ++at) {
+    int offset = at == 0 ? 0 : (at == 1 ? 700 : HMX_D8_GUARD_BYTES - 1);
+    d8_rev3_fault_sequence(&st, D8_COND_B, 0, 0, 0, offset, 0, 0, 0);
+    d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_34_guard_corrupt", 1);
+  }
+
+  /* 35. Guard post-check omitted. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 0, 0, 0, -1, 1, 0, 0);
+  d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_35_guard_check_missing", 1);
+
+  /* 36. Mode 45's third bias set written into +10752 (inside the guard). The
+   *     numbers are unaffected; the region rule rejects. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 0, 0, 0, -1, 0, 1, 0);
+  d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_36_bias2_in_guard", 1);
+
+  /* 37. Corrupted guard with a clean-looking self-report: the validator
+   *     recomputes the digest from memory and rejects. */
+  d8_rev3_fault_sequence(&st, D8_COND_B, 0, 0, 0, 0, 0, 0, 1);
+  d8_expect_reject(&st, D8_COND_B, 1, "d8_fault_37_guard_false_report", 1);
+
+  /* 38. Guard corrupted but the numeric result matches the safe reference:
+   *     the explicit numeric-safe check inside the loop above proves the
+   *     point; this case records the same fact with a named fault. */
+  d8_rev3_fault_sequence(&st, D8_COND_C, 0, 0, 0, 12, 0, 0, 0);
+  d8_expect_reject(&st, D8_COND_C, 1, "d8_fault_38_guard_safe_numeric", 1);
+
+  return g_d8_fail == 0;
+}
+
 /* ---------------- replay for the independent Python audit ---------------- */
 
 static int d8_parse_words(const char *s, uint16_t *dst) {
@@ -951,8 +2025,16 @@ int main(int argc, char **argv) {
     d8_print_sequences();
     return 0;
   }
+  if (argc == 2 && strcmp(argv[1], "--d8-sequence-rev3") == 0) {
+    build_truth_fixture();
+    build_fixture_conditions();
+    d8_build_references();
+    d8_print_rev3_sequences();
+    return 0;
+  }
   if (argc != 1) {
-    fprintf(stderr, "usage: %s [--d8-replay <file>] [--d8-sequence]\n", argv[0]);
+    fprintf(stderr, "usage: %s [--d8-replay <file>] [--d8-sequence] "
+                    "[--d8-sequence-rev3]\n", argv[0]);
     return 2;
   }
 
@@ -1041,6 +2123,7 @@ int main(int argc, char **argv) {
   }
 
   d8_run_controls();
+  d8_run_rev3_controls();
 
   printf("d8_checks=%d fail=%d\n", g_d8_checks, g_d8_fail);
   if (g_d8_fail != 0) {
