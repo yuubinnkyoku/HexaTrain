@@ -152,6 +152,41 @@ C 0x484D5831 0x00000051 0x00003000 0x000010E1 0x00000000 0x00000000 0x00000000 0
 D 0x484D5831 0x00000051 0x00003000 0x000010E1 0x00000000 0x00000000 0x00000000 0x00000001 0x00000001 0xD8B01110 0x00000001 0x00000003 0x00000001 0x00000001 0x00000004 0x00000002 0x01A5A505 0x00000040 0x00000903 0xC6231266 0x3B2D22D2 0x8B88609F 0xA66AF695 0xF5EBD5C5 0xF5EBD5C5 0x011FFF00 0x00000000 0x0D8A5003 0x00200004 0x00000000 0x00000000 0x00000000
 <!-- d8-meta-values:end -->
 
+### 3.5 Capacity and evidence classification
+
+The D8 fields occupy 23 words (9..31). The allocation was decided by failure
+detection value, not by squeezing everything into the smallest encoding:
+
+| Evidence | Disposition | Why |
+| --- | --- | --- |
+| build id | word 9 | compared against the stamp; identity-mode `metadata[2]` is the second, independent echo |
+| DSP architecture | common `metadata[1]` + identity `results[3]` | unchanged `run()` meaning |
+| mode echo | derived | the host knows the mode it sent; the schema word proves the D8 layout |
+| condition echo | word 18 (4 bits) | compared with the requested q |
+| q echo | word 18 (5 bits) | catches a table swap that keeps the condition value |
+| mxclracc / MMA / Convert / Store / pack / bias counts | words 10..15 | kept as individual words: a wrong count names the operation without bit decoding; they fit, so no packing |
+| fill mask / word / form | word 16 | 3 + 16 + 4 bits; the form is a self-report, the disassembly is authoritative |
+| store/out, Wlo, Ahi addresses | word 17 | 3 x 7 bits in 128 B units; `0x7f` is invalid |
+| four operand FNVs | words 19..22 | runtime input proof, taken before MMA #1 |
+| guard pre/post | words 23/24 | raw measurements; the host compares both |
+| guard status / first bad byte / methods | word 25 | localizes corruption and exposes the init/check form |
+| trace / readback / HVX lock / slots written | word 28 | trace is always 0 on device; slots is a self-report |
+| first failure | word 26 | 20-code namespace, 0 = none |
+| schema | word 27 | disambiguates a stale layout |
+| cleanup | word 30 | `run()`-owned for mode 46 |
+| Ahi fill presence | mask bit 2 | offset 0 is ambiguous without it |
+| second build id | dropped | the identity-mode echo is the independent second observation |
+| internal read completion | not representable | the device reports no MX trace; the 1,024-cell outcome is the observation |
+| 1,024-cell result | `results[]` | the actual measurement |
+
+No evidence was dropped to make the table fit except the duplicate build-id
+echo, whose independent function is preserved by the identity-mode echo. The
+only free slots are words 29 and 31. A future implementation that needs another
+runtime field must **not** silently reuse a reserved word: it must amend this
+table and re-run the contract tests. If the field is genuinely required and no
+reserved word is available, the revision is `BLOCKED`, not compressed into an
+unrelated field.
+
 ## 4. Host-side gate
 
 The host applies these checks in order and stops at the first failure. The
