@@ -18,6 +18,8 @@
 >
 > **2026-11-13 研究候補追記**: [Thinking Machines Lab「End-to-End 4-Bit Training」](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)を踏まえ、公表されたNVFP4詳細recipe（forwardのみNVFP4・backwardはMXFP8再量子化＋確率的丸め・末尾層のMXFP8保持・RHT＋S2F6の通信量子化）をPhase 12のP2検証に統合し、ブロックスケールの転置不整合と丸めbiasをop単位検証の測定軸へ加える。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
 >
+> **2026-11-13 研究候補追記**: [MobiInfer-Android（IPADS-SAI）](https://github.com/IPADS-SAI/Mobiinfer-Android)を踏まえ、MoE専門家のフラッシュ外置きとLES前方prefetch（H+2 gate予測・O_DIRECT・常駐読み取りスレッド）によるI/O隠蔽をPhase 9のspill / Data Movement設計の推論側実例へ、逐層混合精度と専門家連続再配置によるフラッシュ分散読み削減をstorage layout軸へ、QNN SDKを経由しない独自ggml-hexagonバックエンド（HVX/HMX・DMA・multi-device、v73〜v85 skel）をBackend Placementの比較参照へ追加。MobiInferは推論のみで学習機能を含まないため、HexaTrainの学習主題とは競合しない。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
+>
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
 > **Limite注記:** 2026-09-22時点ではLimite 1B - Violettoの正式Technical Report本文は未公開。Limite関連の優先順位は、公式release / Hugging Face config・model card / Value Model文書 / 公式vLLM実装 / Paradigma speedrun回顧で確認できる範囲に限定し、未公開のtraining recipeは推測しない。
@@ -284,6 +286,16 @@ Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2
 - **外れ値処理と通信の低bit化は既存候補と同じ方向**: RHTは既存Quantization-Friendly Reparameterization（Hadamard系）と同系統で、combine通信をRHT＋S2F6で8bit化する構成は、bytes read / writeとFastRPC境界を重視するData-Movement-Aware Search（P1）の通信側・転送量の論点と直結する。HexaTrainではまず学習数値へのRHTの効果をCPU数値モデルで測る。
 
 **実験ゲート**: Phase 12の既存op単位検証（量子化保存・通常MatMul・活性化、Muon NS5のHVX FP32対照）を維持し、まずCPU数値モデルでblock scaleの転置誤差と丸めbiasを測定する。実機は承認制のまま。
+
+### MobiInfer-Androidから見えるMoE専門家I/O・HTP直接活用の課題（2026-11-13）
+
+[MobiInfer-Android](https://github.com/IPADS-SAI/Mobiinfer-Android)（IPADS-SAI、llama.cpp-omniベース）は、Snapdragon 8 Elite / 8 Elite Gen5のHexagon HTP上で35B-A3B級MoE（MiniCPM-V 4.7等）を推論するAndroidアプリとバックエンド一式を公開している。MiniCPM-V 4.7 35B-A3B（Q3 tiled）でdecode 23.3 tok/s（8 Elite Gen5 / Hexagon v81、DSpark併用）と報告しており、独自のggml Hexagonバックエンド（HVX/HMX、Flash-Attention、DMA queue、multi-device分割）でv73/v75/v79/v81/v85の5世代skelを運用している。**学習機能は含まない**ためHexaTrainの学習主題そのものとは競合しないが、次の3点が研究参照になる。
+
+- **MoE専門家のフラッシュ外置きとI/O隠蔽**: 専門家重みをフラッシュに常駐させ、gate予測を2層先（H+2）まで前倒しして専門家単位のタスクキュー・常駐読み取りスレッド・O_DIRECTでprefetchし、I/Oを計算側に隠している。Phase 9のspill / Data Movement設計（学習時のoptimizer state・MoE重みをフラッシュへ退避する場合のI/O隠蔽）の推論側実例として参照する。学習では読み込みに加えて書き込み（optimizer stateの更新）が加わる点が異なり、そのままの流用はしない。
+- **逐層混合精度とフラッシュ配置最適化**: 逐層の混合精度量子化と専門家の連続再配置でフラッシュの分散読みを減らす設計は、storage dtype / compute dtype分離とData-Movement-Aware Searchのlayout軸に対応する。
+- **QNN SDKを経由しないHTP直接活用経路**: 独自ggml-hexagonバックエンドでskel / HTPを直接運用する構成は、FastRPC境界・pack/unpack・worker構成がQNN HTP graph経路と異なる第2の参照実装になる。「QNNで実行できるか」ではなく「要求精度を満たす最速経路」でbackendを決める方針（Backend Placement）の比較対象とする。
+
+DSpark投機サンプリング（DFlash草稿、受理率83%報告）は推論技術であり、学習候補へは直接入れない。本節は研究計画の追記であり、実機での検証・計測は承認制のまま。
 
 ### 推論・Android基盤
 
@@ -3860,6 +3872,7 @@ Qwen3.5-9B/27Bの公開重みの対応から「中間層複製後に追加学習
 - direct RPC layout
 - shared arena / double buffering
 - pack/unpack transpose除去
+- MoE専門家 / optimizer stateのフラッシュspillとI/O隠蔽（前方prefetch・O_DIRECT。MobiInfer-AndroidのLESを推論側実例として参照、2026-11-13）
 
 ## Phase 10 — Text Representation / Static Memoryの再探索
 
@@ -4254,6 +4267,11 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [AlphaXiv overview](https://www.alphaxiv.org/overview/2611.inkling-2-smallv1)
 - [End-to-End 4-Bit Training — 原文](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)（NVFP4詳細recipe・転置再量子化・確率的丸め・RHT＋S2F6通信量子化・BBBK kernel・速度/CE測定値）（2026-11-13追加）
 
+## IPADS-SAI / MobiInfer（2026-11-13追加）
+
+- [MobiInfer-Android repository](https://github.com/IPADS-SAI/Mobiinfer-Android)（Hexagon HTP上の端末MoE推論。LES前方専門家スケジューリング・DSpark投機サンプリング・v73〜v85 skel・Android App・性能表）
+- [MobiInfer-Android Releases](https://github.com/IPADS-SAI/Mobiinfer-Android/releases)
+
 ## GLM / KDA / DSA / mHC
 
 - [GLM-5.3-Flash Model Card](https://huggingface.co/zai-org/GLM-5.3-Flash)
@@ -4306,5 +4324,6 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [Can Muon Fine-tune Adam-Pretrained Models?](https://arxiv.org/abs/2605.10468)
 - [MOPD: Multi-Teacher On-Policy Distillation](https://arxiv.org/abs/2606.30406)
 - [Stabilizing MoE RL by Aligning Training and Inference Routers / R3](https://arxiv.org/abs/2510.11370)
+
 
 
