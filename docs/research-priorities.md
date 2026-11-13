@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-11-08 JST**
+> **研究内容の最終更新: 2026-11-13 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -15,6 +15,8 @@
 > **2026-10-30 研究候補追記**: [Cartesia「From Tokens to Bytes」第1部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-1)・[第2部](https://www.cartesia.ai/blog/from-tokens-to-bytes-part-2)を踏まえ、文脈依存の学習型バイト分割 **H-Net** をText RepresentationのP2候補へ追加。まず小規模CPU検証と公平なbyte基準比較を行い、HTP移植は条件付きとする。**今回の変更は研究計画のみで、実装・実機測定・baseline変更・学習実行は行っていない**。
 >
 > **2026-11-08 研究候補追記**: [Thinking Machines Lab「Introducing Inkling 2 Small」](https://thinkingmachines.ai/news/inkling-2-small/)を踏まえ、段階的なデータ選別・終盤の高品質データ配分を既存Phase 13のP1成立性調査へ、NVFP4の数値配置を既存Phase 12のP2検証へ、外部教師の学習軌跡選別をP2〜P3へ統合。長時間の自動研究は研究方針（Phase 16）と開発基盤（`engineering-backlog.md` E2）に切り分ける。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
+>
+> **2026-11-13 研究候補追記**: [Thinking Machines Lab「End-to-End 4-Bit Training」](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)を踏まえ、公表されたNVFP4詳細recipe（forwardのみNVFP4・backwardはMXFP8再量子化＋確率的丸め・末尾層のMXFP8保持・RHT＋S2F6の通信量子化）をPhase 12のP2検証に統合し、ブロックスケールの転置不整合と丸めbiasをop単位検証の測定軸へ加える。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -271,6 +273,17 @@ Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2
 - **低精度化は形式と数値契約を分ける**: NVFP4はGB300上の事前学習実績であり、HTP V81の対応や精度を保証しない。既存Muon Newton–SchulzのHTP内部誤差を踏まえ、量子化保存・通常MatMul・活性化の個別検証から始め、HVX FP32 Original Muonは正式対照として維持する。
 - **自動研究は制御面を研究テーマにする**: 正答率だけでなく失敗の分類、独立オラクル、実機計測、停止・保全を要求する。Inkling 2 SmallのGPU kernel最適化・自動追加学習の能力をHTP/V81の実証済み能力とみなさない。実装上の管理は`engineering-backlog.md` E2に統合する。
 - **現行対象外**: 大規模MoE・画像入力・17M超rolloutの統合RL・長文脈prefix cache。通常のincremental KV-cacheやT拡大、外部教師trackの分離後に再評価する。
+
+### End-to-End 4-Bit Trainingから見える低精度学習の検証論点（2026-11-13）
+
+[Thinking Machines Labのrecipe詳細](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)によると、Inkling 2 Smallの学習は事前学習からRLまで同一の数値構成で通される。forwardはMoE expert層のみNVFP4（活性化は4/6適応block scaling、重み・活性化はper-expert / per-tokenのouter scale）、backwardはforwardで保存した量子化テンソルを高精度に復元・転置し、確率的丸めでMXFP8へ再量子化する。末尾16.6%の層はMXFP8のまま高精度で保持し、expert並列のcombine通信は32次元RHT→S2F6で8.25 bit/valueに圧縮した。結果は、事前学習のwall-clockがフルMXFP8比で8%高速、RLで20%高速、事前学習のcompute efficiencyに約2%のコスト。**これらはNVFP4 GEMM・確率的丸め・S2F6変換を命令で持つGB300前提の数値であり、HTP V81の対応や精度を保証しない**。
+
+- **forwardとbackwardで精度契約を分ける設計例**: 「forwardは低bit・backwardは高bit、ただしbackwardはforwardの量子化テンソルを使う」構成は、既存の「storage dtype / compute dtype / 丸め / 勾配の誤差をop単位で検証する」方針の実例になる。ただし低bit化の対象はMoE expert層であり、Dense scratch LMではどのop/layerから低bit化するかのfake-quant感度を先に測る既存手順を変えない。
+- **ブロックスケールの転置不整合**: 1×16のblock scaleは転置でグルーピングが変わり、backwardの再量子化なしにはforwardと一致しない。NVIDIAの16×16 tile統一スケールはビット一致するが外れ値で小値が潰れ、TMはビット一致でなく期待値一致（E[w_q] = E[(w_q^T)^T]）で緩和した。Phase 12の低bit MatMul検証では、forward/backwardで使う量子化テンソルの一致要件（ビット一致か期待値一致か）を先に決めてから測る。これはB3/R2（D8/C2）の同期問題と同じ「演算とデータの前後関係」の系譜だが、別の問題であり、実験結果を流用しない。
+- **丸めのbiasと分散を区別する**: backwardはバッチ方向の平均化でランダムな丸め誤差は薄まるが、一方向に偏った丸めは層・ステップをまたいで蓄積する。Stochastic Roundingの比較に「丸めbiasの方向」を測定軸として加える。Blackwellは確率的丸めを命令で持つが、V81ではHVX実装の演算コストを見積もってから候補にする。
+- **外れ値処理と通信の低bit化は既存候補と同じ方向**: RHTは既存Quantization-Friendly Reparameterization（Hadamard系）と同系統で、combine通信をRHT＋S2F6で8bit化する構成は、bytes read / writeとFastRPC境界を重視するData-Movement-Aware Search（P1）の通信側・転送量の論点と直結する。HexaTrainではまず学習数値へのRHTの効果をCPU数値モデルで測る。
+
+**実験ゲート**: Phase 12の既存op単位検証（量子化保存・通常MatMul・活性化、Muon NS5のHVX FP32対照）を維持し、まずCPU数値モデルでblock scaleの転置誤差と丸めbiasを測定する。実機は承認制のまま。
 
 ### 推論・Android基盤
 
@@ -3004,7 +3017,7 @@ Engram / N-gramを**静的・連想memory**、recurrent memoryを**動的memory*
 
 → **P2**
 
-Inkling 2 Smallの事前学習はNVIDIA GB300上でNVFP4を採用したが、発表時点で詳細recipeは追補予定。これは**HTP V81のNVFP4直接対応や、学習すべての演算を4bitで処理できる根拠ではない**。新しいformatを一括導入せず、storage dtypeとcompute dtype、scale、丸め、勾配の誤差をop単位で検証する。Muon NS5の正式HVX FP32経路は変更せず、HTP MatMulの既知の誤差増幅を回避する。
+Inkling 2 Smallの事前学習はNVIDIA GB300上でNVFP4を採用した。[詳細recipeは2026-11-13に「End-to-End 4-Bit Training」として公開](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)され、forwardはMoE expert層のみNVFP4、backwardはMXFP8への再量子化＋確率的丸め、末尾16.6%の層はMXFP8、通信はRHT＋S2F6という構成である。これは**HTP V81のNVFP4直接対応や、学習すべての演算を4bitで処理できる根拠ではない**。新しいformatを一括導入せず、storage dtypeとcompute dtype、scale、丸め、勾配の誤差をop単位で検証する。Muon NS5の正式HVX FP32経路は変更せず、HTP MatMulの既知の誤差増幅を回避する。
 
 
 Muse Glimmerの§7.1は**学習後の推論重み**についてQ4_K/Q5_K/Q6_Kをrole別に割り当て、校正KLの増分 / 節約byteを比較した。HexaTrainではまずoffline fake-quant感度・bpb・復元誤差を確認し、V81の対応形式・graph固定費・推論実wallを別途確認する。**学習activation / backward / optimizerの数値精度保証とは扱わない**。
@@ -3082,6 +3095,8 @@ QualcommのQAT oscillation研究から、
 
 Meta mobileはgroup=32、PrismML等では128の例があるが、V81で探索する。
 
+NVFP4（group 16・E4M3 scale）では、16×16 tileへの統一スケールは外れ値で小値が潰れて精度劣化が大きく、1×16のまま転置時に再量子化する構成が報告されている（[Thinking Machines 2026-11-13](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)）。group sizeとscale factorの精度（E4M3 vs E8M0）を別軸で測る。
+
 ## Quantization-Friendly Reparameterization
 
 → **P2**
@@ -3110,6 +3125,8 @@ NVIDIA NVFP4 training等を参考に、
 を比較。
 
 小さいgradientが低bit丸めで系統的に消える問題を抑えられるか見る。
+
+丸めのbiasも別軸で測る。backwardはバッチ方向の平均化でランダム誤差は薄まるが、一方向に偏る丸めは層・ステップをまたいで蓄積する。[Thinking Machines 2026-11-13](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)は、forwardのテンソルをdequant→転置→確率的丸めで再量子化し、期待値一致を保つ構成を報告している。Blackwellは確率的丸めを命令で持つが、V81ではHVX実装のコストを見積もる。
 
 ## COAT-Style Activation / Optimizer Compression
 
@@ -4235,6 +4252,7 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 
 - [Introducing Inkling 2 Small — 原文](https://thinkingmachines.ai/news/inkling-2-small/)（H1〜H4・NVFP4・統合RL・自動研究・推論系の計測値）
 - [AlphaXiv overview](https://www.alphaxiv.org/overview/2611.inkling-2-smallv1)
+- [End-to-End 4-Bit Training — 原文](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)（NVFP4詳細recipe・転置再量子化・確率的丸め・RHT＋S2F6通信量子化・BBBK kernel・速度/CE測定値）（2026-11-13追加）
 
 ## GLM / KDA / DSA / mHC
 
@@ -4288,4 +4306,5 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [Can Muon Fine-tune Adam-Pretrained Models?](https://arxiv.org/abs/2605.10468)
 - [MOPD: Multi-Teacher On-Policy Distillation](https://arxiv.org/abs/2606.30406)
 - [Stabilizing MoE RL by Aligning Training and Inference Routers / R3](https://arxiv.org/abs/2510.11370)
+
 
