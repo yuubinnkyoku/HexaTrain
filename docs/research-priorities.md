@@ -1,6 +1,6 @@
 # HexaTrain 技術候補・優先順位
 
-> **研究内容の最終更新: 2026-11-13 JST**
+> **研究内容の最終更新: 2026-11-14 JST**
 >
 > この文書は研究上の現在地と優先順位を管理する。単なる docs / refactor commit では更新せず、baseline・研究結果・研究優先順位が変わったときに更新する。
 >
@@ -17,6 +17,8 @@
 > **2026-11-08 研究候補追記**: [Thinking Machines Lab「Introducing Inkling 2 Small」](https://thinkingmachines.ai/news/inkling-2-small/)を踏まえ、段階的なデータ選別・終盤の高品質データ配分を既存Phase 13のP1成立性調査へ、NVFP4の数値配置を既存Phase 12のP2検証へ、外部教師の学習軌跡選別をP2〜P3へ統合。長時間の自動研究は研究方針（Phase 16）と開発基盤（`engineering-backlog.md` E2）に切り分ける。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
 >
 > **2026-11-13 研究候補追記**: [Thinking Machines Lab「End-to-End 4-Bit Training」](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)を踏まえ、公表されたNVFP4詳細recipe（forwardのみNVFP4・backwardはMXFP8再量子化＋確率的丸め・末尾層のMXFP8保持・RHT＋S2F6の通信量子化）をPhase 12のP2検証に統合し、ブロックスケールの転置不整合と丸めbiasをop単位検証の測定軸へ加える。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
+>
+> **2026-11-14 研究候補追記**: Hexagon HTP上の外部LLM実装（llama.cpp QNN-HTP / Hexagon backend、MobiInfer-Android、llm.npu、llama.cpp-npu、snapdragon-npu-llm）を調査し、VTCM獲得改善・persistent graph / multi-graph共存を評価engine高速化とthroughput laneの参照へ、HTP0+HTP1 dual-session分割とshared buffer同期をPhase 9 graph partition / persistent APP buffersの実測比較へ、同一実機のllama.cpp INT4+INT8 accumulation kernelをPhase 12低bit検証の外部parity対照へ、MobiInferのGated Delta Net HTP実装をPhase 14 GDN候補のfeasibility証拠へ、cDSP 32bit VA / single-session制約をD8/C2・graph共存の設計資料へ、それぞれ参照として統合。推論専用技術（DSpark・DSA・DiT）とMoE専門家ストリーミングは対象外とする。**NOW枠の追加、実装・実機測定、baseline/defaultの変更は行っていない**。
 >
 > 開発基盤・コード構造の改善候補は [`engineering-backlog.md`](engineering-backlog.md) で別管理する。特定のHEADをこの文書全体の固定anchorにはせず、各研究結果は対応する実験文書・evidenceを参照する。
 >
@@ -284,6 +286,18 @@ Metaの[Muse Glimmer 30B Technical Report](https://arxiv.org/abs/2610.24628)（2
 - **外れ値処理と通信の低bit化は既存候補と同じ方向**: RHTは既存Quantization-Friendly Reparameterization（Hadamard系）と同系統で、combine通信をRHT＋S2F6で8bit化する構成は、bytes read / writeとFastRPC境界を重視するData-Movement-Aware Search（P1）の通信側・転送量の論点と直結する。HexaTrainではまず学習数値へのRHTの効果をCPU数値モデルで測る。
 
 **実験ゲート**: Phase 12の既存op単位検証（量子化保存・通常MatMul・活性化、Muon NS5のHVX FP32対照）を維持し、まずCPU数値モデルでblock scaleの転置誤差と丸めbiasを測定する。実機は承認制のまま。
+
+### Hexagon外部実装からの参照技術（2026-11-14）
+
+Hexagon HTP上の外部LLM実装（いずれも学習機能なし）を、HexaTrainの各課題の**参照実装・比較対照**として位置づける。推論専用技術（DSpark投機サンプリング・DSA/IndexCache・DiT文生図）と、MoE専門家ストリーミング（MoE候補を実際に動かす段階までは不要）は対象外とする。
+
+- **評価engine高速化 / throughput lane**: llama.cppのHexagon backend改善履歴にはVTCM獲得改善によるinter-op overhead削減の報告があり、one-window-per-graph固定費とhost側QNN execute検査（実測 約47–50 ms）の削減調査の第一参照にする。QNN-HTP backendのpersistent graph / multi-graph共存もgraph prepare amortizationの比較対象
+- **Phase 9 — graph partition / APP buffers**: MobiInferのHTP0+HTP1 dual-session（layer/tensor split）とllm.npuのshared buffer同期を、学習graph分割とspill設計の実測比較に使う。学習はgraph間で勾配を渡すためsync・transfer costの実測が前提で、node数からruntimeを予測しない原則を適用する
+- **Phase 12 — 低bit検証の外部parity**: 同一実機でllama.cpp QNN-HTP（INT4 + INT8 accumulation）が動くことを利用し、op単位低bit検証に自作実装と独立実装の対照比較を加える
+- **Phase 14 — GDN候補のfeasibility**: MobiInferのv81 HTP上Gated Delta Net実装を、recurrent state演算のHTP成立性の一実証として参照する（kernel設計や学習品質の証明ではない）
+- **D8/C2・graph共存の制約条件**: llama.cpp-npuの「cDSPは32bit仮想アドレス空間」「single session + 動的VA mapping/unmappingの限界（fastrpc#137）」を、graph分割・persistent graph設計の制約資料として参照する
+
+本節は参照の追加であり、実装・実機測定・baseline/defaultの変更を含まない。
 
 ### 推論・Android基盤
 
@@ -3860,6 +3874,7 @@ Qwen3.5-9B/27Bの公開重みの対応から「中間層複製後に追加学習
 - direct RPC layout
 - shared arena / double buffering
 - pack/unpack transpose除去
+- HTP0+HTP1 dual-session分割とshared buffer同期（llama.cpp系layer/tensor split・llm.npuを比較参照、2026-11-14）
 
 ## Phase 10 — Text Representation / Static Memoryの再探索
 
@@ -3895,6 +3910,7 @@ Adam / Original Muon / Muownのcontrolを残す。
 - activation checkpoint precision
 - optimizer-state precision
 - stochastic rounding / outlier transform
+- **外部parity対照（2026-11-14）**: 同一実機のllama.cpp QNN-HTP（INT4 q4_0/q4_K_M + INT8 accumulation）をop単位低bit検証の独立実装対照に使う。逐層混合精度＋専門家連続再配置（MobiInfer）はstorage layout軸の実例として参照
 
 QNN HTP内部精度の実測を無視して「FP32 tensorだから安全」と仮定しない。
 
@@ -3922,7 +3938,7 @@ scratch-training trackと結果を混同しない。
 
 - Full/Skip Attentionで置換候補layerを特定
 - **Dense checkpoint → SimpleGDN weight-preserving / low-disruption migration**
-- Gated DeltaNet
+- Gated DeltaNet（MobiInferがv81 HTPでの実装を公開済み — feasibilityの一実証として参照、2026-11-14）
 - Attention/GDN hybrid
 - context拡大後にKDA
 - Gated Residual
@@ -4253,6 +4269,14 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [Introducing Inkling 2 Small — 原文](https://thinkingmachines.ai/news/inkling-2-small/)（H1〜H4・NVFP4・統合RL・自動研究・推論系の計測値）
 - [AlphaXiv overview](https://www.alphaxiv.org/overview/2611.inkling-2-smallv1)
 - [End-to-End 4-Bit Training — 原文](https://thinkingmachines.ai/blog/end-to-end-4-bit-training/)（NVFP4詳細recipe・転置再量子化・確率的丸め・RHT＋S2F6通信量子化・BBBK kernel・速度/CE測定値）（2026-11-13追加）
+
+## Hexagon外部LLM実装（2026-11-14追加）
+
+- [llama.cpp（QNN-HTP / Hexagon backend）](https://github.com/ggml-org/llama.cpp) — HTP上INT4 + INT8 accumulation、VTCM獲得改善、persistent graph
+- [MobiInfer-Android（IPADS-SAI）](https://github.com/IPADS-SAI/Mobiinfer-Android) — ggml-hexagon、HTP0+HTP1分割、Gated Delta Net HTP実装、LES / O_DIRECT、逐層混合精度
+- [llm.npu: Fast On-device LLM Inference with NPUs（ASPLOS 2025）](https://arxiv.org/html/2407.05858v2) — chunked prefill、shared buffer同期、NPU/CPU分担
+- [llama.cpp-npu（haozixu）](https://github.com/haozixu/llama.cpp-npu) — Scaling LLM Test-Time Compute with Mobile NPU、cDSP 32bit VA制約
+- [snapdragon-npu-llm（avisre）](https://github.com/avisre/snapdragon-npu-llm) — Hexagon v69でのLLM動作・skel運用の資料
 
 ## GLM / KDA / DSA / mHC
 
