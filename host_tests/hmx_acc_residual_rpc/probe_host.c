@@ -16,12 +16,14 @@
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
 #include "hmx_mode44.h"
+#include "hmx_mode45.h"
 
 /* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
  * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c
- * (44 = E-3D, 43 = E-3C1R, 42 = E-3C1, 41 = B-2, 40 = B-1). */
+ * (45 = R2 S1/S2 retained-ACC two-convert export, 44 = E-3D,
+ * 43 = E-3C1R, 42 = E-3C1, 41 = B-2, 40 = B-1). */
 enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
-       HMX_PROBE_MODE_MAX = 44 };
+       HMX_PROBE_MODE_MAX = 45 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -155,6 +157,20 @@ static void print_verdicts(int rpc_status, int identity_ok, int hmx_executed,
   printf("DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED\n");
 }
 
+/* Append one field name to a comma-separated failure list (the first item
+ * carries no separator). Used by the mode 45 infra/contract reports so every
+ * failure names the field it came from. Truncation is silent: the list is
+ * only ever shorter than the fixed buffer. */
+static void append_fail_field(char *buf, size_t cap, size_t *len,
+                              const char *name) {
+  const size_t n = strlen(name);
+  if (*len + n + (*len ? 1u : 0u) + 1u > cap) return;
+  if (*len) buf[(*len)++] = ',';
+  memcpy(buf + *len, name, n);
+  *len += n;
+  buf[*len] = '\0';
+}
+
 int main(int argc, char **argv) {
   int q = 10;
   int mode = 0;
@@ -175,7 +191,7 @@ int main(int argc, char **argv) {
       mode = atoi(argv[arg_index]);
     } else {
       fprintf(stderr,
-              "usage: %s [q=6..10] [mode=0..43] [-strict-build-id]\n",
+              "usage: %s [q=6..10] [mode=0..45] [-strict-build-id]\n",
               argv[0]);
       return exit_with(2);
     }
@@ -183,23 +199,23 @@ int main(int argc, char **argv) {
   }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..44] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..45] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
   /* Phase D modes 31..38 are hard-bound to q=8 on the DSP (HMX_ERR_ARG);
    * mirror that gate host-side before touching any device state.
-   * B-1 (mode 40), B-2 (mode 41), E-3C1 (mode 42), E-3C1R (mode 43) and
-   * E-3D (mode 44) are bound to q=6 like modes 18/22
-   * (fixed operands/fixtures/tile). */
+   * B-1 (mode 40), B-2 (mode 41), E-3C1 (mode 42), E-3C1R (mode 43),
+   * E-3D (mode 44) and R2 S1/S2 (mode 45) are bound to q=6 like modes
+   * 18/22 (fixed operands/fixtures/tile). */
   if ((mode >= HMX_PHASE_D_MODE_MIN && mode <= HMX_PHASE_D_MODE_MAX &&
        q != 8) ||
       (mode == 40 && q != 6) || (mode == 41 && q != 6) ||
       (mode == 42 && q != 6) || (mode == 43 && q != 6) ||
-      (mode == 44 && q != 6)) {
+      (mode == 44 && q != 6) || (mode == HMX_MODE45_MODE && q != 6)) {
     fprintf(stderr,
-            "phase D modes 31..38 require q=8 and modes 40, 41, 42, 43 and 44 "
-            "require q=6 (got q=%d mode=%d)\n",
+            "phase D modes 31..38 require q=8 and modes 40, 41, 42, 43, 44 "
+            "and 45 require q=6 (got q=%d mode=%d)\n",
             q, mode);
     return exit_with(2);
   }
@@ -223,18 +239,23 @@ int main(int argc, char **argv) {
   printf("open_status=%d\n", status);
   if (status) return exit_with(6);
 
+  /* The result buffer is sized for the widest mode: 11 slots for mode 45
+   * (R2 S1/S2, pre-registration section 6); modes 0..44 only fill the first
+   * four. The metadata buffer is 32 words for mode 45's evidence block;
+   * modes 0..44 only use metadata[0..8]. */
   int *result = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
-                                    RPCMEM_DEFAULT_FLAGS, 4 * sizeof(int));
-  int *meta = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
-                                  RPCMEM_DEFAULT_FLAGS, 9 * sizeof(int));
+                                    RPCMEM_DEFAULT_FLAGS,
+                                    HMX_MODE45_RESULT_SLOTS * sizeof(int));
+  int *meta = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
+                                  HMX_MODE45_METADATA_LEN * sizeof(int));
   if (!result || !meta) {
     if (result) rpcmem_free(result);
     if (meta) rpcmem_free(meta);
     hexatrain_hmx_acc_residual_close(handle);
     return exit_with(7);
   }
-  memset(result, 0, 4 * sizeof(int));
-  memset(meta, 0, 9 * sizeof(int));
+  memset(result, 0, HMX_MODE45_RESULT_SLOTS * sizeof(int));
+  memset(meta, 0, HMX_MODE45_METADATA_LEN * sizeof(int));
   /* Identity check first, on the same handle, for every run. The pure
    * validation lives in hmx_identity.h so the CPU-only self test
    * (probe_identity_selftest.c) checks the exact same code. */
@@ -319,7 +340,15 @@ int main(int argc, char **argv) {
     return exit_with(0);
   }
 
-  status = hexatrain_hmx_acc_residual_run(handle, result, 4, meta, 9, q, mode);
+  status = hexatrain_hmx_acc_residual_run(handle, result,
+                                          (mode == HMX_MODE45_MODE)
+                                              ? HMX_MODE45_RESULT_SLOTS
+                                              : 4,
+                                          meta,
+                                          (mode == HMX_MODE45_MODE)
+                                              ? HMX_MODE45_METADATA_LEN
+                                              : 9,
+                                          q, mode);
 
   printf("rpc_status=%d magic=0x%x dsp_arch=%d vtcm_bytes=%d "
          "kernel_us=%d power=%d modeA_lock=%d modeB_lock=%d hmx_executed=%d trials=%d\n",
@@ -327,6 +356,20 @@ int main(int argc, char **argv) {
          meta[5], meta[6], meta[7], meta[8]);
   const int hmx_executed_flag = meta[7];
   const int trials_flag = meta[8];
+
+  /* Mode 45 (R2 S1/S2) raw capture. The DSP returns 11 zero-extended slots
+   * and 32 metadata words; the host copies them verbatim BEFORE rpcmem_free
+   * and never recomputes slots 8..10 (the HVX recon is a DSP result, plan
+   * section 6). r2_capture is set only by that copy. */
+  int r2_slots[HMX_MODE45_RESULT_SLOTS];
+  int r2_meta[HMX_MODE45_METADATA_LEN];
+  int r2_capture = 0;
+  /* Host-embedded HMX_PROBE_BUILD_ID, NOT the DSP identity echo: the mode 45
+   * evidence check must compare the DSP's metadata[24] echo against the build
+   * the host was compiled with, otherwise a stale DSP image would only be
+   * compared with itself. With -strict-build-id the identity gate above has
+   * already proven the same id on both sides. */
+  int r2_expected_build_id = id_report.expected_build_id;
 
   const double a = mode_operand_a(q, mode);
   const int scale = mode_scale(mode);
@@ -366,6 +409,14 @@ int main(int argc, char **argv) {
            "readback=out[0]_out[1]_out[2]_out[3] expected_out0=0x5420 "
            "expected_out1=0xd420 expected_out2=0xd420 expected_out3=0x5420 "
            "late_clamp_alternative=0x5420,0x0000,0x0000,0x5420\n",
+           q);
+  } else if (mode == HMX_MODE45_MODE) {
+    /* R2 S1/S2: the generic a*a oracle line would be misleading (the mode is
+     * a frozen slot/counter fixture, not a scalar-product oracle), so print
+     * the registered fixture header instead. The region offsets are the
+     * frozen VTCM map (pre-registration section 5). */
+    printf("q=%d mode=45 r2_s1s2=1 trials=2 slots=11 metadata=32 "
+           "regions=pos:4096,neg:6144,recon:8192\n",
            q);
   } else {
     printf("q=%d mode=%d a=%.17g scale=%d oracle=%.17g\n", q, mode, a, scale,
@@ -707,7 +758,10 @@ int main(int argc, char **argv) {
    * reports anything else violates the host contract and must fail closed. */
   const int expected_trials =
       (mode == 43) ? HMX_MODE43_TRIALS
-                   : ((mode == 44) ? HMX_MODE44_TRIALS : 2);
+                   : ((mode == 44)
+                          ? HMX_MODE44_TRIALS
+                          : ((mode == HMX_MODE45_MODE) ? HMX_MODE45_TRIALS
+                                                       : 2));
   int pass = status == 0 && meta[0] == HMX_IDENTITY_MAGIC &&
              meta[1] == HMX_IDENTITY_EXPECTED_ARCH && meta[4] == 0 &&
              meta[6] == 0 && meta[7] == 1 && meta[8] == expected_trials;
@@ -788,7 +842,7 @@ int main(int argc, char **argv) {
       pass = 0;
     }
     if (!math_ok_readback) math_all = 0;
-  } else if (mode != 43 && mode != 44) {
+  } else if (mode != 43 && mode != 44 && mode != HMX_MODE45_MODE) {
   for (int trial = 0; trial < 2; ++trial) {
     const uint16_t hi_bits = (uint16_t)result[2 * trial];
     const uint16_t slot2_bits = (uint16_t)result[2 * trial + 1];
@@ -882,7 +936,7 @@ int main(int argc, char **argv) {
       printf("fp16_residual_recovery=%s\n", exact ? "SUPPORTED" : "NOT_CONFIRMED");
     }
   }
-  } /* end generic trial loop (mode != 38 and mode != 43) */
+  } /* end generic trial loop (mode != 38, 43, 44 and 45) */
 
   if (mode == 40) {
     /* B-1 classification (pre-registered user table, PR #14): primary
@@ -1144,11 +1198,186 @@ int main(int argc, char **argv) {
   const char *math_verdict =
       !math_any ? "NO_ORACLE" : (math_all ? "PASS" : "FAIL");
 
+  if (mode == HMX_MODE45_MODE) {
+    /* Mode 45 (R2 S1/S2) raw capture: copy the DSP result and metadata into
+     * main-scope locals before the rpcmem buffers are released. Slots 8..10
+     * are NOT recomputed on the host: the recon is a DSP HVX result
+     * (pre-registration section 6, implementation plan section 6). */
+    int i;
+    for (i = 0; i < HMX_MODE45_RESULT_SLOTS; ++i) r2_slots[i] = result[i];
+    for (i = 0; i < HMX_MODE45_METADATA_LEN; ++i) r2_meta[i] = meta[i];
+    r2_capture = 1;
+  }
+
   rpcmem_free(result);
   rpcmem_free(meta);
   const int close_status = hexatrain_hmx_acc_residual_close(handle);
   printf("close_status=%d\n", close_status);
   if (close_status) pass = 0;
+
+  if (mode == HMX_MODE45_MODE) {
+    /* R2 S1/S2 evidence and verdict (pre-registration sections 6-8). Every
+     * value printed here is the raw DSP return; the host derives no slot.
+     * The infra gate is folded into the contract (all_ok), so only a
+     * contract/infra failure can set pass=0: every registered non-success
+     * verdict is a valid scientific outcome and still exits 0 with the
+     * verdict printed. Close status is already part of the gate because
+     * this block runs after it. */
+    char infra_fail[256];
+    size_t infra_len = 0;
+    char contract_fail[512];
+    size_t contract_len = 0;
+    int infra_ok;
+    hmx_mode45_report_t report;
+
+    infra_fail[0] = '\0';
+    contract_fail[0] = '\0';
+
+    /* Infrastructure gate: RPC, identity echo, the metadata contract that
+     * is not part of hmx_mode45_contract() (magic, arch, power, mode-B
+     * lock), the stamped build id and the close status. */
+    infra_ok = (status == 0 && r2_meta[0] == HMX_IDENTITY_MAGIC &&
+                r2_meta[1] == HMX_IDENTITY_EXPECTED_ARCH &&
+                r2_meta[4] == 0 && r2_meta[6] == 0 &&
+                r2_meta[7] == 1 && r2_meta[8] == HMX_MODE45_TRIALS &&
+                r2_expected_build_id != 0 && close_status == 0);
+    if (status != 0)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "rpc_status");
+    if (r2_meta[0] != HMX_IDENTITY_MAGIC)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "meta_magic");
+    if (r2_meta[1] != HMX_IDENTITY_EXPECTED_ARCH)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "meta_arch");
+    if (r2_meta[4] != 0)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len, "power");
+    if (r2_meta[6] != 0)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "modeB_lock");
+    if (r2_meta[7] != 1)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "hmx_executed");
+    if (r2_meta[8] != HMX_MODE45_TRIALS)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len, "trials");
+    if (r2_expected_build_id == 0)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "build_id");
+    if (close_status != 0)
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len,
+                        "close_status");
+    /* Defence in depth: this block only makes sense if the capture above
+     * actually ran (it always does for mode 45). */
+    if (r2_capture != 1) {
+      infra_ok = 0;
+      append_fail_field(infra_fail, sizeof(infra_fail), &infra_len, "capture");
+    }
+
+    report = hmx_mode45_classify(r2_slots, HMX_MODE45_RESULT_SLOTS, r2_meta,
+                                 HMX_MODE45_METADATA_LEN,
+                                 r2_expected_build_id);
+    if (!infra_ok) {
+      /* An infrastructure failure fails closed first: the contract is
+       * marked failed and the verdict is never a success verdict. */
+      report.contract.all_ok = 0;
+      report.verdict = HMX_MODE45_HOST_CONTRACT_FAILED;
+      report.cause = "infrastructure";
+    }
+
+    /* Contract field names, in hmx_mode45_contract_t order. */
+    static const char *const cfield[] = {
+      "slots",         "slot_values",  "sentinel",
+      "sentinel_meta", "mxclracc",     "mma",
+      "convert",       "store",        "bias_loads",
+      "recon_loops",   "rs",           "bias_echo",
+      "region_layout", "recon_source", "hvx_lock",
+      "pos_writes",    "neg_writes",   "pos_unchanged",
+      "neg_unchanged", "recon_vectors", "reserved",
+      "trials",        "hmx_executed", "build_id"
+    };
+    const int cok[] = {
+      report.contract.slots_ok,       report.contract.slot_values_ok,
+      report.contract.sentinel_ok,    report.contract.sentinel_meta_ok,
+      report.contract.mxclracc_ok,    report.contract.mma_ok,
+      report.contract.convert_ok,     report.contract.store_ok,
+      report.contract.bias_loads_ok,  report.contract.recon_loops_ok,
+      report.contract.rs_ok,          report.contract.bias_echo_ok,
+      report.contract.region_layout_ok, report.contract.recon_source_ok,
+      report.contract.hvx_lock_ok,    report.contract.pos_writes_ok,
+      report.contract.neg_writes_ok,  report.contract.pos_unchanged_ok,
+      report.contract.neg_unchanged_ok, report.contract.recon_vectors_ok,
+      report.contract.reserved_ok,    report.contract.trials_ok,
+      report.contract.hmx_executed_ok, report.contract.build_id_ok
+    };
+    const int cfield_count = (int)(sizeof(cfield) / sizeof(cfield[0]));
+    int i;
+
+    for (i = 0; i < cfield_count; ++i) {
+      if (!cok[i]) {
+        append_fail_field(contract_fail, sizeof(contract_fail),
+                          &contract_len, cfield[i]);
+      }
+    }
+
+    if (!infra_ok) {
+      printf("r2_infra_fail=%s\n",
+             infra_fail[0] ? infra_fail : "unknown");
+    }
+    printf("r2_slots=0x%04x,0x%04x,0x%04x,0x%04x,0x%04x,0x%04x,0x%04x,"
+           "0x%04x,0x%04x,0x%04x,0x%04x\n",
+           (unsigned)r2_slots[0], (unsigned)r2_slots[1],
+           (unsigned)r2_slots[2], (unsigned)r2_slots[3],
+           (unsigned)r2_slots[4], (unsigned)r2_slots[5],
+           (unsigned)r2_slots[6], (unsigned)r2_slots[7],
+           (unsigned)r2_slots[8], (unsigned)r2_slots[9],
+           (unsigned)r2_slots[10]);
+    printf("r2_slot_count=11 zero_extended=%d sentinel_hits=%d\n",
+           report.contract.slot_values_ok ? 1 : 0,
+           r2_meta[HMX_MODE45_META_SENTINEL_HITS]);
+    printf("r2_evidence mxclracc=%d mma=%d convert=%d store=%d "
+           "bias_loads=%d recon_loops=%d\n",
+           r2_meta[HMX_MODE45_META_MXCLRACC], r2_meta[HMX_MODE45_META_MMA],
+           r2_meta[HMX_MODE45_META_CONVERT], r2_meta[HMX_MODE45_META_STORE],
+           r2_meta[HMX_MODE45_META_BIAS_LOADS],
+           r2_meta[HMX_MODE45_META_RECON_LOOPS]);
+    printf("r2_rs_echo=0x%04x,0x%04x,0x%04x,0x%04x bias_echo=%d\n",
+           (unsigned)r2_meta[HMX_MODE45_META_RS_S1_FIRST],
+           (unsigned)r2_meta[HMX_MODE45_META_RS_S1_SECOND],
+           (unsigned)r2_meta[HMX_MODE45_META_RS_S2_FIRST],
+           (unsigned)r2_meta[HMX_MODE45_META_RS_S2_SECOND],
+           r2_meta[HMX_MODE45_META_BIAS_ECHO]);
+    printf("r2_regions layout=%d recon_source=%d hvx_lock=%d pos_writes=%d "
+           "neg_writes=%d pos_unchanged=%d neg_unchanged=%d "
+           "recon_vectors=%d\n",
+           r2_meta[HMX_MODE45_META_REGION_LAYOUT],
+           r2_meta[HMX_MODE45_META_RECON_SOURCE],
+           r2_meta[HMX_MODE45_META_HVX_LOCK],
+           r2_meta[HMX_MODE45_META_POS_WRITES],
+           r2_meta[HMX_MODE45_META_NEG_WRITES],
+           r2_meta[HMX_MODE45_META_HVX_POS_UNCHANGED],
+           r2_meta[HMX_MODE45_META_HVX_NEG_UNCHANGED],
+           r2_meta[HMX_MODE45_META_RECON_VECTORS]);
+    printf("r2_build_id dsp=0x%08x host_expected=0x%08x match=%d\n",
+           (unsigned)r2_meta[HMX_MODE45_META_BUILD_ID],
+           (unsigned)r2_expected_build_id,
+           r2_meta[HMX_MODE45_META_BUILD_ID] == r2_expected_build_id ? 1 : 0);
+    printf("r2_contract=%s failed=%s\n",
+           report.contract.all_ok ? "PASS" : "FAIL",
+           report.contract.all_ok
+               ? "none"
+               : (contract_fail[0] ? contract_fail : "none"));
+    if (!report.contract.all_ok) {
+      for (i = 0; i < cfield_count; ++i) {
+        if (!cok[i]) printf("r2_contract_fail=%s\n", cfield[i]);
+      }
+    }
+    printf("r2_verdict=%s cause=%s\n",
+           hmx_mode45_verdict_name(report.verdict), report.cause);
+    printf("r2_scope=one_run_s1_s2_minimal no_full_tile_accuracy_claim "
+           "no_performance_claim\n");
+    pass = report.contract.all_ok ? 1 : 0;
+  }
+
   print_verdicts(status, 1, hmx_executed_flag, trials_flag, NULL, close_status,
                  observed_verdict, math_verdict);
   return exit_with(pass ? 0 : 8);

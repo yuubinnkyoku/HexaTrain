@@ -22,9 +22,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Mode 45 (R2 S1/S2) needs the DSP HVX recon loop and the QuRT HVX context.
+ * <stddef.h> is included explicitly because qurt_hvx.h uses size_t.
+ * <hexagon_types.h> supplies the HVX_Vector type itself (hvx_hexagon_protos.h
+ * only declares the Q6_* intrinsics that operate on it). */
+#include <stddef.h>
+#include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
+#include <qurt_hvx.h>
+
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
 #include "hmx_mode44.h"
+#include "hmx_mode45.h"
 #include "bias20.h"
 #include "fp16_util.h" /* E-3C1: shared RN16 / fp16<->double helpers */
 
@@ -46,9 +56,12 @@ enum {
   HMX_ERR_UNLOCK2 = 14007,  /* cleanup stage (a): hmx_unlock2 failed */
   HMX_ERR_RELEASE = 14008,  /* cleanup stage (b): compute_res_release failed */
   HMX_ERR_POWER_DOWN = 14009, /* cleanup stage (c): power-down failed */
+  HMX_ERR_HVX = 14010, /* HVX context (qurt_hvx_lock/unlock) failure */
   PROBE_REVISION = HMX_IDENTITY_EXPECTED_REVISION,
   MODE_IDENTITY = HMX_IDENTITY_MODE,
-  MODE_MAX = 44, /* E-3D highest mode; must mirror probe_host.c HMX_PROBE_MODE_MAX */
+  /* R2 S1/S2 (mode 45) is the highest mode; must mirror probe_host.c
+   * HMX_PROBE_MODE_MAX. */
+  MODE_MAX = 45,
 };
 
 typedef struct probe_context {
@@ -884,6 +897,283 @@ static void run_mode44_one_trial(uint8_t *base, int *results) {
   results[3] = (int)out[hmx_mode44_store_index(1, 1)];
 }
 
+/* R2 S1/S2 (mode 45): retained-ACC two-convert export + DSP HVX recon.
+ *
+ * Frozen sequence (docs/hmx-v81-r2-device-prereg.md sections 4-7 and
+ * docs/hmx-v81-r2-device-implementation-plan.md section 4). Do not re-tune
+ * after a measurement:
+ *
+ *   prologue (once): act/wgt fixture, three bias rows, qurt HVX lock,
+ *                    three bias loads (sets 0, 1, 2 in that order)
+ *   S1: mxclracc, ONE MMA packet, convert #1 Rs=0x0001 -> store out_pos,
+ *       convert #2 Rs=0x2000 -> store out_neg, HVX recon loop, read slots
+ *       0..1
+ *   S2: act[1] = -a, mxclracc, ONE MMA packet, convert #3 Rs=0x0001 ->
+ *       store out_pos, convert #4 Rs=0x1000 -> store out_neg, HVX recon
+ *       loop, read slots 2..10
+ *
+ * The HVX loop is the ONLY writer of out_recon. out_pos/out_neg are hashed
+ * with FNV-1a immediately before and after each loop, so metadata[28]/[29]
+ * are 1 only when the buffer taken before the loop equals the buffer after
+ * it, for BOTH loops. metadata[0..8] are owned by
+ * hexatrain_hmx_acc_residual_run(); this handler writes [9..31] only. */
+static uint32_t mode45_fnv1a(const uint8_t *p, size_t n) {
+  uint32_t h = 2166136261u;
+  size_t i;
+  for (i = 0; i < n; ++i) {
+    h ^= (uint32_t)p[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+
+static int run_mode45_one_trial(uint8_t *base, int *results, int *metadata) {
+  uint16_t *act = (uint16_t *)(base + HMX_MODE45_ACT_OFFSET);
+  uint16_t *wgt = (uint16_t *)(base + HMX_MODE45_WGT_OFFSET);
+  uint16_t *pos = (uint16_t *)(base + HMX_MODE45_POS_OFFSET);
+  uint16_t *neg = (uint16_t *)(base + HMX_MODE45_NEG_OFFSET);
+  uint16_t *recon = (uint16_t *)(base + HMX_MODE45_RECON_OFFSET);
+  uint32_t *bias0 = (uint32_t *)(base + HMX_MODE45_BIAS0_OFFSET);
+  uint32_t *bias1 = (uint32_t *)(base + HMX_MODE45_BIAS1_OFFSET);
+  uint32_t *bias2 = (uint32_t *)(base + HMX_MODE45_BIAS2_OFFSET);
+  const uintptr_t act_reg = (uintptr_t)act;
+  const uintptr_t wgt_reg = (uintptr_t)wgt;
+  const uintptr_t pos_reg = (uintptr_t)pos;
+  const uintptr_t neg_reg = (uintptr_t)neg;
+  /* Register/encoding constants mirror mode 43/44 exactly. */
+  const uint32_t spatial_mask = (14u << 7);
+  const uint32_t act_rt = spatial_mask | (31u << 2);
+  const uint32_t wgt_rt = (uint32_t)(TILE_BYTES - 1);
+  const uint32_t wr_rt = spatial_mask;
+  int mxclracc = 0;
+  int mma = 0;
+  int convert = 0;
+  int store = 0;
+  int bias_loads = 0;
+  int recon_loops = 0;
+  int bias_echo = 0;
+  int sentinel_hits = 0;
+  int pos_writes = 0;
+  int neg_writes = 0;
+  int recon_vectors = 0;
+  int pos_unchanged = 1;
+  int neg_unchanged = 1;
+  int layout_ok;
+  int hvx_lock;
+  int c;
+
+  /* ---- Prologue (once per invocation) ---- */
+  memset(act, 0, TILE_BYTES);
+  memset(wgt, 0, TILE_BYTES);
+  /* S1's tile must have exactly one non-zero activation cell; S2 adds
+   * act[1] further down, just before its own MMA. */
+  act[HMX_MODE45_CELL_S0_O0] = HMX_MODE45_A_BITS;
+  wgt[0] = HMX_MODE45_A_BITS;
+
+  /* Three 256-byte bias rows at the frozen offsets (prereg section 5):
+   * set 0 = +64 shape 0, set 1 = +64 shape 4, set 2 = +32 shape 0. */
+  init_bias20(bias0, HMX_MODE45_SCALE64_BITS, 0, 0, HMX_MODE45_SHAPE0);
+  init_bias20(bias1, HMX_MODE45_SCALE64_BITS, 0, 0, HMX_MODE45_SHAPE4);
+  init_bias20(bias2, HMX_MODE45_SCALE32_BITS, 0, 0, HMX_MODE45_SHAPE0);
+
+  /* Region layout evidence: all three output regions 2 KiB aligned,
+   * pairwise distinct, and out_recon still inside the 12 KiB reserve. */
+  layout_ok =
+      (((uintptr_t)pos & (TILE_BYTES - 1u)) == 0) &&
+      (((uintptr_t)neg & (TILE_BYTES - 1u)) == 0) &&
+      (((uintptr_t)recon & (TILE_BYTES - 1u)) == 0) &&
+      ((uintptr_t)pos != (uintptr_t)neg) &&
+      ((uintptr_t)pos != (uintptr_t)recon) &&
+      ((uintptr_t)neg != (uintptr_t)recon) &&
+      ((uintptr_t)recon + TILE_BYTES <= (uintptr_t)base + VTCM_BYTES);
+
+  /* HVX context for the recon loop; recorded before the early return so the
+   * failure reason stays visible in metadata[25]. */
+  hvx_lock = qurt_hvx_lock(QURT_HVX_MODE_128B);
+  metadata[HMX_MODE45_META_HVX_LOCK] = hvx_lock;
+  if (hvx_lock) return HMX_ERR_HVX;
+
+  /* Bias loads: sets 0, 1, 2 in that order, once, before any convert. The
+   * address low two bits select the set (V81: 256B aligned base). */
+  asm volatile("bias = mxmem2(%0)\n" : : "r"((uintptr_t)bias0) : "memory");
+  bias_loads++;
+  bias_echo |= 1 << 0;
+  asm volatile("bias = mxmem2(%0)\n"
+               : : "r"(((uintptr_t)bias1) | 1u) : "memory");
+  bias_loads++;
+  bias_echo |= 1 << 1;
+  asm volatile("bias = mxmem2(%0)\n"
+               : : "r"(((uintptr_t)bias2) | 2u) : "memory");
+  bias_loads++;
+  bias_echo |= 1 << 2;
+
+  /* ================= S1: retention + bias-set control ================= */
+  memset(pos, 0xa5, TILE_BYTES);
+  memset(neg, 0xa5, TILE_BYTES);
+  memset(recon, 0xa5, TILE_BYTES);
+
+  asm volatile("mxclracc.hf\n" ::: "memory");
+  mxclracc++;
+  /* ONE MMA packet, byte-identical to the mode 44 packet. */
+  asm volatile(
+      "{ activation.hf = mxmem(%0, %1)\n"
+      "  weight.hf = mxmem(%2, %3) }\n"
+      : : "r"(act_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+      : "memory");
+  mma++;
+
+  /* convert #1: Rs = 0x0001 (set 0, retain ACC, no feedback). */
+  {
+    const uint32_t rs_s1_first = HMX_MODE45_RS_S1_FIRST;
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(rs_s1_first) : "memory");
+  }
+  convert++;
+  asm volatile("mxmem(%0, %1) = cvt\n" : : "r"(pos_reg), "r"(wr_rt)
+               : "memory");
+  store++;
+  pos_writes++;
+
+  /* convert #2: Rs = 0x2000 (set 2 = +32, clear+swap, no feedback). */
+  {
+    const uint32_t rs_s1_second = HMX_MODE45_RS_S1_SECOND;
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(rs_s1_second) : "memory");
+  }
+  convert++;
+  asm volatile("mxmem(%0, %1) = cvt\n" : : "r"(neg_reg), "r"(wr_rt)
+               : "memory");
+  store++;
+  neg_writes++;
+
+  /* HVX recon loop 1: out_recon = out_pos - out_neg (16 x 128 B). */
+  {
+    const uint32_t pos_before = mode45_fnv1a((const uint8_t *)pos, TILE_BYTES);
+    const uint32_t neg_before = mode45_fnv1a((const uint8_t *)neg, TILE_BYTES);
+    asm volatile("" ::: "memory");
+    for (int v = 0; v < 16; ++v) {
+      HVX_Vector pv = *(const HVX_Vector *)((const uint8_t *)pos + v * 128);
+      HVX_Vector nv = *(const HVX_Vector *)((const uint8_t *)neg + v * 128);
+      *(HVX_Vector *)((uint8_t *)recon + v * 128) =
+          Q6_Vhf_vsub_VhfVhf(pv, nv);
+    }
+    asm volatile("" ::: "memory");
+    if (mode45_fnv1a((const uint8_t *)pos, TILE_BYTES) != pos_before)
+      pos_unchanged = 0;
+    if (mode45_fnv1a((const uint8_t *)neg, TILE_BYTES) != neg_before)
+      neg_unchanged = 0;
+    recon_loops++;
+    recon_vectors += 16;
+  }
+
+  /* S1 readback: slots 0..1 (zero-extended 16-bit). */
+  results[0] = (int)pos[HMX_MODE45_CELL_S0_O0];
+  results[1] = (int)neg[HMX_MODE45_CELL_S0_O0];
+  for (c = 0; c <= 1; ++c) {
+    if ((uint16_t)results[c] == HMX_MODE45_SENTINEL_WORD) sentinel_hits++;
+  }
+
+  /* =================== S2: sign split =================== */
+  /* Only now does the tile get its second non-zero activation cell. */
+  act[HMX_MODE45_CELL_S1_O0] = HMX_MODE45_NEG_A_BITS;
+
+  memset(pos, 0xa5, TILE_BYTES);
+  memset(neg, 0xa5, TILE_BYTES);
+  memset(recon, 0xa5, TILE_BYTES);
+
+  asm volatile("mxclracc.hf\n" ::: "memory");
+  mxclracc++;
+  asm volatile(
+      "{ activation.hf = mxmem(%0, %1)\n"
+      "  weight.hf = mxmem(%2, %3) }\n"
+      : : "r"(act_reg), "r"(act_rt), "r"(wgt_reg), "r"(wgt_rt)
+      : "memory");
+  mma++;
+
+  /* convert #3: Rs = 0x0001 (set 0, retain ACC, no feedback). */
+  {
+    const uint32_t rs_s2_first = HMX_MODE45_RS_S2_FIRST;
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(rs_s2_first) : "memory");
+  }
+  convert++;
+  asm volatile("mxmem(%0, %1) = cvt\n" : : "r"(pos_reg), "r"(wr_rt)
+               : "memory");
+  store++;
+  pos_writes++;
+
+  /* convert #4: Rs = 0x1000 (set 1, shape 4, clear+swap, no feedback). */
+  {
+    const uint32_t rs_s2_second = HMX_MODE45_RS_S2_SECOND;
+    asm volatile("cvt.hf = acc(%0)\n" : : "r"(rs_s2_second) : "memory");
+  }
+  convert++;
+  asm volatile("mxmem(%0, %1) = cvt\n" : : "r"(neg_reg), "r"(wr_rt)
+               : "memory");
+  store++;
+  neg_writes++;
+
+  /* HVX recon loop 2: out_recon = out_pos - out_neg (16 x 128 B). */
+  {
+    const uint32_t pos_before = mode45_fnv1a((const uint8_t *)pos, TILE_BYTES);
+    const uint32_t neg_before = mode45_fnv1a((const uint8_t *)neg, TILE_BYTES);
+    asm volatile("" ::: "memory");
+    for (int v = 0; v < 16; ++v) {
+      HVX_Vector pv = *(const HVX_Vector *)((const uint8_t *)pos + v * 128);
+      HVX_Vector nv = *(const HVX_Vector *)((const uint8_t *)neg + v * 128);
+      *(HVX_Vector *)((uint8_t *)recon + v * 128) =
+          Q6_Vhf_vsub_VhfVhf(pv, nv);
+    }
+    asm volatile("" ::: "memory");
+    if (mode45_fnv1a((const uint8_t *)pos, TILE_BYTES) != pos_before)
+      pos_unchanged = 0;
+    if (mode45_fnv1a((const uint8_t *)neg, TILE_BYTES) != neg_before)
+      neg_unchanged = 0;
+    recon_loops++;
+    recon_vectors += 16;
+  }
+
+  /* S2 readback: slots 2..10 (zero-extended 16-bit).
+   * 2..4 positive buffer, 5..7 negative buffer, 8..10 DSP HVX recon. */
+  results[2] = (int)pos[HMX_MODE45_CELL_S0_O0];
+  results[3] = (int)pos[HMX_MODE45_CELL_S1_O0];
+  results[4] = (int)pos[HMX_MODE45_CELL_S2_O0];
+  results[5] = (int)neg[HMX_MODE45_CELL_S0_O0];
+  results[6] = (int)neg[HMX_MODE45_CELL_S1_O0];
+  results[7] = (int)neg[HMX_MODE45_CELL_S2_O0];
+  results[8] = (int)recon[HMX_MODE45_CELL_S0_O0];
+  results[9] = (int)recon[HMX_MODE45_CELL_S1_O0];
+  results[10] = (int)recon[HMX_MODE45_CELL_S2_O0];
+  for (c = 2; c <= 10; ++c) {
+    if ((uint16_t)results[c] == HMX_MODE45_SENTINEL_WORD) sentinel_hits++;
+  }
+
+  /* ---- Evidence metadata [9..31]; [0..8] belong to run() ---- */
+  metadata[HMX_MODE45_META_SCHEMA] = HMX_MODE45_SCHEMA_REVISION;
+  metadata[HMX_MODE45_META_MXCLRACC] = mxclracc;
+  metadata[HMX_MODE45_META_MMA] = mma;
+  metadata[HMX_MODE45_META_CONVERT] = convert;
+  metadata[HMX_MODE45_META_STORE] = store;
+  metadata[HMX_MODE45_META_BIAS_LOADS] = bias_loads;
+  metadata[HMX_MODE45_META_RECON_LOOPS] = recon_loops;
+  metadata[HMX_MODE45_META_RS_S1_FIRST] = (int)HMX_MODE45_RS_S1_FIRST;
+  metadata[HMX_MODE45_META_RS_S1_SECOND] = (int)HMX_MODE45_RS_S1_SECOND;
+  metadata[HMX_MODE45_META_RS_S2_FIRST] = (int)HMX_MODE45_RS_S2_FIRST;
+  metadata[HMX_MODE45_META_RS_S2_SECOND] = (int)HMX_MODE45_RS_S2_SECOND;
+  metadata[HMX_MODE45_META_BIAS_ECHO] = bias_echo;
+  metadata[HMX_MODE45_META_SENTINEL_HITS] = sentinel_hits;
+  metadata[HMX_MODE45_META_REGION_LAYOUT] = layout_ok;
+  metadata[HMX_MODE45_META_RECON_SOURCE] = HMX_MODE45_RECON_SOURCE_DSP_HVX;
+  metadata[HMX_MODE45_META_BUILD_ID] = (int)HMX_PROBE_BUILD_ID;
+  /* metadata[HMX_MODE45_META_HVX_LOCK] was written at lock time. */
+  metadata[HMX_MODE45_META_POS_WRITES] = pos_writes;
+  metadata[HMX_MODE45_META_NEG_WRITES] = neg_writes;
+  metadata[HMX_MODE45_META_HVX_POS_UNCHANGED] = pos_unchanged;
+  metadata[HMX_MODE45_META_HVX_NEG_UNCHANGED] = neg_unchanged;
+  metadata[HMX_MODE45_META_RECON_VECTORS] = recon_vectors;
+  metadata[HMX_MODE45_META_RESERVED] = 0;
+
+  if (qurt_hvx_unlock()) return HMX_ERR_HVX;
+  return 0;
+}
+
 int hexatrain_hmx_acc_residual_open(const char *uri, remote_handle64 *handle) {
   (void)uri;
   if (!handle) return HMX_ERR_ARG;
@@ -911,6 +1201,13 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
        !results || resultsLen < 4 || !metadata || metadataLen < 9) {
     return HMX_ERR_ARG;
   }
+  /* Mode 45 (R2 S1/S2) returns 11 result slots and writes evidence
+   * metadata[9..31]; the existing modes keep the >=4 / >=9 contract. */
+  if (mode == HMX_MODE45_MODE &&
+      (resultsLen < HMX_MODE45_RESULT_SLOTS ||
+       metadataLen < HMX_MODE45_METADATA_LEN)) {
+    return HMX_ERR_ARG;
+  }
   if (q < 6 || q > 10 || mode < 0 || mode > MODE_MAX) {
     return HMX_ERR_ARG;
   }
@@ -932,6 +1229,9 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   /* E-3D (mode 44) uses a fixed fixture independent of q; the host mirrors
    * q=6 like modes 18/22/40/41/42/43. */
   if (mode == 44 && q != 6) return HMX_ERR_ARG;
+  /* R2 S1/S2 (mode 45) also uses fixed fixtures independent of q; the host
+   * mirrors q=6 like modes 18/22/40/41/42/43/44. */
+  if (mode == HMX_MODE45_MODE && q != HMX_MODE45_Q) return HMX_ERR_ARG;
   /* Phase D modes 31..39 are hard-bound to q=8 (fixed -64.5/-64.25/-64.0
    * payload and 1+2^-8 operand); the host mirrors this gate. */
   if (mode >= 31 && mode <= 39 && q != 8) return HMX_ERR_ARG;
@@ -997,6 +1297,7 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   int combined_unlock_status = 0;
   int combined_release_status = 0;
   int power_down_status = 0;
+  int execution_error = 0;
   uint8_t *vtcm = NULL;
   int combined_resource = 0;
   int hmx_only_resource = 0;
@@ -1065,6 +1366,17 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
               run_mode44_one_trial(vtcm, results);
               metadata[7] = 1;
               metadata[8] = HMX_MODE44_TRIALS;
+            } else if (mode == HMX_MODE45_MODE) {
+              /* R2 S1/S2 (mode 45) is genuinely TWO trials (S1, S2) with 11
+               * returned slots and evidence metadata[9..31]; a failure is
+               * reported through run()'s status, not through metadata[7]. */
+              const int s45 = run_mode45_one_trial(vtcm, results, metadata);
+              if (s45 == 0) {
+                metadata[7] = 1;
+                metadata[8] = HMX_MODE45_TRIALS;
+              } else {
+                execution_error = s45;
+              }
             } else {
               run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
               run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
@@ -1148,5 +1460,5 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
    * remains readable in metadata[7] (and the lock stages in [5]/[6]). */
   if (cleanup_error != 0) return cleanup_error;
   if (metadata[7] == 1) return 0;
-  return HMX_ERR_LOCK;
+  return execution_error ? execution_error : HMX_ERR_LOCK;
 }
