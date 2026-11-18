@@ -1013,3 +1013,108 @@ d8_operand_fnv name=wlo fnv=a66af695
 
 実機セッションの前に、所有者側で §10 停止条件・証拠保全・分類ラベルの
 最終チェックリストが出される予定。
+
+---
+
+## §18 実機セッションの準備完了（2026-11-19 05:00）
+
+### §18.1 デバイス
+
+| 項目 | 値 |
+| --- | --- |
+| モデル | **NX741J**（`PQ85A01`、`canoe`、Android 16） |
+| ADB | **`100.108.106.81:45997`**（以前の `192.168.55.15:5555` から変わった） |
+| uptime | 3:10（**所有者が再起動した**。私は再起動していない） |
+| 配置先 | `/data/local/tmp/d8/` |
+
+### §18.2 ビルドした成果物
+
+| 種別 | パス | サイズ |
+| --- | --- | --- |
+| DSP skel | `build/d8skel/libhexatrain_hmx_acc_residual_skel.so` | 28,280 B |
+| HLOS stub | `build/d8host/libhexatrain_hmx_acc_residual.so` | 7,968 B |
+| host exe | `build/d8host/hexatrain_hmx_acc_residual_test` | 43,656 B |
+
+**skel の SHA-256 は `56bf5c03...c0d4` で、逆アセンブル監査を通したビルドと一致。**
+デプロイ後にデバイス上で `sha256sum` して確認済み。
+
+### §18.3 ビルドで判明したこと
+
+**① `probe_host.c` に `#include "hmx_mode44.h"` が欠けていた**
+
+`HMX_MODE44_TRIALS` と `hmx_mode44_report_t` が未定義でコンパイルできなかった。
+**既存のバグ**（私の変更とは無関係）。追加して解決。
+
+**② `librpcmem` は SDK に無く、`libcdsprpc` が正しい**
+
+`-lrpcmem` はリンクできない。`$SDK/ipc/fastrpc/remote/ship/android_aarch64/libcdsprpc.so`
+を使う。
+
+**③ SDK 版 `libcdsprpc.so` を push すると DSP に到達できなくなる（重要）**
+
+`libcdsprpc.so` を `/data/local/tmp/d8/` に置いて `LD_LIBRARY_PATH` を通すと:
+
+```
+capability_status=-1 raw_arch=0x0
+exit_code=3 exit_code_description=arch
+```
+
+**削除すると正常になる:**
+
+```
+capability_status=0 raw_arch=0x8081
+unsigned_pd_status=0
+open_status=0
+```
+
+デバイスには `/vendor/lib64/libcdsprpc.so`（600,224 B、root 所有）があり、
+**そちらを使うべき**。SDK 同梱版（30,992 B）は ABI が合わない。
+
+**④ host 側にも同じ `HMX_PROBE_BUILD_ID` が必要**
+
+`-strict-build-id` は host の期待値と DSP の echo の**両方が非ゼロで一致**することを
+要求する。host を `-DHMX_PROBE_BUILD_ID=0x4D8B1121` でビルドし直す必要があった。
+
+### §18.4 identity ゲート PASS
+
+```
+capability_status=0 raw_arch=0x8081
+unsigned_pd_status=0
+open_status=0
+identity_status=0 dsp_revision=3 dsp_q=6 dsp_mode=30 dsp_arch=81
+identity_meta=0x484d5831 arch=81 hmx_executed=0 trials=0
+build_id=0x4d8b1121 dsp_build_id=0x4d8b1121 build_id_status=MATCH
+dsp_identity=MATCH
+close_status=0
+RPC_OK=PASS rpc_status=0 dsp_status=OK
+IDENTITY_OK=PASS
+RESOURCE_CLEANUP_OK=PASS close_status=0 dsp_status=OK
+exit_code=0 exit_code_description=verdict pass+cleanup ok
+```
+
+**§7.3 の identity ゲートを満たした。** 実験 q は identity 呼び出しに使っていない
+（identity は mode 30 / q=6 の固定呼び出し）。
+
+### §18.5 実行コマンド（実機セッション用）
+
+```sh
+cd /data/local/tmp/d8
+export LD_LIBRARY_PATH=/data/local/tmp/d8
+export ADSP_LIBRARY_PATH=/data/local/tmp/d8
+# identity（実験の前に必ず 1 回）
+./hexatrain_hmx_acc_residual_test 6 30 -strict-build-id
+# 4 ラン: A(q=6) -> B(q=7) -> C(q=8) -> D(q=9)、各 1 回、再試行なし
+./hexatrain_hmx_acc_residual_test 6 46
+./hexatrain_hmx_acc_residual_test 7 46
+./hexatrain_hmx_acc_residual_test 8 46
+./hexatrain_hmx_acc_residual_test 9 46
+```
+
+**注意: `/data/local/tmp/d8/libcdsprpc.so` を置いてはならない。**
+
+### §18.6 未着手
+
+**タスク7（実機セッション）はまだ実行していない。** 予算は
+「1 ビルド・1 セッション・4 ラン・再試行 0」で、所有者から
+「実機セッション着手前に §10 停止条件・証拠保全・分類ラベルの最終チェックリストを出す」
+との連絡を受けている。**チェックリストを待ってから着手する。**

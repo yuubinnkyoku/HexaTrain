@@ -15,6 +15,7 @@
 #include "bias20.h"
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
+#include "hmx_mode44.h"
 #include "hmx_mode45.h"
 #include "hmx_mode46.h"
 #include "hmx_mode46_host.h"
