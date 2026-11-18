@@ -276,6 +276,33 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 - **negative evidenceも固定**
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
   - Muon scratchのVTCM化は現行実測ではDDRより遅いため再試行しない
+- **Candidate B / D8（VTCM フェーズ再利用の同期）— 実装・監査まで完了、実機ラン未実行**
+  - **問い**: Candidate B は 4 つの operand tile を VTCM に常駐させ、最後の MMA の後に
+    そのうち 2 つへ出力を書く。**MMA が operand を読み終える前に出力フェーズが
+    上書きしていないか**（D8a = Wlo、D8b = Ahi）。数値結果から「読み落とし」の
+    帰結だけを観測する。MX pipeline の内部や「プログラム順 = 完了順」は前提にしない。
+  - **状態（2026-11-19）**: revision 3 を**登録済み**（`D8_REV3_REGISTERED`）、Mode 46 を
+    DSP・host 両側に実装、V81 skel をビルド、**逆アセンブル監査が 4 条件すべて PASS**、
+    CPU 回帰（合成 25/25・独立監査 143 checks・変異 5/5）PASS、`verify.ps1 -Profile Fast` PASS。
+    **実機 4 ラン（A/B/C/D）は未実行。**
+  - **登録済みの検証対象は不変**: 発行順序 18 項目、VTCM オフセット
+    `+0/+2048/+4096/+6144/+8192/+10240/+10496/+10752`、fill 形式 `16 x 128 B` と
+    mask A=1 B=7 C=3 D=5、Convert `Rs=0x0001`、Store 先 `+8192`、臨界区間の同期禁止、
+    guard `12 x 128 B`。**監査を実オブジェクト向けに拡張したが（base 相対解決・
+    ループ展開・セグメント毎スナップショット）、これは「どう読むか」だけで、
+    検証対象そのものは 1 つも変えていない。**
+  - **この監査が実装欠陥 2 件を捕まえた**（load-bearing であることの証拠）:
+    `bias = mxmem2` の発行漏れ、および `-O2` のインライン化が 3 番目の pack を
+    out_pos スロットへ折り畳み `+4096` が一度も書かれなかった件。
+  - **`B3_R2_SYNC_UNPROVEN` は変わらない。** D8 が safe でも 1 ビルド・1 命令距離・
+    1 回の観測であり、PROVEN へ昇格させない。距離スイープ・全タイル精度・性能測定は
+    revision 3 §11 の予算外。
+  - **C2 は別管理**で `NOT_RUN` のまま。
+  - evidence: [hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md](hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md) /
+    [hmx-v81-cand-b-d8-evidence-contract-rev3-proposal.md](hmx-v81-cand-b-d8-evidence-contract-rev3-proposal.md) /
+    [hmx-v81-d8-disasm-audit-spec.md](hmx-v81-d8-disasm-audit-spec.md)（Appendix A が実オブジェクト拡張）/
+    [hmx-v81-d8-fastrpc-failure-contract.md](hmx-v81-d8-fastrpc-failure-contract.md) /
+    [hmx-d8-mode46-worklog-2026-11-18.md](hmx-d8-mode46-worklog-2026-11-18.md)
 
 ## NOW — Active Queue【最大5件】
 
