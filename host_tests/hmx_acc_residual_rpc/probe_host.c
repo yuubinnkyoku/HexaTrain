@@ -15,15 +15,16 @@
 #include "bias20.h"
 #include "hmx_identity.h"
 #include "hmx_mode43.h"
-#include "hmx_mode44.h"
 #include "hmx_mode45.h"
+#include "hmx_mode46.h"
+#include "hmx_mode46_host.h"
 
 /* Phase D mode range (extra4 nibble sweep + bias readback) is 31..39;
  * HMX_PROBE_MODE_MAX mirrors MODE_MAX in probe_dsp.c
  * (45 = R2 S1/S2 retained-ACC two-convert export, 44 = E-3D,
  * 43 = E-3C1R, 42 = E-3C1, 41 = B-2, 40 = B-1). */
 enum { HMX_PHASE_D_MODE_MIN = 31, HMX_PHASE_D_MODE_MAX = 39,
-       HMX_PROBE_MODE_MAX = 45 };
+       HMX_PROBE_MODE_MAX = 46 };
 
 /* Per-mode operand a. Must mirror run_one() in probe_dsp.c: the
  * zero-residual controls (21/22) and the mode-37 exact-zero control run
@@ -191,7 +192,7 @@ int main(int argc, char **argv) {
       mode = atoi(argv[arg_index]);
     } else {
       fprintf(stderr,
-              "usage: %s [q=6..10] [mode=0..45] [-strict-build-id]\n",
+              "usage: %s [q=6..10] [mode=0..46] [-strict-build-id]\n",
               argv[0]);
       return exit_with(2);
     }
@@ -199,7 +200,7 @@ int main(int argc, char **argv) {
   }
   if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX) {
     fprintf(stderr,
-            "usage: %s [q=6..10] [mode=0..45] [-strict-build-id]\n",
+            "usage: %s [q=6..10] [mode=0..46] [-strict-build-id]\n",
             argv[0]);
     return exit_with(2);
   }
@@ -217,6 +218,14 @@ int main(int argc, char **argv) {
             "phase D modes 31..38 require q=8 and modes 40, 41, 42, 43, 44 "
             "and 45 require q=6 (got q=%d mode=%d)\n",
             q, mode);
+    return exit_with(2);
+  }
+  /* Mode 46 (D8) maps q=6..9 to conditions A..D and rejects q=10 before
+   * execution, exactly like the DSP gate. */
+  if (mode == HMX_MODE46_MODE &&
+      (q < HMX_D8_Q_FIRST || q > HMX_D8_Q_LAST)) {
+    fprintf(stderr,
+            "mode 46 requires q=6..9 (conditions A..D), got q=%d\n", q);
     return exit_with(2);
   }
   // Same CDSP/unsigned-PD policy as the existing HexaTrain HVX device probe.
@@ -239,23 +248,29 @@ int main(int argc, char **argv) {
   printf("open_status=%d\n", status);
   if (status) return exit_with(6);
 
-  /* The result buffer is sized for the widest mode: 11 slots for mode 45
-   * (R2 S1/S2, pre-registration section 6); modes 0..44 only fill the first
-   * four. The metadata buffer is 32 words for mode 45's evidence block;
+  /* The result buffer is sized for the widest mode: 1,024 slots for mode 46
+   * (D8), 11 for mode 45 (R2 S1/S2); modes 0..44 only fill the first four.
+   * The metadata buffer is 32 words for the mode 45/46 evidence block;
    * modes 0..44 only use metadata[0..8]. */
+  const int result_capacity = (mode == HMX_MODE46_MODE)
+                                  ? HMX_MODE46_RESULT_SLOTS
+                                  : HMX_MODE45_RESULT_SLOTS;
+  const int meta_capacity = (mode == HMX_MODE46_MODE)
+                                ? HMX_MODE46_METADATA_LEN
+                                : HMX_MODE45_METADATA_LEN;
   int *result = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM,
                                     RPCMEM_DEFAULT_FLAGS,
-                                    HMX_MODE45_RESULT_SLOTS * sizeof(int));
+                                    result_capacity * sizeof(int));
   int *meta = (int *)rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
-                                  HMX_MODE45_METADATA_LEN * sizeof(int));
+                                  meta_capacity * sizeof(int));
   if (!result || !meta) {
     if (result) rpcmem_free(result);
     if (meta) rpcmem_free(meta);
     hexatrain_hmx_acc_residual_close(handle);
     return exit_with(7);
   }
-  memset(result, 0, HMX_MODE45_RESULT_SLOTS * sizeof(int));
-  memset(meta, 0, HMX_MODE45_METADATA_LEN * sizeof(int));
+  memset(result, 0, result_capacity * sizeof(int));
+  memset(meta, 0, meta_capacity * sizeof(int));
   /* Identity check first, on the same handle, for every run. The pure
    * validation lives in hmx_identity.h so the CPU-only self test
    * (probe_identity_selftest.c) checks the exact same code. */
@@ -341,13 +356,9 @@ int main(int argc, char **argv) {
   }
 
   status = hexatrain_hmx_acc_residual_run(handle, result,
-                                          (mode == HMX_MODE45_MODE)
-                                              ? HMX_MODE45_RESULT_SLOTS
-                                              : 4,
+                                          result_capacity,
                                           meta,
-                                          (mode == HMX_MODE45_MODE)
-                                              ? HMX_MODE45_METADATA_LEN
-                                              : 9,
+                                          meta_capacity,
                                           q, mode);
 
   printf("rpc_status=%d magic=0x%x dsp_arch=%d vtcm_bytes=%d "
@@ -364,6 +375,10 @@ int main(int argc, char **argv) {
   int r2_slots[HMX_MODE45_RESULT_SLOTS];
   int r2_meta[HMX_MODE45_METADATA_LEN];
   int r2_capture = 0;
+  /* Mode 46 (D8) raw capture, same discipline: 1,024 slots and 32 words. */
+  static int d8_slots[HMX_MODE46_RESULT_SLOTS];
+  static int d8_meta[HMX_MODE46_METADATA_LEN];
+  int d8_capture = 0;
   /* Host-embedded HMX_PROBE_BUILD_ID, NOT the DSP identity echo: the mode 45
    * evidence check must compare the DSP's metadata[24] echo against the build
    * the host was compiled with, otherwise a stale DSP image would only be
@@ -1208,6 +1223,16 @@ int main(int argc, char **argv) {
     for (i = 0; i < HMX_MODE45_METADATA_LEN; ++i) r2_meta[i] = meta[i];
     r2_capture = 1;
   }
+  if (mode == HMX_MODE46_MODE) {
+    /* Mode 46 (D8) raw capture. The copy happens whether or not the RPC
+     * status is zero, because a non-zero status can still leave partial
+     * evidence and the S5/S6 classes need to know whether the copy succeeded.
+     * d8_capture records the copy outcome, not the run outcome. */
+    int i;
+    for (i = 0; i < HMX_MODE46_RESULT_SLOTS; ++i) d8_slots[i] = result[i];
+    for (i = 0; i < HMX_MODE46_METADATA_LEN; ++i) d8_meta[i] = meta[i];
+    d8_capture = 1;
+  }
 
   rpcmem_free(result);
   rpcmem_free(meta);
@@ -1376,6 +1401,16 @@ int main(int argc, char **argv) {
     printf("r2_scope=one_run_s1_s2_minimal no_full_tile_accuracy_claim "
            "no_performance_claim\n");
     pass = report.contract.all_ok ? 1 : 0;
+  }
+
+  if (mode == HMX_MODE46_MODE) {
+    /* D8 (mode 46) evidence and verdict. The gate, the classification and the
+     * raw dump all live in hmx_mode46_host.h so the CPU-only self test can
+     * exercise the same code. A contract failure is the only thing that fails
+     * closed; every registered non-success label is a valid scientific
+     * outcome and still exits 0 with the label printed. */
+    pass = d8_report(status, d8_slots, d8_meta, d8_capture, q,
+                     HMX_PROBE_BUILD_ID);
   }
 
   print_verdicts(status, 1, hmx_executed_flag, trials_flag, NULL, close_status,
