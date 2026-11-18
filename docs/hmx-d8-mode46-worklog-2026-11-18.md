@@ -908,3 +908,108 @@ volatile ローカル）が、**すべて同じ折り畳みが起きた。**
 
 所有者指示の「最終 stamped ビルドは新しいビルド ID で押し直す」に従い、
 **監査を通した `0x4D8B1121` をそのまま実機投入ビルドとして確定**する。
+
+---
+
+## §17 `verify.ps1 -Profile Fast` PASS（2026-11-19 05:00）
+
+### §17.1 結果
+
+```
+verify-local-fast            PASS    228.1s  everyday gate ok
+total 228.1s  PASS=1 FAIL=0 SKIP=0
+```
+
+内訳（`verify_local summary`）:
+
+| ステップ | 結果 |
+| --- | --- |
+| git-diff-check | PASS 0.4s |
+| tracked-binary-audit | PASS 0.2s |
+| secret-path-audit | PASS 0.6s |
+| powershell-parser-check | PASS 1.2s（130 スクリプト） |
+| qairt-selection-self-test | PASS 12.4s |
+| pr-gate-policy-self-test | PASS 4.5s |
+| agent-skills-sync-check | PASS 1.4s |
+| incident-6031-analyzer-self-test | PASS 3.2s |
+| unit-tests | PASS 32.7s |
+| **host-fast-contract** | **PASS 170.0s** |
+| その他 21 件 | SKIP（fast mode） |
+
+**`total 226.6s PASS=10 FAIL=0 SKIP=21`。**
+
+### §17.2 D8 関連の全項目
+
+```
+d8_sim=PASS
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS (checks=143 fail=0)
+d8_mutation_check=PASS mutants=5
+d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5
+d8_feasibility=PASS (d8_feas_checks=186 fail=0)
+d8_feas_verdict=D8_IMPLEMENTATION_INSUFFICIENT_EVIDENCE
+d8_python=PASS (independent=exit0 mutation=exit0)
+```
+
+**4 参照 SHA-256 と 4 オペランド FNV が登録値と一致:**
+
+```
+d8_ref name=safe sha256=c9abf30e...20203d
+d8_ref name=wlo  sha256=f0b3b4aa...81f6fb
+d8_ref name=ahi  sha256=b6328e88...760fcc
+d8_ref name=both sha256=5285b463...2535d
+d8_operand_fnv name=ahi fnv=c6231266
+d8_operand_fnv name=alo fnv=3b2d22d2
+d8_operand_fnv name=whi fnv=8b88609f
+d8_operand_fnv name=wlo fnv=a66af695
+```
+
+### §17.3 途中で 1 回ハングした件（記録）
+
+最初の実行は 60 分以上応答せず、`run_hmx_selftest.ps1` の
+`hmx_selftest_gcc_exit=0` の後で停止していた。
+
+**構成要素はすべて単独では正常だった:**
+
+| 確認項目 | 結果 |
+| --- | --- |
+| `cpu_reference_training_test.exe` 単独 | 120 秒以内に exit 0 |
+| `vswhere.exe` 単独 | exit 0、vcvars64.bat のパスを返す |
+| `vcvars64.bat` 単独 | exit 0、172 行の環境を出力 |
+| `clang` でのコンパイル単独 | exit 0 |
+| clang ビルドの selftest 実行単独 | exit 0、`selftest=PASS` |
+
+**一時ディレクトリが 2 つ残っていた**（`hmx-selftest-*`、中身は
+`probe_host_selftest_gcc.exe`）。プロセスは残っていなかったので、
+`Remove-Item -Recurse` ではなく**子プロセスの出力パイプが詰まった**状態と判断した。
+
+残骸を削除して再実行したところ **228 秒で正常完了**した。
+**再現しなかったので、一時的な環境要因**（同時に走っていた別の pwsh ジョブとの
+干渉）と記録する。スクリプトの欠陥とは断定しない。
+
+### §17.4 実機投入ビルドの確定
+
+| 項目 | 値 |
+| --- | --- |
+| skel | `build/d8skel/libhexatrain_hmx_acc_residual_skel.so` |
+| **SHA-256** | **`56bf5c03eac39fe83fdb7389a50ffafa4bdd7a56b72f3cadb7a4c16704e0c0d4`** |
+| **build id** | **`0x4D8B1121`** |
+| サイズ | 28,280 B |
+| 逆アセンブル監査 | **4 条件すべて PASS** |
+| CPU 回帰 | 合成 25/25 PASS |
+| `verify.ps1 -Profile Fast` | **PASS** |
+
+**この 1 本を実機セッション（タスク7）で使用する。**
+`0x4D8B1118`〜`0x4D8B1120` は開発履歴としてのみ残し、実機には投入しない。
+
+### §17.5 残る作業
+
+| タスク | 状態 |
+| --- | --- |
+| 1〜6 | **完了** |
+| **7 実機セッション** | **未着手**（予算: 1 ビルド・1 セッション・4 ラン・再試行 0） |
+| 8 報告と文書更新 | 未着手 |
+
+実機セッションの前に、所有者側で §10 停止条件・証拠保全・分類ラベルの
+最終チェックリストが出される予定。
