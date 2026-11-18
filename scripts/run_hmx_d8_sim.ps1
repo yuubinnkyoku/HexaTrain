@@ -333,6 +333,41 @@ try {
     }
     Write-Host "d8_host_gate=$hostGateStatus"
 
+    # ---------------- D8 operand fixture, reproduced on the CPU ----------------
+    # The device run stopped at the operand-FNV gate. This program runs the same
+    # generator on the CPU and compares against the registered constants, so the
+    # next attempt knows whether the generation or the VTCM path is at fault.
+    $fixtureStatus = "SKIP (not evaluated)"
+    $fixtureSrc = Join-Path $Root "host_tests\hmx_acc_residual_rpc\probe_d8_fixture_cpu.c"
+    if (-not $gccForGate) {
+        $fixtureStatus = "SKIP (gcc not found on PATH)"
+    } elseif (-not (Test-Path -LiteralPath $fixtureSrc -PathType Leaf)) {
+        $fixtureStatus = "FAIL (missing $fixtureSrc)"
+        $failed = $true
+    } else {
+        $fixtureExe = Join-Path $TempDir "probe_d8_fixture_cpu.exe"
+        & $gccForGate.Source "-std=gnu11" "-O2" "-Wall" "-Wextra" "-Werror" `
+            "-I" (Join-Path $Root "host_tests\hmx_acc_residual_rpc") `
+            "-o" $fixtureExe $fixtureSrc
+        if ($LASTEXITCODE -ne 0) {
+            $fixtureStatus = "FAIL (compile exit $LASTEXITCODE)"
+            $failed = $true
+        } else {
+            $fixtureOut = & $fixtureExe *>&1 | Out-String
+            $fixtureExit = $LASTEXITCODE
+            $fixtureOut.TrimEnd().Split("`n") | ForEach-Object {
+                if ($_ -match '^(d8_fixture_cpu|d8_fixture |d8_vs_device)') { Write-Host $_.Trim() }
+            }
+            if ($fixtureExit -eq 0 -and $fixtureOut -match 'd8_fixture_cpu=PASS') {
+                $fixtureStatus = "PASS (generator reproduces the registered FNVs)"
+            } else {
+                $fixtureStatus = "FAIL (exit $fixtureExit)"
+                $failed = $true
+            }
+        }
+    }
+    Write-Host "d8_fixture_cpu=$fixtureStatus"
+
     # ---------------- D8 disassembly audit rules (synthetic text only) ----------------
     # No V81 binary exists here. This runs the rule engine on a synthetic
     # fixture and its mutations; it is not a passed audit of a real object.

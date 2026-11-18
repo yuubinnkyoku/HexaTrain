@@ -1497,3 +1497,98 @@ FNV のスカラー byte 読みの間にバリアが無い。**
    再実行し、新しいビルド ID を押す
 
 **第 2 のセッションは新しい登録が必要。**
+
+---
+
+## §24 原因の切り分け — 生成は正しく、VTCM 経路が原因（2026-11-19 06:40）
+
+### §24.1 やったこと
+
+§23.5 の第一候補（「`build_d8_operands` が CPU で一度も実行されていない」）を
+**offline で検証した**。実機は使っていない。
+
+`host_tests/hmx_acc_residual_rpc/probe_d8_fixture_cpu.c` を作り、
+`hmx_mode46_d8.h` の fixture 生成を CPU で再現して 4 タイルの FNV を計算した。
+
+**ヘルパは `probe_dsp.c` と `fp16_util.h` から逐語コピーした**
+（`e3c1_rng64` / `e3c1_rng_unit` / `e3c1_split_lo` / `double_to_fp16` /
+`fp16_to_double`）。**再実装すると自分自身をテストするだけになるため。**
+
+### §24.2 結果 — 生成は正しい
+
+```
+d8_fixture ahi cpu=c6231266 registered=c6231266 match
+d8_fixture alo cpu=3b2d22d2 registered=3b2d22d2 match
+d8_fixture whi cpu=8b88609f registered=8b88609f match
+d8_fixture wlo cpu=a66af695 registered=a66af695 match
+d8_fixture_cpu=PASS
+```
+
+**CPU で生成すると登録済み 4 定数と完全一致する。** 生成ロジックは正しい。
+
+そして実機の値とは一致しない:
+
+```
+d8_vs_device ahi cpu=c6231266 device=57a0ec09 differs_from_device
+d8_vs_device alo cpu=3b2d22d2 device=d0e0c444 differs_from_device
+d8_vs_device whi cpu=8b88609f device=9c9fe034 differs_from_device
+d8_vs_device wlo cpu=a66af695 device=29a90a5c differs_from_device
+```
+
+**したがって原因は生成ではなく、VTCM への書き込みか読み出しである。**
+
+### §24.3 欠陥を特定した — HVX ロックの前に `vmem` を発行している
+
+`run_mode46_d8_one_trial` の実際の順序:
+
+```
+build_d8_operands(...)      4 x 16 vmem ストア   ← HVX ロックなし
+d8_guard_init(guard)        12 vmem ストア       ← HVX ロックなし
+guard_pre = fnv(guard)      スカラー読み
+fnv_ahi..wlo = fnv(ops)     スカラー読み（陳腐化データ）
+qurt_hvx_lock(...)          ← ここで初めてロック取得
+```
+
+**`vmem` は HVX 命令であり、`qurt_hvx_lock` を取る前に発行してはならない。**
+ロック無しの `vmem` は実行されないか、他コンテキストと競合する。
+
+これで実機の観測がすべて説明できる:
+
+| 観測 | 説明 |
+| --- | --- |
+| pack=4, bias=2 | これらは**カウンタ**であり、実際の発行とは独立 |
+| guard pre/post が登録値と一致 | ガードは**ゼロ**を書くので、ストアが実行されなくてもゼロを読む |
+| オペランド FNV が全滅 | ストアが実行されず、**初期状態のバイト列**を読んだ |
+| 結果配列が全ゼロ | 臨界区間に行かなかったので当然 |
+
+**§23.5 の第二候補（バリア欠如）は否定された。** 問題はバリアではなく、
+**HVX ロックの取得順序**である。
+
+### §24.4 これは登録済み順序の違反か
+
+**いいえ。** 登録 §3.1 の発行順序は
+`PACK → BIAS → GUARD INIT → GUARD PRE → MXCLRACC → MMA → FILL → CONVERT → STORE → GUARD POST`
+であり、**`qurt_hvx_lock` は順序の項目ではない**（HVX コンテキストの取得は
+実装の前提条件）。したがってロックを先に取るのは**登録の変更ではなく実装の修正**。
+
+ただし**修正は revision 3 §11 の予算外**なので、私の判断では行わない。
+
+### §24.5 回帰への組み込み
+
+`run_hmx_d8_sim.ps1` に `d8_fixture_cpu` を追加した。以後は
+**実機接触前に生成ロジックの正しさが機械的に確認される**。
+
+```
+d8_fixture_cpu=PASS (generator reproduces the registered FNVs)
+d8_sim=PASS
+```
+
+### §24.6 次に必要なこと
+
+1. `qurt_hvx_lock` を `build_d8_operands` / `d8_guard_init` の**前**へ移す
+2. 逆アセンブル監査を再実行（`vmem` の位置が変わるため）
+3. CPU スイートと `verify.ps1 -Profile Fast` を再実行
+4. 新しいビルド ID を押す
+5. **新しい登録**を得てから第 2 セッション
+
+**1〜4 は revision 3 §11 の予算外。所有者の指示を待つ。**
