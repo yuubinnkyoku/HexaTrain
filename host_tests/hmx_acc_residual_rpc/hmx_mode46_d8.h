@@ -232,7 +232,23 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   uint32_t guard_pre, guard_post;
   int first_bad;
 
-  /* ---- prologue: operands, bias, guard (outside the critical interval) ---- */
+  /* ---- prologue: operands, bias, guard (outside the critical interval) ----
+   *
+   * The HVX context is taken FIRST. build_d8_operands and d8_guard_init issue
+   * vmem stores, and vmem is an HVX instruction: issued without the lock they
+   * do not land. The device run showed exactly that - the guard hashed to the
+   * zero-guard value because the guard init writes zeros anyway, and the four
+   * operand tiles hashed to their untouched contents, so the handler stopped at
+   * its own FNV gate before the critical interval.
+   *
+   * The lock is not an entry of the registered issued order (section 3.1); it
+   * is a precondition for issuing any of them, so taking it first changes no
+   * registered target. */
+  hvx_lock = qurt_hvx_lock(QURT_HVX_MODE_128B);
+  if (hvx_lock) {
+    return HMX_ERR_HVX;
+  }
+
   build_d8_operands(base, ahi, alo, whi, wlo);
 
   init_bias20(bias0, HMX_MODE46_SCALE64_BITS, 0, 0, HMX_MODE46_SHAPE0);
@@ -255,13 +271,6 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   fnv_alo = d8_tile_fnv(alo);
   fnv_whi = d8_tile_fnv(whi);
   fnv_wlo = d8_tile_fnv(wlo);
-
-  /* HVX context for the fills. Recorded before the early return so the
-   * failure reason stays visible. */
-  hvx_lock = qurt_hvx_lock(QURT_HVX_MODE_128B);
-  if (hvx_lock) {
-    return HMX_ERR_HVX;
-  }
 
   /* Execution starts here: metadata[9] is the first D8-owned word. */
   metadata[HMX_D8_META_BUILD_ID] = HMX_PROBE_BUILD_ID;

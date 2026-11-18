@@ -211,6 +211,8 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
     # operand at the MMA is routinely reused afterwards (the handler reloads r5
     # for its FNV loops), so resolving late loses it.
     $script:mapAt[$i] = $script:vtcmMap.Clone()
+    if ($env:D8_DBG -and $i -le 6) { Write-Host "DBG i=$i r19=[$($script:vtcmMap['r19'])] r0=[$($script:vtcmMap['r0'])] t=$t" }
+    if ($env:D8_DBG -and $i -lt 6) { Write-Host "DBG i=$i t=$t r19=$($script:vtcmMap['r19']) r0=$($script:vtcmMap['r0'])" }
 
     if ($t -match '^(r\d+)\s*=\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)$') {
         $regs[$Matches[1]] = [Convert]::ToInt32($Matches[2],
@@ -230,6 +232,9 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
         $src = $Matches[2]
         $off = [Convert]::ToInt32($Matches[3],
             $(if ($Matches[3].StartsWith('0x')) { 16 } else { 10 }))
+        # Inside a loop body the increment is per-iteration, so it must not
+        # change the derivation used AFTER the loop; the body's own store is
+        # resolved separately by the loop expansion below.
         if ($script:vtcmMapMode -and -not $inLoopBody.ContainsKey($i)) {
             if ($script:vtcmMap.ContainsKey($src)) {
                 $script:vtcmMap[$dst] = $script:vtcmMap[$src] + $off
@@ -255,11 +260,11 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
     # Stack spill: memw(r29+#off) = rN, or the 64-bit memd(r29+#off) = rM:rN
     # which stores rN at +off and rM at +off+4. The slot keeps the derivation
     # the register had at the spill, which is what a later reload must see.
-    if ($t -match 'memd\(r29\+#(0x[0-9a-fA-F]+)\)\s*=\s*(r\d+):(r\d+)') {
+    if ($t -match 'memd\(r29\+#(0x[0-9a-fA-F]+)\)\s*=\s*r(\d+):(\d+)') {
         $off = [Convert]::ToInt32($Matches[1],
             $(if ($Matches[1].StartsWith('0x')) { 16 } else { 10 }))
-        $hi = $Matches[2]
-        $lo = $Matches[3]
+        $hi = 'r' + $Matches[2]
+        $lo = 'r' + $Matches[3]
         foreach ($pair in @(@($off, $lo), @(($off + 4), $hi))) {
             $slot = 's' + $pair[0]
             $src = $pair[1]
@@ -285,10 +290,35 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
             }
         }
     }
+    # 64-bit register pair build: rM:rN = combine(rS,rT) puts rS in rM (the high
+    # half) and rT in rN (the low half). The compiler uses it to save the
+    # incoming argument registers, so the base arrives as the high half of a pair
+    # rather than as a plain copy.
+    #
+    # The pair is spelled "r19:18", not "r19:r18": the high half carries the r
+    # prefix and the low half does not.
+    if ($t -match '^r(\d+):(\d+)\s*=\s*combine\((r\d+)\s*,\s*(r\d+)\)') {
+        $hi = 'r' + $Matches[1]
+        $lo = 'r' + $Matches[2]
+        $srcHi = $Matches[3]
+        $srcLo = $Matches[4]
+        if ($script:vtcmMapMode) {
+            foreach ($pair in @(@($lo, $srcLo), @($hi, $srcHi))) {
+                $dst = $pair[0]
+                $src = $pair[1]
+                if ($script:vtcmMap.ContainsKey($src)) {
+                    $script:vtcmMap[$dst] = $script:vtcmMap[$src]
+                } elseif ($script:vtcmMap.ContainsKey($dst)) {
+                    $script:vtcmMap.Remove($dst)
+                }
+            }
+        }
+        continue
+    }
     # 64-bit stack reload: rM:rN = memd(r29+#off). rN comes from +off and rM
     # from +off+4, mirroring the spill. The compiler uses this to restore the
     # callee-saved registers in the epilogue and to reload pointer pairs.
-    if ($t -match '^(r\d+):(r\d+)\s*=\s*memd\(r29\+#(0x[0-9a-fA-F]+)\)') {
+    if ($t -match '^r(\d+):(\d+)\s*=\s*memd\(r29\+#(0x[0-9a-fA-F]+)\)') {
         $hi = $Matches[1]
         $lo = $Matches[2]
         $off = [Convert]::ToInt32($Matches[3],
@@ -394,7 +424,13 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
         $suffix = $Matches[3]
         $width = 128
         if ($suffix -and $suffix -match '\.(b|h|w)$') { $width = 0 }
-        if ($null -eq $addr) { Fail "vector_address_unresolved: line $($segments[$i].Line)" }
+        # A store inside a loop body is resolved by the loop expansion below,
+        # which uses the map at the loop entry and can follow a pointer built
+        # inside the body. Failing here would reject a store the expansion is
+        # about to resolve, so only a store outside every body fails now.
+        if ($null -eq $addr -and -not $inLoopBody.ContainsKey($i)) {
+            Fail "vector_address_unresolved: line $($segments[$i].Line)"
+        }
         $vecStores += [pscustomobject]@{
             Index = $i; Addr = $addr; Width = $width; Suffix = $suffix
             Text = $t; Line = $segments[$i].Line; LoopCount = 0
@@ -457,6 +493,36 @@ foreach ($lp in $loopIdx) {
                 $slot = 's' + [Convert]::ToInt32($Matches[1],
                     $(if ($Matches[1].StartsWith('0x')) { 16 } else { 10 }))
                 if ($loopMap.ContainsKey($slot)) { $base = $loopMap[$slot] }
+                break
+            }
+            # The compiler also hoists a pointer computation into the body when
+            # the loop is its only user: the guard pointer is built as
+            # add(r19,#0x2a00) inside the guard init loop itself.
+            if ($segments[$j].Text -match "^$reg\s*=\s*add\((r\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)$") {
+                $src = $Matches[1]
+                $add = [Convert]::ToInt32($Matches[2],
+                    $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+                if ($loopMap.ContainsKey($src)) { $base = $loopMap[$src] + $add }
+                break
+            }
+            # ... and it arrives as the low half of a pair built by combine.
+            # The source of that combine may itself be built inside the body, so
+            # resolve it the same way rather than only from the loop-entry map.
+            if ($segments[$j].Text -match "^r\d+:$($reg.Substring(1))\s*=\s*combine\(([^,]*)\s*,\s*(r\d+)\)$") {
+                $src = $Matches[2]
+                if ($loopMap.ContainsKey($src)) {
+                    $base = $loopMap[$src]
+                } else {
+                    for ($k = $j - 1; $k -gt $lp.Index; $k--) {
+                        if ($segments[$k].Text -match "^$src\s*=\s*add\((r\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)$") {
+                            $src2 = $Matches[1]
+                            $add2 = [Convert]::ToInt32($Matches[2],
+                                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+                            if ($loopMap.ContainsKey($src2)) { $base = $loopMap[$src2] + $add2 }
+                            break
+                        }
+                    }
+                }
                 break
             }
         }
