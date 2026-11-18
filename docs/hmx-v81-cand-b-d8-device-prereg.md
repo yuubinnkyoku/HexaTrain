@@ -1,5 +1,11 @@
 # Candidate B — D8 Minimal Device Experiment Pre-Registration
 
+> **Superseded by revision 3, registered 2026-11-18**
+> (`docs/hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md`). This revision 2
+> document is retained unmodified for history; its body and numbers are not
+> changed by the supersession. Revision 3 does not replace any registered
+> number.
+
 Status: **PRE-REGISTERED (REVISION 2), NOT AUTHORISED, CPU-ONLY**, 2026-11-09.
 Scope: the minimal device experiment that isolates **D8**, the last
 design-specific synchronization question of Candidate B (phase-reused VTCM).

@@ -1,21 +1,29 @@
-# Candidate B — D8 Device Experiment: Evidence Contract (Revision 3 Proposal)
+# Candidate B — D8 Device Experiment: Evidence Contract (Revision 3, Registered)
 
-Status: **`D8_REV3_PROPOSED_CPU_ONLY`**, 2026-11-10. Companion to
+Status: **`D8_REV3_REGISTERED`**, 2026-11-18. Companion to
 `docs/hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md`. This document is a
-**proposal**. Revision 2
-(`docs/hmx-v81-cand-b-d8-evidence-contract.md`) remains the registered
-evidence contract and is not modified.
+**registration**. Revision 3 supersedes revision 2
+(`docs/hmx-v81-cand-b-d8-evidence-contract.md`), which is retained unmodified.
 
-This document authorises nothing: no DSP source, no DSP build, no QAIRT
-invocation, no ADB, no device contact, no Mode 46, no release, no merge.
-`D8 NOT_RUN`, `B3_R2_SYNC_UNPROVEN`, Mode 46 unregistered and approval
-`NOT GRANTED` are unchanged.
+Registration authorises only the revision 3 §11 budget: one stamped DSP build,
+one device session, four condition runs (A, B, C, D), zero retries, no timing.
+It authorises no fifth run, no distance sweep, no full-tile run, no performance
+measurement, no training integration, no release and no merge.
+`B3_R2_SYNC_UNPROVEN` is unchanged; Mode 46 is registered and `NOT_RUN`; D8 is
+`NOT_RUN`.
 
 Revision 3 exists because revision 2 §3 could not be implemented against the
 existing `run()`: words 0..8 have generic owners, words 3/7/8 are rewritten
 after the handler, `q=0..3` is rejected before dispatch, the `rout` length is
 not a returned count, a non-zero return discards the arrays, and the guard had
 no channel. Revision 3 fixes the contract, not the device.
+
+### Change record
+
+| Date | Change | Authority |
+| --- | --- | --- |
+| 2026-11-10 | revision 3 drafted as a CPU-only proposal | CPU contract work |
+| 2026-11-18 | revision 3 registered; device approval granted for the §11 budget only | 2026-11-18, owner instruction in project chat (HexaTrain, Vibe session), budget = revision 3 §11 |
 
 ## 1. Digest and value inventory (unchanged)
 

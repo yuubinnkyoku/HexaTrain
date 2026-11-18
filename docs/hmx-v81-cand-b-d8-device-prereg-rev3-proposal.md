@@ -1,13 +1,15 @@
-# Candidate B — D8 Minimal Device Experiment Pre-Registration (Revision 3 Proposal)
+# Candidate B — D8 Minimal Device Experiment Pre-Registration (Revision 3, Registered)
 
-Status: **`D8_REV3_PROPOSED_CPU_ONLY`**, 2026-11-10. This document is a
-**proposal**, not a registration. Revision 2
-(`docs/hmx-v81-cand-b-d8-device-prereg.md`) remains the registered revision and
-is not modified by this document. This proposal authorises nothing: no DSP
-source, no DSP build, no QAIRT invocation, no ADB, no device contact, no
-Mode 46, no release, no merge.
+Status: **`D8_REV3_REGISTERED`**, 2026-11-18. This document is a
+**registration**. Revision 3 supersedes revision 2
+(`docs/hmx-v81-cand-b-d8-device-prereg.md`), which is retained unmodified except
+for a supersession note. Registration authorises only the revision 3 §11 budget:
+one stamped DSP build, one device session, four condition runs (A, B, C, D), zero
+retries, no timing. It authorises no fifth run, no distance sweep, no full-tile
+run, no performance measurement, no training integration, no release and no
+merge.
 
-Labels unchanged by this document:
+Labels after registration:
 
 | Label | Value |
 | --- | --- |
@@ -15,13 +17,13 @@ Labels unchanged by this document:
 | `B3_R2_SYNC_UNPROVEN` | **unchanged (D8 is still unrun)** |
 | `CPU_VALIDATED_PREFERRED_DESIGN` | unchanged (Candidate B) |
 | Candidate C / C2 | CPU-only-consistent, `C2 NOT_RUN` |
-| Mode 46 | **unregistered, `NOT_RUN`** |
-| Device approval | **`NOT GRANTED`** |
+| Mode 46 | **registered, `NOT_RUN`** |
+| Device approval | **GRANTED for the revision 3 §11 budget only** |
 | D8 | **`NOT_RUN`** |
 
-The new label `D8_REV3_PROPOSED_CPU_ONLY` means: the CPU-side contract is
-machine-checked and self-consistent; it is not an approval, not a device
-result, and not a retirement of `B3_R2_SYNC_UNPROVEN`.
+The label `D8_REV3_REGISTERED` means: the CPU-side contract is machine-checked
+and self-consistent, and the owner has authorised the §11 budget. It is not a
+device result and not a retirement of `B3_R2_SYNC_UNPROVEN`.
 
 ## Revision history
 
@@ -29,7 +31,14 @@ result, and not a retirement of `B3_R2_SYNC_UNPROVEN`.
 | --- | --- | --- | --- |
 | 1 | 2026-11-08 | superseded | first registration; out_pos fill in the prologue; fill mask inconsistent (C/D swapped). |
 | 2 | 2026-11-09 | **registered** | out_pos fill moved after MMA #3; mask A=1/B=7/C=3/D=5; no registered number changed. |
-| 3 | 2026-11-10 | **proposed, CPU only** | metadata renumbered into words 9..31 with bit fields; `q` selector fixed to 6..9; results-length and failure-preservation semantics corrected; VTCM guard initialisation and pre/post digests added; disassembly audit conditions extended. No registered number changed. |
+| 3 | 2026-11-10 | **registered 2026-11-18 (owner authorisation, CPU contract verified 2026-11-10)** | metadata renumbered into words 9..31 with bit fields; `q` selector fixed to 6..9; results-length and failure-preservation semantics corrected; VTCM guard initialisation and pre/post digests added; disassembly audit conditions extended. No registered number changed. |
+
+### Change record
+
+| Date | Change | Authority |
+| --- | --- | --- |
+| 2026-11-10 | revision 3 drafted as a CPU-only proposal | CPU contract work |
+| 2026-11-18 | revision 3 registered; Mode 46 registered; device approval granted for the §11 budget only | 2026-11-18, owner instruction in project chat (HexaTrain, Vibe session), budget = revision 3 §11 |
 
 Revision 3 is a response to
 `docs/hmx-v81-d8-implementation-feasibility-audit.md`, which established
@@ -40,7 +49,7 @@ does not fix the device.
 
 ### Revision 3 before / after
 
-| Item | Revision 2 | Revision 3 proposal |
+| Item | Revision 2 | Revision 3 (registered) |
 | --- | --- | --- |
 | Metadata words | D8 used words 0..24, colliding with `run()` words 0..8 | D8 uses **9..31 only**; words 0..8 keep their `run()` meaning |
 | Build ID | word 0 (collides with magic) + word 24 | **word 9**, one echo; identity-mode `metadata[2]` is the second, independent echo |
@@ -95,7 +104,7 @@ used as a premise.
 
 | Finding (audit §9) | Revision 3 resolution |
 | --- | --- |
-| `mode46_unregistered` | still **BLOCKED**; registration is a governance step, not a CPU step |
+| `mode46_unregistered` | **resolved 2026-11-18**: Mode 46 is registered; the DSP and host implementation is the remaining work |
 | `metadata_ownership_collision` | renumbered into 9..31; words 0..8 untouched; `d8-meta-layout` machine block |
 | `q_selector_encoding` | `q=6..9`, condition `q-6`; identity probe uses its own `q=6` |
 | `results_length_unobservable` | exact allocation + exact DSP capacity check; no return-length claim |
@@ -109,8 +118,9 @@ used as a premise.
 | `disasm_audit_fill_gap` | new D8 audit rules, fail-closed on unresolved addresses |
 | `dsp_build_env_absent` | still an environment constraint; not claimed as resolved |
 
-The CPU-side findings are resolved by this proposal. Mode 46 registration, a
-stamped build and the device questions remain outside CPU scope.
+The CPU-side findings are resolved by this revision. Mode 46 registration was
+granted on 2026-11-18; a stamped build and the device questions remain outside
+CPU scope.
 
 ## 3. Fixed layout and instruction sequence
 
@@ -418,7 +428,7 @@ The run stops immediately, with no retry, if any of the following holds:
 | Retries | 0 |
 | Timing / performance | none |
 | Profile | Tier 2 (`BACKGROUND_CORRECTNESS`) if ever executed |
-| Authorisation | **NOT GRANTED** |
+| Authorisation | **GRANTED 2026-11-18 for this budget only** |
 
 Approving a future revision 3 §11 would approve only: 1 build, 1 session,
 4 condition runs, 0 retries, under the evidence contract. It would not approve
@@ -448,8 +458,8 @@ All CPU only; no SDK, no device, no Mode 46. The exact run record is in
 
 ## 14. Unresolved items carried forward
 
-1. **Mode 46 registration** — unregistered and `NOT_RUN`; a trigger mode is a
-   prerequisite.
+1. **Mode 46 registration** — **registered 2026-11-18**; the DSP and host
+   implementation is the remaining work.
 2. **A stamped DSP build** — no Hexagon SDK or build environment in this
    checkout.
 3. **Disassembly audit of the real object** — the rules and a synthetic parser
@@ -475,3 +485,4 @@ $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
 ```
 
 Artifacts under `build/` are gitignored and are not device evidence.
+
