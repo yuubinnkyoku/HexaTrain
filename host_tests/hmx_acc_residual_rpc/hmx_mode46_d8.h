@@ -189,6 +189,13 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   init_bias20(bias0, HMX_MODE46_SCALE64_BITS, 0, 0, HMX_MODE46_SHAPE0);
   init_bias20(bias1, HMX_MODE46_SCALE64_BITS, 0, 0, HMX_MODE46_SHAPE4);
 
+  /* Load the two bias sets. The registration lists BIAS 0 and BIAS 1 as
+   * issued operations before mxclracc; writing the payload without loading it
+   * would leave the convert with no registered bias state. The low two address
+   * bits select the set on V81, so set 1 is addressed with |1. */
+  asm volatile("bias = mxmem2(%0)\n" : : "r"(bias0_reg) : "memory");
+  asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
+
   d8_guard_init(guard);
   guard_pre = mode45_fnv1a(guard, HMX_MODE46_GUARD_BYTES);
 

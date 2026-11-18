@@ -302,3 +302,212 @@ EXIT=2
 CWD ハザードが除去できたので、指示どおり **タスク2（DSP 実装）→ タスク3（ホスト実装）**
 に進む。ビルド時は `HEXAGON_SDK_ROOT=C:\Qualcomm\Hexagon_SDK\6.6.0.0` を明示し、
 SDK バージョンと使用 QAIRT をビルド記録に残す。
+
+---
+
+## §8 タスク4: ビルド（完了）
+
+### §8.1 ビルド環境
+
+| 項目 | 値 |
+| --- | --- |
+| Hexagon SDK | **6.6.0.0** |
+| Hexagon Tools | **19.0.07**（`hexagon-clang` = QuIC LLVM Hexagon Clang 19.0.07） |
+| QAIRT | 使用していない（このビルドは DSP skel のみ） |
+| ビルド日時 | 2026-11-19 |
+| IDL ヘッダ生成 | `qaic -m dll -I host_tests/hmx_acc_residual_rpc -I $SDK/incs/stddef -I $SDK/incs -o build/d8gen` |
+
+**`build_cmake` は bash 前提で Windows では使えない**ため、SDK の `hexagon-clang` を
+直接叩いてビルドした。フラグは CMakeLists の `-mhmx` と
+`${HEXAGON_SDK_ROOT}/incs`, `${HEXAGON_SDK_ROOT}/incs/stddef`,
+`${HEXAGON_SDK_ROOT}/rtos/qurt` を再現している。
+
+```powershell
+$SDK = "C:\Qualcomm\Hexagon_SDK\6.6.0.0"
+$BIN = "$SDK\tools\HEXAGON_Tools\19.0.07\Tools\bin"
+& "$BIN\hexagon-clang.exe" -shared -fPIC -O2 -G0 -mv81 -mhmx -mhvx `
+    -mhvx-length=128b -D__HEXAGON_ARCH__=81 -DHMX_PROBE_BUILD_ID=0x4D8B1118 `
+    -I host_tests/hmx_acc_residual_rpc -I build/d8gen `
+    -I "$SDK\incs" -I "$SDK\incs\stddef" `
+    -I "$SDK\rtos\qurt\computev81\include" `
+    -I "$SDK\rtos\qurt\computev81\include\qurt" `
+    -o build/d8skel/libhexatrain_hmx_acc_residual_skel.so `
+    host_tests/hmx_acc_residual_rpc/probe_dsp.c `
+    build/d8gen/hexatrain_hmx_acc_residual_skel.c `
+    "$SDK\rtos\qurt\computev81\lib\pic\libqurt.a"
+```
+
+### §8.2 スタンプと成果物
+
+| 項目 | 値 |
+| --- | --- |
+| `HMX_PROBE_BUILD_ID` | **`0x4D8B1118`**（mode 46 / D8 + 2026-11-18、正値なので符号の問題を避ける） |
+| skel | `build/d8skel/libhexatrain_hmx_acc_residual_skel.so`、28,056 B |
+| skel SHA-256 | `ea4ec5ea5cdfd490fd28d7033cd2cd9dfb6bc06d75254077bdce26d845eb5abc` |
+
+**ビルド ID がバイナリに刻まれていることを逆アセンブルで確認:**
+
+```
+10dc: memw(r20+#0x8) = ##0x4d8b1118      ← identity mode の metadata[2]
+21bc: memw(r16+#0x60) = ##0x4d8b1118     ← D8 ハンドラ
+```
+
+---
+
+## §9 タスク5: 逆アセンブル監査 — **FAIL（監査側の欠陥 3 件、うち 1 件は修正済み）**
+
+### §9.1 監査を実オブジェクトに適用した結果
+
+`hexagon-llvm-objdump -d --disassemble-symbols=run_mode46_d8_one_trial` の出力から
+生バイト列を除いたテキストを作り、`scripts/audit_hmx_d8_disasm.ps1` に通した。
+
+```
+d8_disasm_audit_counts mxclracc=1 mma=3 bias=2 convert=1 store=1 vector_stores=4
+FAIL store_address_unresolved: line 527
+FAIL mma_address_unresolved: line 489 / 492 / 496
+FAIL bias_addresses: [0,21504] want [10240,10496]
+FAIL mma_0 : got (,) want (0,4096)
+FAIL store_address: /8192
+FAIL convert_rs: 0x0fff/0x0001
+FAIL pack_0_count: 0/16  (×4 タイル)
+FAIL guard_init_count: 1/12
+FAIL fill_count: 3/48 (condition B)
+FAIL fill_8192_address: 42405/8192
+d8_disasm_audit=FAIL checks_failed=19
+```
+
+### §9.2 実装側の実バグ 1 件（**修正した**）
+
+**`bias = mxmem2(...)` 命令を発行していなかった。** `init_bias20` で
+bias ペイロードをメモリに書くだけで、bias レジスタへロードする命令が無かった。
+登録 §3 は `BIAS 0` / `BIAS 1` を発行操作として要求している。
+
+**修正**: 2 命令を追加した。監査の `bias=2` は修正前から 2 と出ていたが、
+これは偶然で、実際にはペイロード書き込みを bias ロードと誤認していたわけではない
+（修正後も `bias=2`）。修正後の逆アセンブル:
+
+```
+278c: bias = mxmem2(r16)
+2794: bias = mxmem2(r2)
+```
+
+### §9.3 監査側の欠陥 1: `convert_rs` がレジスタ表のスナップショットを取らない
+
+`audit_hmx_d8_disasm.ps1` は `$regs` を 1 つの連想配列として順に更新するが、
+`convert_rs` の判定は**ループの後**に `$regs[$cvtReg]` を読む。したがって
+**cvt より後に同じレジスタへ代入があると、その後の値で判定してしまう。**
+
+**最小再現（実行済み）:**
+
+| 入力 | 結果 |
+| --- | --- |
+| `build/d8_disasm/clean_B.txt`（既知の正常フィクスチャ） | `d8_disasm_audit=PASS` |
+| **同じファイル + 末尾に `{ r0 = ##0x0fff }` を 1 行追加** | **`FAIL convert_rs: 0x0fff/0x0001`** |
+
+**store の後に足した 1 行は、既に実行された convert の Rs を変えられない。**
+それで FAIL になるのだから、これは監査のバグである。
+
+実オブジェクトで `0x0fff` が出たのは、`r2` が後で
+`HMX_D8_GUARD_FIRST_BAD_NONE`（`0xfff`）の比較に再利用されるためである。
+実オブジェクトの該当箇所は正しい:
+
+```
+29b8: r2 = #0x1
+29bc: cvt.hf = acc(r2)
+```
+
+### §9.4 監査側の欠陥 2: 絶対アドレスを前提にしており、実装は満たせない
+
+`Resolve-Expr` は `##即値` と `rN +#off`（`rN` が既知のとき）しか解決しない。
+一方 **VTCM は実行時に `HAP_compute_res_attr_get_vtcm_ptr` で確保される**ので、
+実オブジェクトに絶対アドレスは存在し得ない。実装は `base + offset` を使うため、
+監査は全ての MMA / store / fill で `*_address_unresolved` になる（fail-closed）。
+
+監査が拾った `21504`（= `0x5400`、scale ビット）や `42405`（= `0xA5A5`、fill パターン）は、
+**アドレスではない値をアドレスとして解決した**ものである。
+
+### §9.5 監査側の欠陥 3: ループを 1 命令と数える
+
+登録は「16 x 128 B」だが、実オブジェクトは `loop0(...,#0x10)` の中に
+`vmem = v0` を 1 命令置く形になる。意味的には 16 ストアだが、静的な命令数は 1。
+`pack_*_count: 0/16`、`guard_init_count: 1/12`、`fill_count: 3/48` はこれが原因。
+
+### §9.6 判定
+
+**`D8_DISASM_AUDIT_FAILED`。実機実験には進まない。**
+
+ただし失敗の内訳は「実装が登録と違う」ではなく、
+**「監査が実装不能な前提（絶対アドレス・完全展開）を要求している」**である。
+§9.3 は明確な監査のバグで、§9.4 と §9.5 は監査仕様と実 DSP コードの構造的な不一致である。
+
+**監査の規則を変えることは「解釈を変える」に当たるため、所有者の確認を待つ。**
+提示する案は §12 に書く。
+
+---
+
+## §10 実装と登録の一致（監査とは独立に確認したもの）
+
+| 登録項目 | 実装 | 確認方法 |
+| --- | --- | --- |
+| 発行順序 18 項目 | 一致 | `--d8-sequence-rev3` の 4 条件シグネチャと逆アセンブルを突き合わせ |
+| 臨界区間に同期命令なし | 満たす | `syncht` / `barrier` / DMA sync が 0 件 |
+| fill が 16 x 128 B | 満たす（`loop0 #0x10`） | 逆アセンブル |
+| 条件別 fill（B/C=Wlo, B/D=Ahi, A なし） | 満たす | `bitsclr(r8,#0x2)` と `if (p0) jump` の 2 分岐 |
+| `bias = mxmem2` ×2 | 満たす（**修正後**） | 逆アセンブル |
+| guard init 12 x 128 B | 満たす（`loop0 #0xC`） | 逆アセンブル |
+| Convert Rs = 1 | 満たす（`r2 = #0x1`） | 逆アセンブル |
+| metadata words 9..31 のみ | 満たす | コードレビュー（words 0..8 を書かない） |
+| オペランド FNV を MMA #1 より前 | 満たす | コードレビュー |
+| ビルド ID のエコー | 満たす | バイナリに `0x4d8b1118` ×2 |
+
+---
+
+## §11 CPU 回帰（変更後、全 PASS）
+
+```
+d8_sim=PASS
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS (checks=143 fail=0)
+d8_mutation_check=PASS mutants=5
+d8_disasm_audit_test=PASS clean=4 mutants=12
+d8_feasibility=PASS (d8_feas_checks=186 fail=0)
+```
+
+`d8_feas_verdict` は `D8_IMPLEMENTATION_BLOCKED` から
+**`D8_IMPLEMENTATION_INSUFFICIENT_EVIDENCE`** に変わった（実装の blocker が解消し、
+残るのは実機 4 ランでしか得られない証拠だけになったため）。
+
+---
+
+## §12 所有者への確認事項（監査仕様）
+
+実機に進む前に、次のいずれかの判断が要る。
+
+### 案 A: 監査を実オブジェクト向けに拡張する（推奨）
+
+最小の拡張は 3 点。
+
+1. **VTCM ベースレジスタの宣言**: `-BaseRegister r19` のように、VTCM 先頭を保持する
+   レジスタを監査に与え、`rN + #off` を `off` として解決する。
+2. **ループの展開数の認識**: `loop0(L,#0x10)` の直後の store を 16 回として数える。
+3. **`convert_rs` のスナップショット化**: cvt のインデックス時点のレジスタ値を記録する
+   （純粋なバグ修正）。
+
+この 3 点で、実オブジェクトに対して意味のある監査になる。
+**登録済みの数値・順序・マスクは一切変えない。** 変わるのは「どう読むか」だけ。
+
+### 案 B: 監査を「ソース＋発行順序」に限定し、実オブジェクト監査を諦める
+
+`--d8-sequence-rev3` との突き合わせ（§10）で発行順序は確認済みなので、
+実オブジェクトの監査を「未実施」として記録し、実機に進む。
+ただし §7 の停止条件に「逆アセンブル監査が PASS しない」があるため、
+**その条件を明示的に解除する判断**が要る。
+
+### 案 C: 完全展開したコードを生成する
+
+fill / pack を 16 個の明示的 store に展開すれば §9.5 は解消する。
+ただし §9.4（絶対アドレス）は解消しないので、案 A の 1 がどうしても要る。
+
+**現状は案 A を推奨する。** §9.3 は監査のバグであることが最小再現で証明できており、
+§9.4 と §9.5 も「実 DSP コードではこうなる」という構造的な事実である。
