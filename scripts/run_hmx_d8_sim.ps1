@@ -295,6 +295,44 @@ try {
     }
     Write-Host "d8_rev3_python=$rev3PyStatus"
 
+    # ---------------- D8 host gate and classifier (CPU only) ----------------
+    # The device run is the only source of real arrays, but the gate and the
+    # classifier are pure functions of (rpc_status, slots, meta). This drives
+    # every branch with synthetic inputs so a defect is found here rather than
+    # after the single registered device session has been spent.
+    $hostGateStatus = "SKIP (not evaluated)"
+    $hostGateSrc = Join-Path $Root "host_tests\hmx_acc_residual_rpc\probe_d8_host_gate_test.c"
+    $gccForGate = Get-Command gcc -ErrorAction SilentlyContinue
+    if (-not $gccForGate) {
+        $hostGateStatus = "SKIP (gcc not found on PATH)"
+    } elseif (-not (Test-Path -LiteralPath $hostGateSrc -PathType Leaf)) {
+        $hostGateStatus = "FAIL (missing $hostGateSrc)"
+        $failed = $true
+    } else {
+        $hostGateExe = Join-Path $TempDir "probe_d8_host_gate_test.exe"
+        & $gccForGate.Source "-std=gnu11" "-O2" "-Wall" "-Wextra" "-Werror" `
+            "-Wno-unused-function" `
+            "-I" (Join-Path $Root "host_tests\hmx_acc_residual_rpc") `
+            "-o" $hostGateExe $hostGateSrc
+        if ($LASTEXITCODE -ne 0) {
+            $hostGateStatus = "FAIL (compile exit $LASTEXITCODE)"
+            $failed = $true
+        } else {
+            $hostGateOut = & $hostGateExe *>&1 | Out-String
+            $hostGateExit = $LASTEXITCODE
+            $hostGateOut.TrimEnd().Split("`n") | ForEach-Object {
+                if ($_ -match '^(d8_host_gate)') { Write-Host $_.Trim() }
+            }
+            if ($hostGateExit -eq 0 -and $hostGateOut -match 'd8_host_gate=PASS') {
+                $hostGateStatus = "PASS (gate and classifier, synthetic inputs)"
+            } else {
+                $hostGateStatus = "FAIL (exit $hostGateExit)"
+                $failed = $true
+            }
+        }
+    }
+    Write-Host "d8_host_gate=$hostGateStatus"
+
     # ---------------- D8 disassembly audit rules (synthetic text only) ----------------
     # No V81 binary exists here. This runs the rule engine on a synthetic
     # fixture and its mutations; it is not a passed audit of a real object.
@@ -330,7 +368,7 @@ Write-Host "d8_sim_gcc_checks=$gccChecks"
 Write-Host "d8_rev3_checks=$rev3Checks"
 if ($gccExit -ne 0) { $failed = $true }
 if ($failed) {
-    Write-Host "d8_sim=FAIL (gcc=$gccExit o0='$o0Status' clang='$clangStatus' rev3='$rev3Status' rev3_python='$rev3PyStatus' disasm='$disasmStatus' feasibility='$feasStatus' python='$pythonStatus')"
+    Write-Host "d8_sim=FAIL (gcc=$gccExit o0='$o0Status' clang='$clangStatus' rev3='$rev3Status' rev3_python='$rev3PyStatus' host_gate='$hostGateStatus' disasm='$disasmStatus' feasibility='$feasStatus' python='$pythonStatus')"
     exit 1
 }
 Write-Host "d8_sim=PASS"
