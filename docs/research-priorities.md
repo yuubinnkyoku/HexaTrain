@@ -276,15 +276,30 @@ DeepSeek-V4.1-Flashは、CSA2 / CED / Engram / Single-Pass mHC / DSpark / low-bi
 - **negative evidenceも固定**
   - QNN HTP Newton–Schulzは新しいprecision evidenceが出るまで再試行しない
   - Muon scratchのVTCM化は現行実測ではDDRより遅いため再試行しない
-- **Candidate B / D8（VTCM フェーズ再利用の同期）— 実装・監査まで完了、実機ラン未実行**
+- **Candidate B / D8（VTCM フェーズ再利用の同期）— 実機セッション実行、`D8_CONTRACT_FAILED`、数値証拠なし**
   - **問い**: Candidate B は 4 つの operand tile を VTCM に常駐させ、最後の MMA の後に
     そのうち 2 つへ出力を書く。**MMA が operand を読み終える前に出力フェーズが
     上書きしていないか**（D8a = Wlo、D8b = Ahi）。数値結果から「読み落とし」の
     帰結だけを観測する。MX pipeline の内部や「プログラム順 = 完了順」は前提にしない。
-  - **状態（2026-11-19）**: revision 3 を**登録済み**（`D8_REV3_REGISTERED`）、Mode 46 を
+  - **状態（2026-11-19）**: revision 3 を登録（`D8_REV3_REGISTERED`）、Mode 46 を
     DSP・host 両側に実装、V81 skel をビルド、**逆アセンブル監査が 4 条件すべて PASS**、
     CPU 回帰（合成 25/25・独立監査 143 checks・変異 5/5）PASS、`verify.ps1 -Profile Fast` PASS。
-    **実機 4 ラン（A/B/C/D）は未実行。**
+  - **実機セッションを 1 回実行した（`d8-20261119-a`、build `0x4D8B1121`）。結果は
+    `D8_CONTRACT_FAILED`。** identity ゲートは通り、条件 A(q=6) がハンドラ自身の
+    **オペランド FNV ゲートで停止**した。4 つの MMA・fill・Convert・Store はすべて 0 を
+    報告し、結果配列は **1,024 語すべてゼロ**（観測 SHA-256 が 2,048 ゼロバイトの
+    SHA-256 と一致することを確認）。**臨界区間は実行されていない。**
+    ガードの pre/post は登録値と一致したので、**fail-closed が実機で正しく働いた**。
+  - **したがって D8 の問いには何も答えていない。** 原因は第一に
+    **`build_d8_operands` が CPU で一度も実行されていない**こと（定義は
+    `hmx_mode46_d8.h`、参照は同ヘッダ内のみ、include するのは DSP 側の `probe_dsp.c`
+    だけ）。登録済み 4 定数と DSP 出力の突き合わせが実機 1 回だけになっていた。
+    第二候補は `vmem` ストアとスカラー FNV 読みの間のバリア欠如だが、ガードが
+    ゼロを書くため証拠では区別できない。**どちらも V81 HMX の性質ではない。**
+  - **予算は消費済み。第 2 セッションには新しい登録が必要。** 事前にやることは
+    offline で、DSP fixture を CPU で比較可能にすること、バリア要否を決めて
+    （要るなら黙って足さず）登録し直すこと、修正ビルドで監査・CPU スイート・
+    `verify.ps1 -Profile Fast` を再実行して新しい build id を押すこと。
   - **登録済みの検証対象は不変**: 発行順序 18 項目、VTCM オフセット
     `+0/+2048/+4096/+6144/+8192/+10240/+10496/+10752`、fill 形式 `16 x 128 B` と
     mask A=1 B=7 C=3 D=5、Convert `Rs=0x0001`、Store 先 `+8192`、臨界区間の同期禁止、
@@ -4140,4 +4155,3 @@ DeepSeek-V4.1-Flashからは、もう一段**parameter roleとruntime representa
 - [Can Muon Fine-tune Adam-Pretrained Models?](https://arxiv.org/abs/2605.10468)
 - [MOPD: Multi-Teacher On-Policy Distillation](https://arxiv.org/abs/2606.30406)
 - [Stabilizing MoE RL by Aligning Training and Inference Routers / R3](https://arxiv.org/abs/2510.11370)
-
