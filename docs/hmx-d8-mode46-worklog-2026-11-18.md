@@ -1377,3 +1377,123 @@ tracked file 全体を機械的に走査した:
 **ローカル絶対パス**（`D:\ghq\...`）は worklog の §16.5 等に書いているが、
 これは**リポジトリ自身のパス**であり、`C:\Users\<user>` のような
 ホスト固有の個人パスではない。ただし今後も増やさない。
+
+---
+
+## §23 実機セッション実行 — `D8_CONTRACT_FAILED`、数値証拠なし（2026-11-19 06:15Z）
+
+### §23.1 実行したこと
+
+`AGENTS.md` と `docs/agent/device-test-tiers.md` を確認したうえで Tier 2 の
+条件を満たしてから、`d8_session.sh` を **1 回だけ**実行した。
+
+| Tier 2 条件 | 確認結果 |
+| --- | --- |
+| online 物理端末が 1 台、安定識別子で同一性を証明 | **1 endpoint**、`ro.serialno` と `ro.boot.serialno` が**一致**、`ro.kernel.qemu` 空（実機）。値は private report のみ |
+| 正式 endpoint を 1 つ決定的に選択 | 実施（値は private report のみ） |
+| 固定 QAIRT root / Build ID | **該当しない**（D8 は QNN graph を使わず、HMX intrinsics の skel のみ） |
+| QNN 有効 build 後の APK audit | **該当しない**（APK を作らない） |
+| 2 秒ごとの top-resumed 監視、`focus_takeover_count=0` | **0**（ランチャーのまま。probe は CLI） |
+| root 化・SELinux 変更・system 領域変更なし | SELinux `Enforcing`、`uid=2000(shell)`、push 先は `/data/local/tmp` のみ |
+| 既存 active training なし | **なし** |
+
+### §23.2 結果
+
+```
+D8_SESSION id=d8-20261119-a skel_sha256=56bf5c03...c0d4 host_sha256=76dcf755...d35c
+D8_SESSION started_utc=2026-11-18T21:15:11Z device=NX741J build=MyOS16.0.28_NX741J_NEEA
+D8_IDENTITY rc=0  (build_id_status=MATCH, IDENTITY_OK=PASS)
+D8_RUN condition=A q=6 rc=8
+D8_A_d8_contract=FAIL first_bad=mxclracc
+D8_A_d8_failure=16 name=FNV
+D8_STOP condition A returned rc=8; the budget has no retry
+```
+
+**条件 A で停止。B/C/D は実行していない。再試行もしていない。予算は消費済み。**
+
+### §23.3 メタデータの実測値
+
+| 語 | フィールド | 実測 | 登録値 | |
+| ---: | --- | --- | --- | --- |
+| 10 | `mxclracc` | `0` | 1 | **不一致** |
+| 11 | MMA | `0` | 3 | **不一致** |
+| 12 | Convert | `0` | 1 | **不一致** |
+| 13 | Store | `0` | 1 | **不一致** |
+| 14 | pack | `4` | 4 | 一致 |
+| 15 | bias | `2` | 2 | 一致 |
+| 16 | fill | `0x00000000` | mask 1 | **不一致** |
+| 17 | address | `0x00000000` | `0x1000` | **不一致** |
+| 18 | selector | `0x00000600` | cond 0, q 6 | 一致 |
+| 19 | FNV Ahi | `0x57A0EC09` | `0xC6231266` | **不一致** |
+| 20 | FNV Alo | `0xD0E0C444` | `0x3B2D22D2` | **不一致** |
+| 21 | FNV Whi | `0x9C9FE034` | `0x8B88609F` | **不一致** |
+| 22 | FNV Wlo | `0x29A90A5C` | `0xA66AF695` | **不一致** |
+| 23 | guard pre | `0xF5EBD5C5` | `0xF5EBD5C5` | **一致** |
+| 24 | guard post | `0xF5EBD5C5` | `0xF5EBD5C5` | **一致** |
+| 26 | failure | `16` (FNV) | 0 | ゲート自体 |
+
+結果配列は **1,024 語すべて 0**。観測 SHA-256
+`e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad` は
+**2,048 ゼロバイトの SHA-256 と完全一致**することを独立に検証した。
+
+### §23.4 何が起きたか
+
+**臨界区間は実行されていない。** ハンドラは
+
+1. オペランド 4 タイルを構築（pack=4）
+2. bias 2 組をロード（bias=2）
+3. guard 1,536 B をゼロ初期化し、**guard pre/post とも登録値と一致**
+4. 4 オペランドの FNV を計算
+5. **登録値と違うので `metadata[26]=16` を立て、発行せずに戻った**
+
+**これは fail-closed が正しく働いた結果である。** ゲートが無ければ、
+間違ったオペランドで得た数値を「D8 の結果」と誤読していた。
+
+**したがってこのランは MMA オペランド再利用について何も答えていない。**
+失敗契約の状態 **S2**（`D8_CONTRACT_FAILED`）で、数値判定なし、生配列は保全、
+再試行なし。
+
+### §23.5 原因
+
+**ガードの FNV は正しいので、FNV 関数と VTCM 読み出し経路は動いている。**
+差はオペランドのバイト列そのものにある。
+
+**第一候補: `build_d8_operands` が CPU で一度も実行されていない。**
+
+- 定義は `hmx_mode46_d8.h`
+- 参照はそのヘッダ内のみ（定義・pack ヘルパ・ハンドラ）
+- **このヘッダを include するのは `probe_dsp.c` だけ**（DSP 側）
+
+CPU 側のスイートは契約チェッカ・分類器・**別の**ホストモデルを検証しているが、
+**DSP が生成するタイルは一度も生成していない。** そのため登録済み 4 定数と
+DSP の出力が突き合わされたのは、実機での 1 回だけだった。
+
+**第二候補（証拠では区別できない）: `d8_pack_tile` の `vmem` ストアと、
+FNV のスカラー byte 読みの間にバリアが無い。**
+
+コンパイラの `"memory"` clobber しか無く、データキャッシュ／`syncht` バリアが
+無い。ガード側で区別できないのは、`d8_guard_init` が**ゼロ**を書くため、
+ストアを見落とした読みもゼロを見るからである。
+
+**どちらも V81 HMX の性質ではない。`B3_R2_SYNC_UNPROVEN` とは無関係。**
+
+### §23.6 現在のラベル
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変**（どちら向きの証拠も無い） |
+| `B3_R2_FULL_TILE_CPU_READY` | 不変 |
+| `CPU_VALIDATED_PREFERRED_DESIGN` | Candidate B のまま |
+| C2 | `C2 NOT_RUN`（別管理） |
+| Mode 46 | 登録済み・1 回実行・`D8_CONTRACT_FAILED` |
+| D8 | **`D8_CONTRACT_FAILED`**（数値証拠なし） |
+
+### §23.7 次にやること（すべて offline、revision 3 予算外）
+
+1. DSP のオペランド fixture を CPU で実行・比較できるようにし、
+   4 つの FNV 定数を実機接触前に検査する
+2. pack の後にバリアが要るか決め、要るなら**黙って足さず**登録し直す
+3. 修正ビルドで逆アセンブル監査・CPU スイート・`verify.ps1 -Profile Fast` を
+   再実行し、新しいビルド ID を押す
+
+**第 2 のセッションは新しい登録が必要。**
