@@ -18,7 +18,24 @@
 param(
     [Parameter(Mandatory = $true)][string]$DisasmPath,
     [ValidateSet('A', 'B', 'C', 'D')][string]$Condition = 'B',
-    [string]$Symbol = "run_mode46_one_trial"
+    [string]$Symbol = "run_mode46_one_trial",
+    # VTCM base register, e.g. r0. VTCM is allocated at run time by
+    # HAP_compute_res_attr_get_vtcm_ptr, so a real object cannot contain the
+    # absolute offsets the synthetic fixture uses. The handler receives the base
+    # in one register and derives every operand pointer from it with a constant
+    # add, then spills the derived pointers to the stack frame and reloads them.
+    # Declaring the base register lets the audit follow that chain. Two rules
+    # keep this fail-closed:
+    #
+    #   1. only the declared register, and registers provably derived from it by
+    #      a constant add (directly or through a stack slot), resolve to an
+    #      offset; any other expression is unresolved and fails;
+    #   2. a bare ##N immediate is NOT an address when a base is declared.
+    #      Without rule 2 the payload constants the handler writes (scale
+    #      0x5400, fill pattern 0xA5A5) would resolve as addresses and pass.
+    #
+    # Without this parameter the audit behaves exactly as before (absolute ##N).
+    [string]$BaseRegister = ""
 )
 $ErrorActionPreference = "Stop"
 
@@ -84,17 +101,78 @@ function Resolve-Expr([string]$Expr) {
     return $null
 }
 
+# ------------------------------------------------------- VTCM pointer map
+# See the -BaseMap comment in the param block for why this is a map and not a
+# single base register.
+$script:vtcmMap = @{}
+$script:slotReg = @{}
+$script:loopSnapshots = @{}
+$script:vtcmMapMode = $false
+if ($BaseRegister) {
+    if ($BaseRegister -notmatch '^r\d+$') {
+        Fail "base_register_invalid: '$BaseRegister' is not a register name"
+    } else {
+        $script:vtcmMap[$BaseRegister] = 0
+        $script:vtcmMapMode = $true
+    }
+}
+
+function Resolve-Addr([string]$Expr) {
+    # A real object spells the HMX operand as mxmem(ptr, rt): the pointer and
+    # the register-type field. The address is the first component; the rt is a
+    # separate encoding the rules do not interpret.
+    $e = ($Expr -split ',')[0].Trim()
+    if ($script:vtcmMapMode) {
+        # base mode: only a declared or derived register carries an offset
+        if ($e -match '^(r\d+)\s*\+\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)$') {
+            $reg = $Matches[1]
+            $off = [Convert]::ToInt32($Matches[2],
+                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+            if ($script:vtcmMap.ContainsKey($reg)) {
+                return ($script:vtcmMap[$reg] + $off)
+            }
+            return $null
+        }
+        if ($e -match '^(r\d+)$' -and $script:vtcmMap.ContainsKey($Matches[1])) {
+            return $script:vtcmMap[$Matches[1]]
+        }
+        return $null
+    }
+    return Resolve-Expr $e
+}
+
 $mxIdx = @()
 $actIdx = @()
 $wgtIdx = @()
 $biasIdx = @()
 $biasAddr = @()
 $cvtIdx = @()
+$cvtRs = $null          # snapshot of the Rs register AT the cvt index
 $storeIdx = @()
 $storeAddr = @()
-$vecStores = @()   # objects: Index, Addr, Width, Text
+$vecStores = @()   # objects: Index, Addr, Width, Text, LoopCount, LoopBody
 $readsUsed = @{}
 $forbiddenIdx = @()
+$loopIdx = @()     # objects: Index, Count, BodyIndex, BodyText
+
+# Loop ranges must be known before the derivation walk: a loop body advances its
+# pointer by 128 B per iteration, and that increment must not leak into the
+# addresses used after the loop (the MMA operands and the store). The body is
+# every segment from loop0+1 up to the segment carrying :endloop0.
+$loopBody = @{}    # loop index -> @(first, last)
+for ($i = 0; $i -lt $segments.Count; $i++) {
+    if ($segments[$i].Text -notmatch '^loop[01]\(') { continue }
+    for ($j = $i + 1; $j -lt $segments.Count; $j++) {
+        if ($segments[$j].Text -match ':endloop[01]') {
+            $loopBody[$i] = @(($i + 1), $j)
+            break
+        }
+    }
+}
+$inLoopBody = @{}
+foreach ($k in $loopBody.Keys) {
+    for ($j = $loopBody[$k][0]; $j -le $loopBody[$k][1]; $j++) { $inLoopBody[$j] = $k }
+}
 
 for ($i = 0; $i -lt $segments.Count; $i++) {
     $t = $segments[$i].Text
@@ -102,12 +180,133 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
     if ($t -match '^(r\d+)\s*=\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)$') {
         $regs[$Matches[1]] = [Convert]::ToInt32($Matches[2],
             $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        # A constant assignment destroys any VTCM derivation the register had.
+        if ($script:vtcmMapMode -and $script:vtcmMap.ContainsKey($Matches[1])) {
+            $script:vtcmMap.Remove($Matches[1])
+        }
+        continue
+    }
+    # rD = add(rS, #imm): a pointer derived from the base by a constant add.
+    # Inside a loop body the increment is per-iteration, so it must not change
+    # the derivation used after the loop; the body's own store is resolved
+    # separately by the loop expansion below.
+    if ($t -match '^(r\d+)\s*=\s*add\((r\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)') {
+        $dst = $Matches[1]
+        $src = $Matches[2]
+        $off = [Convert]::ToInt32($Matches[3],
+            $(if ($Matches[3].StartsWith('0x')) { 16 } else { 10 }))
+        if ($script:vtcmMapMode -and -not $inLoopBody.ContainsKey($i)) {
+            if ($script:vtcmMap.ContainsKey($src)) {
+                $script:vtcmMap[$dst] = $script:vtcmMap[$src] + $off
+            } elseif ($script:vtcmMap.ContainsKey($dst)) {
+                $script:vtcmMap.Remove($dst)
+            }
+        }
+        continue
+    }
+    # rD = rS: a register copy preserves the derivation.
+    if ($t -match '^(r\d+)\s*=\s*(r\d+)$') {
+        $dst = $Matches[1]
+        $src = $Matches[2]
+        if ($script:vtcmMapMode) {
+            if ($script:vtcmMap.ContainsKey($src)) {
+                $script:vtcmMap[$dst] = $script:vtcmMap[$src]
+            } elseif ($script:vtcmMap.ContainsKey($dst)) {
+                $script:vtcmMap.Remove($dst)
+            }
+        }
+        continue
+    }
+    # Stack spill: memw(r29+#off) = rN, or the 64-bit memd(r29+#off) = rM:rN
+    # which stores rN at +off and rM at +off+4. The slot keeps the derivation
+    # the register had at the spill, which is what a later reload must see.
+    if ($t -match 'memd\(r29\+#(0x[0-9a-fA-F]+)\)\s*=\s*(r\d+):(r\d+)') {
+        $off = [Convert]::ToInt32($Matches[1],
+            $(if ($Matches[1].StartsWith('0x')) { 16 } else { 10 }))
+        $hi = $Matches[2]
+        $lo = $Matches[3]
+        foreach ($pair in @(@($off, $lo), @(($off + 4), $hi))) {
+            $slot = 's' + $pair[0]
+            $src = $pair[1]
+            $script:slotReg[$slot] = $src
+            if ($script:vtcmMapMode) {
+                if ($script:vtcmMap.ContainsKey($src)) {
+                    $script:vtcmMap[$slot] = $script:vtcmMap[$src]
+                } elseif ($script:vtcmMap.ContainsKey($slot)) {
+                    $script:vtcmMap.Remove($slot)
+                }
+            }
+        }
+    }
+    if ($t -match 'memw\(r29\+#(0x[0-9a-fA-F]+)\)\s*=\s*(r\d+)') {
+        $slot = 's' + [Convert]::ToInt32($Matches[1],
+            $(if ($Matches[1].StartsWith('0x')) { 16 } else { 10 }))
+        $script:slotReg[$slot] = $Matches[2]
+        if ($script:vtcmMapMode) {
+            if ($script:vtcmMap.ContainsKey($Matches[2])) {
+                $script:vtcmMap[$slot] = $script:vtcmMap[$Matches[2]]
+            } elseif ($script:vtcmMap.ContainsKey($slot)) {
+                $script:vtcmMap.Remove($slot)
+            }
+        }
+    }
+    # Stack reload: rN = memw(r29+#off). The register inherits the slot. The
+    # pattern is not anchored at the end because the compiler emits compound
+    # segments ("r4 = memw(r29+#0x4); memw(r6+#0x28) = #1").
+    if ($t -match '^(r\d+)\s*=\s*memw\(r29\+#(0x[0-9a-fA-F]+)\)') {
+        $dst = $Matches[1]
+        $slot = 's' + [Convert]::ToInt32($Matches[2],
+            $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        if ($script:vtcmMapMode) {
+            if ($script:vtcmMap.ContainsKey($slot)) {
+                $script:vtcmMap[$dst] = $script:vtcmMap[$slot]
+            } elseif ($script:vtcmMap.ContainsKey($dst)) {
+                $script:vtcmMap.Remove($dst)
+            }
+        }
+        continue
+    }
+    # rD = setbit(rS,#mask) / rD = and(rS,#mask): the pointer survives, only the
+    # low tag bits the HMX encoding carries change. The derivation is inherited
+    # from the source register. This must be checked before the generic
+    # "any other write" rule below, and it must not require the mask to be small:
+    # the handler tags bias set 1 with |1, which is exactly this form.
+    if ($t -match '^(r\d+)\s*=\s*(?:setbit|and)\((r\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)') {
+        $dst = $Matches[1]
+        $src = $Matches[2]
+        if ($script:vtcmMapMode) {
+            if ($script:vtcmMap.ContainsKey($src)) {
+                $script:vtcmMap[$dst] = $script:vtcmMap[$src]
+            } elseif ($script:vtcmMap.ContainsKey($dst)) {
+                $script:vtcmMap.Remove($dst)
+            }
+        }
+        continue
+    }
+    # Any other write to a register destroys its derivation. This must come
+    # after the spill/reload/copy cases so those keep their meaning.
+    if ($t -match '^(r\d+)\s*=' -and $script:vtcmMapMode) {
+        $dst = $Matches[1]
+        if ($script:vtcmMap.ContainsKey($dst)) { $script:vtcmMap.Remove($dst) }
+    }
+    # loop0(L,#N) / loop1(L,#N): the body is the next segment. Only a literal
+    # count can be expanded statically. A register count is recorded but not
+    # expanded: the handler's FNV and copy loops use register counts and are not
+    # part of the registered fill/pack form, so they are not counted as stores.
+    if ($t -match '^loop[01]\((0x[0-9a-fA-F]+|\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)$') {
+        $count = [Convert]::ToInt32($Matches[2],
+            $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        $loopIdx += [pscustomobject]@{ Index = $i; Count = $count; Literal = $true }
+        continue
+    }
+    if ($t -match '^loop[01]\(') {
+        $loopIdx += [pscustomobject]@{ Index = $i; Count = 0; Literal = $false }
         continue
     }
 
     if ($t -match '\bmxclracc\.hf\b') { $mxIdx += $i }
     if ($t -match '\bbias\s*=\s*mxmem2\(([^)]*)\)') {
-        $addr = Resolve-Expr $Matches[1]
+        $addr = Resolve-Addr $Matches[1]
         if ($null -eq $addr) { Fail "bias_address_unresolved: line $($segments[$i].Line)" }
         $biasIdx += $i
         $biasAddr += $addr
@@ -116,9 +315,14 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
     if ($t -match '\bcvt\.hf\s*=\s*acc\((r\d+)\)') {
         $cvtIdx += $i
         $script:cvtReg = $Matches[1]
+        # Snapshot the Rs register HERE. Reading the final map later lets any
+        # unrelated reuse of the same register change the verdict; a minimal
+        # reproduction (known-good fixture plus one trailing r0 = ##0x0fff)
+        # flipped PASS to FAIL before this was fixed.
+        if ($regs.ContainsKey($script:cvtReg)) { $cvtRs = $regs[$script:cvtReg] }
     }
     if ($t -match '\bmxmem\(([^)]*)\)\s*=\s*cvt\b') {
-        $addr = Resolve-Expr $Matches[1]
+        $addr = Resolve-Addr $Matches[1]
         if ($null -eq $addr) { Fail "store_address_unresolved: line $($segments[$i].Line)" }
         $storeIdx += $i
         $storeAddr += $addr
@@ -130,18 +334,103 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
         $readsUsed[$i] = 1
     }
     if ($t -match '\bvmem\(([^)]*)\)\s*=\s*(v\d+)(\.\w+)?') {
-        $addr = Resolve-Expr $Matches[1]
+        $addr = Resolve-Addr $Matches[1]
         $suffix = $Matches[3]
         $width = 128
         if ($suffix -and $suffix -match '\.(b|h|w)$') { $width = 0 }
         if ($null -eq $addr) { Fail "vector_address_unresolved: line $($segments[$i].Line)" }
         $vecStores += [pscustomobject]@{
             Index = $i; Addr = $addr; Width = $width; Suffix = $suffix
-            Text = $t; Line = $segments[$i].Line
+            Text = $t; Line = $segments[$i].Line; LoopCount = 0
         }
     }
     if ($t -match '\b(syncht|barrier|dmwait|dmstart|dmb|isync)\b') {
         $forbiddenIdx += $i
+    }
+}
+
+# ------------------------------------------------------- loop expansion
+# 16 x 128 B lowers to loop0(L,#0x10) ... :endloop0 around a single vmem store.
+# The body is every segment from loop0+1 up to the segment carrying :endloop0,
+# not just the next one: the compiler reloads the pointer and sets up the
+# pattern inside the body. The rules count stores, so a store inside a
+# literal-count loop stands for Count stores at base + k*128. A loop whose body
+# holds no vector store (the handler's FNV and copy loops) is not part of the
+# registered fill/pack form and is ignored.
+foreach ($lp in $loopIdx) {
+    $bodyEnd = -1
+    for ($j = $lp.Index + 1; $j -lt $segments.Count; $j++) {
+        if ($segments[$j].Text -match ':endloop[01]') { $bodyEnd = $j; break }
+    }
+    if ($bodyEnd -lt 0) {
+        Fail "loop_end_missing: line $($segments[$lp.Index].Line)"
+        continue
+    }
+    # the store inside the body, if any
+    $storeSeg = -1
+    for ($j = $lp.Index + 1; $j -lt $bodyEnd; $j++) {
+        if ($segments[$j].Text -match '\bvmem\(([^)]*)\)\s*=\s*(v\d+)$') { $storeSeg = $j; break }
+    }
+    if ($storeSeg -lt 0) { continue }
+    if (-not $lp.Literal) {
+        Fail "loop_count_not_immediate: line $($segments[$lp.Index].Line) '$($segments[$lp.Index].Text)'"
+        continue
+    }
+    # Resolve the store address from the register state at the store, taking
+    # the last assignment to that register inside the body into account.
+    $storeText = $segments[$storeSeg].Text
+    $null = $storeText -match '\bvmem\(([^)]*)\)\s*=\s*(v\d+)$'
+    $addrExpr = $Matches[1]
+    $addr = $null
+    if ($addrExpr -match '^(r\d+)\s*\+\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)$') {
+        $reg = $Matches[1]
+        $off = [Convert]::ToInt32($Matches[2],
+            $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        $base = $null
+        for ($j = $storeSeg - 1; $j -gt $lp.Index; $j--) {
+            if ($segments[$j].Text -match "^$reg\s*=\s*(r\d+)$") {
+                $src = $Matches[1]
+                if ($script:vtcmMap.ContainsKey($src)) { $base = $script:vtcmMap[$src] }
+                break
+            }
+            if ($segments[$j].Text -match "^$reg\s*=\s*memw\(r29\+#(0x[0-9a-fA-F]+)\)$") {
+                $slot = 's' + [Convert]::ToInt32($Matches[1],
+                    $(if ($Matches[1].StartsWith('0x')) { 16 } else { 10 }))
+                if ($script:vtcmMap.ContainsKey($slot)) { $base = $script:vtcmMap[$slot] }
+                break
+            }
+        }
+        if ($null -eq $base -and $script:vtcmMap.ContainsKey($reg)) {
+            $base = $script:vtcmMap[$reg]
+        }
+        if ($null -ne $base) { $addr = $base + $off }
+    } elseif ($addrExpr -match '^(r\d+)$' -and $script:vtcmMap.ContainsKey($Matches[1])) {
+        $addr = $script:vtcmMap[$Matches[1]]
+    }
+    if ($null -eq $addr) {
+        Fail "loop_body_address_unresolved: line $($segments[$storeSeg].Line)"
+        continue
+    }
+    $hit = @($vecStores | Where-Object { $_.Index -eq $storeSeg })
+    if ($hit.Count -ne 1) {
+        Fail "loop_body_not_counted: line $($segments[$storeSeg].Line)"
+        continue
+    }
+    $hit[0].LoopCount = $lp.Count
+    # The body advances the pointer by 128 B per iteration. The increment may
+    # sit before or after the store, and it may share the :endloop0 segment.
+    $inc = $null
+    for ($j = $lp.Index + 1; $j -le $bodyEnd; $j++) {
+        if ($segments[$j].Text -match '^(r\d+)\s*=\s*add\(\1\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)') {
+            $inc = [Convert]::ToInt32($Matches[2],
+                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+            break
+        }
+    }
+    if ($null -eq $inc) {
+        Fail "loop_stride_unresolved: line $($segments[$storeSeg].Line)"
+    } elseif ($inc -ne 128) {
+        Fail "loop_stride: $inc/128 at line $($segments[$storeSeg].Line)"
     }
 }
 
@@ -153,8 +442,8 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
     $both = [regex]::Match($t,
         'activation\.hf\s*=\s*mxmem\(([^)]*)\).*weight\.hf\s*=\s*mxmem\(([^)]*)\)')
     if ($both.Success) {
-        $a = Resolve-Expr $both.Groups[1].Value
-        $w = Resolve-Expr $both.Groups[2].Value
+        $a = Resolve-Addr $both.Groups[1].Value
+        $w = Resolve-Addr $both.Groups[2].Value
         if ($null -eq $a -or $null -eq $w) {
             Fail "mma_address_unresolved: line $($segments[$i].Line)"
         }
@@ -166,8 +455,8 @@ for ($i = 0; $i -lt $segments.Count; $i++) {
         $wgt = [regex]::Match($segments[$i + 1].Text,
             'weight\.hf\s*=\s*mxmem\(([^)]*)\)')
         if ($wgt.Success) {
-            $a = Resolve-Expr $act.Groups[1].Value
-            $w = Resolve-Expr $wgt.Groups[1].Value
+            $a = Resolve-Addr $act.Groups[1].Value
+            $w = Resolve-Addr $wgt.Groups[1].Value
             if ($null -eq $a -or $null -eq $w) {
                 Fail "mma_address_unresolved: line $($segments[$i].Line)"
             }
@@ -211,8 +500,7 @@ if ($cvtIdx.Count -eq 1 -and $storeIdx.Count -eq 1 -and $cvtIdx[0] -gt $storeIdx
     Fail "store_before_convert"
 }
 if ($cvtIdx.Count -eq 1) {
-    $rs = $null
-    if ($script:cvtReg -and $regs.ContainsKey($script:cvtReg)) { $rs = $regs[$script:cvtReg] }
+    $rs = $cvtRs
     if ($null -eq $rs) {
         Fail "convert_rs_unresolved"
     } elseif ($rs -ne 1) {
@@ -221,16 +509,38 @@ if ($cvtIdx.Count -eq 1) {
 }
 
 # ------------------------------------------------------------- vector stores
+# A store inside loop0(L,#N) stands for N stores at base + k*128. Expand the
+# recorded stores into the address sequence the rules below expect, keeping the
+# segment index so the order rules still work.
+$expanded = @()
+foreach ($s in $vecStores) {
+    if ($s.LoopCount -gt 0) {
+        for ($k = 0; $k -lt $s.LoopCount; $k++) {
+            $expanded += [pscustomobject]@{
+                Index = $s.Index; Addr = $s.Addr + $k * 128; Width = $s.Width
+                Suffix = $s.Suffix; Text = $s.Text; Line = $s.Line
+                LoopCount = $s.LoopCount; Iteration = $k
+            }
+        }
+    } else {
+        $expanded += [pscustomobject]@{
+            Index = $s.Index; Addr = $s.Addr; Width = $s.Width
+            Suffix = $s.Suffix; Text = $s.Text; Line = $s.Line
+            LoopCount = 0; Iteration = 0
+        }
+    }
+}
+
 $firstBias = if ($biasIdx.Count -gt 0) { ($biasIdx | Measure-Object -Minimum).Minimum } else { [int]::MaxValue }
 $firstMx = if ($mxIdx.Count -gt 0) { $mxIdx[0] } else { [int]::MaxValue }
 $lastMma = if ($mma.Count -gt 0) { ($mma | ForEach-Object { $_.Index } | Measure-Object -Maximum).Maximum } else { -1 }
 
-$packStores = @($vecStores | Where-Object { $_.Index -lt $firstBias })
-$guardStores = @($vecStores | Where-Object { $_.Index -ge $firstBias -and $_.Index -lt $firstMx })
-$fillStores = @($vecStores | Where-Object { $_.Index -gt $lastMma })
-$criticalStores = @($vecStores | Where-Object { $_.Index -ge $firstMx -and $_.Index -le $lastMma })
+$packStores = @($expanded | Where-Object { $_.Index -lt $firstBias })
+$guardStores = @($expanded | Where-Object { $_.Index -ge $firstBias -and $_.Index -lt $firstMx })
+$fillStores = @($expanded | Where-Object { $_.Index -gt $lastMma })
+$criticalStores = @($expanded | Where-Object { $_.Index -ge $firstMx -and $_.Index -le $lastMma })
 
-foreach ($s in $vecStores) {
+foreach ($s in $expanded) {
     if ($s.Width -ne 128) { Fail "vector_width: line $($s.Line) '$($s.Text)' is narrower than 128 B" }
 }
 foreach ($s in $criticalStores) { Fail "store_in_critical_interval: line $($s.Line)" }
@@ -258,7 +568,7 @@ for ($k = 0; $k -lt $guardStores.Count; $k++) {
         break
     }
 }
-foreach ($s in $vecStores) {
+foreach ($s in $expanded) {
     if ($s.Index -gt $firstMx -and $s.Addr -ge 10752) {
         Fail "guard_written_after_init: line $($s.Line)"
     }

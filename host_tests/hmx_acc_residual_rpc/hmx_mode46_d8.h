@@ -23,6 +23,28 @@
 // Ownership: this handler writes metadata[9..31] only. metadata[0..8] belong to
 // run(), and metadata[30] (cleanup) is written by run() for mode 46.
 
+/* Copy one 2 KiB tile into VTCM with 16 x 128 B HVX stores.
+ *
+ * The registration lists PACK as "16 x 128 B" per operand, and the
+ * disassembly audit checks the real object for exactly that form. Writing the
+ * cells straight into VTCM lowers to scalar memd/memw stores, which is a
+ * different experiment, so the tiles are built in a local buffer and copied
+ * with vector stores. The loop count is a literal so the audit can expand it
+ * statically. */
+static void d8_pack_tile(uint16_t *dst, const uint16_t *src) {
+  const uintptr_t base = (uintptr_t)dst;
+  int v;
+  for (v = 0; v < HMX_MODE46_TILE_VECTORS; ++v) {
+    const HVX_Vector chunk =
+        *(const HVX_Vector *)((const uint8_t *)src +
+                              (size_t)(v * HMX_MODE46_VECTOR_BYTES));
+    asm volatile("vmem(%0) = %1\n"
+                 : : "r"(base + (uintptr_t)(v * HMX_MODE46_VECTOR_BYTES)),
+                     "v"(chunk)
+                 : "memory");
+  }
+}
+
 /* ---- D8 operand fixture -------------------------------------------------
  *
  * The registered operands are the ones the CPU model packs from the mode 42
@@ -37,6 +59,13 @@
  */
 static void build_d8_operands(uint16_t *ahi, uint16_t *alo, uint16_t *whi,
                               uint16_t *wlo) {
+  /* The tiles are built in local buffers and then copied into VTCM with the
+   * registered 16 x 128 B vector stores; writing the cells straight into VTCM
+   * would lower to scalar stores, which is a different experiment. */
+  static uint16_t ahi_local[E3C1_T8_CELLS];
+  static uint16_t alo_local[E3C1_T8_CELLS];
+  static uint16_t whi_local[E3C1_T8_CELLS];
+  static uint16_t wlo_local[E3C1_T8_CELLS];
   int idx;
   int s, o, i;
 
@@ -85,10 +114,10 @@ static void build_d8_operands(uint16_t *ahi, uint16_t *alo, uint16_t *whi,
 
   /* Pack the four tiles. hi = RN16(value) is the plain operand; lo is the
    * float-arithmetic split residual, exactly e3c1_split_lo. */
-  memset(ahi, 0, TILE_BYTES);
-  memset(alo, 0, TILE_BYTES);
-  memset(whi, 0, TILE_BYTES);
-  memset(wlo, 0, TILE_BYTES);
+  memset(ahi_local, 0, TILE_BYTES);
+  memset(alo_local, 0, TILE_BYTES);
+  memset(whi_local, 0, TILE_BYTES);
+  memset(wlo_local, 0, TILE_BYTES);
   for (idx = 0; idx < E3C1_T8_CELLS; ++idx) {
     const int row = idx >> 5; /* activation spatial / weight output channel */
     const int col = idx & 31; /* input channel */
@@ -96,11 +125,17 @@ static void build_d8_operands(uint16_t *ahi, uint16_t *alo, uint16_t *whi,
     const uint16_t wh = double_to_fp16(e3c1_w[idx]);
     const uint16_t al = e3c1_split_lo(e3c1_x[idx], ah);
     const uint16_t wl = e3c1_split_lo(e3c1_w[idx], wh);
-    ahi[((row >> 1) * 64) + col * 2 + (row & 1)] = ah;
-    alo[((row >> 1) * 64) + col * 2 + (row & 1)] = al;
-    whi[((col >> 1) * 64) + row * 2 + (col & 1)] = wh;
-    wlo[((col >> 1) * 64) + row * 2 + (col & 1)] = wl;
+    ahi_local[((row >> 1) * 64) + col * 2 + (row & 1)] = ah;
+    alo_local[((row >> 1) * 64) + col * 2 + (row & 1)] = al;
+    whi_local[((col >> 1) * 64) + row * 2 + (col & 1)] = wh;
+    wlo_local[((col >> 1) * 64) + row * 2 + (col & 1)] = wl;
   }
+
+  /* PACK AHI, PACK ALO, PACK WHI, PACK WLO: 16 x 128 B each, in that order. */
+  d8_pack_tile(ahi, ahi_local);
+  d8_pack_tile(alo, alo_local);
+  d8_pack_tile(whi, whi_local);
+  d8_pack_tile(wlo, wlo_local);
 }
 
 /* FNV-1a 32 over a packed tile, byte order as stored (little endian u16). */

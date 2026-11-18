@@ -86,10 +86,14 @@ function New-Fixture {
 }
 
 function Invoke-Case {
-    param([string]$Name, [string]$Cond, [string[]]$Lines, [int]$Expect)
+    param([string]$Name, [string]$Cond, [string[]]$Lines, [int]$Expect,
+          [string]$Base = "")
     $path = Join-Path $OutDir "$Name.txt"
     Set-Content -LiteralPath $path -Value $Lines -Encoding ascii
-    $out = & pwsh -NoProfile -File $Auditor -DisasmPath $path -Condition $Cond 2>&1
+    $argv = @("-NoProfile", "-File", $Auditor, "-DisasmPath", $path,
+              "-Condition", $Cond)
+    if ($Base) { $argv += @("-BaseRegister", $Base) }
+    $out = & pwsh @argv 2>&1
     $exit = $LASTEXITCODE
     $ok = ($exit -eq $Expect)
     if (-not $ok) {
@@ -99,6 +103,77 @@ function Invoke-Case {
         Write-Host "case=$Name exit=$exit want=$Expect PASS"
     }
     return $ok
+}
+
+# Base-relative fixture: the shape a real V81 object has. The handler receives
+# the VTCM base in r0, derives every operand pointer from it with a constant
+# add, then spills and reloads them. Loops are used for the 16 x 128 B blocks.
+function New-BaseFixture {
+    param(
+        [string]$Cond,
+        [switch]$SwapMma3ToZero,
+        [int]$LoopCount = 16,
+        [int]$RsValue = 1,
+        [switch]$PayloadAsAddress
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("{ r21 = add(r0,#0x0) }")      # Ahi  +0
+    $lines.Add("{ r27 = add(r0,#0x800) }")    # Alo  +2048
+    $lines.Add("{ r4 = add(r0,#0x1000) }")    # Whi  +4096
+    $lines.Add("{ r26 = add(r0,#0x1800) }")   # Wlo  +6144
+    $lines.Add("{ r8 = add(r0,#0x2000) }")    # out  +8192
+    $lines.Add("{ r16 = add(r0,#0x2800) }")   # bias0 +10240
+    $lines.Add("{ r17 = add(r0,#0x2900) }")   # bias1 +10496
+    $lines.Add("{ r18 = add(r0,#0x2a00) }")   # guard +10752
+    $lines.Add("{ memw(r29+#0x4) = r21 }")
+    $lines.Add("{ memw(r29+#0x8) = r27 }")
+    $lines.Add("{ memw(r29+#0x10) = r4 }")
+    $lines.Add("{ memw(r29+#0xc) = r26 }")
+    $lines.Add("{ memw(r29+#0x2c) = r8 }")
+    $lines.Add("{ memw(r29+#0x1c) = r16 }")
+    $lines.Add("{ memw(r29+#0x18) = r17 }")
+    $lines.Add("{ memw(r29+#0x24) = r18 }")
+    # packs: 4 blocks of 16 x 128 B
+    foreach ($base in @('r21', 'r27', 'r4', 'r26')) {
+        $lines.Add("{ loop0(0x0,#0x10) }")
+        $lines.Add("{ vmem($base+#0x0) = v0 }")
+        $lines.Add("{ $base = add($base,#0x80) :endloop0 }")
+    }
+    $lines.Add("{ bias = mxmem2(r16) }")
+    $lines.Add("{ bias = mxmem2(r17) }")
+    # guard init: 12 x 128 B
+    $lines.Add("{ loop0(0x0,#0xc) }")
+    $lines.Add("{ vmem(r18+#0x0) = v0 }")
+    $lines.Add("{ r18 = add(r18,#0x80) :endloop0 }")
+    $lines.Add("{ mxclracc.hf }")
+    $mma3act = if ($SwapMma3ToZero) { 'r21' } else { 'r27' }
+    $lines.Add("{ activation.hf = mxmem(r21) weight.hf = mxmem(r4) }")
+    $lines.Add("{ activation.hf = mxmem(r21) weight.hf = mxmem(r26) }")
+    $lines.Add("{ activation.hf = mxmem($mma3act) weight.hf = mxmem(r4) }")
+    # fills
+    $lines.Add("{ loop0(0x0,#$('0x{0:x}' -f $LoopCount)) }")
+    $lines.Add("{ vmem(r8+#0x0) = v0 }")
+    $lines.Add("{ r8 = add(r8,#0x80) :endloop0 }")
+    if ($Cond -in @('B', 'C')) {
+        $lines.Add("{ loop0(0x0,#$('0x{0:x}' -f $LoopCount)) }")
+        $lines.Add("{ vmem(r26+#0x0) = v0 }")
+        $lines.Add("{ r26 = add(r26,#0x80) :endloop0 }")
+    }
+    if ($Cond -in @('B', 'D')) {
+        $lines.Add("{ loop0(0x0,#$('0x{0:x}' -f $LoopCount)) }")
+        $lines.Add("{ vmem(r21+#0x0) = v0 }")
+        $lines.Add("{ r21 = add(r21,#0x80) :endloop0 }")
+    }
+    $lines.Add("{ r0 = ##$('0x{0:x4}' -f $RsValue) }")
+    $lines.Add("{ cvt.hf = acc(r0) }")
+    $lines.Add("{ mxmem(r8) = cvt }")
+    if ($PayloadAsAddress) {
+        # A payload constant used as an address must not resolve.
+        $lines.Add("{ loop0(0x0,#0x10) }")
+        $lines.Add("{ vmem(##0xa5a5) = v0 }")
+        $lines.Add("{ r5 = add(r5,#0x80) :endloop0 }")
+    }
+    return $lines
 }
 
 $failed = 0
@@ -168,13 +243,66 @@ $m = New-Fixture 'B'
 $m = @($m -replace 'vmem\(##8192\) = v0', 'vmem(##8192) = v0.b')
 if (-not (Invoke-Case "mut_fill_width" 'B' $m 1)) { $failed++ }
 
+# ---------------------------------------------------------------------------
+# Base-relative rules (2026-11-19). A real V81 object receives the VTCM base in
+# a register, derives the operand pointers from it, spills them, and lowers
+# 16 x 128 B to loop0. The audit gained three rules for that shape: a declared
+# base register with derivation tracking, loop expansion, and an Rs snapshot.
+# Each rule gets a clean case and a mutation that must be rejected.
+# ---------------------------------------------------------------------------
+$baseReg = "r0"
+$baseCases = 0
+$baseFailed = 0
+
+# 13-16. the base-relative shape must pass for all four conditions
+foreach ($cond in @('A', 'B', 'C', 'D')) {
+    $baseCases++
+    if (-not (Invoke-Case "base_clean_$cond" $cond (New-BaseFixture $cond) 0 $baseReg)) {
+        $baseFailed++
+    }
+}
+
+# 17. MMA #3 reading +0 instead of +2048 must be rejected
+$baseCases++
+if (-not (Invoke-Case "base_mut_mma3_offset" 'B' (New-BaseFixture 'B' -SwapMma3ToZero) 1 $baseReg)) {
+    $baseFailed++
+}
+
+# 18. a loop count of 8 instead of 16 must be rejected
+$baseCases++
+if (-not (Invoke-Case "base_mut_loop_count" 'B' (New-BaseFixture 'B' -LoopCount 8) 1 $baseReg)) {
+    $baseFailed++
+}
+
+# 19. a real Rs change must be rejected (the snapshot must still catch it)
+$baseCases++
+if (-not (Invoke-Case "base_mut_rs_value" 'B' (New-BaseFixture 'B' -RsValue 0x1004) 1 $baseReg)) {
+    $baseFailed++
+}
+
+# 20. a payload constant used as an address must not resolve
+$baseCases++
+if (-not (Invoke-Case "base_mut_payload_address" 'B' (New-BaseFixture 'B' -PayloadAsAddress) 1 $baseReg)) {
+    $baseFailed++
+}
+
+# 21. the same base-relative text without -BaseRegister must fail closed:
+#     rN is then an unknown register, not an address.
+$baseCases++
+if (-not (Invoke-Case "base_mut_no_base_declared" 'B' (New-BaseFixture 'B') 1 '')) {
+    $baseFailed++
+}
+
+$cases += $baseCases
+$failed += $baseFailed
+
 Write-Host "d8_disasm_audit_test_cases=$cases failures=$failed"
 if ($failed -ne 0) {
     Write-Host "d8_disasm_audit_test=FAIL"
     if ($pushedLocation) { Pop-Location }
     exit 1
 }
-Write-Host "d8_disasm_audit_test=PASS clean=4 mutants=12"
+Write-Host "d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5"
 Write-Host "d8_disasm_audit_test_scope=synthetic_text_only_no_real_v81_binary"
 if ($pushedLocation) { Pop-Location }
 exit 0
