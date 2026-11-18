@@ -12,6 +12,13 @@ $Auditor = Join-Path $PSScriptRoot "audit_hmx_d8_disasm.ps1"
 $OutDir = Join-Path $Root "build\d8_disasm"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+# Pin the working directory to the repository root so build/ is always resolved
+# inside this worktree, whatever directory the caller used (see
+# run_hmx_d8_sim.ps1 for the incident that motivated this).
+$pushedLocation = $false
+Push-Location $Root
+$pushedLocation = $true
+
 function New-Fixture {
     param(
         [string]$Cond,
@@ -164,8 +171,10 @@ if (-not (Invoke-Case "mut_fill_width" 'B' $m 1)) { $failed++ }
 Write-Host "d8_disasm_audit_test_cases=$cases failures=$failed"
 if ($failed -ne 0) {
     Write-Host "d8_disasm_audit_test=FAIL"
+    if ($pushedLocation) { Pop-Location }
     exit 1
 }
 Write-Host "d8_disasm_audit_test=PASS clean=4 mutants=12"
 Write-Host "d8_disasm_audit_test_scope=synthetic_text_only_no_real_v81_binary"
+if ($pushedLocation) { Pop-Location }
 exit 0

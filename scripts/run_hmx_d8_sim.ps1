@@ -40,6 +40,16 @@ $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("hmx-d8-sim-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
+# The simulator writes its reference dump to the relative path
+# "build/hmx_d8_reference_arrays.txt" (hmx_d8_min_sim.c), so the process working
+# directory decides where the dump lands. Running this script from anywhere but
+# the repository root used to scatter build/ into the caller's directory and
+# made the Python audit skip, which then looked like a mutation failure. Pin the
+# working directory to the repository root for the whole run.
+$pushedLocation = $false
+Push-Location $Root
+$pushedLocation = $true
+
 $gccExit = 1
 $gccChecks = "unknown"
 $o0Status = "SKIP (not evaluated)"
@@ -310,6 +320,9 @@ try {
 } finally {
     if (Test-Path -LiteralPath $TempDir) {
         Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($pushedLocation) {
+        Pop-Location
     }
 }
 

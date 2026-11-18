@@ -211,3 +211,94 @@ try {
 
 **注意: `Push-Location` を省くと、`build/` が現在の CWD に作られ、
 Python 監査が SKIP して mutation check が誤って FAIL する。**
+
+---
+
+## §6 CWD ハザードの根治（2026-11-18 夜、所有者の指示による）
+
+### §6.1 なぜ運用回避ではなくコード修正にしたか
+
+`Push-Location` を人間が覚えておく運用は、注意に依存する一時しのぎである。
+実際に 1 度の事故で **①保護対象への書き込み** と **②偽 FAIL による誤診断** の
+2 種類を同時に起こした。残る作業（DSP 実装・ビルド・実機セッション・証拠保全）は
+すべてこのハザードの上で行われるので、**作業環境の信頼性を先に確定させる**。
+
+### §6.2 修正内容
+
+| スクリプト | 修正 |
+| --- | --- |
+| `scripts/run_hmx_d8_sim.ps1` | `$Root` 解決後に `Push-Location $Root`、既存の `finally` で `Pop-Location`。**どの CWD から呼んでも `build/` が worktree 内に一意に決まる** |
+| `scripts/run_hmx_d8_mutation_check.ps1` | 同じ CWD 固定。加えて **`BLOCKED` ラベルの導入**（下記） |
+| `scripts/test_hmx_d8_disasm_audit.ps1` | 同じ CWD 固定（`build/d8_disasm/` を書くため） |
+| `scripts/audit_hmx_d8_disasm.ps1` | **変更なし**。`-DisasmPath` を受け取るだけで `build/` を書かない |
+
+**C 側（`hmx_d8_min_sim.c` の相対パス）は変更していない。** 指示 4 のとおり、
+スコープ最小はスクリプト側固定とする。dump パスを引数化する設計変更は、
+登録済みの実行経路に触れるリスクに対して利得が小さい。
+
+### §6.3 偽 FAIL の硬化（`BLOCKED` ラベル）
+
+`run_hmx_d8_mutation_check.ps1` に 2 段の防御を入れた。
+
+1. **前提チェック**: `build/hmx_d8_reference_arrays.txt` が無ければ、
+   mutant を 1 つもビルドせずに
+   `d8_mutation_check=BLOCKED (no reference dump at ...)` を出して **exit 2**。
+   ヒント行 `d8_mutation_check_hint=run scripts/run_hmx_d8_sim.ps1 first` も出す。
+2. **実行時チェック**: 独立差分が exit 2（＝実行できなかった）を返した場合、
+   それを **`BLOCKED (audit could not run, exit=2)`** として数え、
+   `FAIL` には数えない。1 件でも BLOCKED があれば全体を
+   `d8_mutation_check=BLOCKED (...)` で **exit 2** にする。
+
+**これで「環境要因で監査が走らなかった」と「mutant が生き残った」が
+ラベルで区別される。** 前者を後者と読み違える誤診断は再発しない。
+
+### §6.4 回帰確認（指示 3）
+
+**テンポラリディレクトリを CWD にして実行**（`PhoneLM` は使っていない）:
+
+```powershell
+$tmp = Join-Path $env:TEMP ("cwdtest-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Push-Location $tmp
+try { & <worktree>\scripts\run_hmx_d8_sim.ps1 } finally { Pop-Location }
+```
+
+| 確認項目 | 結果 |
+| --- | --- |
+| (a) `d8_sim=PASS` になること | **PASS** |
+| `d8_mutation_check=PASS mutants=5` | **PASS**（5/5 DETECTED） |
+| `d8_python=PASS` | **PASS** |
+| `d8_rev3_python=PASS` | **PASS**（checks=140 fail=0） |
+| `d8_disasm_audit_test=PASS` | **PASS**（clean=4 mutants=12） |
+| (b) 実行後その CWD に `build/` が作られていないこと | **作られていない**（ディレクトリ内の項目数 0、`Test-Path <tmp>\build` が False） |
+
+**BLOCKED ラベルの実地確認**: dump を一時退避して実行すると
+
+```
+d8_mutation_check=BLOCKED (no reference dump at ...\build\hmx_d8_reference_arrays.txt)
+d8_mutation_check_hint=run scripts/run_hmx_d8_sim.ps1 first
+EXIT=2
+```
+
+となり、**`FAIL mutants=5` は出ない。** dump は退避から復元済み。
+
+### §6.5 `verify.ps1 -Profile Fast`
+
+1 回目の実行で `git-diff-check` が FAIL した。原因は**私の編集が
+`run_hmx_d8_mutation_check.ps1` の末尾に空行を残したこと**
+（`git diff --check` が `new blank line at EOF` を報告）。末尾の空行を削除して再実行し、
+`git diff --check` がクリーンになったことを確認した。
+
+**この FAIL は私の編集ミスであり、既存の不具合ではない。**
+
+### §6.6 コミット
+
+`<このコミット>` — `fix(hmx): pin the D8 scripts to the repository root`
+
+---
+
+## §7 次の作業（タスク2・3）
+
+CWD ハザードが除去できたので、指示どおり **タスク2（DSP 実装）→ タスク3（ホスト実装）**
+に進む。ビルド時は `HEXAGON_SDK_ROOT=C:\Qualcomm\Hexagon_SDK\6.6.0.0` を明示し、
+SDK バージョンと使用 QAIRT をビルド記録に残す。

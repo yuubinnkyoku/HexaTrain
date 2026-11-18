@@ -24,13 +24,30 @@ if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
 $Source = Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_d8_min_sim.c"
 $Test = Join-Path $Root "host_tests\hmx_acc_residual_rpc\hmx_d8_independent_test.py"
 $BuildDir = Join-Path $Root "build"
+$Dump = Join-Path $BuildDir "hmx_d8_reference_arrays.txt"
 $python = Get-Command python -ErrorAction SilentlyContinue
 $gcc = Get-Command gcc -ErrorAction SilentlyContinue
 if (-not $python -or -not $gcc) {
     Write-Host "d8_mutation_check=SKIP (python or gcc not found on PATH)"
     exit 0
 }
+# The independent differential needs the reference dump that run_hmx_d8_sim.ps1
+# writes. Without it the audit exits 2 with "SKIP (no dump ...)", which is an
+# environment condition, not a surviving mutant. Reporting that as
+# "FAIL mutants=5" once sent a whole investigation down the wrong path, so the
+# two outcomes are now distinct labels and a missing dump stops the script
+# before any mutant is built.
+if (-not (Test-Path -LiteralPath $Dump -PathType Leaf)) {
+    Write-Host "d8_mutation_check=BLOCKED (no reference dump at $Dump)"
+    Write-Host "d8_mutation_check_hint=run scripts/run_hmx_d8_sim.ps1 first"
+    exit 2
+}
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+# The simulator writes its dump relative to the process working directory, so
+# pin it to the repository root for the whole run (see run_hmx_d8_sim.ps1).
+$pushedLocation = $false
+Push-Location $Root
+$pushedLocation = $true
 # Normalise line endings so the multi-line mutation needle matches regardless of
 # the checkout's autocrlf setting.
 $sourceText = (Get-Content -LiteralPath $Source -Raw).Replace("`r`n", "`n")
@@ -69,6 +86,7 @@ $mutations = @(
 )
 
 $failed = 0
+$blocked = 0
 foreach ($m in $mutations) {
     $mutantText = $sourceText.Replace($m.Needle, $m.Replacement)
     if ($mutantText -eq $sourceText) {
@@ -89,6 +107,14 @@ foreach ($m in $mutations) {
     }
     $out = & $python.Source $Test ("--replay-exe=" + $mutantExe) 2>&1 | Out-String
     $exitCode = $LASTEXITCODE
+    # exit 2 from the differential means it could not run (missing dump, missing
+    # binary). That is an environment condition, not a surviving mutant, so it
+    # must not be counted as a detection failure.
+    if ($exitCode -eq 2) {
+        Write-Host "d8_mutation=$($m.Name) BLOCKED (audit could not run, exit=2)"
+        $blocked++
+        continue
+    }
     $detected = ($exitCode -eq 1) -and ($out -match "MISMATCH")
     if ($detected) {
         Write-Host "d8_mutation=$($m.Name) DETECTED exit=$exitCode"
@@ -97,10 +123,16 @@ foreach ($m in $mutations) {
         $failed++
     }
 }
-
+if ($blocked -gt 0) {
+    Write-Host "d8_mutation_check=BLOCKED (audit could not run for $blocked of $($mutations.Count) mutants)"
+    if ($pushedLocation) { Pop-Location }
+    exit 2
+}
 if ($failed -eq 0) {
     Write-Host "d8_mutation_check=PASS mutants=$($mutations.Count)"
+    if ($pushedLocation) { Pop-Location }
     exit 0
 }
 Write-Host "d8_mutation_check=FAIL failed=$failed"
+if ($pushedLocation) { Pop-Location }
 exit 1
