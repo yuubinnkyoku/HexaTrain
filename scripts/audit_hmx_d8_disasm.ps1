@@ -35,7 +35,16 @@ param(
     #      0x5400, fill pattern 0xA5A5) would resolve as addresses and pass.
     #
     # Without this parameter the audit behaves exactly as before (absolute ##N).
-    [string]$BaseRegister = ""
+    [string]$BaseRegister = "",
+    # Symbol that performs the four packs, when the compiler keeps it out of
+    # line. The handler then contains four calls instead of four loops, and the
+    # pack counts must be taken from this symbol's body. Empty means the packs
+    # are inline in the handler.
+    [string]$PackSymbol = "",
+    # Object file the symbols come from, needed when -PackSymbol is used.
+    [string]$ObjectPath = "",
+    # objdump to use for the helper symbol.
+    [string]$objdump = "hexagon-llvm-objdump"
 )
 $ErrorActionPreference = "Stop"
 
@@ -546,16 +555,55 @@ foreach ($s in $expanded) {
 foreach ($s in $criticalStores) { Fail "store_in_critical_interval: line $($s.Line)" }
 
 # Packs: 16 stores at each operand base, in order Ahi/Alo/Whi/Wlo.
+#
+# When the compiler keeps the pack helper out of line, the handler holds four
+# calls and the stores live in the helper's body. The helper is disassembled
+# separately and its stores are counted here; the four call sites are matched to
+# the four bases in call order.
 $packBases = @(0, 2048, 4096, 6144)
-for ($b = 0; $b -lt 4; $b++) {
-    $block = @($packStores | Where-Object {
-        $_.Addr -ge $packBases[$b] -and $_.Addr -lt $packBases[$b] + 2048
-    })
-    if ($block.Count -ne 16) { Fail "pack_$($packBases[$b])_count: $($block.Count)/16" }
-    for ($k = 0; $k -lt $block.Count; $k++) {
-        if ($block[$k].Addr -ne $packBases[$b] + $k * 128) {
-            Fail "pack_$($packBases[$b])_address: $($block[$k].Addr)"
-            break
+if ($PackSymbol) {
+    $packText = & $objdump -d --disassemble-symbols=$PackSymbol $ObjectPath 2>&1
+    $packSegs = New-Object System.Collections.Generic.List[object]
+    foreach ($line in $packText) {
+        if ($line -match '^\s*([0-9a-fA-F]+):\s+[0-9a-f]{2} [0-9a-f]{2} [0-9a-f]{2} [0-9a-f]{2}\s+[0-9a-f]{8}\s*(.*)$') {
+            $rest = (($Matches[2] -replace '[{}]',' ') -replace '\s+',' ').Trim()
+            if ($rest) { $packSegs.Add($rest) }
+        }
+    }
+    # The helper takes the destination as its first argument (r0) and advances
+    # it by 128 B per iteration; the loop count is the literal in loop0.
+    $packCount = 0
+    $packStride = $null
+    for ($i = 0; $i -lt $packSegs.Count; $i++) {
+        if ($packSegs[$i] -match '^loop[01]\((0x[0-9a-fA-F]+|\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)$') {
+            $packCount = [Convert]::ToInt32($Matches[2],
+                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        }
+        if ($packSegs[$i] -match '^(r\d+)\s*=\s*add\(\1\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)') {
+            $packStride = [Convert]::ToInt32($Matches[2],
+                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+        }
+    }
+    if ($packCount -ne 16) { Fail "pack_symbol_count: $packCount/16" }
+    if ($null -eq $packStride) {
+        Fail "pack_symbol_stride_unresolved"
+    } elseif ($packStride -ne 128) {
+        Fail "pack_symbol_stride: $packStride/128"
+    }
+    # The handler must call the helper exactly four times, in order.
+    $packCalls = @($segments | Where-Object { $_.Text -match "call 0x[0-9a-f]+ <$PackSymbol>" })
+    if ($packCalls.Count -ne 4) { Fail "pack_call_count: $($packCalls.Count)/4" }
+} else {
+    for ($b = 0; $b -lt 4; $b++) {
+        $block = @($packStores | Where-Object {
+            $_.Addr -ge $packBases[$b] -and $_.Addr -lt $packBases[$b] + 2048
+        })
+        if ($block.Count -ne 16) { Fail "pack_$($packBases[$b])_count: $($block.Count)/16" }
+        for ($k = 0; $k -lt $block.Count; $k++) {
+            if ($block[$k].Addr -ne $packBases[$b] + $k * 128) {
+                Fail "pack_$($packBases[$b])_address: $($block[$k].Addr)"
+                break
+            }
         }
     }
 }

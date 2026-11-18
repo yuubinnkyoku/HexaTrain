@@ -31,15 +31,15 @@
  * different experiment, so the tiles are built in a local buffer and copied
  * with vector stores. The loop count is a literal so the audit can expand it
  * statically. */
-static void d8_pack_tile(uint16_t *dst, const uint16_t *src) {
-  const uintptr_t base = (uintptr_t)dst;
+static void d8_pack_tile(uint8_t *dst_ptr, const uint16_t *src) {
+  const uintptr_t dst = (uintptr_t)dst_ptr;
   int v;
   for (v = 0; v < HMX_MODE46_TILE_VECTORS; ++v) {
     const HVX_Vector chunk =
         *(const HVX_Vector *)((const uint8_t *)src +
                               (size_t)(v * HMX_MODE46_VECTOR_BYTES));
     asm volatile("vmem(%0) = %1\n"
-                 : : "r"(base + (uintptr_t)(v * HMX_MODE46_VECTOR_BYTES)),
+                 : : "r"(dst + (uintptr_t)(v * HMX_MODE46_VECTOR_BYTES)),
                      "v"(chunk)
                  : "memory");
   }
@@ -57,8 +57,17 @@ static void d8_pack_tile(uint16_t *dst, const uint16_t *src) {
  * (spatial&1)), weight cell (out_ch, in_ch) at ((in_ch>>1)*64 + out_ch*2 +
  * (in_ch&1)). Same mapping as mode 43.
  */
-static void build_d8_operands(uint16_t *ahi, uint16_t *alo, uint16_t *whi,
-                              uint16_t *wlo) {
+/* The four packs must stay four distinct calls.
+ *
+ * At -O0 the object calls d8_pack_tile four times with +0, +0x800, +0x1000 and
+ * +0x1800, which is the registered form. At -O2 the compiler inlines this
+ * function into the handler and folds the third pack onto the out_pos slot: the
+ * emitted object then writes whi_local to +8192 and never writes +4096, which
+ * the disassembly audit catches as pack_4096_count 0/16. Keeping the function
+ * out of line preserves the four destinations. */
+__attribute__((noinline))
+static void build_d8_operands(uint8_t *base, uint16_t *ahi, uint16_t *alo,
+                              uint16_t *whi, uint16_t *wlo) {
   /* The tiles are built in local buffers and then copied into VTCM with the
    * registered 16 x 128 B vector stores; writing the cells straight into VTCM
    * would lower to scalar stores, which is a different experiment. */
@@ -131,11 +140,16 @@ static void build_d8_operands(uint16_t *ahi, uint16_t *alo, uint16_t *whi,
     wlo_local[((col >> 1) * 64) + row * 2 + (col & 1)] = wl;
   }
 
-  /* PACK AHI, PACK ALO, PACK WHI, PACK WLO: 16 x 128 B each, in that order. */
-  d8_pack_tile(ahi, ahi_local);
-  d8_pack_tile(alo, alo_local);
-  d8_pack_tile(whi, whi_local);
-  d8_pack_tile(wlo, wlo_local);
+  /* PACK AHI, PACK ALO, PACK WHI, PACK WLO: 16 x 128 B each, in that order.
+   *
+   * The third destination is derived from base at the call site rather than
+   * from a pointer variable. The compiler otherwise copied the out_pos pointer
+   * into the third pack's slot: the emitted object wrote whi_local to +8192 and
+   * never wrote +4096, which the audit caught as pack_4096_count 0/16. */
+  d8_pack_tile(base + 0u, ahi_local);
+  d8_pack_tile(base + 2048u, alo_local);
+  d8_pack_tile(base + 4096u, whi_local);
+  d8_pack_tile(base + 6144u, wlo_local);
 }
 
 /* FNV-1a 32 over a packed tile, byte order as stored (little endian u16). */
@@ -219,7 +233,7 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   int first_bad;
 
   /* ---- prologue: operands, bias, guard (outside the critical interval) ---- */
-  build_d8_operands(ahi, alo, whi, wlo);
+  build_d8_operands(base, ahi, alo, whi, wlo);
 
   init_bias20(bias0, HMX_MODE46_SCALE64_BITS, 0, 0, HMX_MODE46_SHAPE0);
   init_bias20(bias1, HMX_MODE46_SCALE64_BITS, 0, 0, HMX_MODE46_SHAPE4);
