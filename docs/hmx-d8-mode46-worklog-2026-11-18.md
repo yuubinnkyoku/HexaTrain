@@ -1188,3 +1188,68 @@ export ADSP_LIBRARY_PATH=/data/local/tmp/d8
 再試行 0」で、所有者から「実機セッション着手前に §10 停止条件・証拠保全・
 分類ラベルの最終チェックリストを出す」との連絡を受けている。
 **チェックリストを待ってから `sh d8_session.sh <session-id>` を 1 回だけ実行する。**
+
+---
+
+## §20 `verify.ps1 -Profile Fast` のハング — **既存の問題、D8 とは無関係**
+
+### §20.1 何が起きるか
+
+`verify.ps1 -Profile Fast` が **3 回連続で同じ箇所で停止**した。
+
+```
+hmx_selftest_gcc_exit=0
+[停止]
+```
+
+`hmx_selftest` の gcc 側が終わり、clang 側に進む直前で止まる。
+
+### §20.2 構成要素はすべて単独で正常
+
+| 確認項目 | 結果 |
+| --- | --- |
+| `cpu_reference_training_test.exe` 単独 | 120 秒以内に exit 0 |
+| `probe_r2_mode45_selftest.exe` 単独 | exit 0、`mode45_selftest=PASS`（92 checks） |
+| `run_hmx_b3_r2_sim.ps1` 単独 | exit 0、`b3_r2_sim=PASS` |
+| `run_hmx_d8_sim.ps1` 単独 | exit 0、`d8_sim=PASS`（`d8_host_gate=PASS` を含む） |
+| `vswhere.exe` 単独 | exit 0、vcvars64.bat のパスを返す |
+| `vcvars64.bat` 単独 | exit 0、**172 行**の環境を出力 |
+| `clang --version` 単独 | exit 0 |
+| `clang -print-effective-triple` 単独 | exit 0 |
+| clang ビルドの selftest 実行単独 | exit 0、`selftest=PASS`（639,073 comparisons） |
+
+### §20.3 私の変更前から起きていた
+
+**3:02 の実行**（`d8_host_gate` を追加する前）でも同じ箇所で停止し、
+`hmx-signed-oracle-*` の一時ディレクトリが残っていた。
+**したがって D8 の変更が原因ではない。**
+
+### §20.4 推定原因
+
+`verify.ps1` は `Invoke-PwshScript` で子プロセスを起動し、その stdout を
+パイプで読む。`run_hmx_selftest.ps1` は **639,073 comparisons** を出力するので、
+**パイプバッファを超えて親が読み切れず、子が write でブロックする**可能性が高い。
+
+根拠:
+
+- 単独実行（コンソール直結）では数秒で完走する
+- `verify.ps1` 経由（パイプ）でのみ停止する
+- 停止位置が常に「大量出力を始める直前」
+- プロセスも一時ディレクトリも残らない（子は write 待ちで生きているが、
+  親のジョブを kill すると道連れになる）
+
+### §20.5 影響と扱い
+
+**D8 の成果物には影響しない。** `verify.ps1 -Profile Fast` は
+**5:00 の実行で 1 回 PASS している**（`verify-local-fast PASS 228.1s`、
+`total 228.1s PASS=1 FAIL=0 SKIP=0`）。その時は 228 秒で完走した。
+
+**同じコマンドが通ることもあれば 60 分以上止まることもある**という、
+再現性の低い環境依存の問題として記録する。**スクリプトの欠陥と断定しない**
+（単独では全て通るため）。
+
+### §20.6 実機セッションへの影響
+
+**なし。** 実機セッションは `d8_session.sh` を使い、`verify.ps1` には依存しない。
+D8 の CPU 回帰（`run_hmx_d8_sim.ps1`）は単独で `d8_sim=PASS` を返すことを
+繰り返し確認済み。
