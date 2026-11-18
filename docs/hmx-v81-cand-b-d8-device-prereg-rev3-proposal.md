@@ -14,16 +14,24 @@ Labels after registration:
 | Label | Value |
 | --- | --- |
 | `B3_R2_FULL_TILE_CPU_READY` | unchanged |
-| `B3_R2_SYNC_UNPROVEN` | **unchanged (D8 is still unrun)** |
+| `B3_R2_SYNC_UNPROVEN` | **unchanged (D8 produced no numeric evidence)** |
 | `CPU_VALIDATED_PREFERRED_DESIGN` | unchanged (Candidate B) |
 | Candidate C / C2 | CPU-only-consistent, `C2 NOT_RUN` |
-| Mode 46 | **registered, `NOT_RUN`** |
-| Device approval | **GRANTED for the revision 3 §11 budget only** |
-| D8 | **`NOT_RUN`** |
+| Mode 46 | **registered, executed once, `D8_CONTRACT_FAILED`** |
+| Device approval | **GRANTED for the revision 3 §11 budget only — budget spent** |
+| D8 | **`D8_CONTRACT_FAILED`** (device session 2026-11-19, condition A stopped at the operand-FNV gate; no numeric reading) |
 
 The label `D8_REV3_REGISTERED` means: the CPU-side contract is machine-checked
 and self-consistent, and the owner has authorised the §11 budget. It is not a
 device result and not a retirement of `B3_R2_SYNC_UNPROVEN`.
+
+**Post-run update (2026-11-19).** The budget was spent on one session. Condition A
+stopped at the handler's own operand-FNV gate **before the critical interval**:
+the four MMAs, the fills, the Convert and the Store all report zero and the
+result array is 1,024 zeros. Nothing above changes, and `B3_R2_SYNC_UNPROVEN`
+stays unproven because the D8 question was never put to the hardware. The record
+is `docs/hmx-v81-d8-device-run-2026-11-19.md`; a second session needs a new
+registration.
 
 ## Revision history
 
@@ -485,4 +493,3 @@ $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
 ```
 
 Artifacts under `build/` are gitignored and are not device evidence.
-
