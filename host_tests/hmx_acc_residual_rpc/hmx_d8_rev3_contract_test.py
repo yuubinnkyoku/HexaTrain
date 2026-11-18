@@ -579,19 +579,29 @@ def main():
     check(defines["HMX_D8_Q_IDENTITY"] == 6, "identity_q_is_6")
     check(defines["HMX_D8_IDENTITY_MODE"] == 30, "identity_mode_30")
 
-    # The current DSP does not dispatch mode 46 and rejects q<6. The proposal
-    # must not pretend that the mode already exists.
+    # Mode 46 is registered (2026-11-18) and implemented. These checks used to
+    # assert the opposite, because while revision 3 was only a proposal the DSP
+    # had to stay free of mode 46. They now assert the registered wiring: the
+    # mode is inside the dispatch range, the DSP and the host both carry the
+    # mode 46 branch, both keep the shared q gate, and both restrict mode 46 to
+    # q=6..9 so q=10 cannot reach the handler.
     probe = open(os.path.join(HERE, "probe_dsp.c"), encoding="utf-8").read()
     host = open(os.path.join(HERE, "probe_host.c"), encoding="utf-8").read()
     mode_max = re.search(r"MODE_MAX\s*=\s*(\d+)", probe)
-    check(mode_max is not None and int(mode_max.group(1)) == 45,
-          "dsp_mode_max_45")
-    check(defines["HMX_D8_MODE"] > int(mode_max.group(1)),
-          "mode46_not_dispatched")
-    check("MODE46" not in probe and "mode == 46" not in probe,
-          "mode46_absent_in_dsp")
+    check(mode_max is not None and int(mode_max.group(1)) == 46,
+          "dsp_mode_max_46")
+    check(defines["HMX_D8_MODE"] <= int(mode_max.group(1)),
+          "mode46_dispatched")
+    check("HMX_MODE46_MODE" in probe and "run_mode46_d8_one_trial" in probe,
+          "mode46_present_in_dsp")
+    check("HMX_MODE46_MODE" in host and "d8_report" in host,
+          "mode46_present_in_host")
     check("q < 6 || q > 10" in probe, "dsp_q_gate")
     check("q < 6 || q > 10" in host, "host_q_gate")
+    check("HMX_D8_Q_FIRST" in probe and "HMX_D8_Q_LAST" in probe,
+          "dsp_mode46_q_gate")
+    check("HMX_D8_Q_FIRST" in host and "HMX_D8_Q_LAST" in host,
+          "host_mode46_q_gate")
 
     # 5. Field decodes for each condition.
     for cond, letter in enumerate("ABCD"):

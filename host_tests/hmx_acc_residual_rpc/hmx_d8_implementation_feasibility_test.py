@@ -29,6 +29,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 RPC = os.path.join(ROOT, "host_tests", "hmx_acc_residual_rpc")
 PREREG = os.path.join(ROOT, "docs", "hmx-v81-cand-b-d8-device-prereg.md")
+REV3 = os.path.join(ROOT, "docs",
+                    "hmx-v81-cand-b-d8-device-prereg-rev3-proposal.md")
 CONTRACT = os.path.join(ROOT, "docs", "hmx-v81-cand-b-d8-evidence-contract.md")
 PROBE_DSP = os.path.join(RPC, "probe_dsp.c")
 PROBE_HOST = os.path.join(RPC, "probe_host.c")
@@ -560,11 +562,17 @@ def main():
     check(result_bytes == 4096, "abi_results_4096")
     check(metadata_bytes == 128, "abi_metadata_128")
     check(result_bytes + metadata_bytes == 4224, "abi_total_4224")
-    check("HMX_MODE45_RESULT_SLOTS * sizeof(int)" in host and
-          "HMX_MODE45_METADATA_LEN * sizeof(int)" in host,
-          "abi_host_current_allocation")
-    check("(mode == HMX_MODE45_MODE)" in host and
-          "? HMX_MODE45_RESULT_SLOTS" in host,
+    # Mode 46 is registered (2026-11-18) and implemented, so the host now sizes
+    # the buffers per mode instead of always using the mode 45 constants. The
+    # ABI facts (4,096 + 128 = 4,224 bytes) are unchanged; only the source
+    # expression moved.
+    check("HMX_MODE46_RESULT_SLOTS" in host and
+          "HMX_MODE46_METADATA_LEN" in host,
+          "abi_host_mode46_allocation")
+    check("result_capacity" in host and "meta_capacity" in host,
+          "abi_host_per_mode_capacity")
+    check("result_capacity" in host and "meta_capacity" in host and
+          "? HMX_MODE46_RESULT_SLOTS" in host,
           "abi_host_current_result_len")
     finding("results_length_unobservable", "IMPLEMENTATION_CHANGE_REQUIRED",
             "rout sequence<long> maps to (int* results, int resultsLen): the "
@@ -576,10 +584,10 @@ def main():
     # q selector baseline.
     check("if (q < 6 || q > 10 || mode < 0 || mode > MODE_MAX)" in dsp,
           "abi_dsp_q_gate_6_10")
-    check("MODE_MAX = 45" in dsp, "abi_dsp_mode_max_45")
+    check("MODE_MAX = 46" in dsp, "abi_dsp_mode_max_46")
     check("if (q < 6 || q > 10 || mode < 0 || mode > HMX_PROBE_MODE_MAX)" in host,
           "abi_host_q_gate_6_10")
-    check("HMX_PROBE_MODE_MAX = 45" in host, "abi_host_mode_max_45")
+    check("HMX_PROBE_MODE_MAX = 46" in host, "abi_host_mode_max_46")
     check("!report->q_ok" in identity and
           "report.q_ok = (identity[1] == q)" in identity,
           "abi_identity_q_echo")
@@ -696,17 +704,23 @@ def main():
             "targets or the CFG; a D8 audit must add fill-address/extent and "
             "per-condition path checks before it can accept a future object")
 
-    # Mode 46 is unregistered and unauthorised.
-    check("MODE_MAX = 45" in dsp and "HMX_PROBE_MODE_MAX = 45" in host,
-          "mode_max_45")
-    check("mode == 46" not in dsp and "HMX_MODE46" not in dsp and
-          "HMX_MODE46" not in host, "mode46_absent")
-    check("NOT_RUN" in prereg and "NOT GRANTED" in prereg,
-          "mode46_status_not_run")
-    finding("mode46_unregistered", "BLOCKED",
-            "the registered experiment has no trigger mode; Mode 46 remains "
-            "unregistered/NOT_RUN and the pre-registration itself lists a "
-            "registered mode as a prerequisite (section 11 item 7)")
+    # Mode 46 is registered (2026-11-18) and implemented.
+    check("MODE_MAX = 46" in dsp and "HMX_PROBE_MODE_MAX = 46" in host,
+          "mode_max_46")
+    check(("HMX_MODE46" in dsp and "run_mode46_d8_one_trial" in dsp and
+           "HMX_MODE46" in host and "d8_report" in host), "mode46_present")
+    check("NOT_RUN" in prereg, "mode46_status_not_run")
+    # prereg is the revision 2 document, which keeps its body and gains only a
+    # supersession note; the registered status lives in the revision 3 document.
+    check("Superseded by revision 3, registered 2026-11-18" in prereg,
+          "rev2_superseded_by_rev3")
+    check("D8_REV3_REGISTERED" in read(REV3), "mode46_registered")
+    finding("mode46_unregistered", "RESOLVED",
+            "was BLOCKED on 2026-11-10 because the experiment had no trigger "
+            "mode. The owner registered revision 3 and Mode 46 on 2026-11-18 "
+            "for the revision 3 section 11 budget, and the DSP and host now "
+            "implement the mode; this finding is closed. The device questions "
+            "themselves are still open until the four runs happen.")
 
     # Fixture generation: the mode-42 DSP generator reproduces the registered
     # packed-tile FNVs exactly (same seed/anchors/split).
