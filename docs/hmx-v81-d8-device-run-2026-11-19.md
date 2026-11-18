@@ -1,8 +1,9 @@
 # Candidate B — D8 Device Run Record (2026-11-19)
 
-Status: **`D8_NOT_RUN`** — this document is the record template. The four
-condition runs have **not** been executed. Every field marked `PENDING` is
-filled from the session evidence after the single registered session.
+Status: **`D8_CONTRACT_FAILED`** — the session ran, the identity gate passed, and
+condition A stopped at the handler's own operand-FNV gate **before the critical
+interval**. No numeric D8 evidence was obtained. The registered budget (one
+session, four runs, no retry) is **spent**.
 
 Companion documents:
 
@@ -16,23 +17,22 @@ Companion documents:
 
 | Item | Value |
 | --- | --- |
-| Date | PENDING |
-| Session id | PENDING |
-| Device | NX741J (`PQ85A01`, `canoe`, Android 16) |
-| ADB endpoint | PENDING (the endpoint changes between sessions and is not committed) |
+| Date | 2026-11-19 (device clock 2026-11-18T21:15:11Z) |
+| Session id | `d8-20261119-a` |
+| Device | NX741J (`PQ85A01`, `canoe`, Android 16, build `MyOS16.0.28_NX741J_NEEA`) |
 | DSP skel SHA-256 | `56bf5c03eac39fe83fdb7389a50ffafa4bdd7a56b72f3cadb7a4c16704e0c0d4` |
 | DSP build id | `0x4D8B1121` |
-| Host executable SHA-256 | PENDING |
+| Host executable SHA-256 | `76dcf755e04e38b615ec20a3eb7a52281797ec14ff9d869a3b60945a2973d35c` |
 | Hexagon SDK | 6.6.0.0, tools 19.0.07 |
-| Budget spent | 1 build, 1 session, 4 runs, 0 retries |
+| Budget | 1 session, **1 of 4 runs attempted**, 0 retries — **exhausted** |
 
-The build and the audit are recorded in the worklog §16 and §17. The identity
-gate passed before the experiment:
+The identity gate passed before the experiment:
 
 ```
 build_id=0x4d8b1121 dsp_build_id=0x4d8b1121 build_id_status=MATCH
 dsp_identity=MATCH
 IDENTITY_OK=PASS
+RESOURCE_CLEANUP_OK=PASS
 exit_code=0
 ```
 
@@ -42,90 +42,118 @@ Order is fixed: A(q=6) → B(q=7) → C(q=8) → D(q=9), each once, no retry.
 
 | Condition | q | Fill mask | Label | Observed SHA-256 | Matched reference |
 | --- | ---: | ---: | --- | --- | --- |
-| A | 6 | 1 | PENDING | PENDING | PENDING |
-| B | 7 | 7 | PENDING | PENDING | PENDING |
-| C | 8 | 3 | PENDING | PENDING | PENDING |
-| D | 9 | 5 | PENDING | PENDING | PENDING |
+| A | 6 | 1 | **`D8_CONTRACT_FAILED`** | `e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad` | none |
+| B | 7 | 7 | **not run** | — | — |
+| C | 8 | 3 | **not run** | — | — |
+| D | 9 | 5 | **not run** | — | — |
 
-The four registered references are:
+The observed array for condition A is **1,024 zeros**. Its digest is exactly the
+SHA-256 of 2,048 zero bytes, which was verified independently. The critical
+interval never wrote `out_pos`, so there is no numeric reading to compare.
 
-| Name | SHA-256 |
-| --- | --- |
-| `safe` | `c9abf30e3b440ddaa2e21bf0b0d327195c7eb8d3f23c5960abaa7debea20203d` |
-| `wlo` | `f0b3b4aa71b09377a826f2a6d98903d4aa56fdc45911c373057d3fe69881f6fb` |
-| `ahi` | `b6328e88b4f9be50e6ace56b9a1db552a1ce3873f5d1f1a3016781cfe0760fcc` |
-| `both` | `5285b463b94e16aac99635ae5a706c286665249be731292f8ad12449de32535d` |
+## 3. What the handler reported
 
-## 3. Stop-condition checklist
+Metadata words 9..31 from the run (the full 32-word block is in the evidence):
 
-Every row is checked against the session evidence. A single failure stops the
-session and the remaining conditions are not run (prereg §10).
+| Word | Field | Observed | Registered | |
+| ---: | --- | --- | --- | --- |
+| 9 | build id | `0x4D8B1121` | `0x4D8B1121` | ok |
+| 10 | `mxclracc` | `0` | 1 | **fail** |
+| 11 | MMA | `0` | 3 | **fail** |
+| 12 | Convert | `0` | 1 | **fail** |
+| 13 | Store | `0` | 1 | **fail** |
+| 14 | pack | `4` | 4 | ok |
+| 15 | bias | `2` | 2 | ok |
+| 16 | fill | `0x00000000` | mask 1 | **fail** |
+| 17 | address | `0x00000000` | `0x1000` | **fail** |
+| 18 | selector | `0x00000600` | cond 0, q 6 | ok |
+| 19 | FNV Ahi | `0x57A0EC09` | `0xC6231266` | **fail** |
+| 20 | FNV Alo | `0xD0E0C444` | `0x3B2D22D2` | **fail** |
+| 21 | FNV Whi | `0x9C9FE034` | `0x8B88609F` | **fail** |
+| 22 | FNV Wlo | `0x29A90A5C` | `0xA66AF695` | **fail** |
+| 23 | guard pre | `0xF5EBD5C5` | `0xF5EBD5C5` | ok |
+| 24 | guard post | `0xF5EBD5C5` | `0xF5EBD5C5` | ok |
+| 25 | guard status | `0x011FFF00` | status 0, first-bad none | ok |
+| 26 | failure | `0x10` (16, `FNV`) | 0 | **the gate itself** |
+| 27 | schema | `0x0D8A5003` | `0x0D8A5003` | ok |
+| 28 | readback | `0x00200004` | — | — |
+| 30 | cleanup | `0` | 0 | ok |
 
-| # | Condition | Result |
-| ---: | --- | --- |
-| 1 | any RPC status other than 0, except the documented cleanup case | PENDING |
-| 2 | `resultsLen != 1024`, `metadataLen != 32`, or a slot outside 0..65535 | PENDING |
-| 3 | build id mismatch (identity echo vs run echo vs stamped) | PENDING |
-| 4 | schema mismatch or selector mismatch, or q outside 6..9 | PENDING |
-| 5 | count mismatch: mxclracc 1, MMA 3, Convert 1, Store 1, pack 4, bias 2 | PENDING |
-| 6 | store target != `+8192`, out fill != `+8192`, or a Wlo/Ahi fill address that does not match the condition | PENDING |
-| 7 | any operand FNV mismatch | PENDING |
-| 8 | fill mask / word / form mismatch, including a C/D swap or B missing a fill | PENDING |
-| 9 | any guard digest, status, first-bad-byte or method mismatch | PENDING |
-| 10 | a `metadata[30]` cleanup error | PENDING |
-| 11 | the issued order differs from §3.1, or an access event is missing, duplicated, out of bounds or before the last MMA read | PENDING |
-| 12 | any disassembly audit condition fails or cannot be resolved | **PASS** (four conditions, worklog §16) |
-| 13 | the observed array matches none of the four references | PENDING |
+`first_bad = mxclracc` because that is the first field the contract checks in
+order; the operative failure is `metadata[26] = 16` (`HMX_D8_FAIL_FNV`).
 
-## 4. Evidence
+## 4. Reading
 
-Raw evidence lives beside the session, not in the repository:
+**The critical interval did not execute.** `mxclracc`, the three MMAs, the fills,
+the Convert and the Store all report zero, `fill` and `address` are zero, and the
+result array is untouched zeros. The handler built the four operand tiles
+(pack = 4), loaded the two bias sets (bias = 2), initialised the 1,536 B guard
+correctly (guard pre and post both equal the registered zero-guard FNV), then
+computed the four operand FNVs, found them different from the registered values,
+set `metadata[26] = 16`, and returned without issuing the sequence.
 
-| File | Content |
-| --- | --- |
-| `00-identity.txt` | identity call stdout |
-| `NN-condition-X-qN.txt` | that run's full stdout |
-| `NN-condition-X-slots.csv` | the 1,024 result slots, verbatim |
-| `NN-condition-X-meta.csv` | the 32 metadata words, verbatim |
+**This is the fail-closed design working.** The handler refused to run an
+experiment whose fixture was not the registered one. Without that gate the run
+would have produced numbers that looked like a D8 outcome but were an artefact of
+a wrong operand set.
 
-The session log records the skel and host digests, the UTC timestamps, the model
-and the label of each run. PENDING: the archive location.
+**Therefore this run answers nothing about MMA operand reuse.** It is a
+`D8_CONTRACT_FAILED` (state S2 of the failure contract): no numeric reading, the
+raw arrays preserved, no retry.
 
-## 5. Reading
+## 5. Cause of the FNV mismatch
 
-PENDING. The registered classification order is contract → numeric, and the
-terminal classes are:
+The guard FNV is correct, so the FNV function and the VTCM read path work; the
+difference is in the operand bytes themselves.
 
-```text
-condition A: safe -> D8_CONTROL_SAFE; otherwise D8_CONTROL_ANOMALY
-condition B: safe -> D8_NO_VIOLATION_OBSERVED; wlo/ahi/both -> *_SUSPECT;
-             otherwise D8_INCONCLUSIVE_NUMERIC
-condition C: safe -> D8_NO_VIOLATION_OBSERVED (Wlo); wlo -> D8_VIOLATION_WLO_SUSPECT
-condition D: safe -> D8_NO_VIOLATION_OBSERVED (Ahi); ahi -> D8_VIOLATION_AHI_SUSPECT
-```
+The gap is that **`build_d8_operands` was never executed on the CPU.** It is
+defined in `hmx_mode46_d8.h`, referenced only from that header (its definition,
+the pack helper and the handler), and the only file that includes the header is
+`probe_dsp.c`, which is DSP-side. The CPU suites verify the contract checker, the
+classifier and a separate host model of the arithmetic — they never produce the
+DSP's tiles. So the four registered FNV constants were compared against whatever
+the DSP generated only at run time, on the device, once.
 
-**No terminal class carries `PROVEN`.** A safe result is one build, one
-instruction distance, one run. It does not retire `B3_R2_SYNC_UNPROVEN`, it does
-not generalise to all tiles, and it does not bound the race window. A distance
-sweep, a full-tile run and any performance measurement are outside the
-revision 3 §11 budget.
+A second, weaker possibility that the evidence cannot separate: the four
+`vmem` stores in `d8_pack_tile` are followed by scalar byte reads for the FNV
+with only a compiler `"memory"` clobber and no data-cache or `syncht` barrier.
+The guard case cannot distinguish this, because `d8_guard_init` writes zeros and
+a read that misses the store also sees zeros.
+
+Both are fixable offline. Neither is a V81 HMX property, so neither bears on
+`B3_R2_SYNC_UNPROVEN`.
 
 ## 6. What this run can and cannot establish
 
-**Can:** whether the 1,024-cell outcome of this one build, at this one
-instruction distance, matches one of the four registered references; and, if it
-does not, which operand tile's corruption the outcome is consistent with.
+**Can:** the build `0x4D8B1121` reaches the DSP, passes identity, acquires VTCM
+and HVX, generates its operand fixture, and **stops itself** when that fixture
+does not match the registered one. The fail-closed path is exercised on real
+hardware, which the CPU suites could not show.
 
-**Cannot:** when the MMA read completed, whether the fill beat it in general,
-how wide the race window is, or anything about timing or performance.
+**Cannot:** anything about the D8 question. Whether the MMA finished reading an
+operand tile before the output phase overwrote it is **untested**.
 
 ## 7. Labels after the run
 
 | Label | Before | After |
 | --- | --- | --- |
-| `B3_R2_SYNC_UNPROVEN` | unchanged | PENDING (stays unproven either way) |
+| `B3_R2_SYNC_UNPROVEN` | unchanged | **unchanged** (no evidence either way) |
 | `B3_R2_FULL_TILE_CPU_READY` | unchanged | unchanged |
 | `CPU_VALIDATED_PREFERRED_DESIGN` | Candidate B | unchanged |
 | Candidate C / C2 | `C2 NOT_RUN` | unchanged (separate management) |
-| Mode 46 | registered, `NOT_RUN` | PENDING |
-| D8 | `NOT_RUN` | PENDING |
+| Mode 46 | registered, `NOT_RUN` | **registered, executed once, `D8_CONTRACT_FAILED`** |
+| D8 | `NOT_RUN` | **`D8_CONTRACT_FAILED`** — no numeric evidence |
+
+## 8. Before another attempt
+
+The budget for revision 3 is spent, so a second session needs a **new
+registration**. The work that has to happen first is offline:
+
+1. make the DSP operand fixture executable and comparable on the CPU, so the four
+   FNV constants are checked before any device contact;
+2. decide whether the pack needs an explicit barrier before the scalar FNV read,
+   and if so register that as part of the sequence rather than adding it quietly;
+3. re-run the disassembly audit, the CPU suites and `verify.ps1 -Profile Fast`
+   against the corrected build, and stamp a new build id.
+
+None of that is authorised by revision 3 §11.
