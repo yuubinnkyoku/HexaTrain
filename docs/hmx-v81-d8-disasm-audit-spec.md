@@ -204,3 +204,130 @@ Requirements:
    fill or pack must be normalized to the same address sequence (or the rules
    extended and re-tested) before it can pass.
 5. **No timing, no performance, no device behaviour.**
+
+---
+
+## Appendix A — Real-object extension (2026-11-19)
+
+Status: **`D8_DISASM_RULES_ONLY`**, extended. This appendix records the three
+rules added so the audit can read an actual V81 object, and states explicitly
+that **no registered verification target changed**. The order, the offsets, the
+fill form, the Convert `Rs` and the synchronisation ban are exactly as
+registered; only the way the text is read changed.
+
+### A.1 Why the rules had to change
+
+The 2026-11-10 rules were written against a synthetic fixture that spells every
+address as an absolute `##N`. A real object cannot: VTCM is allocated at run
+time by `HAP_compute_res_attr_get_vtcm_ptr`, so the handler receives the base in
+a register and derives every operand pointer from it. The compiler also lowers
+`16 x 128 B` to `loop0(L,#0x10)` around a single `vmem` store, and it reuses
+registers after their last use.
+
+Applied unchanged to the stamped object, the rules failed 19 checks. Three of
+those were properties of the audit, not of the object:
+
+| Symptom | Cause |
+| --- | --- |
+| `convert_rs: 0x0fff/0x0001` | the Rs register was read from the final map, after the handler reused it |
+| `mma_address_unresolved`, `store_address_unresolved` | the rules required absolute addresses, which a real object cannot contain |
+| `pack_*_count: 0/16`, `guard_init_count: 1/12`, `fill_count: 3/48` | the rules counted stores statically, but 16 stores lower to one loop |
+
+### A.2 The three rules
+
+**A.2.1 `-BaseRegister rN` — base-relative resolution.**
+
+The declared register resolves to offset 0. A register derived from it by a
+constant add, directly or through a stack slot, inherits the offset. Any other
+expression is unresolved and **fails**; nothing is skipped or warned.
+
+In this mode a bare `##N` immediate is **not** an address. Without that rule the
+payload constants the handler writes would resolve as addresses and pass:
+`0x5400` (the bias scale) and `0xA5A5` (the fill pattern) were both observed
+being read as addresses before the rule was added.
+
+**A.2.2 Loop expansion.**
+
+`loop0(L,#N)` … `:endloop0` around a single 128 B `vmem` store stands for `N`
+stores at `base + k*128`. The count must be a literal immediate; a register
+count is not statically known and fails. The body is every segment up to the one
+carrying `:endloop0`, not just the next segment, because the compiler reloads
+the pointer and builds the pattern inside the body. The stride is checked to be
+128 B.
+
+A loop whose body holds no vector store — the handler's FNV and copy loops — is
+not part of the registered fill/pack form and is ignored.
+
+**A.2.3 Per-segment derivation snapshots.**
+
+Every address is resolved against the derivation map **as it stood at that
+segment**, not against the final map. A register that holds an operand at the
+MMA is routinely reused afterwards: the handler reloads `r5` for its FNV loops
+and increments `r19` inside a fill loop. Resolving late read both at their later
+values and produced wrong MMA and fill addresses.
+
+The loop expansion additionally writes back the address it resolved, because it
+uses the map at the loop entry rather than at the store, and that value is the
+authoritative one.
+
+### A.3 Two smaller corrections
+
+- **64-bit `memd` reload.** `rM:rN = memd(r29+#off)` restores `rN` from `+off`
+  and `rM` from `+off+4`, mirroring the spill. The compiler uses it to restore
+  the callee-saved registers and to reload pointer pairs; without it `r19` lost
+  its derivation in the epilogue.
+- **`.new` suffix.** A stack spill may be spelled `memw(r29+#off) = rN.new`.
+
+### A.4 What did NOT change
+
+| Registered target | Status |
+| --- | --- |
+| issued-operation order (18 entries) | **unchanged**; still checked against `--d8-sequence-rev3` |
+| VTCM offsets `+0/+2048/+4096/+6144/+8192/+10240/+10496/+10752` | **unchanged** |
+| fill form `16 x 128 B`, mask A=1 B=7 C=3 D=5 | **unchanged** |
+| Convert `Rs = 0x0001`, Store target `+8192` | **unchanged** |
+| synchronisation ban in `[mxclracc, Store]` | **unchanged** |
+| guard init `12 x 128 B`, no write after the init | **unchanged** |
+| fail-closed policy | **unchanged**; an unresolved expression is still a FAIL |
+
+### A.5 Test record (2026-11-19)
+
+| Suite | Result |
+| --- | --- |
+| synthetic, original 16 cases | **unchanged, all pass** |
+| synthetic, added 9 cases (base-relative clean A/B/C/D + 5 mutations) | **all pass** |
+| total synthetic | `d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5` (25 cases) |
+| stamped object, conditions A/B/C/D | `d8_disasm_audit=PASS packs=64 guard=12 fills=48 mma=3 convert=1 store=1` |
+
+The added mutations are: MMA #3 reading `+0` instead of `+2048`; a loop count of
+8 instead of 16; a real `Rs` change; a payload constant used as an address; and
+the same base-relative text with no `-BaseRegister` declared, which must fail
+closed.
+
+### A.6 What the real-object pass does and does not prove
+
+**Proves:** the stamped object contains the registered sequence — one
+`mxclracc`, three MMA packets with the registered operand pairs, the three fill
+blocks of 16 x 128 B at the registered bases, one Convert with `Rs = 1`, one
+Store at `+8192`, a 12 x 128 B guard init with no later guard write, and no
+synchronisation in the critical interval.
+
+**Does not prove:** that the hardware completes the MMA read before the fill
+writes, that the numeric outcome matches a reference, or anything about timing.
+Those are the device questions the four runs exist to answer.
+
+### A.7 Two implementation defects this audit caught
+
+Recorded because they show the audit is load-bearing, not decorative.
+
+1. **`bias = mxmem2` was never issued.** The handler wrote the two bias payloads
+   to memory but never loaded them into the bias register, so the Convert had no
+   registered bias state. The registration lists `BIAS 0` and `BIAS 1` as issued
+   operations.
+2. **`-O2` folded the third pack onto the out_pos slot.** At `-O0` the object
+   calls the pack helper four times with `+0`, `+0x800`, `+0x1000` and
+   `+0x1800`. At `-O2` the helper was inlined into the handler and the third
+   pack was folded onto `+0x2000`: `whi_local` was written to `+8192` and
+   `+4096` was never written. Four different spellings of the destination all
+   produced the same fold, so the fix is `__attribute__((noinline))` on the
+   helper, not a rewording of the call.
