@@ -35,6 +35,7 @@
 #include "hmx_mode43.h"
 #include "hmx_mode44.h"
 #include "hmx_mode45.h"
+#include "hmx_mode46.h"
 #include "bias20.h"
 #include "fp16_util.h" /* E-3C1: shared RN16 / fp16<->double helpers */
 
@@ -61,7 +62,7 @@ enum {
   MODE_IDENTITY = HMX_IDENTITY_MODE,
   /* R2 S1/S2 (mode 45) is the highest mode; must mirror probe_host.c
    * HMX_PROBE_MODE_MAX. */
-  MODE_MAX = 45,
+  MODE_MAX = 46,
 };
 
 typedef struct probe_context {
@@ -1174,6 +1175,10 @@ static int run_mode45_one_trial(uint8_t *base, int *results, int *metadata) {
   return 0;
 }
 
+/* D8 (mode 46) handler. Included here so it can use init_bias20, e3c1_* and
+ * the fp16 helpers defined above. It writes metadata[9..31] only. */
+#include "hmx_mode46_d8.h"
+
 int hexatrain_hmx_acc_residual_open(const char *uri, remote_handle64 *handle) {
   (void)uri;
   if (!handle) return HMX_ERR_ARG;
@@ -1208,7 +1213,22 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
        metadataLen < HMX_MODE45_METADATA_LEN)) {
     return HMX_ERR_ARG;
   }
+  /* Mode 46 (D8) has no short/long return: the host allocates exactly 1,024
+   * result slots and 32 metadata words, and the DSP requires that exact shape
+   * before execution. A larger buffer is not "complete". */
+  if (mode == HMX_MODE46_MODE &&
+      (resultsLen != HMX_MODE46_RESULT_SLOTS ||
+       metadataLen != HMX_MODE46_METADATA_LEN)) {
+    return HMX_ERR_ARG;
+  }
   if (q < 6 || q > 10 || mode < 0 || mode > MODE_MAX) {
+    return HMX_ERR_ARG;
+  }
+  /* Mode 46 maps q=6..9 to conditions A..D and rejects q=10 (and anything
+   * outside 6..9) before execution. The shared gate above already bounds q to
+   * 6..10, so this only removes q=10 for mode 46. */
+  if (mode == HMX_MODE46_MODE &&
+      (q < HMX_D8_Q_FIRST || q > HMX_D8_Q_LAST)) {
     return HMX_ERR_ARG;
   }
   /* Some modes are bound to a specific q (fixed bias values). */
@@ -1377,6 +1397,21 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
               } else {
                 execution_error = s45;
               }
+            } else if (mode == HMX_MODE46_MODE) {
+              /* D8 (mode 46) is ONE trial with 1,024 returned slots and
+               * evidence metadata[9..31]. The handler returns 0 for every
+               * failure that happens after execution started and carries the
+               * reason in metadata[26]; only a pre-execution HVX lock failure
+               * comes back non-zero. */
+              const int condition = hmx_d8_condition_for_q(q);
+              const int s46 = run_mode46_d8_one_trial(vtcm, results, metadata,
+                                                      condition);
+              if (s46 == 0) {
+                metadata[7] = 1;
+                metadata[8] = HMX_MODE46_TRIALS;
+              } else {
+                execution_error = s46;
+              }
             } else {
               run_one(vtcm, 0, (int)q, mode, &results[0], &results[1]);
               run_one(vtcm, 1, (int)q, mode, &results[2], &results[3]);
@@ -1457,8 +1492,21 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
 
   /* A cleanup failure must be visible to the host on any path where
    * resources were acquired, so it takes precedence; the execution state
-   * remains readable in metadata[7] (and the lock stages in [5]/[6]). */
-  if (cleanup_error != 0) return cleanup_error;
+   * remains readable in metadata[7] (and the lock stages in [5]/[6]).
+   *
+   * Mode 46 is the one documented exception: a non-zero FastRPC return
+   * discards the rout arrays, which would destroy the D8 evidence. When the
+   * handler already ran (metadata[7] == 1) the first cleanup error goes to
+   * metadata[30] and run() returns 0, so the host can still read the evidence
+   * and classify the run as D8_CONTRACT_FAILED_CLEANUP. Every other mode keeps
+   * the existing behaviour unchanged. */
+  if (cleanup_error != 0) {
+    if (mode == HMX_MODE46_MODE && metadata[7] == 1) {
+      metadata[HMX_D8_META_CLEANUP] = cleanup_error;
+      return 0;
+    }
+    return cleanup_error;
+  }
   if (metadata[7] == 1) return 0;
   return execution_error ? execution_error : HMX_ERR_LOCK;
 }
