@@ -1963,3 +1963,119 @@ EXIT=0
 
 revision 4 は `D8_REV4_REGISTERED`。条件 1 を満たしたので、
 第 2 実機セッションを 1 回だけ実行する。
+
+---
+
+## §30 第 2 実機セッション — `D8_CONTRACT_FAILED`、原因は特定できず（2026-11-19 22:35）
+
+### §30.1 実行
+
+条件 1 を満たした（`verify.ps1 -Profile Fast` 全 PASS、§29.5）後、
+`d8_session.sh d8-20261119-b` を **1 回だけ**実行した。
+
+```
+D8_SESSION id=d8-20261119-b skel_sha256=a8461eb9...bd8c host_sha256=f5ae25c1...7bd
+D8_SESSION started_utc=2026-11-19T13:34:56Z device=NX741J
+D8_IDENTITY rc=0  (build_id_status=MATCH, IDENTITY_OK=PASS)
+D8_RUN condition=A q=6 rc=8
+D8_A_d8_contract=FAIL first_bad=mxclracc
+D8_A_d8_failure=16 name=FNV
+D8_STOP condition A returned rc=8; the budget has no retry
+```
+
+**条件 A で停止。B/C/D は未実行、再試行なし。revision 4 の予算は消費済み。**
+
+### §30.2 結果は第 1 セッションと 1 ビットも違わない
+
+| 項目 | 第 1（`0x4D8B1121`） | 第 2（`0x4D8B1123`） |
+| --- | --- | --- |
+| `d8_fnv ahi` | `57a0ec09` | `57a0ec09` |
+| `d8_fnv alo` | `d0e0c444` | `d0e0c444` |
+| `d8_fnv whi` | `9c9fe034` | `9c9fe034` |
+| `d8_fnv wlo` | `29a90a5c` | `29a90a5c` |
+| `d8_counts` | `mxclracc=0 mma=0 convert=0 store=0 pack=4 bias=2` | 同左 |
+| `d8_guard pre/post` | `f5ebd5c5` / `f5ebd5c5` | 同左 |
+| 結果配列 | 1,024 zeros | 1,024 zeros |
+| 観測 SHA-256 | `e5a00aa9...` | `e5a00aa9...` |
+
+**HVX ロックの移動も、`qurt_mem_syncht()` フェンスも、FNV を 1 ビットも
+変えなかった。** 両方とも発行オブジェクトで正しい位置にあることを確認済み
+（§28.3、§29.2）なので、**「修正が効いていない」とは言えない。修正は効いたが、
+FNV の不一致は別の原因である。**
+
+### §30.3 実機の FNV は CPU が生成するどのバイト列でもない
+
+CPU 側の fixture 生成（`probe_d8_fixture_cpu.c`、`probe_dsp.c` から逐語コピー）は
+**登録済み 4 定数を完全に再現する**:
+
+```
+d8_fixture ahi cpu=c6231266 registered=c6231266 match
+d8_fixture alo cpu=3b2d22d2 registered=3b2d22d2 match
+d8_fixture whi cpu=8b88609f registered=8b88609f match
+d8_fixture wlo cpu=a66af695 registered=a66af695 match
+```
+
+実機の観測値と比較し、**考えられる範囲を総当たりで調べた**:
+
+| 範囲 | ahi | 実機 `57a0ec09` と一致 |
+| --- | --- | --- |
+| 全 2,048 B | `c6231266` | いいえ（登録値） |
+| 半分 1,024 B | `8ae0f102` | いいえ |
+| 1/4 の 512 B | `434c0c15` | いいえ |
+| 先頭 128 B | `2eb2e465` | いいえ |
+| 2,048 B ゼロ | `d2063dc5` | いいえ |
+| 2,048 B `0xFF` | `208205c5` | いいえ |
+| 2,048 B `0xA5` | `dea645c5` | いいえ |
+
+**どの範囲・どのパターンとも一致しない。**
+
+### §30.4 分かっていること
+
+1. **4 タイルは互いに異なる内容を持つ**（4 つの FNV が全て異なる）。
+   ゼロでも同一内容でもない。
+2. **2 セッションで完全に再現する**（同じビルドでなく、ロック位置もフェンスも
+   違う 2 つのビルドで同一値）。**決定的な値であり、競合や未初期化ではない。**
+3. **CPU の生成器は登録値を再現する。** 生成ロジックは正しい。
+4. **HVX ロックもフェンスも値を変えない。** どちらも正しい位置にある。
+
+### §30.5 残る仮説
+
+**「DSP が実行している `build_d8_operands` は、CPU が再現したものと違う」**
+以外に、上記 4 点を同時に説明する説明を思いつかない。
+
+具体的には:
+
+- **`static` ローカルの初期化順序**: `build_d8_operands` は
+  `static uint16_t ahi_local[...]` 等を関数内に持つ。DSP では
+  `.bss` のゼロ初期化が保証されない、あるいは `memset` の前に読まれる可能性。
+  ただし `memset` は明示的に呼んでいる。
+- **`double` 演算の差**: `e3c1_rng_unit` は `double` を使う。V81 の
+  `double` が CPU の x86-64 `double` と異なる丸めをするなら、
+  生成される `uint16_t` が変わる。**これが最も疑わしい。**
+  `e3c1_split_lo` は `float` 演算を明示しているが、`e3c1_rng_unit` と
+  `double_to_fp16` は `double` を経由する。
+- **`-O2` の最適化差**: DSP の clang 19.0.07 とホストの gcc 15.2.0 で
+  `double` の丸めが変わる可能性。
+
+### §30.6 これは V81 HMX の性質ではない
+
+**FNV の不一致はオペランド生成の数値差であり、MMA の読み書き順序とは
+無関係。** 臨界区間は 2 回とも実行されていない。
+
+したがって:
+
+- **`B3_R2_SYNC_UNPROVEN` は不変。** D8 の問いは依然として実機に問われていない。
+- **D8 は `D8_CONTRACT_FAILED`。** 数値証拠なし。
+- **revision 4 の予算は消費済み。** 第 3 セッションには新しい登録が必要。
+
+### §30.7 次に必要なこと（すべて offline）
+
+1. **DSP の `double` 演算を CPU で再現できるか確認する。**
+   `e3c1_rng_unit` の `double` 乗算と `double_to_fp16` の丸めを、
+   V81 の実際の挙動と突き合わせる。SDK のドキュメントか、
+   DSP 上で中間値を出力する診断ビルドで確認する。
+2. **または、オペランド生成を `float` のみで書き直す**（`double` を排除）。
+   ただしこれは登録済み fixture の変更であり、**新しい登録が必要**。
+3. いずれの場合も、実機接触前に CPU で登録値と一致することを確認する。
+
+**第 3 セッションは、この数値差を潰してからでなければ同じ結果になる。**
