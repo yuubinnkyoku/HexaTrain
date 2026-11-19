@@ -1592,3 +1592,92 @@ d8_sim=PASS
 5. **新しい登録**を得てから第 2 セッション
 
 **1〜4 は revision 3 §11 の予算外。所有者の指示を待つ。**
+
+---
+
+## §25 HVX ロック修正の検証（2026-11-19 07:00）
+
+### §25.1 修正内容
+
+`qurt_hvx_lock` を `build_d8_operands` / `d8_guard_init` の**前**へ移した。
+
+```
+修正前: build_d8_operands -> d8_guard_init -> FNV -> qurt_hvx_lock
+修正後: qurt_hvx_lock -> build_d8_operands -> d8_guard_init -> FNV
+```
+
+`vmem` は HVX 命令なので、ロック無しでは発行されない。§24 の診断どおり。
+
+### §25.2 新しいビルド
+
+| 項目 | 値 |
+| --- | --- |
+| build id | **`0x4D8B1122`** |
+| SHA-256 | `8f73eed5dcecf2aac912dcdda4deafc80323ec1e530c2aacd8ac5993c17e7a0d` |
+| サイズ | 28,216 B |
+| 逆アセンブル監査 | **4 条件すべて PASS** |
+
+### §25.3 監査側で直した 4 点
+
+修正でレジスタ割り当てが変わり、監査が読めなくなった箇所。**いずれも
+「どう読むか」の問題で、検証対象は変えていない。**
+
+| 欠陥 | 内容 |
+| --- | --- |
+| `combine(rS,rT)` の対応 | **`rS` が高half、`rT` が低half**。当初逆に実装していた |
+| ペアの表記 | `r19:18` であり `r19:r18` ではない。低half に `r` が付かない |
+| ループ本体内のポインタ | ガードポインタが `add(r19,#0x2a00)` としてループ本体内で構築される |
+| ループ本体内のストア | パース時ではなくループ展開が解決する |
+
+**合成スイートは 25/25 PASS を維持**（旧 16 ケースは 1 つも挙動が変わっていない）。
+
+### §25.4 CPU スイート
+
+`run_hmx_d8_sim.ps1` 単独で **全項目 PASS**:
+
+```
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS
+d8_mutation_check=PASS mutants=5
+d8_host_gate=PASS (121 checks)
+d8_fixture_cpu=PASS
+d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5
+d8_feasibility=PASS
+d8_sim=PASS
+```
+
+### §25.5 `verify.ps1 -Profile Fast` — 中断した
+
+```
+host-fast-contract           FAIL  1,173.5s  run_host_contract_tests(Fast) failed with exit code 1073807364
+total 1,237.2s  PASS=9 FAIL=1 SKIP=21
+```
+
+**exit code `1073807364` = `0x40010004` = `STATUS_CONTROL_C_EXIT`（中断）。**
+§20 で記録した現象と同じで、**数値の失敗ではない。**
+
+**切り分け済み: `run_host_contract_tests.ps1 -Suite Fast` を単独で実行すると
+exit 0 で完走し、D8 も全項目 PASS する。**
+
+```
+d8_fixture_cpu=PASS
+d8_disasm_audit_test=PASS
+d8_sim=PASS
+EXIT=0
+```
+
+したがって **D8 の成果物に影響はない。** `verify.ps1` 経由の
+`Invoke-PwshScript` が子プロセスの大量出力をパイプで読み切れず中断する、
+という §20 の推定を裏づける結果である。
+
+### §25.6 現在地
+
+| 項目 | 状態 |
+| --- | --- |
+| build `0x4D8B1122` | ビルド済み、SHA-256 記録済み |
+| 逆アセンブル監査 | **4 条件 PASS** |
+| CPU スイート（単独） | **全項目 PASS** |
+| `verify.ps1 -Profile Fast` | **中断**（環境依存、D8 は単独で PASS） |
+| 実機デプロイ | **未実施** |
+| 第 2 実機セッション | **未実施**（新しい登録が必要） |
