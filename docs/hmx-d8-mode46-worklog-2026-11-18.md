@@ -1681,3 +1681,61 @@ EXIT=0
 | `verify.ps1 -Profile Fast` | **中断**（環境依存、D8 は単独で PASS） |
 | 実機デプロイ | **未実施** |
 | 第 2 実機セッション | **未実施**（新しい登録が必要） |
+
+---
+
+## §26 build `0x4D8B1122` のデプロイと identity 確認（2026-11-19 16:05）
+
+### §26.1 端末の同一性を再証明した
+
+デプロイしようとしたところ、**ADB エンドポイントが変わっていた**
+（前回のセッションから時間が経っている）。しかも `adb devices` が
+**同一端末を 2 つの endpoint で表示**した。
+
+`docs/agent/device-test-tiers.md` の手順どおり、**安定識別子で同一性を確認**した:
+
+| endpoint | `ro.serialno` | `ro.boot.serialno` | `ro.kernel.qemu` |
+| --- | --- | --- | --- |
+| TCP `host:port` | 一致 | 一致 | 空（実機） |
+| `adb-<serial>-..._adb-tls-connect._tcp` | 一致 | 一致 | 空（実機） |
+
+**両方とも同じ安定識別子で、実機である。** したがって物理端末は 1 台。
+正式 endpoint として **TCP 側を 1 つ決定的に選んだ**（値は private report のみ）。
+
+**「online endpoint が 1 つ」という理由で別端末へ接続してはいけない**という
+規則に従い、識別子の一致を確認してから進めた。
+
+### §26.2 デプロイ
+
+| 成果物 | デバイス上の SHA-256 |
+| --- | --- |
+| skel | `8f73eed5dcecf2aac912dcdda4deafc80323ec1e530c2aacd8ac5993c17e7a0d` |
+| host exe | `91e2283b671ba126e1fc4c0e0e2ceb4138fa13974dc3dd77afaa6b292fa0db61` |
+
+**skel の SHA-256 は監査を通したビルドと一致。** デバイス上で `sha256sum`
+して確認した。
+
+`/data/local/tmp/d8/libcdsprpc.so` が**無い**ことも確認（§18.3 の罠）。
+
+### §26.3 identity ゲート PASS
+
+```
+identity_rc=0
+build_id=0x4d8b1122 dsp_build_id=0x4d8b1122 build_id_status=MATCH
+dsp_identity=MATCH
+RPC_OK=PASS rpc_status=0 dsp_status=OK
+IDENTITY_OK=PASS
+RESOURCE_CLEANUP_OK=PASS close_status=0 dsp_status=OK
+exit_code=0
+```
+
+**修正ビルド `0x4D8B1122` は実機に到達し、identity を通る。**
+identity は mode 30 / q=6 の固定呼び出しで、実験 q は使っていない。
+
+### §26.4 実験ランは実行していない
+
+**条件 A/B/C/D は 1 つも実行していない。** revision 3 §11 の予算は消費済みで、
+第 2 セッションには revision 4 の承認が必要（§25・
+`docs/hmx-v81-cand-b-d8-device-prereg-rev4-proposal.md`）。
+
+デプロイと identity 確認は**予算を消費しない**（ランではない）ため実施した。
