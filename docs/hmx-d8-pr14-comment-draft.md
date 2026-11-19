@@ -1,7 +1,10 @@
-# PR #14 comment draft — D8 Mode 46 implementation and device session
+# PR #14 comment — D8 Mode 46 implementation and device session
 
-Status: **final — the session has run, and it produced `D8_CONTRACT_FAILED`.**
-This text was posted as a comment on PR #14 on 2026-11-19.
+Status: **posted** — https://github.com/yuubinnkyoku/HexaTrain/pull/14#issuecomment-7002378578
+
+The session has run and produced `D8_CONTRACT_FAILED`. This file is the
+verbatim text of the posted comment, kept so the record does not depend on the
+PR page.
 
 ---
 
