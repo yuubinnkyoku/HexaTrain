@@ -2189,3 +2189,93 @@ skel: r7:6   = dfmpyll(r13:12,r11:10) ; r7:6 += dfmpylh(r13:12,r11:10)
 
 **登録済みの検証対象は変わらない**（診断であって D8 のランではない）。
 ただし実機接触であることに変わりはない。
+
+---
+
+## §32 Phase 1.5 — pack は無罪、原因は libm の解決先（2026-11-19 23:50）
+
+### §32.1 手順 1: pack 込みの sim 再構成 — **pack は無罪**
+
+`probe_d8_pack_sim.c` を作り、プロローグ全体
+（生成 → `d8_pack_tile` の 16×128 B `vmem` 格納 → スカラー FNV 読み出し）を
+sim で再現した。VTCM 相当のバッファは `static uint8_t vtcm[12288]`。
+
+```
+sim_pack ahi fnv=c6231266 registered=c6231266 device=57a0ec09 MATCH_REGISTERED
+sim_pack alo fnv=3b2d22d2 registered=3b2d22d2 device=d0e0c444 MATCH_REGISTERED
+sim_pack whi fnv=8b88609f registered=8b88609f device=9c9fe034 MATCH_REGISTERED
+sim_pack wlo fnv=a66af695 registered=a66af695 device=29a90a5c MATCH_REGISTERED
+```
+
+**pack を通しても登録値のまま。pack レイアウトは無罪。**
+
+### §32.2 手順 2: USR 丸めモード掃引 — **実行不能**
+
+`qurt_event.h` を調べたが、USR で制御できるのは
+**FP 例外ビット（`qurt_enable_floating_point_exception`）のみ**で、
+丸めモードや FTZ の制御 API は SDK に存在しない。
+
+**指示された「USR 丸めモード 4 種 × FTZ on/off」の掃引は実行できない。**
+存在しない API を推測で叩くことはしない。
+
+### §32.3 代わりに見つけた決定的な差 — **libm の解決先が違う**
+
+`double_to_fp16`（`fp16_util.h`）は `frexp` / `ldexp` / `floor` / `fmod` を
+使う。**これらのシンボル解決が skel と sim で違う。**
+
+| バイナリ | 呼び出し | 解決先 |
+| --- | --- | --- |
+| **skel（実機）** | `call 0xe10 <frexp@plt>` 等 | **`@plt` = 動的リンク。デバイスの `libc.so`** |
+| **sim** | `call 0x81b8 <frexp>` 等 | **静的リンク。バイナリ内の実装** |
+
+```
+skel: 37fc: call 0xe10 <frexp@plt>
+      3824: call 0xe20 <ldexp@plt>
+      3838: call 0xe40 <floor@plt>
+      38c0: call 0xe50 <fmod@plt>
+
+sim : 783c: call 0x81b8 <frexp>
+      7864: call 0x81dc <ldexp>
+      7878: call 0x7f68 <floor>
+      7900: call 0x7fc0 <fmod>
+```
+
+**実機では DSP の `libc.so` の実装が、sim では静的リンク版が走る。**
+`frexp` / `ldexp` / `floor` / `fmod` のいずれかが両者で異なる丸めをすれば、
+`double_to_fp16` の出力が変わり、4 タイルのバイト列が変わる。
+
+**これは「同じコンパイラ・同じフラグ・同じ命令列で sim は登録値、実機は別値」
+という §31.4 の観測と完全に整合する。** 命令列は同じでも、`@plt` の先が違う。
+
+### §32.4 なぜこれが最有力か
+
+1. **`double_to_fp16` は fixture の全 1,024 セルで呼ばれる。**
+   1 セルでも丸めが違えばタイル全体の FNV が変わる。
+2. **`e3c1_split_lo` も `double_to_fp16` を経由する。**
+3. **`frexp` / `ldexp` は 2 の冪のスケーリングなので、
+   実装によっては境界値（subnormal / tie）で差が出る。**
+4. **sim は静的リンクなので、実機の `libc.so` の挙動を再現していない。**
+   sim が登録値を出すことは、実機の `libc.so` が同じ挙動をする証明にならない。
+
+### §32.5 次の一手
+
+**実機の `libc.so` の `frexp`/`ldexp`/`floor`/`fmod` の挙動を、
+sim で再現する方法を探す。**
+
+- 案 1: sim に実機と同じ `libc.so` を食わせる（`--shared_lib` 等）。
+  sim のオプションを調べる。
+- 案 2: `double_to_fp16` を **libm 非依存**に書き直す
+  （`frexp`/`ldexp`/`floor`/`fmod` を整数ビット操作に置き換える）。
+  これは登録済み fixture の**実装**変更であり、生成される値が変わらないなら
+  登録 4 定数は不変。**rev5 の候補として最も筋が良い。**
+- 案 3: 診断ダンプ（所有者承認済み）で実機のタイルバイトを持ち帰り、
+  どのセルがずれるかを特定する。
+
+**案 2 が「登録 4 定数を変えずに済む修正」の要件に合致する。**
+`double_to_fp16` は純粋な丸め関数なので、libm に依存せず書ける。
+書き直した版が CPU と sim の両方で登録値を再現すれば、
+実機でも同じ値になる可能性が高い（命令列が同じになるため）。
+
+ただし **`double_to_fp16` は mode 42/43/45 と共有**されているので、
+書き換えるとそれらの fixture にも影響する。**共有部分の変更は
+D8 の登録範囲を超えるため、所有者の判断が必要。**
