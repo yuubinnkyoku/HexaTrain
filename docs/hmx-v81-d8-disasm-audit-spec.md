@@ -331,3 +331,83 @@ Recorded because they show the audit is load-bearing, not decorative.
    `+4096` was never written. Four different spellings of the destination all
    produced the same fold, so the fix is `__attribute__((noinline))` on the
    helper, not a rewording of the call.
+
+### A.8 Second extension — register pairs and in-loop pointers (2026-11-19)
+
+The first extension (A.2) read the object produced by the revision 3 handler. A
+later source change — moving `qurt_hvx_lock` above the vector prologue, which is
+not a change to the registered issued order — altered the register allocation,
+and the audit could no longer read the object. Four more rules were needed. All
+four are again about **how the text is read**; no registered verification target
+moved.
+
+**A.8.1 `combine(rS,rT)` puts `rS` in the high half.**
+
+`rM:rN = combine(rS,rT)` assigns `rS` to `rM` and `rT` to `rN`. The compiler
+uses it to save the incoming argument registers, so the VTCM base arrives as the
+high half of a pair rather than as a plain copy. The first implementation had the
+two halves the wrong way round, which silently dropped the base.
+
+**A.8.2 The pair is spelled `r19:18`, not `r19:r18`.**
+
+The high half carries the `r` prefix and the low half does not. A pattern written
+as `(r\d+):(r\d+)` never matches, and because the mismatch is silent the rule
+simply does not fire. This affects both the `combine` rule and the 64-bit `memd`
+spill and reload rules.
+
+**A.8.3 A pointer may be built inside the loop body that uses it.**
+
+The guard pointer is emitted as `add(r19,#0x2a00)` **inside** the guard init
+loop, not before it. The loop expansion therefore looks back through the body for
+`rN = add(rS,#imm)` as well as for `rN = rM` and `rN = memw(r29+#off)`, and it
+follows a `combine` whose source is itself built in the body.
+
+The main walk still ignores an in-loop `add` when updating the derivation map,
+because the increment is per-iteration and must not leak past the loop. The two
+rules are not in conflict: the walk decides what the map holds **after** the
+loop, the expansion decides what the store inside the body sees.
+
+**A.8.4 A store inside a loop body is resolved by the expansion, not at parse
+time.**
+
+The parse-time `vmem` rule used to fail immediately on an unresolved address.
+That is wrong for a store inside a body, because the expansion is about to
+resolve it with the map at the loop entry. Only a store outside every body fails
+at parse time now.
+
+**A.4 applies unchanged to this second extension.** The issued order, the VTCM
+offsets, the fill form and mask, the Convert `Rs`, the Store target, the
+synchronisation ban, the guard and the fail-closed policy are the same targets
+they were before A.8. Only the reading of the text changed again.
+
+### A.9 Test record after the second extension (2026-11-19)
+
+| Suite | Result |
+| --- | --- |
+| synthetic, original 16 cases | **unchanged, all pass** |
+| synthetic, added 9 base-relative cases | **all pass** |
+| total synthetic | `d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5` (25 cases) |
+| stamped object `0x4D8B1122`, conditions A/B/C/D | `d8_disasm_audit=PASS packs=64 guard=12 fills=48 mma=3 convert=1 store=1` |
+
+### A.10 The emitted order was verified, not assumed
+
+Moving `qurt_hvx_lock` in the source does not prove the compiler emitted it
+first. Comparing the pre-fix object with the stamped one on the same symbol
+settles it:
+
+| | pre-fix `dbg.so` | stamped `0x4D8B1122` |
+| --- | ---: | ---: |
+| `qurt_hvx_lock` | segment 450 | segment 22 |
+| first `vmem` | segment 324 | segment 59 |
+
+Before the fix the vector stores really were issued 126 segments before the lock.
+That is what the device observed: the operand FNVs hashed the untouched bytes,
+and the guard matched only because the guard init writes zeros.
+
+### A.11 What the audit still cannot do
+
+The rules read a disassembly. They cannot show that a store landed, that a read
+saw it, or that the hardware completed an MMA read before a fill overwrote it.
+The second extension makes the audit able to **read** the corrected object; it
+does not make the audit able to **answer** the D8 question. That still needs the
+device.
