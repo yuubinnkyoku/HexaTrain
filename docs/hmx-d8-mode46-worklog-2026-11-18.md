@@ -1739,3 +1739,90 @@ identity は mode 30 / q=6 の固定呼び出しで、実験 q は使ってい�
 `docs/hmx-v81-cand-b-d8-device-prereg-rev4-proposal.md`）。
 
 デプロイと identity 確認は**予算を消費しない**（ランではない）ため実施した。
+
+---
+
+## §27 指示書タスク 1〜8 の完了（2026-11-19 16:30）
+
+### §27.1 タスクの状態
+
+| タスク | 状態 | 根拠 |
+| --- | --- | --- |
+| 1 revision 3 登録 | **完了** | `D8_REV3_REGISTERED`、prereg 更新済み |
+| 2 DSP 実装 | **完了** | `hmx_mode46.h` / `hmx_mode46_d8.h` / `probe_dsp.c` |
+| 3 ホスト実装 | **完了** | `hmx_mode46_host.h` / `probe_host.c` |
+| 4 ビルド | **完了** | build `0x4D8B1122`、SHA-256 `8f73eed5…7a0d` |
+| 5 逆アセンブル監査 | **PASS** | 実オブジェクト 4 条件、合成 25/25 |
+| 6 CPU 回帰 | **PASS** | 下記 §27.2 |
+| 7 実機セッション | **1 回実行済み** | `D8_CONTRACT_FAILED`（§23） |
+| 8.1 PR #14 コメント | **完了** | pull/14#issuecomment-7002378578 |
+| 8.2 実験記録ドキュメント | **完了** | `hmx-v81-d8-device-run-2026-11-19.md` |
+| 8.3 ラベル更新 | **完了** | prereg / research-priorities |
+| 8.4 research-priorities.md | **完了** | D8 ゲートを追記 |
+
+### §27.2 最終 CPU スイート（全項目 PASS）
+
+```
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS (independent contract audit)
+d8_mutation_check=PASS mutants=5
+d8_host_gate=PASS (121 checks)
+d8_fixture_cpu=PASS (generator reproduces the registered FNVs)
+d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5
+d8_feasibility=PASS
+d8_python=PASS
+d8_sim=PASS
+```
+
+**4 参照 SHA-256 と 4 オペランド FNV が登録値と一致。**
+
+### §27.3 登録数値の不変を最終確認
+
+| 検査 | 結果 |
+| --- | --- |
+| `hmx_d8_contract.h` の差分 | **空**（無変更） |
+| `hmx_mode46_host.h` の 4 参照 | 登録値と**一致**（このブランチで新規追加したファイル） |
+| `<!-- d8-rev3-sequence:begin -->` ブロック | **無変更** |
+| prereg の変更行 | ラベル行と post-run 段落のみ |
+
+### §27.4 ブランチの状態
+
+| 項目 | 値 |
+| --- | --- |
+| ブランチ | `codex/hmx-d8-mode46-20261118` |
+| 分岐元 | `92c408757726d30efd03895c6c489ca14f268c7b` |
+| コミット数 | **34** |
+| upstream | 同期済み |
+| 未コミット変更 | **なし** |
+| `PhoneLM` | **8 ファイルのまま無傷** |
+
+### §27.5 残る唯一の作業
+
+**第 2 実機セッション。** revision 3 §11 の予算は消費済みで、
+`docs/hmx-v81-cand-b-d8-device-prereg-rev4-proposal.md` の承認が必要。
+
+承認なしで進められる準備はすべて完了している:
+
+| 項目 | 状態 |
+| --- | --- |
+| build `0x4D8B1122` | 監査 4 条件 PASS、CPU スイート PASS |
+| 実機デプロイ | 完了、digest 一致 |
+| identity ゲート | **PASS**（`build_id_status=MATCH`） |
+| ハーネス | 配置済み、停止条件 14/14 PASS |
+| 事前チェックリスト | `hmx-v81-d8-second-session-checklist.md` |
+
+**承認いただければ `sh d8_session.sh <session-id>` を 1 回実行するだけ。**
+
+### §27.6 ラベル（最終）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変**（D8 は数値証拠を生んでいない） |
+| `B3_R2_FULL_TILE_CPU_READY` | 不変 |
+| `CPU_VALIDATED_PREFERRED_DESIGN` | Candidate B のまま |
+| C2 | `C2 NOT_RUN`（別管理） |
+| Mode 46 | 登録済み・1 回実行・`D8_CONTRACT_FAILED` |
+| D8 | **`D8_CONTRACT_FAILED`**（数値証拠なし） |
+
+**`PROVEN` を印字する terminal class は存在しない。**
