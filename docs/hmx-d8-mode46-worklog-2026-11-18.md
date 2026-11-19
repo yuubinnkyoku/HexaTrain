@@ -1877,3 +1877,89 @@ line 206: vmem(r19+#0x0) = v0       <- fill Ahi
 | 実機で FNV が一致する | **未確認**（第 2 セッションが必要） |
 
 **3 番目までが言える。4 番目は実機でしか分からない。**
+
+---
+
+## §29 フェンス修正の検証と `verify.ps1 -Profile Fast` 全 PASS（2026-11-19 22:30）
+
+### §29.1 フェンス修正（revision 4 §1.1 change 2）
+
+`qurt_mem_syncht()` を `d8_guard_init` の後、guard hash の前に挿入した。
+
+`qurt_memory.h` の仕様:
+
+> Performs heavy-weight synchronization of memory transactions. This operation
+> does not return until all previous memory transactions (cached and uncached
+> load/store, mem_locked, and so on) that originated from the current thread are
+> complete and globally observable.
+
+**読み戻しに必要な保証そのもの。**
+
+### §29.2 発行オブジェクトでの確認
+
+| 項目 | セグメント |
+| --- | ---: |
+| `qurt_hvx_lock` | 22 |
+| `build_d8_operands` | 31 |
+| 最初の `vmem`（guard init） | 57 |
+| **`syncht`** | **60** |
+| `mxclracc`（臨界区間開始） | **175** |
+
+**`syncht` は `mxclracc` の 115 セグメント前。**
+登録済み同期禁止区間 `[mxclracc, Store #1]` の**外側**にある。
+
+### §29.3 監査 4 条件 PASS
+
+```
+d8_disasm_audit=PASS packs=64 guard=12 fills=48 mma=3 convert=1 store=1
+```
+
+条件 A / B / C / D すべて PASS。合成スイートも **25/25 PASS**。
+
+監査側で 1 件修正した: ループ展開が `r3 = r2` のコピー元
+（`r2 = add(r19,#0x2a00)`）をループ本体内から解決できていなかった。
+
+### §29.4 CPU スイート全項目 PASS
+
+```
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS (143 checks)
+d8_mutation_check=PASS mutants=5
+d8_host_gate=PASS (121 checks)
+d8_fixture_cpu=PASS
+d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5
+d8_feasibility=PASS (187 checks)
+d8_python=PASS
+d8_sim=PASS
+```
+
+実現可能性監査も 1 件修正した: `syncht` を**ハンドラ全体**で禁止していたため、
+プロローグフェンスが違反扱いになっていた。**臨界区間内のみ**の禁止に限定し、
+プロローグフェンスの存在を別途確認する形にした（186→187 checks）。
+
+### §29.5 `verify.ps1 -Profile Fast` — 全 PASS
+
+```
+host-fast-contract           PASS    245.6s  metadata staleness + CPU reference contracts ok
+total 328.4s  PASS=10 FAIL=0 SKIP=21
+EXIT=0
+```
+
+**§20 / §25.5 の `STATUS_CONTROL_C_EXIT` ストールは発生しなかった。**
+条件 2（単独実行による切り分け）は不要だった。
+
+### §29.6 スタンプビルド
+
+| 項目 | 値 |
+| --- | --- |
+| build id | **`0x4D8B1123`** |
+| skel SHA-256 | `a8461eb9188f83c5a3e66c0eb08c704eeebe4aa15cfb77e9cbe8df7d5f8cbd8c` |
+| サイズ | 28,216 B |
+| デバイス上の digest | **一致** |
+| identity 二重エコー | **両方 `0x4d8b1123`**、`IDENTITY_OK=PASS` |
+
+### §29.7 セッションへ
+
+revision 4 は `D8_REV4_REGISTERED`。条件 1 を満たしたので、
+第 2 実機セッションを 1 回だけ実行する。
