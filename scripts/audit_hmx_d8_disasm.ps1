@@ -486,7 +486,21 @@ foreach ($lp in $loopIdx) {
         for ($j = $storeSeg - 1; $j -gt $lp.Index; $j--) {
             if ($segments[$j].Text -match "^$reg\s*=\s*(r\d+)$") {
                 $src = $Matches[1]
-                if ($loopMap.ContainsKey($src)) { $base = $loopMap[$src] }
+                if ($loopMap.ContainsKey($src)) {
+                    $base = $loopMap[$src]
+                } else {
+                    # The source may itself be built inside the body, so resolve
+                    # it the same way rather than only from the loop-entry map.
+                    for ($k = $j - 1; $k -gt $lp.Index; $k--) {
+                        if ($segments[$k].Text -match "^$src\s*=\s*add\((r\d+)\s*,\s*(?:##|#)(0x[0-9a-fA-F]+|\d+)\)$") {
+                            $src2 = $Matches[1]
+                            $add2 = [Convert]::ToInt32($Matches[2],
+                                $(if ($Matches[2].StartsWith('0x')) { 16 } else { 10 }))
+                            if ($loopMap.ContainsKey($src2)) { $base = $loopMap[$src2] + $add2 }
+                            break
+                        }
+                    }
+                }
                 break
             }
             if ($segments[$j].Text -match "^$reg\s*=\s*memw\(r29\+#(0x[0-9a-fA-F]+)\)$") {

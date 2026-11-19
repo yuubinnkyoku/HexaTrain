@@ -1,9 +1,11 @@
-# Candidate B — D8 Device Preregistration (Revision 4 Proposal)
+# Candidate B — D8 Device Preregistration (Revision 4, Registered)
 
-Status: **`D8_REV4_PROPOSED_CPU_ONLY`**, 2026-11-19. This document authorises
-nothing: no DSP source change beyond the one listed, no DSP build, no QAIRT, no
-ADB, no device contact, no Mode 46 run. It is a proposal for the owner to accept
-or reject.
+Status: **`D8_REV4_REGISTERED`**, 2026-11-19. The owner approved the budget in
+§4 with one condition: settle explicitly whether the prologue needs a fence
+between its vector stores and the scalar reads that hash them. That is settled
+in §1.1 change 2, and the build was re-stamped as `0x4D8B1123`.
+
+This document authorises exactly the budget in §4 and nothing else.
 
 Companion documents:
 
@@ -33,20 +35,51 @@ observe the question revision 3 could not put to the hardware.**
 
 ## 1. What changed since revision 3
 
-### 1.1 The one source change
+### 1.1 The two source changes
 
-`qurt_hvx_lock` moved to the top of the handler, before any vector work:
+**Change 1 — the HVX lock moves above the vector prologue.**
 
 ```text
 revision 3:  build_d8_operands -> d8_guard_init -> operand FNVs -> qurt_hvx_lock
 revision 4:  qurt_hvx_lock -> build_d8_operands -> d8_guard_init -> operand FNVs
 ```
 
-**This is not a change to the registered issued order.** Section 3.1 lists
+**Change 2 — a `qurt_mem_syncht()` fence between the vector stores and the
+scalar reads that hash them.**
+
+```text
+revision 4:  qurt_hvx_lock
+             -> build_d8_operands      (4 x 16 vmem stores)
+             -> d8_guard_init          (12 vmem stores)
+             -> qurt_mem_syncht()      <- the fence
+             -> guard_pre = fnv(guard)
+             -> fnv_ahi..wlo = fnv(operands)
+             -> mxclracc ...           (the critical interval starts here)
+```
+
+`qurt_mem_syncht()` "does not return until all previous memory transactions
+(cached and uncached load/store, mem_locked, and so on) that originated from the
+current thread are complete and globally observable" (`qurt_memory.h`). That is
+exactly the guarantee the read-back needs: the prologue writes VTCM with `vmem`
+and then reads the same VTCM with ordinary scalar loads.
+
+**Why both changes, and not one assumed to cover the other.** The revision 3
+device run could not distinguish them. The guard hashed to the registered
+zero-guard value, but `d8_guard_init` writes zeros, so a read that misses the
+store also sees zeros. The operand FNVs hashed to their untouched contents,
+which the lock bug alone explains. Rather than assume the lock fix covers the
+visibility question, both are fixed and both are recorded.
+
+**Neither change touches the registered issued order.** Section 3.1 lists
 `PACK`, `BIAS`, `GUARD INIT`, `GUARD PRE`, `MXCLRACC`, `MMA`, `FILL`, `CONVERT`,
 `STORE`, `GUARD POST`. `qurt_hvx_lock` is not an entry of that order; it is a
-precondition for issuing any of them. Taking it first changes no registered
-target.
+precondition for issuing any of them. The fence sits in the prologue, **outside**
+the registered synchronisation ban, which covers `[mxclracc, Store #1]`. Taking
+the lock first and fencing the prologue therefore change no registered target.
+
+The emitted object confirms the placement rather than assuming it: `syncht` is at
+segment 60 and `mxclracc` at segment 175, so the fence is 115 segments before the
+interval opens.
 
 ### 1.2 What did NOT change
 
@@ -115,12 +148,21 @@ integration.
 All of these are already true for build `0x4D8B1122` in the working tree, and
 must be re-established for whatever build is finally stamped:
 
-| Gate | Requirement |
-| --- | --- |
-| Disassembly audit | all four conditions PASS on the stamped object |
-| CPU suite | `run_hmx_d8_sim.ps1` PASS, including `d8_fixture_cpu` |
-| Identity | `build_id_status=MATCH`, `IDENTITY_OK=PASS` on the device |
-| Digest | the skel SHA-256 recorded and the device copy verified |
+| Gate | Requirement | State for the stamped build |
+| --- | --- | --- |
+| Disassembly audit | all four conditions PASS on the stamped object | **PASS** |
+| CPU suite | `run_hmx_d8_sim.ps1` PASS, including `d8_fixture_cpu` | **PASS** |
+| Identity | `build_id_status=MATCH`, `IDENTITY_OK=PASS` on the device | **PASS** |
+| Digest | the skel SHA-256 recorded and the device copy verified | **PASS** |
+
+The stamped build for revision 4 is **`0x4D8B1123`**, skel SHA-256
+`a8461eb9188f83c5a3e66c0eb08c704eeebe4aa15cfb77e9cbe8df7d5f8cbd8c`.
+`0x4D8B1122` is **not** reused: the source changed, so the build id must change.
+
+The feasibility audit's synchronisation check was tightened at the same time. It
+used to ban `syncht` anywhere in the handler, which would forbid the prologue
+fence; it now bans it inside `[mxclracc, Store #1]` and separately asserts that
+the prologue fence exists. The check count went from 186 to 187.
 
 ## 6. Stop conditions (unchanged from revision 3 §10)
 

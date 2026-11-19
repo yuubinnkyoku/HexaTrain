@@ -30,6 +30,9 @@
 #include <hexagon_types.h>
 #include <hvx_hexagon_protos.h>
 #include <qurt_hvx.h>
+/* qurt_mem_syncht: the fence between the vector prologue's vmem stores and the
+ * scalar reads that hash them (mode 46). */
+#include <qurt_memory.h>
 
 #include "hmx_identity.h"
 #include "hmx_mode43.h"

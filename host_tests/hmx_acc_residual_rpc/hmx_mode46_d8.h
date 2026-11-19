@@ -262,6 +262,25 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   asm volatile("bias = mxmem2(%0)\n" : : "r"(bias1_reg) : "memory");
 
   d8_guard_init(guard);
+
+  /* Fence the vector stores before the scalar reads below.
+   *
+   * build_d8_operands and d8_guard_init issue vmem stores; the guard hash and
+   * the four operand FNVs then read the same VTCM with ordinary scalar loads.
+   * qurt_mem_syncht does not return until every preceding memory transaction
+   * from this thread is complete and globally observable (qurt_memory.h), which
+   * is exactly the guarantee the read-back needs.
+   *
+   * This sits in the prologue, outside the registered synchronisation ban,
+   * which covers [mxclracc, Store #1]. It therefore changes no registered
+   * target: the issued order, the offsets, the fill form, the Convert Rs and the
+   * critical interval are untouched.
+   *
+   * The device run of revision 3 could not distinguish this from the lock bug,
+   * because the guard init writes zeros and a read that misses the store also
+   * sees zeros. Both are fixed rather than one assumed to cover the other. */
+  qurt_mem_syncht();
+
   guard_pre = mode45_fnv1a(guard, HMX_MODE46_GUARD_BYTES);
 
   /* The operand FNVs must be taken BEFORE MMA #1: hashing 8 KiB inside the

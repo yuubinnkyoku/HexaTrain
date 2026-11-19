@@ -524,8 +524,20 @@ def main():
 
     check("asm volatile(\"\" ::: \"memory\")" in dsp,
           "template_compiler_barrier_present")
+    # The ban on synchronisation covers the registered critical interval
+    # [mxclracc, Store #1], not the whole handler. The prologue may fence its
+    # own vector stores before it reads them back: that is outside the interval
+    # and changes no registered target. Checking the whole file would forbid a
+    # fence the prologue needs.
+    d8_handler = read(os.path.join(RPC, "hmx_mode46_d8.h"))
+    crit_start = d8_handler.index("mxclracc.hf")
+    crit_end = d8_handler.index("mxmem(%0, %1) = cvt", crit_start)
+    critical = d8_handler[crit_start:crit_end]
     for banned in ("syncht", "dmsyncht", "dmtlbsynch", "mxswapacc"):
-        check(banned not in dsp, "template_no_%s" % banned)
+        check(banned not in critical, "critical_interval_no_%s" % banned)
+    # The prologue fence is allowed, but it must exist only outside the
+    # interval, so the two facts are recorded separately.
+    check("syncht" in d8_handler[:crit_start], "prologue_fence_present")
     check("qurt_hvx_lock(QURT_HVX_MODE_128B)" in dsp, "template_hvx_lock")
     check("for (int v = 0; v < 16; ++v)" in dsp, "template_hvx_16_loop")
     check("*(HVX_Vector *)" in dsp, "template_hvx_vector_store")
