@@ -2079,3 +2079,113 @@ d8_fixture wlo cpu=a66af695 registered=a66af695 match
 3. いずれの場合も、実機接触前に CPU で登録値と一致することを確認する。
 
 **第 3 セッションは、この数値差を潰してからでなければ同じ結果になる。**
+
+---
+
+## §30.8 §24.3 の読み替え — 第 1 セッションでもストアは着地していた
+
+§24.3 で私は「`qurt_hvx_lock` より前の `vmem` は実行されない」と結論した。
+**この結論は覆る。**
+
+理由: 第 1 セッション（`0x4D8B1121`、ロック前の `vmem`）と第 2 セッション
+（`0x4D8B1123`、ロック後 + フェンス）の 4 オペランド FNV が
+**1 ビットも違わない**。
+
+```
+第 1: ahi=57a0ec09 alo=d0e0c444 whi=9c9fe034 wlo=29a90a5c
+第 2: ahi=57a0ec09 alo=d0e0c444 whi=9c9fe034 wlo=29a90a5c
+```
+
+もし第 1 セッションでストアが着地していなければ、陳腐化した 2,048 B が
+第 2 セッションの生成結果と偶然一致する必要がある。**確率的にほぼ不可能。**
+
+**したがって第 1 セッションでもストアは着地しており、FNV 不一致は
+2 ビルドとも同じ原因で最初から存在していた。**
+
+ロック移動とフェンスは**仕様上正しい修正**（HVX 命令はロック後に発行すべき、
+ベクタストアとスカラー読みの間にはフェンスが要る）であり、発行オブジェクトで
+位置も確認済み（§28.3、§29.2）。**ただしこのゲート停止の原因ではなかった。**
+
+---
+
+## §31 Phase 1 — hexagon-sim で実機値を再現できず、FMA 説は否定（2026-11-19 23:00）
+
+### §31.1 手順 1: FP 命令の特定
+
+`build_d8_operands` を逆アセンブルしたところ、**`dfmpyll` / `dfmpylh` /
+`dfmpyhh` の積和命令が 72 個**あった。`double` の乗算が `+=` の形で
+融合されている。
+
+これは指示で挙げられた FMA contraction 仮説と整合する。
+
+### §31.2 手順 2: hexagon-sim で実機値を再現できるか
+
+`hexagon-sim.exe` が SDK に存在したので、ベアメタルのハーネス
+（`probe_d8_fixture_sim.c`）を組み、**skel と同じフラグ**
+（`-O2 -G0 -mv81 -mhmx -mhvx -mhvx-length=128b`）でコンパイルして実行した。
+
+**結果: 登録値を完全に再現し、実機値とは一致しない。**
+
+```
+sim_fixture ahi fnv=c6231266 registered=c6231266 match
+sim_fixture alo fnv=3b2d22d2 registered=3b2d22d2 match
+sim_fixture whi fnv=8b88609f registered=8b88609f match
+sim_fixture wlo fnv=a66af695 registered=a66af695 match
+
+sim_vs_device ahi sim=c6231266 device=57a0ec09 differs_from_device
+sim_vs_device alo sim=3b2d22d2 device=d0e0c444 differs_from_device
+sim_vs_device whi sim=8b88609f device=9c9fe034 differs_from_device
+sim_vs_device wlo sim=a66af695 device=29a90a5c differs_from_device
+```
+
+### §31.3 FMA 説は否定された
+
+**sim バイナリも同じ `dfmpy` 命令を使っている。**
+
+| バイナリ | `dfmpy`/`dfma` の数 | FNV |
+| --- | ---: | --- |
+| sim ハーネス（`main` にインライン化） | **96**（バイナリ全体） | **登録値** |
+| skel（`build_d8_operands`） | **72** | 実機で不一致 |
+
+命令列も同一形:
+
+```
+sim : r11:10 = dfmpyll(r7:6,r5:4) ; r11:10 += dfmpylh(r7:6,r5:4)
+skel: r7:6   = dfmpyll(r13:12,r11:10) ; r7:6 += dfmpylh(r13:12,r11:10)
+```
+
+**同じ命令で同じ結果が出るなら、FMA は原因ではない。**
+`-ffp-contract=off` / `=fast` を試しても `dfmpy` の数は変わらなかった（0 個のまま
+だったのは `build` がインライン化されて `main` に入っていたため）。
+
+### §31.4 これで分かったこと
+
+| 環境 | コンパイラ | FNV |
+| --- | --- | --- |
+| x86-64 gcc 15.2.0 | gcc | **登録値** |
+| hexagon-clang 19.0.07 + **hexagon-sim** | hexagon-clang | **登録値** |
+| hexagon-clang 19.0.07 + **実機 V81** | hexagon-clang | **別の値** |
+
+**同じコンパイラ・同じフラグ・同じ命令列で、sim は登録値、実機は別の値。**
+
+したがって原因は**コンパイル時ではなく実行時**にある。候補:
+
+1. **実機の `double` 演算の丸めモードが sim と違う**（ハードウェアの
+   `dfmpy` 実装差、または USR / 丸め制御レジスタの設定差）
+2. **実機の非正規化数（subnormal）の扱いが sim と違う**（FTZ / DAZ）
+3. **`static` ローカルの初期化状態が違う**（sim は `.bss` ゼロ、
+   実機は VTCM ではなく `.bss` だが、ロード時の状態が違う可能性）
+4. **実機の `double_to_fp16` 経路**（`fp16_util.h` の丸め）が
+   sim と異なる最適化を受ける
+
+### §31.5 次の一手
+
+**sim で再現できないので、実機のタイルバイトを持ち帰る診断が必要。**
+これは実機接触なので、**実行前に所有者の許可を得る。**
+
+具体的には、`build_d8_operands` の直後に 4 タイルの先頭 64 B と
+`e3c1_rng` の最初の 8 値を `metadata` の空き語（29/31）に詰めるか、
+別モードで返す診断ビルドを 1 本作り、1 回だけ実行する。
+
+**登録済みの検証対象は変わらない**（診断であって D8 のランではない）。
+ただし実機接触であることに変わりはない。
