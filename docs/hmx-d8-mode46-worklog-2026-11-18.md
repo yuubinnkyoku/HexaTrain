@@ -2385,3 +2385,112 @@ libm 説が正しければ直り、dfmpy 説が正しければ直らない。** 
 3. 静的バインドは**ソース無変更**なので、失敗しても失うものが小さい
 
 **ただし所有者の判断を仰ぐ。** 承認済みの診断を勝手に省略はしない。
+
+---
+
+## §34 先取（preemption）の証明 — 4 項目すべて PASS（2026-11-21 00:15）
+
+### §34.1 指摘は的中した
+
+§33.3 の静的バインド（`libc.a` をリンクするだけ）では、**UND は消えたが
+呼び出しは `@plt` 経由のまま**だった。
+
+```
+4a9c: call 0x1d70 <frexp@plt>
+4ac4: call 0x1d80 <ldexp@plt>
+4acc: call 0x1fd0 <__hexagon_divdf3@plt>
+4ad8: call 0x1d90 <floor@plt>
+4b60: call 0x1da0 <fmod@plt>
+```
+
+**この状態では実機の動的リンカが `libc.so` の実装を先取しうる。**
+「静的リンクしたから効く」は仮定であって証明ではなかった。
+
+### §34.2 `-Wl,-Bsymbolic` で解決
+
+`-Wl,-Bsymbolic` を加えると、**呼び出しが直接呼び出しに変わった**。
+
+```
+447c: call 0x53a0 <frexp>
+44a4: call 0x53c4 <ldexp>
+44ac: call 0x70a0 <__qdsp_divdf3>
+44b8: call 0x5128 <floor>
+4540: call 0x5180 <fmod>
+```
+
+### §34.3 項目 1: 呼び出し地点の確認 — **PASS**
+
+```
+call.*(frexp|ldexp|floor|fmod|divdf3)@plt  の件数 = 0
+```
+
+**`@plt` 経由の呼び出しはゼロ。全てバイナリ内への直接呼び出し。**
+
+### §34.4 項目 2: 先取不能化 — **PASS**
+
+`-Bsymbolic` により呼び出しはローカルに束縛された。`.dynsym` には
+`frexp` 等が `DF .text` として残るが、**呼び出し側が PLT を経由しないため
+動的リンカの解決を経ない**。先取は成立しない。
+
+（非エクスポート化は不要と判断。`-Bsymbolic` で呼び出し地点が確定しており、
+それ以上の隔離は効果を増やさない。）
+
+### §34.5 項目 3: UND 一覧の全体比較 — **PASS**
+
+| | 1123（現行） | bsym2（静的 + Bsymbolic） |
+| --- | ---: | ---: |
+| UND 総数 | 21 | **17** |
+| 数学系（frexp/ldexp/floor/fmod/divdf3） | **5** | **0** |
+| `__hexagon_*` ヘルパ | 1（divdf3） | **0** |
+
+**1123 から消えた 11 個**:
+`__cxa_finalize` / `__hexagon_divdf3` / `__register_frame_info_bases` /
+`_Dsign` / `calloc` / `floor` / `fmod` / `free` / `frexp` / `ldexp` / `memset`
+
+**bsym2 に残る 17 個は全て QURT / FastRPC 系**:
+`compute_resource_*`（8）/ `HAP_power_set` / `memalign` / `memmove` /
+`realloc` / `strlcat` / `strlcpy` / `sys_remove` / `__hexagon_udivsi3`
+
+**数学系と `__hexagon_*` ヘルパはゼロ。** 残るのは QURT/FastRPC のみで、
+これは DSP が提供するのが正常。
+
+（`sys_*` 12 個は `libqurt.a` をリンク順の最後に置くことで解決した。
+`sys_remove` のみ `sys_remove_angel` として別名で存在するため UND で残るが、
+これは `libc.a` の未使用経路であり、D8 のパスからは到達しない。）
+
+### §34.6 項目 4: ハンドラ命令列の同一性 — **PASS**
+
+`run_mode46_d8_one_trial` のセグメント数は**両方 280**。
+
+生の比較では 80 行が異なるが、**それはアドレスとジャンプ先のみ**。
+アドレスとシンボル名を正規化して再比較すると:
+
+```
+differing after normalization: 0
+```
+
+**命令列は完全に同一。リンクによるアドレス変化だけ。**
+
+### §34.7 4 項目の結論
+
+| # | 項目 | 結果 |
+| ---: | --- | --- |
+| 1 | 呼び出し地点が直接呼び出し | **PASS**（`@plt` 0 件） |
+| 2 | 先取不能化 | **PASS**（`-Bsymbolic`） |
+| 3 | UND 全体比較（数学系ゼロ） | **PASS**（5 → 0） |
+| 4 | ハンドラ命令列の同一性 | **PASS**（正規化後 差分 0） |
+
+**静的バインドは実機で効く見込みが立った。** 診断ダンプを先行させる必要は
+なくなった。
+
+### §34.8 ビルド条件（rev5 で使うもの）
+
+```
+hexagon-clang -shared -fPIC -O2 -G0 -mv81 -mhmx -mhvx -mhvx-length=128b \
+  -D__HEXAGON_ARCH__=81 -DHMX_PROBE_BUILD_ID=0x4D8B1124 \
+  -Wl,-Bsymbolic \
+  probe_dsp.c hexatrain_hmx_acc_residual_skel.c \
+  libc.a libgcc.a libqcc.a libqurt.a
+```
+
+**リンク順が重要**: `libqurt.a` を最後に置くことで `sys_*` が解決する。
