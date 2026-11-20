@@ -849,6 +849,70 @@ if ($script:Failed -gt 0) {
     Write-Host "d8_disasm_audit=FAIL checks_failed=$($script:Failed)"
     exit 1
 }
+
+# ---- link binding: the math helpers must not be preemptable -----------------
+#
+# The device run stopped at the operand-FNV gate because double_to_fp16 calls
+# frexp/ldexp/floor/fmod, and those resolved through @plt to the device's
+# libc.so while the simulator linked its own copy. The fix is a static bind with
+# -Bsymbolic, and these two checks keep it from silently regressing: a later
+# build that drops the static libraries or the flag would reintroduce the
+# difference and the four registered constants would stop matching again.
+#
+# This is a link property, not a registered verification target. The issued
+# order, the offsets, the fill form, the Convert Rs and the synchronisation ban
+# are untouched.
+if ($ObjectPath) {
+    $mathSyms = @('frexp', 'ldexp', 'floor', 'fmod',
+                  '__hexagon_divdf3', '__qdsp_divdf3',
+                  '__hexagon_fast_divdf3', '__hexagon_fast2_divdf3')
+    $dyn = & $objdump -T $ObjectPath 2>&1 | Out-String
+    $dis = & $objdump -d $ObjectPath 2>&1 | Out-String
+
+    # 1. no math helper may be reached through the PLT.
+    $pltHits = @()
+    foreach ($m in $mathSyms) {
+        if ($dis -match "call\s+0x[0-9a-f]+\s+<$([regex]::Escape($m))@plt>") {
+            $pltHits += $m
+        }
+    }
+    if ($pltHits.Count -gt 0) {
+        Fail "link_math_plt: $($pltHits -join ',')"
+    }
+
+    # 2. no math helper may remain an unresolved dynamic import.
+    $undHits = @()
+    foreach ($m in $mathSyms) {
+        if ($dyn -match "\*UND\*\s+$([regex]::Escape($m))\b") { $undHits += $m }
+    }
+    if ($undHits.Count -gt 0) {
+        Fail "link_math_und: $($undHits -join ',')"
+    }
+
+    # 3. the remaining UND set must be the QURT/FastRPC allowlist. Anything else
+    #    means a new dynamic dependency appeared, which is fail-closed.
+    $allow = @(
+        'compute_resource_acquire', 'compute_resource_attr_get_vtcm_ptr',
+        'compute_resource_attr_init', 'compute_resource_attr_init_v2',
+        'compute_resource_attr_set_hmx_param',
+        'compute_resource_attr_set_vtcm_param',
+        'compute_resource_hmx_lock2', 'compute_resource_hmx_unlock2',
+        'compute_resource_release', 'HAP_power_set',
+        'memalign', 'memmove', 'realloc', 'strlcat', 'strlcpy',
+        'sys_remove', '__hexagon_udivsi3'
+    )
+    $und = @()
+    foreach ($line in ($dyn -split "`n")) {
+        if ($line -match '\*UND\*\s+[0-9a-f]+\s+(\S+)\s*$') { $und += $Matches[1] }
+    }
+    $und = @($und | Sort-Object -Unique)
+    $extra = @($und | Where-Object { $allow -notcontains $_ })
+    if ($extra.Count -gt 0) {
+        Fail "link_und_unexpected: $($extra -join ',')"
+    }
+    Write-Host "d8_disasm_audit_link=math_plt=0 math_und=0 und=$($und.Count)/$($allow.Count)"
+}
+
 Write-Host "d8_disasm_audit=PASS packs=64 guard=12 fills=$($fillStores.Count) mma=3 convert=1 store=1"
 Write-Host "d8_disasm_audit_scope=text_rules_only_no_real_v81_binary"
 exit 0

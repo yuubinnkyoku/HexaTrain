@@ -411,3 +411,74 @@ saw it, or that the hardware completed an MMA read before a fill overwrote it.
 The second extension makes the audit able to **read** the corrected object; it
 does not make the audit able to **answer** the D8 question. That still needs the
 device.
+
+### A.12 Third extension — link binding as a standing check (2026-11-21)
+
+The device run stopped at the operand-FNV gate for a reason the text rules could
+not see. `double_to_fp16` calls `frexp`, `ldexp`, `floor` and `fmod`, and in the
+stamped skel those resolved through `@plt` to the **device's** `libc.so`, while
+the simulator linked its own copy. Same compiler, same flags, same instruction
+sequence, different library behind it.
+
+The fix is a static bind with `-Wl,-Bsymbolic`. Two checks now keep it from
+regressing silently, and they run whenever `-ObjectPath` is given.
+
+**A.12.1 No math helper may be reached through the PLT.**
+
+`frexp`, `ldexp`, `floor`, `fmod`, `__hexagon_divdf3`, `__qdsp_divdf3`,
+`__hexagon_fast_divdf3` and `__hexagon_fast2_divdf3` must not appear as
+`call 0x… <name@plt>`. A PLT call means the dynamic linker can preempt the
+static definition, which is exactly the failure this check exists to catch.
+
+**A.12.2 The remaining UND set must be the QURT/FastRPC allowlist.**
+
+Seventeen symbols are expected:
+
+```text
+compute_resource_acquire            compute_resource_attr_get_vtcm_ptr
+compute_resource_attr_init          compute_resource_attr_init_v2
+compute_resource_attr_set_hmx_param compute_resource_attr_set_vtcm_param
+compute_resource_hmx_lock2          compute_resource_hmx_unlock2
+compute_resource_release            HAP_power_set
+memalign  memmove  realloc  strlcat  strlcpy  sys_remove  __hexagon_udivsi3
+```
+
+Anything else is `link_und_unexpected` and fails closed. A new dynamic
+dependency is a new unknown, and the whole point of this audit is to refuse to
+run an experiment whose object is not the registered one.
+
+**A.12.3 What this does not change.**
+
+These are link properties, not registered verification targets. The issued
+order, the VTCM offsets, the fill form and mask, the Convert `Rs`, the Store
+target and the synchronisation ban are untouched. A.4 still applies.
+
+**A.12.4 Negative control.**
+
+The check was verified against the pre-fix object, which must fail:
+
+```text
+FAIL link_math_plt: frexp,ldexp,floor,fmod,__hexagon_divdf3
+FAIL link_und_unexpected: __cxa_finalize,__hexagon_divdf3,
+     __register_frame_info_bases,_Dsign,calloc,floor,fmod,free,frexp,ldexp,memset
+```
+
+The fixed object reports `math_plt=0 math_und=0 und=17/17` and passes.
+
+**A.12.5 Heap mixing is confined to init and teardown.**
+
+The static bind resolves `calloc`, `free` and `memset` while `memmove`,
+`realloc`, `memalign`, `strlcat` and `strlcpy` stay dynamic. That mix is safe
+here because none of it is on the D8 path:
+
+| Call | Containing function | On the D8 path |
+| --- | --- | --- |
+| `calloc` | `hexatrain_hmx_acc_residual_open` | init only |
+| `free` | `hexatrain_hmx_acc_residual_close` | teardown only |
+| `calloc`, `free` | `__registerx`, `_Tls_get__Errno` | TLS / atexit internals |
+| `_Atrealloc` | `__cxa_atexit` | atexit internals |
+| `memmove@plt` | `qurt_memsmove` | QURT internal |
+
+`run_mode46_d8_one_trial` contains **no heap call at all**, so no pointer
+allocated statically is ever handed to the dynamic `realloc`. The mix is
+recorded here so a later reader does not have to re-derive it.
