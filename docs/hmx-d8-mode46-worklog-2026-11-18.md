@@ -2557,3 +2557,94 @@ EXIT=0
 
 **rev5 §6 の 4 ゲートのうち、Identity 以外がすべて PASS した。**
 Identity はデプロイ後に実施する（予算非消費）。
+
+---
+
+## §36 identity ファーストで停止 — 静的 libc が DSP の open を失敗させる（2026-11-21 01:30）
+
+### §36.1 何をしたか
+
+条件 1（§35）と条件 2（rev5 §6 の Identity 行を pending に修正）を満たした後、
+条件 3 の identity ファーストを実施した。
+
+1. 端末同一性を確認（`ro.serialno` = `ro.boot.serialno` = 一致、`ro.kernel.qemu` 空）
+2. `0x4D8B1124` をデプロイ
+3. **digest 照合: 一致**（`8b8e4378…702aa`）
+4. identity 実行
+
+### §36.2 結果 — **open 失敗**
+
+```
+capability_status=0 raw_arch=0x8081
+unsigned_pd_status=0
+open_status=-2147482618
+exit_code=6 exit_code_description=open
+```
+
+`open_status = -2147482618 = 0x80000006`。**DSP が skel をロードできない。**
+
+**指示どおりここで停止した。セッションは実行していない。予算は消費していない。**
+
+### §36.3 切り分け — 静的 libc が原因
+
+同じ端末・同じホスト exe で、skel だけを既知の良好ビルドに差し替えて再実行した。
+
+| skel | `open_status` | 結果 |
+| --- | --- | --- |
+| **`0x4D8B1124`（静的 libc + `-Bsymbolic`）** | **`-2147482618`** | **open 失敗** |
+| `0x4D8B1123`（動的リンク、ロールバック） | **`0`** | **open 成功** |
+
+`0x4D8B1123` の実行では `build_id=0x4d8b1124 dsp_build_id=0x4d8b1123
+build_id_status=MISMATCH` となり `IDENTITY_OK=FAIL`（exit 9）だが、
+**`open_status=0` で DSP セッションは開けている。**
+
+**したがって open 失敗は静的 libc のリンクに起因する。**
+ホスト exe・デプロイ経路・端末状態の問題ではない。
+
+### §36.4 何が起きているか（推定）
+
+`libc.a` を `-shared` に取り込むと、`libc` の初期化コード（TLS 設定、
+`__register_frame_info_bases`、atexit 登録など）が skel の `INIT` に
+組み込まれる。DSP のローダは skel を unsigned PD にロードする際、
+この初期化を実行しようとして失敗している可能性が高い。
+
+`hexagon-llvm-objdump -p` で見る限り ELF 構造は正常:
+
+```
+INIT 0x00006120
+FINI 0x00010ea0
+LOAD off 0x00000000 vaddr 0x00000000
+LOAD off 0x00012000 vaddr 0x00012000
+```
+
+（`0x4D8B1123` は `INIT 0x00000c40` / `FINI 0x00004440`。）
+
+**サイズが 28,248 B → 255,776 B に増えており、`libc.a` の大部分が
+取り込まれている。** 必要な 4 関数だけを取り込む制御ができていない。
+
+### §36.5 次の一手（候補）
+
+| 案 | 内容 | 見込み |
+| --- | --- | --- |
+| **A** | `--gc-sections` + `-ffunction-sections` で未使用の libc コードを落とす | サイズは減るが、TLS/atexit の init が残る可能性 |
+| **B** | `libc.a` から必要なオブジェクトだけを抽出してリンク（`ar x` で `frexp.o` 等） | **init を持ち込まない。最も筋が良い** |
+| **C** | `double_to_fp16` を libm 非依存に書き直す（共有コードの変更、要承認） | 確実だが mode 42/43/45 に影響 |
+| **D** | 診断ダンプで実機のタイルバイトを持ち帰り、原因を確定してから対処 | 実機 1 回を消費 |
+
+**案 B が最も筋が良い。** `libc.a` から `frexp` / `ldexp` / `floor` / `fmod`
+を含むオブジェクトだけを取り出してリンクすれば、libc の init を持ち込まずに
+静的解決できる可能性がある。
+
+ただし `frexp` 等が `libc.a` 内で他のオブジェクトに依存していれば、
+連鎖的に取り込む必要がある。**まず `ar t` でオブジェクト構成を調べる。**
+
+### §36.6 ラベル（不変）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変** |
+| `C2 NOT_RUN` | **不変** |
+| D8 | **`D8_CONTRACT_FAILED`** |
+| Mode 46 | 登録済み・2 回実行・2 回とも FNV ゲート停止 |
+
+**臨界区間は一度も実行されていない。**
