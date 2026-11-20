@@ -2494,3 +2494,66 @@ hexagon-clang -shared -fPIC -O2 -G0 -mv81 -mhmx -mhvx -mhvx-length=128b \
 ```
 
 **リンク順が重要**: `libqurt.a` を最後に置くことで `sys_*` が解決する。
+
+---
+
+## §35 rev5 ビルドのゲート② — 監査・CPU スイート・verify Fast 全 PASS（2026-11-21 01:20）
+
+### §35.1 スタンプビルド
+
+| 項目 | 値 |
+| --- | --- |
+| build id | **`0x4D8B1124`** |
+| skel SHA-256 | `8b8e4378681043c4e323f41544653dcdf75d841c25282bdd51e1ce86b8d702aa` |
+| サイズ | **255,776 B**（rev4 の 28,216 B から +227,560 B） |
+
+サイズ増は静的 `libc.a` の取り込みによる。**ソースは無変更。**
+
+### §35.2 逆アセンブル監査 — 4 条件すべて PASS
+
+```
+d8_disasm_audit_link=math_plt=0 math_und=0 und=17/17
+d8_disasm_audit=PASS packs=64 guard=12 fills=48 mma=3 convert=1 store=1
+```
+
+条件 A / B / C / D すべて PASS。リンク検査 3 項目も PASS。
+
+### §35.3 CPU スイート — 全項目 PASS
+
+```
+d8_checks=79 fail=0
+d8_rev3_checks=104 fail=0
+d8_rev3_python=PASS (143 checks)
+d8_mutation_check=PASS mutants=5
+d8_host_gate=PASS (121 checks)
+d8_fixture_cpu=PASS
+d8_disasm_audit_test=PASS clean=4 mutants=12 base_clean=4 base_mutants=5
+d8_feasibility=PASS (187 checks)
+d8_python=PASS
+d8_sim=PASS
+```
+
+**4 参照 SHA-256 と 4 オペランド FNV が登録値と一致。**
+
+### §35.4 `verify.ps1 -Profile Fast` — 全 PASS
+
+```
+host-fast-contract           PASS    127.8s  metadata staleness + CPU reference contracts ok
+total 174.0s  PASS=10 FAIL=0 SKIP=21
+EXIT=0
+```
+
+**§20 / §25.5 の `STATUS_CONTROL_C_EXIT` ストールは発生しなかった。**
+単独実行による切り分けは不要だった。
+
+### §35.5 ゲート②の結論
+
+| ゲート | 結果 |
+| --- | --- |
+| 逆アセンブル監査 4 条件 | **PASS** |
+| リンク検査（`math_plt` / `math_und` / `und` ホワイトリスト） | **PASS** |
+| CPU スイート | **PASS** |
+| `verify.ps1 -Profile Fast` | **PASS** |
+
+**rev5 §6 の 4 ゲートのうち、Identity 以外がすべて PASS した。**
+Identity はデプロイ後に実施する（予算非消費）。

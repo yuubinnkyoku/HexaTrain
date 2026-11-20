@@ -134,7 +134,7 @@ No other reading of the results is permitted.
 | Link binding | `math_plt=0`, `math_und=0`, `und=17/17` | **PASS** |
 | CPU suite | `run_hmx_d8_sim.ps1` PASS, including `d8_fixture_cpu` | **PASS** |
 | `verify.ps1 -Profile Fast` | all PASS | **PASS** (174.0 s, PASS=10 FAIL=0) |
-| Identity | `build_id_status=MATCH`, `IDENTITY_OK=PASS` | **PASS** |
+| Identity | `build_id_status=MATCH`, `IDENTITY_OK=PASS` | **pending** — runs at deploy time, before the session, and consumes no budget (§7) |
 
 The stamped build is **`0x4D8B1124`**, skel SHA-256
 `8b8e4378681043c4e323f41544653dcdf75d841c25282bdd51e1ce86b8d702aa`,
