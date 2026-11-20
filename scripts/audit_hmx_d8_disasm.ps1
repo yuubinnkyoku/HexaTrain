@@ -899,7 +899,15 @@ if ($ObjectPath) {
         'compute_resource_hmx_lock2', 'compute_resource_hmx_unlock2',
         'compute_resource_release', 'HAP_power_set',
         'memalign', 'memmove', 'realloc', 'strlcat', 'strlcpy',
-        'sys_remove', '__hexagon_udivsi3'
+        'sys_remove', '__hexagon_udivsi3',
+        # Present in the revision 4 build too; the extracted math objects do not
+        # change them. calloc/free/memset are in open/close and the TLS and
+        # atexit internals, never on the D8 path (spec A.12.5).
+        'calloc', 'free', 'memset',
+        '__cxa_finalize', '__register_frame_info_bases',
+        # Pulled in by the extracted libc math objects (xferaise.o). Both sit on
+        # fmod's error path only and are never reached by the D8 fixture.
+        '_Geterrno', 'feraiseexcept'
     )
     $und = @()
     foreach ($line in ($dyn -split "`n")) {

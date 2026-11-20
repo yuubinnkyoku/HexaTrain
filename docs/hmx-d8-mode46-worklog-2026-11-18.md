@@ -2648,3 +2648,114 @@ LOAD off 0x00012000 vaddr 0x00012000
 | Mode 46 | 登録済み・2 回実行・2 回とも FNV ゲート停止 |
 
 **臨界区間は一度も実行されていない。**
+
+---
+
+## §37 案B 実装と第 3 セッション — FNV が変わったが登録値に届かず（2026-11-21 02:05）
+
+### §37.1 リンクマップで 210KB の内訳を特定
+
+`-Wl,-Map` で `0x4D8B1124`（255,776 B）を解析した。
+
+| アーカイブ | 取り込まれたメンバー数 |
+| --- | ---: |
+| `libc.a` | **45** |
+| `libgcc.a` | 1 |
+| `libqurt.a` | 49 |
+
+`libc.a` の 45 メンバーには `exit.o` / `abort.o` / `signal.o` /
+`xfinalize.o` / `xmt.o`（マルチスレッド）など **init/exit 機構**が含まれていた。
+これが open 失敗の原因と推定。
+
+### §37.2 案B — 必要なオブジェクトだけを抽出
+
+`ar t` で在庫を調べ、`frexp` / `ldexp` / `floor` / `fmod` とその依存閉包を特定した。
+
+| オブジェクト | 提供するもの |
+| --- | --- |
+| `frexp.o` / `ldexp.o` / `floor.o` / `fmod.o` | 4 関数本体 |
+| `xdint.o` / `xdscale.o` / `xdsign.o` / `xdtest.o` / `xdunscal.o` | `_Dint` / `_Dscale` / `_Dsign` / `_Dtest` / `_Dunscale` |
+| `xferaise.o` | `_Feraise` |
+| `xvalues.o` | `_Nan` / `_Inf` |
+| `xdnorm.o` | `_Dnorm` |
+
+`ar x` で 12 オブジェクトを抽出し、`libgcc.a` + `libqurt.a` とともにリンク。
+
+**結果: 34,648 B**（255,776 B から −221,128 B）。
+
+### §37.3 ゲート（すべて PASS）
+
+| ゲート | 結果 |
+| --- | --- |
+| 逆アセンブル監査 4 条件 | **PASS** |
+| `math_plt` / `math_und` | **0 / 0** |
+| UND ホワイトリスト | **17/24**（新規は `_Geterrno` / `feraiseexcept` の 2 つ、`fmod` のエラー経路のみ） |
+| ハンドラ | **280 セグメント** |
+| `.init` / `.fini` | **`0x6c` / `0x44`**（1123 と同一、新しい init 機構なし） |
+| CPU スイート | **全項目 PASS** |
+| `verify.ps1 -Profile Fast` | **PASS**（401.5 s、PASS=10 FAIL=0） |
+
+### §37.4 ビルド
+
+| 項目 | 値 |
+| --- | --- |
+| build id | **`0x4D8B1125`** |
+| skel SHA-256 | `806bdf82c0e5b2c2ad1f11b4ac33394a3cb67c9b52180018724786b1a2905231` |
+| サイズ | 34,648 B |
+
+### §37.5 identity — **PASS**
+
+```
+capability_status=0 raw_arch=0x8081
+open_status=0
+build_id=0x4d8b1125 dsp_build_id=0x4d8b1125 build_id_status=MATCH
+IDENTITY_OK=PASS
+exit_code=0
+```
+
+**`open_status=0`。静的 libc の init 問題は案B で解消した。**
+
+### §37.6 第 3 セッション — FNV が変わった
+
+`sh d8_session.sh d8-20261121-a` を 1 回だけ実行。条件 A で停止。
+
+```
+d8_counts mxclracc=0 mma=0 convert=0 store=0 pack=4 bias=2
+d8_fnv ahi=6ec2c551 alo=03091750 whi=c1ae2ca5 wlo=6ab603fa
+d8_guard pre=f5ebd5c5 post=f5ebd5c5 status=0x011fff00
+d8_failure=16 name=FNV
+```
+
+**FNV が変わった。**
+
+| タイル | 第 1・2（動的 libc） | 第 3（静的 libc） |
+| --- | --- | --- |
+| ahi | `57a0ec09` | **`6ec2c551`** |
+| alo | `d0e0c444` | **`03091750`** |
+| whi | `9c9fe034` | **`c1ae2ca5`** |
+| wlo | `29a90a5c` | **`6ab603fa`** |
+
+**静的バインドは実機で効いた。** 値が変わったことがその証明。
+**ただし登録値（`c6231266` / `3b2d22d2` / `8b88609f` / `a66af695`）には一致しない。**
+
+### §37.7 rev5 §5 の事前宣言に従う
+
+> **A が `metadata[26] = 16` で停止した場合**: libm 説は**反証**。
+> 承認済みの診断ダンプを即実行する。
+
+**宣言どおり、libm 説は反証された。** 静的バインドは値を変えたが、
+登録値には到達しなかった。**別の原因が残っている。**
+
+**診断ダンプ（USR 生捕獲 + 変換前 double）を実行する。**
+2026-11-19 に所有者が条件付き承認済みで、条件は満たされ続けているため
+追加承認は不要。
+
+### §37.8 ラベル（不変）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変** |
+| `C2 NOT_RUN` | **不変** |
+| D8 | **`D8_CONTRACT_FAILED`** |
+
+**臨界区間は一度も実行されていない。**
