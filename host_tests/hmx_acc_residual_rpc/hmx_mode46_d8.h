@@ -23,6 +23,32 @@
 // Ownership: this handler writes metadata[9..31] only. metadata[0..8] belong to
 // run(), and metadata[30] (cleanup) is written by run() for mode 46.
 
+/* ---- diagnostic build support (HMX_D8_DIAG) ------------------------------
+ *
+ * The device has stopped at the operand-FNV gate three times. The CPU and the
+ * simulator both reproduce the registered constants, so the difference is in how
+ * the device evaluates the generator. A diagnostic build returns the packed
+ * tiles and the user status register so the difference can be bisected offline.
+ *
+ * This is NOT a D8 observation. It never issues mxclracc or anything after it,
+ * so the critical interval does not run and the D8 question is not put to the
+ * hardware. The sentinel in metadata[31] lets the host refuse a payload that
+ * came from a normal build.
+ */
+#define HMX_D8_DIAG_SENTINEL 0x0D1A6001
+#define HMX_D8_DIAG_LAYOUT 1
+
+#if defined(HMX_D8_DIAG)
+/* Read the user status register directly. qurt_event.h exposes only the
+ * floating-point exception bits, and the rounding mode and flush-to-zero state
+ * live in the same register, so the raw value is what the diagnostic needs. */
+static uint32_t hmx_d8_diag_usr(void) {
+  uint32_t usr = 0;
+  __asm__ __volatile__("%0 = usr" : "=r"(usr));
+  return usr;
+}
+#endif
+
 /* Copy one 2 KiB tile into VTCM with 16 x 128 B HVX stores.
  *
  * The registration lists PACK as "16 x 128 B" per operand, and the
@@ -331,6 +357,30 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
         HMX_D8_GUARD_INIT_HVX12, HMX_D8_GUARD_CHECK_BYTE);
     metadata[HMX_D8_META_GUARD_POST] = (int)guard_pre;
     metadata[HMX_D8_META_READBACK] = (int)hmx_mode46_readback_echo(0);
+#if defined(HMX_D8_DIAG)
+    /* ---- diagnostic payload (NOT a D8 observation) ----------------------
+     *
+     * Reached only when the operand FNVs do not match, which is the state the
+     * device has been stuck in. Nothing below mxclracc is issued: the critical
+     * interval does not run.
+     *
+     * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT:
+     *   results[0..1023]   the four packed tiles, 2,048 B, little endian u16
+     *   results[1024..]    not used; the payload is capped at 1,024 words
+     *
+     * The pre-conversion doubles and the guard bytes do not fit alongside the
+     * tiles in 1,024 words, so they go in the metadata words that the contract
+     * leaves free (29 and 31) as a digest, and the full bytes are recovered by
+     * re-running the generator on the CPU with the captured USR. */
+    {
+      int i;
+      for (i = 0; i < HMX_D8_RESULT_SLOTS; ++i) {
+        results[i] = (int)((const uint16_t *)base)[i];
+      }
+      metadata[HMX_D8_META_RESERVED_29] = (int)hmx_d8_diag_usr();
+      metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
+    }
+#endif
     qurt_hvx_unlock();
     return 0;
   }
