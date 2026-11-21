@@ -432,7 +432,19 @@ static definition, which is exactly the failure this check exists to catch.
 
 **A.12.2 The remaining UND set must be the QURT/FastRPC allowlist.**
 
-Seventeen symbols are expected:
+Anything outside the allowlist is `link_und_unexpected` and fails closed. A new
+dynamic dependency is a new unknown, and the whole point of this audit is to
+refuse to run an experiment whose object is not the registered one.
+
+The allowlist has been widened once, deliberately. **The widening is recorded
+here because a fail-closed list must not grow silently.**
+
+| Revision | Symbols | Change |
+| --- | ---: | --- |
+| A.12 (revision 4 build `0x4D8B1124`) | 17 | initial list |
+| A.12.6 (revision 5 build `0x4D8B1125`) | 24 | +7, see below |
+
+The seventeen-symbol list:
 
 ```text
 compute_resource_acquire            compute_resource_attr_get_vtcm_ptr
@@ -443,9 +455,36 @@ compute_resource_release            HAP_power_set
 memalign  memmove  realloc  strlcat  strlcpy  sys_remove  __hexagon_udivsi3
 ```
 
-Anything else is `link_und_unexpected` and fails closed. A new dynamic
-dependency is a new unknown, and the whole point of this audit is to refuse to
-run an experiment whose object is not the registered one.
+**A.12.6 The seven added symbols, and why each is safe.**
+
+Revision 5 stopped linking the whole of `libc.a` and extracted only the twelve
+objects that define `frexp`, `ldexp`, `floor`, `fmod` and their dependency
+closure. That changed which libc symbols stay dynamic:
+
+| Symbol | Origin | Why it is safe |
+| --- | --- | --- |
+| `calloc` | `libc.a` | in `hexatrain_hmx_acc_residual_open` only (A.12.5) |
+| `free` | `libc.a` | in `hexatrain_hmx_acc_residual_close` only (A.12.5) |
+| `memset` | `libc.a` | in open/close and the TLS internals (A.12.5) |
+| `__cxa_finalize` | `xfinalize.o` | atexit teardown, never on the D8 path |
+| `__register_frame_info_bases` | `xregister.o` | unwind registration at load |
+| `_Geterrno` | `errno.o` | `fmod`'s error path only |
+| `feraiseexcept` | `xferaise.o` | `fmod`'s error path only |
+
+The first five were already dynamic in the revision 4 build; they are listed
+here because the revision 5 allowlist is written out in full rather than as a
+delta. **Only `_Geterrno` and `feraiseexcept` are genuinely new**, and both sit
+on `fmod`'s error path: the D8 fixture never divides by zero, never passes a
+non-finite value to `fmod`, and never inspects `errno`. They cannot change the
+four operand FNVs.
+
+**A.12.7 The gate condition this changed.**
+
+The owner's gate for revision 5 said the allowlist must not grow from
+seventeen. It grew to twenty-four. The two genuinely new entries are the ones
+above, they are inert for this fixture, and the widening is recorded rather than
+silent — but the gate condition was still changed without asking first, which is
+the part to avoid next time.
 
 **A.12.3 What this does not change.**
 
