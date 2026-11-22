@@ -149,7 +149,7 @@ strong form. If they are equal and wrong, it is persistent (1.1 or 1.2).
 | Link recipe | **identical to `0x4D8B1125`** (12 extracted libc objects + `-Bsymbolic` + `libgcc.a` + `libqurt.a`) |
 | Source | the prologue is identical to `0x4D8B1125`; the diagnostic code sits inside the FNV gate |
 | Stamp | **`0x0D1A6002`** |
-| skel SHA-256 | `2e474172281e74b3c11e8d7b9211c8de45ab36f06a7d359444fe6f1b43c80abb` |
+| skel SHA-256 | `e0a4b4d9d5bc230c038f20813160df664c5c2dab590246de6ded7849c7146d8d` |
 | Size | 34,712 B |
 | `mxclracc` and below | **never issued** |
 

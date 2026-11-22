@@ -436,8 +436,21 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
       metadata[HMX_D8_META_SELECTOR] = (int)below2[0];
       metadata[HMX_D8_META_FNV_AHI] = (int)below2[1];
 
-      /* Scalar write/read sanity at base+0. This overwrites the first word of
-       * the tile, so it runs after the payload copy and after fnv_now. */
+      metadata[HMX_D8_META_FNV_WHI] = (int)hmx_d8_diag_usr();
+      metadata[HMX_D8_META_FNV_WLO] = (int)hmx_d8_diag_local_fnv;
+      metadata[HMX_D8_META_GUARD_PRE] = (int)guard_pre;
+
+      /* Delayed re-read: the same region, hashed again just before return.
+       *
+       * This MUST run before the scalar sanity write below. base+0 is word 0 of
+       * the Ahi tile, so writing 0xA5A5 there first would change the second FNV
+       * and make a non-delayed store look delayed. Order is fixed:
+       *   capture and fnv_now -> fnv_late -> sanity write/read -> return. */
+      fnv_late = d8_tile_fnv(ahi_v);
+      metadata[HMX_D8_META_GUARD_POST] = (int)fnv_late;
+
+      /* Scalar write/read sanity at base+0. Runs last because it overwrites the
+       * tile's first word. */
       {
         volatile uint16_t *probe = (volatile uint16_t *)base;
         uint16_t saved = probe[0];
@@ -446,13 +459,6 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
         probe[0] = saved;
       }
 
-      metadata[HMX_D8_META_FNV_WHI] = (int)hmx_d8_diag_usr();
-      metadata[HMX_D8_META_FNV_WLO] = (int)hmx_d8_diag_local_fnv;
-      metadata[HMX_D8_META_GUARD_PRE] = (int)guard_pre;
-
-      /* Delayed re-read: the same region, hashed again just before return. */
-      fnv_late = d8_tile_fnv(ahi_v);
-      metadata[HMX_D8_META_GUARD_POST] = (int)fnv_late;
       metadata[HMX_D8_META_RESERVED_29] = 0;
       metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
     }
