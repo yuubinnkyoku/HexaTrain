@@ -545,5 +545,3 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   qurt_hvx_unlock();
   return 0;
 }
-
-
