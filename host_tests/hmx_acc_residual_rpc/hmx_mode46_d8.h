@@ -47,6 +47,15 @@ static uint32_t hmx_d8_diag_usr(void) {
   __asm__ __volatile__("%0 = usr" : "=r"(usr));
   return usr;
 }
+
+/* The generator's own output, captured inside build_d8_operands before the
+ * pack. The handler cannot see that function's locals, so the diagnostic
+ * records them here. Comparing these against the CPU's values separates
+ * "the generator produced something different" from "the pack put it
+ * somewhere else". */
+static uint16_t hmx_d8_diag_local0;
+static uint16_t hmx_d8_diag_local1;
+static uint32_t hmx_d8_diag_local_fnv;
 #endif
 
 /* Copy one 2 KiB tile into VTCM with 16 x 128 B HVX stores.
@@ -172,6 +181,13 @@ static void build_d8_operands(uint8_t *base, uint16_t *ahi, uint16_t *alo,
    * from a pointer variable. The compiler otherwise copied the out_pos pointer
    * into the third pack's slot: the emitted object wrote whi_local to +8192 and
    * never wrote +4096, which the audit caught as pack_4096_count 0/16. */
+#if defined(HMX_D8_DIAG)
+  /* Capture the generator's output before the pack. */
+  hmx_d8_diag_local0 = ahi_local[0];
+  hmx_d8_diag_local1 = ahi_local[1];
+  hmx_d8_diag_local_fnv = mode45_fnv1a((const uint8_t *)ahi_local, TILE_BYTES);
+#endif
+
   d8_pack_tile(base + 0u, ahi_local);
   d8_pack_tile(base + 2048u, alo_local);
   d8_pack_tile(base + 4096u, whi_local);
@@ -365,19 +381,79 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
      * interval does not run.
      *
      * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT:
-     *   results[0..1023]   the four packed tiles, 2,048 B, little endian u16
-     *   results[1024..]    not used; the payload is capped at 1,024 words
+     *   results[0..1023]   the Ahi tile, all 2,048 B, little endian u16
      *
-     * The pre-conversion doubles and the guard bytes do not fit alongside the
-     * tiles in 1,024 words, so they go in the metadata words that the contract
-     * leaves free (29 and 31) as a digest, and the full bytes are recovered by
-     * re-running the generator on the CPU with the captured USR. */
+     * The other three tiles do not fit in 1,024 words. Ahi is the one that
+     * matters: its anchors are the words that differ, and they are the first
+     * sixteen.
+     *
+     * The metadata words carry what decides between the hypotheses:
+     *   word 10  base & 127          -- non-zero means the vmem stores land at
+     *                                   a truncated address while the scalar
+     *                                   reads do not
+     *   word 11  base low 32
+     *   word 12  base high 32
+     *   word 13  Ahi FNV right after the pack
+     *   word 14  Ahi FNV just before return -- a difference means the store
+     *                                   lands late
+     *   word 15  ahi_local[0]        -- the generator's output, before the pack
+     *   word 16  ahi_local[1]
+     *   word 17  [base-0x80] word 0  -- if the misalignment hypothesis holds,
+     *   word 18  [base-0x80] word 1     the anchor row appears here
+     *   word 19  [base-0x40] word 0
+     *   word 20  [base-0x40] word 1
+     *   word 21  scalar write/read sanity at base+0
+     *   word 22  USR raw
+     *   word 23  ahi_local FNV
+     *   word 24  guard pre FNV (control: scalar write, scalar read)
+     *   word 31  sentinel
+     */
     {
+      const uint16_t *ahi_v = (const uint16_t *)base;
+      const uint16_t *below = (const uint16_t *)(base - 0x80u);
+      const uint16_t *below2 = (const uint16_t *)(base - 0x40u);
+      uintptr_t base_val = (uintptr_t)base;
+      uint32_t fnv_now, fnv_late;
       int i;
+
+      /* Ahi tile, whole. */
       for (i = 0; i < HMX_D8_RESULT_SLOTS; ++i) {
-        results[i] = (int)((const uint16_t *)base)[i];
+        results[i] = (int)ahi_v[i];
       }
-      metadata[HMX_D8_META_RESERVED_29] = (int)hmx_d8_diag_usr();
+
+      /* FNV right after the pack. */
+      fnv_now = d8_tile_fnv(ahi_v);
+
+      /* The window below base: where a truncated vmem store would have landed. */
+      metadata[HMX_D8_META_MXCLRACC] = (int)(base_val & 127u);
+      metadata[HMX_D8_META_MMA] = (int)(uint32_t)(base_val & 0xFFFFFFFFu);
+      metadata[HMX_D8_META_CONVERT] = (int)(uint32_t)((base_val >> 16) >> 16);
+      metadata[HMX_D8_META_STORE] = (int)fnv_now;
+      metadata[HMX_D8_META_PACK] = (int)hmx_d8_diag_local0;
+      metadata[HMX_D8_META_BIAS] = (int)hmx_d8_diag_local1;
+      metadata[HMX_D8_META_FILL] = (int)below[0];
+      metadata[HMX_D8_META_ADDRESS] = (int)below[1];
+      metadata[HMX_D8_META_SELECTOR] = (int)below2[0];
+      metadata[HMX_D8_META_FNV_AHI] = (int)below2[1];
+
+      /* Scalar write/read sanity at base+0. This overwrites the first word of
+       * the tile, so it runs after the payload copy and after fnv_now. */
+      {
+        volatile uint16_t *probe = (volatile uint16_t *)base;
+        uint16_t saved = probe[0];
+        probe[0] = 0xA5A5u;
+        metadata[HMX_D8_META_FNV_ALO] = (int)probe[0];
+        probe[0] = saved;
+      }
+
+      metadata[HMX_D8_META_FNV_WHI] = (int)hmx_d8_diag_usr();
+      metadata[HMX_D8_META_FNV_WLO] = (int)hmx_d8_diag_local_fnv;
+      metadata[HMX_D8_META_GUARD_PRE] = (int)guard_pre;
+
+      /* Delayed re-read: the same region, hashed again just before return. */
+      fnv_late = d8_tile_fnv(ahi_v);
+      metadata[HMX_D8_META_GUARD_POST] = (int)fnv_late;
+      metadata[HMX_D8_META_RESERVED_29] = 0;
       metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
     }
 #endif
@@ -469,3 +545,5 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
   qurt_hvx_unlock();
   return 0;
 }
+
+
