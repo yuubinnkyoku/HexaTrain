@@ -3087,3 +3087,129 @@ USR も libm も dfmpy も、この距離の差は生み出せない。
 - **出力を `evidence/` に保存**（§40.3 の再発防止）
 
 **まず 4 と 5 を実行し、その結果で診断 2 号の設計を決める。**
+
+---
+
+## §41 分析 4・5 — VTCM 可視性の仕様記述を発見（2026-11-23 03:00）
+
+### §41.1 分析 5: Hexagon ドキュメント調査 — **決定的な記述**
+
+SDK の `docs/software/system_performance/dsp_optimizations.html` に
+**HVX 書き込みとスカラー読み出しの遅延**が明記されていた。
+
+> **Accessing scalar contents from an HVX register**
+>
+> The recommended way to access an element from an HVX register is to go
+> through memory instead of using vextract. This approach is best accomplished
+> using a union. [...] `HVX_and_array.vector = hvx_value;` // turns into an HVX
+> store to memory / `int16_t first_element = HVX_and_array.array[0];` // turns
+> into a scalar read from memory
+>
+> **Expect a delay of tens of cycles between the HVX write to memory and the
+> scalar read.**
+
+**これは「HVX ストアの直後にスカラー読みをすると、数十サイクルの遅延があり、
+その間は書いた値が見えない」という仕様記述である。**
+
+さらに同ドキュメントのメモリ階層の記述:
+
+> **Scalar data memory accesses go through a two-level cache hierarchy, while
+> HVX memory accesses only transit through the L2 memory.**
+
+**スカラーは L1+L2、HVX は L2 のみ。** 経路が違う。
+
+そして VMEM のアドレス規則:
+
+> `VMEM(R0) = V0` // **(R0 & 127) bits are ignored**
+
+**VMEM ストアはアドレスの下位 7 ビットを無視する。**
+
+### §41.2 これが §24.3 説の仕様上の根拠になる
+
+§24.3 で「`vmem` ストアが着地していない」と診断し、§30.8 で
+「FNV が 2 ビルド同一なら陳腐化との偶然一致は不可能」を理由に取り下げた。
+
+**所有者の指摘どおり、その確率論は「読んだ領域がそもそもタイル内容である」
+という前提に依存していた。** 今のアンカー観測（`0xCB76` が `0x3C00` の
+はずの位置にある）はその前提を壊す。
+
+**仕様に「HVX 書き込みからスカラー読みまで数十サイクルの遅延がある」と
+明記されている以上、「スカラー読みが pack の書き先を見ていない」は
+再候補として有力である。**
+
+### §41.3 分析 4: 静的な base 同一性 — **pack は 4 つとも正しく発行されている**
+
+デバイスから回収した診断オブジェクト（`d0b3e302…`）を逆アセンブルした。
+
+`build_d8_operands` 内の `vmem` ストアは **3 つ**しか見えず、
+一瞬「4 つ目の pack が欠落」と判断したが、**末尾を確認して誤りと分かった**:
+
+```
+4000: r2 = r3                    ← pack #1 (Ahi, +0)
+4008: vmem(r2+#0x0) = v0
+4018: r2 = add(r3,#0x800)        ← pack #2 (Alo, +2048)
+4020: vmem(r2+#0x0) = v1
+4030: r2 = add(r3,#0x1000)       ← pack #3 (Whi, +4096)
+4038: vmem(r2+#0x0) = v2
+4040: nop :endloop0
+4044: r0 = add(r3,#0x1800)       ← pack #4 (Wlo, +6144) の宛先
+4060: jump 0x40e8 <d8_pack_tile> ← 末尾呼び出し
+```
+
+**4 つ目の pack は末尾呼び出し（tail call）として `d8_pack_tile` に飛ぶ。**
+`r0 = add(r3,#0x1800)` が +6144 を指しており、**登録レイアウトどおり**。
+
+**pack の宛先は 4 つとも正しい。** §16.3 の `-O2` 折り畳みバグの再発ではない。
+
+### §41.4 分析 4 の結論
+
+| 項目 | 結果 |
+| --- | --- |
+| pack #1 の宛先 | `r3 + 0` = **+0** ✓ |
+| pack #2 の宛先 | `r3 + 0x800` = **+2048** ✓ |
+| pack #3 の宛先 | `r3 + 0x1000` = **+4096** ✓ |
+| pack #4 の宛先 | `r3 + 0x1800` = **+6144** ✓（末尾呼び出し） |
+| ベースレジスタ | 4 つとも **`r3`** で同一 |
+
+**静的な base 同一性は保たれている。** pack の書き先と、
+診断のスカラー読み出しが使う `base` が同じ変数であることは
+ソース上もオブジェクト上も確認できる。
+
+### §41.5 残る謎
+
+pack は正しく 4 つ発行され、宛先も正しい。それでも実機の
+スカラー読み出しは `0xCB76`（fp16 で約 -14.9）を返す。
+
+**仕様の「数十サイクルの遅延」が最有力。** 診断コードは
+`build_d8_operands` の直後にスカラー読みをしており、
+**遅延が解消する前に読んでいる可能性がある。**
+
+§29 で `qurt_mem_syncht()` を追加したが、あれは
+`d8_guard_init` の後であり、**`build_d8_operands` の直後ではない**。
+しかも §37 の第 3 セッションは `syncht` 込みのビルドで走っており、
+それでも FNV が登録値に届かなかった。
+
+**`syncht` が HVX ストアの完了を待つかは別問題。**
+仕様は「数十サイクル」と言っており、`syncht` がそれを保証するかは
+明記されていない。
+
+### §41.6 診断 2 号で確かめること
+
+1. **遅延再読み FNV**（所有者提案）: 捕獲直後と return 直前に同じ領域の
+   FNV を計算し、両者が一致するか。**一致しなければ「遅れて着地する」が確定**
+2. `build_d8_operands` 直後のローカル変数（`.bss`）の先頭語 —
+   生成器の出力そのもの
+3. ランタイムの base ポインタ実値
+4. `base+0` へのスカラー書き→読み戻しサニティ
+5. 4 タイル全部の捕獲
+6. USR の再捕獲
+
+### §41.7 ラベル（不変）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変** |
+| `C2 NOT_RUN` | **不変** |
+| D8 | **`D8_CONTRACT_FAILED`** |
+
+**臨界区間は一度も実行されていない。**
