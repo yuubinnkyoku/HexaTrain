@@ -3572,3 +3572,106 @@ diag2 でも `3d9a46d7…`（再ビルド）≠ `d0b3e302…`（実物）だっ�
 | D8 | **`D8_CONTRACT_FAILED`** |
 
 **臨界区間は一度も実行されていない。**
+
+---
+
+## §46 `HAP_compute_res_attr_get_vtcm_ptr` の用法 — SDK が要求する順序を満たしていない（2026-11-23 13:00）
+
+### §46.1 SDK の記述
+
+`incs/HAP_compute_res.h` の `HAP_compute_res_acquire_cached` の節に
+**明示的な要求**がある。
+
+> After a successful cacheable request via `HAP_compute_res_acquire()`, users
+> can get the assigned VTCM pointer (if requested) by passing the attribute
+> structure to `HAP_compute_res_attr_get_vtcm_ptr()` for v1 and
+> `HAP_compute_res_attr_get_vtcm_ptr_v2()` for v2,
+> **and they must call `HAP_compute_res_acquire_cached()` before using the
+> assigned resources.**
+
+**`get_vtcm_ptr()` を使う前に `acquire_cached()` を呼ぶことが要求されている。**
+
+`acquire_cached` のシグネチャ:
+
+```c
+static inline int HAP_compute_res_acquire_cached(
+                                              unsigned int context_id,
+                                              unsigned int timeout_us)
+```
+
+`acquire()` が返した `context_id` を取る。
+
+### §46.2 現在の実装
+
+`probe_dsp.c` の mode B（combined VTCM + HMX）:
+
+```c
+combined_resource = HAP_compute_res_acquire(&attr, 10000);
+if (combined_resource) {
+  vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
+  if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
+    combined_lock_status = HMX_ERR_VTCM;
+  } else {
+    ...
+```
+
+**`acquire()` の直後に `get_vtcm_ptr()` を呼んでおり、
+`acquire_cached()` を経由していない。**
+
+### §46.3 これが `base` の正体を説明する
+
+SDK の要求を満たしていない場合、`get_vtcm_ptr()` が返す値は
+**VTCM のアドレスである保証がない**。
+
+実測した `base` = `0x02080000` は:
+
+- VTCM のマップ範囲（通常 `0x08000000` 付近）ではない
+- **skel の `.bss` のベースと一致する**（`base+0x20` = `0xA320` = `ahi_local`）
+
+**`get_vtcm_ptr()` が未初期化の属性構造体から読んだ値、
+または別のフィールドを返している可能性が高い。**
+
+### §46.4 mode 43/44/45 で整合が取れていた理由（所有者の問い）
+
+**これらのモードも同じ `acquire()` → `get_vtcm_ptr()` の順序を使っている。**
+したがって同じ問題を抱えているはずである。
+
+しかし mode 43/44/45 は**スカラー書きと `mxmem` 読みの両方**を VTCM に
+対して行い、両者が一致していた。これは:
+
+- **両方が同じ（誤った）アドレスを見ていれば、互いに整合する**
+- mode 43/44/45 の検証は「VTCM に書いた値が VTCM から読めるか」であり、
+  **「そのアドレスが本当に VTCM か」を検証していない**
+
+**つまり mode 43/44/45 の PASS は、VTCM のアドレス正当性を保証しない。**
+これは重要な発見である。
+
+### §46.5 誰も VTCM 実値を記録していなかった
+
+`metadata[2]` は `vtcm_bytes`（12,288）であり、**ポインタの実値ではない**。
+`base` の実値を記録したのは診断 2 号が初めてである。
+
+**今後は `vtcm` の実値を常設でエコーする。**
+
+### §46.6 rev7 の設計方針
+
+**`run()` レベルで VTCM ポインタ検証ゲートを追加する**（D8 登録対象の外）:
+
+1. `acquire()` → **`acquire_cached()`** → `get_vtcm_ptr()` の正しい順序に直す
+2. `get_vtcm_ptr()` の戻り値が VTCM の VA 範囲に入っているか照合
+3. 複数オフセット（`+0` / `+2048` / `+4096` / `+6144`）で
+   スカラー書き→読み戻しを確認
+4. 失敗なら**未消費で停止**（`HMX_ERR_VTCM`）
+
+**登録 4 定数は不変の見込み。** これは VTCM の取得方法の修正であり、
+D8 の検証対象（順序・オフセット・fill 形式・`Rs`）には触れない。
+
+### §46.7 ラベル（不変）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変** |
+| `C2 NOT_RUN` | **不変** |
+| D8 | **`D8_CONTRACT_FAILED`** |
+
+**臨界区間は一度も実行されていない。**
