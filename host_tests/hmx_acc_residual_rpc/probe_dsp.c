@@ -1593,6 +1593,3 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if (metadata[7] == 1) return 0;
   return execution_error ? execution_error : HMX_ERR_LOCK;
 }
-
-
-
