@@ -3667,3 +3667,131 @@ cacheable 要求をしていないのに `acquire_cached()` を挟むのは、
 | D8 | **`D8_CONTRACT_FAILED`** |
 
 **臨界区間は一度も実行されていない。**
+
+---
+
+## §47 framework 実装の逆アセンブル — `get_vtcm_ptr` は検証しない（2026-11-23 21:40）
+
+### §47.1 実装が見つかった
+
+SDK ツリーを `*.a` / `*.so` で走査し、
+`compute_resource_attr_get_vtcm_ptr` の**実装**を含むライブラリを特定した。
+
+```
+utils/sim_utils/prebuilt/hexagon_toolv19_v68/test_util.a
+  → sysmon_vtcm_mgr_client.o
+```
+
+シンボル一覧:
+
+| シンボル | アドレス |
+| --- | --- |
+| `compute_resource_attr_init` | `0xab8` |
+| `compute_resource_attr_set_vtcm_param` | `0xb34` |
+| `compute_resource_attr_get_vtcm_ptr` | **`0xd40`** |
+| `compute_resource_attr_get_vtcm_ptr_v2` | **`0xd50`** |
+| `compute_resource_validate_attr` | `0xd70` |
+| `compute_resource_acquire` | `0x12fc` |
+
+### §47.2 `get_vtcm_ptr` の実装（4 命令）
+
+```
+d40: p0 = cmp.eq(r0,#0x0)              ; attr == NULL ?
+d44: jumpr r31                          ; return
+d48: if (p0.new) r0 = #0x0              ; NULL なら 0
+d4c: if (!p0.new) r0 = memw(r0+#0x8)    ; そうでなければ attr+0x8 を返す
+```
+
+**`attr + 0x8` のフィールドをそのまま返すだけ。検証も変換もしない。**
+
+### §47.3 `get_vtcm_ptr_v2` の実装
+
+```
+d50: p0 = cmp.eq(r0,#0x0)              ; attr == NULL ?
+d54: r3 = memw(r0+#0x8)                ; attr+0x8 = ポインタ
+d58: memw(r1+#0x0) = r3.new            ; *vtcm_ptr = ポインタ
+d5c: r0 = #0x0                          ; status = 0
+d60: jumpr r31
+d64: r3 = memw(r3+#0x20)               ; ポインタ+0x20 = サイズ
+d68: memw(r2+#0x0) = r3.new            ; *vtcm_size = サイズ
+d6c: r0 = #-0x1                         ; attr==NULL なら -1
+```
+
+**v2 も `attr+0x8` をそのまま返し、status は「attr が NULL か」しか見ていない。**
+サイズは**ポインタが指す先の `+0x20`** から読む（VTCM ヘッダの一部）。
+
+### §47.4 `attr_init` は `attr+0x8` を初期化しない
+
+```
+ab8: p0 = cmp.eq(r0,#0x0)              ; attr == NULL ?
+ac0: r2 = add(r0,#0x2)
+ad4: memd(r3+#0x18) = r5:4             ; +0x18..+0x1f = 0
+ad8: memd(r3+#0x38) = r5:4             ; +0x38..+0x3f = 0
+adc: memd(r3+#0x30) = r5:4             ; +0x30..+0x37 = 0
+ae0: memd(r3+#0x28) = r5:4             ; +0x28..+0x2f = 0
+ae4: memd(r3+#0x20) = r5:4             ; +0x20..+0x27 = 0
+ae8: memd(r3+#0x10) = r5:4             ; +0x10..+0x17 = 0
+af4: memh(r3+#0x0) = ##0x200           ; +0x0..+0x1 = 0x0200
+af8: memw(r3+#0x1c) = #0x0
+```
+
+**ゼロ初期化は `+0x10` から `+0x3f` まで。`+0x8` は含まれない。**
+
+### §47.5 `set_vtcm_param` も `attr+0x8` を書かない
+
+```
+b34: p0 = cmp.eq(r0,#0x0)              ; attr == NULL ?
+b38: r0 = #0x0; r3 = r0
+b40: memw(r3+#0x4) = r1                ; +0x4 = サイズ
+     memb(r3+#0x3) = r2                 ; +0x3 = フラグ
+b44: r0 = #-0x1                         ; attr==NULL なら -1
+```
+
+**`+0x4`（サイズ）と `+0x3`（フラグ）だけ。`+0x8` は書かない。**
+
+### §47.6 結論 — `attr+0x8` は `acquire()` だけが書く
+
+| 関数 | `attr+0x8` を書くか |
+| --- | --- |
+| `attr_init` | **書かない**（`+0x10` 以降のみゼロ化） |
+| `set_vtcm_param` | **書かない**（`+0x4` / `+0x3` のみ） |
+| `set_hmx_param` | 未確認（`+0x2` と推定） |
+| `acquire` | **書く**（成功時のみ、と推定） |
+| `get_vtcm_ptr` / `_v2` | **読むだけ。検証しない** |
+
+**したがって `base` = `0x02080000` は `acquire()` が `attr+0x8` に書いた値である。**
+`get_vtcm_ptr` はそれをそのまま返している。
+
+### §47.7 仮説 (A) / (B) への影響
+
+**`get_vtcm_ptr` は検証しないので、「無効値が返った」という表現は不正確。**
+正確には「**`acquire()` が `attr+0x8` に書いた値が `0x02080000` だった**」。
+
+- **(A) の修正版**: `acquire()` が VTCM を実際には確保できず、
+  何らかの理由で `0x02080000` を書いた
+- **(B)**: `acquire()` は正当に VTCM を確保し、その VA が `0x02080000`。
+  スカラー視点で skel イメージと衝突している
+
+**`get_vtcm_ptr_v2` の status は「attr が NULL か」しか見ないので、
+(A)/(B) の判別子にならない。** 所有者が提案した判別論理
+（v2 status==0 かつ size==12,288 なら (B)）は**成立しない**。
+
+**サイズは `ポインタ+0x20` から読む**ので、`0x02080000+0x20` の内容が
+12,288 かどうかは判別材料になる。ただしそれは `.bss` の内容なので、
+偶然一致する可能性がある。
+
+### §47.8 次の一手
+
+**`acquire()` が `attr+0x8` に何を書くかを逆アセンブルで追う。**
+`0x12fc` から `0x1854` まで 1,300 バイト超の関数なので、
+`attr+0x8` への書き込みを探す。
+
+### §47.9 ラベル（不変）
+
+| ラベル | 値 |
+| --- | --- |
+| `B3_R2_SYNC_UNPROVEN` | **不変** |
+| `C2 NOT_RUN` | **不変** |
+| D8 | **`D8_CONTRACT_FAILED`** |
+
+**臨界区間は一度も実行されていない。**
