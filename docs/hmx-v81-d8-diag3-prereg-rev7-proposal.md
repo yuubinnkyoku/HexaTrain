@@ -65,9 +65,16 @@ collides with the skel image from the scalar view.
 
 ### 1.2 The pointer check (main defence)
 
-**Skel self-image exclusion.** Compare `vtcm` against the addresses of our own
-symbols. If `vtcm` falls inside the skel's own image, the pointer is not VTCM
-and the run stops unconsumed with `HMX_ERR_VTCM`.
+**Skel self-image exclusion.** Compare `vtcm` against the skel's own image
+range. If `vtcm` falls inside it, the pointer is not VTCM and the run stops
+unconsumed with `HMX_ERR_VTCM`.
+
+**The range is defined by the linker, not guessed.** The upper bound is the
+linker symbol `__end`, which sits just past `.bss` (`0xC331` in the diag2
+object, with `.bss` running `0x6318`..`0xC330`), so **`.bss` is inside
+the range**. The lower bound is the page containing the check function's own
+address, which is inside `.text`. The observed failure pointed at `0xA300`,
+inside `.bss`, and this is exactly what the range must cover.
 
 This is the check that would have caught the observed failure directly.
 
@@ -96,7 +103,15 @@ the pointer, not the tile contents. Layout:
 | Words | Content |
 | --- | --- |
 | `0..15` | `attr+0x0..+0x3f`, verbatim |
-| `16..31` | the four gate FNVs, the context id, `base & 127`, and the coherence results |
+| `16` | gate FNV Ahi |
+| `17` | gate FNV Alo |
+| `18` | gate FNV Whi |
+| `19` | gate FNV Wlo |
+| `20` | `acquire()` return value (context id) |
+| `21` | `base & 127` |
+| `22` | coherence: scalar write -> vmem read (0 = pass) |
+| `23` | coherence: vmem write -> scalar read (0 = pass) |
+| `24..31` | **reserved, written as zero** |
 | `32..1023` | zero |
 
 **This avoids the diag2 mistake of overwriting the gate FNV slots.** The gate

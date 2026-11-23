@@ -921,6 +921,58 @@ static void run_mode44_one_trial(uint8_t *base, int *results) {
  * are 1 only when the buffer taken before the loop equals the buffer after
  * it, for BOTH loops. metadata[0..8] are owned by
  * hexatrain_hmx_acc_residual_run(); this handler writes [9..31] only. */
+/* ---- VTCM pointer gate ---------------------------------------------------
+ *
+ * The device has been reading the skel's own .bss through the VTCM pointer.
+ * A non-NULL, 128 B aligned pointer is not enough, so the gate checks the
+ * address against the image and then checks that the region is coherently
+ * usable in both directions.
+ *
+ * The image range is [first section, __end]. The linker places __end just past
+ * .bss, so .bss is inside the range; the observed failure pointed at 0xA300,
+ * which is inside .bss, and that is exactly what this must catch.
+ */
+
+/* Lowest address of the skel image. .init is the first allocated section. */
+extern char __init_array_start[] __attribute__((weak));
+extern char __end[] __attribute__((weak));
+
+static int hmx_vtcm_inside_image(const void *p) {
+  const uintptr_t a = (uintptr_t)p;
+  const uintptr_t lo = (uintptr_t)(const void *)&hmx_vtcm_inside_image;
+  const uintptr_t hi = (uintptr_t)(const void *)__end;
+  /* The function's own address is inside .text, so it is a safe lower bound
+   * without depending on a linker symbol that may not exist. */
+  if (hi == 0) return 0;
+  return a >= (lo & ~(uintptr_t)0xFFFFFu) && a < hi;
+}
+
+/* Both directions must agree. A scalar write must be visible to a vector read
+ * and a vector write to a scalar read; one direction alone cannot tell a wrong
+ * address from a write that did not land. */
+static int hmx_vtcm_coherent(uint8_t *base) {
+  const uintptr_t a = (uintptr_t)base;
+  volatile uint32_t *w = (volatile uint32_t *)base;
+  const HVX_Vector pattern = Q6_V_vsplat_R(0x5AA5C33Cu);
+  HVX_Vector v;
+  uint32_t back;
+
+  /* scalar write -> vector read. The vector load must see the scalar store. */
+  w[0] = 0x5AA5C33Cu;
+  v = *(const HVX_Vector *)(const void *)base;
+  /* Store the loaded vector to a second vector and read it back with a scalar
+   * load, so the comparison stays in C without indexing an HVX_Vector. */
+  asm volatile("vmem(%0) = %1\n" : : "r"(a + 0x80u), "v"(v) : "memory");
+  back = *(volatile uint32_t *)(void *)(a + 0x80u);
+  if (back != 0x5AA5C33Cu) return 0;
+
+  /* vector write -> scalar read. The scalar load must see the vector store. */
+  asm volatile("vmem(%0) = %1\n" : : "r"(a), "v"(pattern) : "memory");
+  if (w[0] != 0x5AA5C33Cu) return 0;
+
+  return 1;
+}
+
 static uint32_t mode45_fnv1a(const uint8_t *p, size_t n) {
   uint32_t h = 2166136261u;
   size_t i;
@@ -1361,14 +1413,42 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
    * never taken, so unlock is skipped and only release runs. */
   {
     compute_res_attr_t attr;
-    int status = HAP_compute_res_attr_init(&attr);
+    int status;
+    /* Zero the attribute structure first. This is hygiene, not a fix: the
+     * framework's acquire() writes attr+0x8 on every path that reaches its
+     * common exit, so a value written there survives this. It is here so that a
+     * future framework which leaves the field untouched fails closed on the
+     * !vtcm check below instead of reading a stale stack word. */
+    memset(&attr, 0, sizeof(attr));
+    status = HAP_compute_res_attr_init(&attr);
     if (!status) status = HAP_compute_res_attr_set_vtcm_param(&attr, VTCM_BYTES, 1);
     if (!status) status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
     if (!status) {
       combined_resource = HAP_compute_res_acquire(&attr, 10000);
       if (combined_resource) {
         vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
+        /* VTCM pointer gate.
+         *
+         * The device has been reading the skel's own .bss through this pointer,
+         * so the checks below are the main defence: a pointer that is non-NULL
+         * and 128 B aligned is not enough.
+         *
+         *   1. non-NULL and 128 B aligned (the original check);
+         *   2. outside the skel's own image. The image runs from the first
+         *      section to __end, which the linker places just past .bss, so
+         *      .bss is inside the range. The observed failure pointed at
+         *      0xA300, inside .bss, and this is what catches it.
+         *   3. bidirectional coherence: a scalar write must be visible to a
+         *      vector read and a vector write to a scalar read. One direction
+         *      alone cannot tell a wrong address from a write that did not
+         *      land.
+         *
+         * Any failure stops unconsumed with HMX_ERR_VTCM. */
         if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
+          combined_lock_status = HMX_ERR_VTCM;
+        } else if (hmx_vtcm_inside_image(vtcm)) {
+          combined_lock_status = HMX_ERR_VTCM;
+        } else if (!hmx_vtcm_coherent(vtcm)) {
           combined_lock_status = HMX_ERR_VTCM;
         } else {
           combined_lock_status = HAP_compute_res_hmx_lock2(
@@ -1513,3 +1593,6 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   if (metadata[7] == 1) return 0;
   return execution_error ? execution_error : HMX_ERR_LOCK;
 }
+
+
+
