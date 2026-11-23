@@ -3374,8 +3374,9 @@ VTCM から読むと別の値になる。**
 4. **`vmem` ストアが L2 に書くが、スカラー読みが VTCM の別の場所を見ている**
 
 **候補 3 が新しく浮上した。** `base` はスカラーアドレスとして
-`0x02080000`。VTCM は通常 `0x08000000` 付近にマップされる。
-**`0x02080000` は VTCM のアドレスではない可能性がある。**
+`0x02080000`。**この値が VTCM の VA かどうかは出典を持っていない**
+（§46.3 で「`0x08000000` 付近」という推測を取り下げた）。
+**`0x02080000` が VTCM でない可能性がある。**
 
 ### §43.6 次の一手
 
@@ -3451,7 +3452,8 @@ little endian) の**連続 8 バイトそのもの**。
 skel 自身の `.bss` セグメントを指している。**
 
 `base` の下位 16 ビットが `0x0000` で、`.bss` の VA と整合する。
-`0x02080000` は VTCM のマップ範囲（通常 `0x08000000` 付近）ではない。
+**`0x02080000` が VTCM の VA かどうかは、この時点では出典を持っていない**
+（§46.3 で推測を取り下げた）。
 
 ### §44.4 これで全観測が説明できる
 
@@ -3575,96 +3577,86 @@ diag2 でも `3d9a46d7…`（再ビルド）≠ `d0b3e302…`（実物）だっ�
 
 ---
 
-## §46 `HAP_compute_res_attr_get_vtcm_ptr` の用法 — SDK が要求する順序を満たしていない（2026-11-23 13:00）
+## §46 訂正 — `acquire()` → `get_vtcm_ptr()` は文書上の正しい順序である（2026-11-23 21:20）
 
-### §46.1 SDK の記述
+### §46.1 私の §46 は引用の文脈を取り違えていた
 
-`incs/HAP_compute_res.h` の `HAP_compute_res_acquire_cached` の節に
-**明示的な要求**がある。
+§46 で私は「SDK が `acquire_cached()` を要求しているのに実装が呼んでいない」と
+書いた。**これは誤りだった。** 所有者の指摘どおり、引用した一節は
+**`HAP_compute_res_attr_set_cache_mode` の doc ブロック内**にあり、
+**cacheable request 専用**の要求である。
 
-> After a successful cacheable request via `HAP_compute_res_acquire()`, users
-> can get the assigned VTCM pointer (if requested) by passing the attribute
-> structure to `HAP_compute_res_attr_get_vtcm_ptr()` for v1 and
-> `HAP_compute_res_attr_get_vtcm_ptr_v2()` for v2,
-> **and they must call `HAP_compute_res_acquire_cached()` before using the
-> assigned resources.**
+実物 `incs/HAP_compute_res.h` で確認した:
 
-**`get_vtcm_ptr()` を使う前に `acquire_cached()` を呼ぶことが要求されている。**
+- 引用元は `set_cache_mode` の doc（`b_enable` で cacheable を opt-in した
+  フローの説明）
+- **v1 `HAP_compute_res_attr_get_vtcm_ptr` 自身の doc** はこう書いている:
 
-`acquire_cached` のシグネチャ:
+> On a successful VTCM resource request placed via `HAP_compute_res_acquire()`
+> using `HAP_compute_res_attr_set_vtcm_param()`, a user can invoke this helper
+> function to retrieve the allocated VTCM address by passing the same attribute
+> structure used in the respective `HAP_compute_res_acquire()` call.
 
-```c
-static inline int HAP_compute_res_acquire_cached(
-                                              unsigned int context_id,
-                                              unsigned int timeout_us)
-```
+**非 cacheable フローでは `acquire()` → `get_vtcm_ptr()` が正しい順序。**
 
-`acquire()` が返した `context_id` を取る。
+さらに `probe_dsp.c` は `set_cache_mode` を**呼んでいない**（0 件）。
+cacheable 要求をしていないのに `acquire_cached()` を挟むのは、
+かえってフローとして不適切になる。
 
-### §46.2 現在の実装
+### §46.2 追加で確認したこと
 
-`probe_dsp.c` の mode B（combined VTCM + HMX）:
+**`HAP_compute_res_acquire()` の戻り値の意味**（doc）:
 
-```c
-combined_resource = HAP_compute_res_acquire(&attr, 10000);
-if (combined_resource) {
-  vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
-  if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
-    combined_lock_status = HMX_ERR_VTCM;
-  } else {
-    ...
-```
+> Nonzero context ID upon success. 0 upon failure (i.e., unable to acquire
+> requested resource in a given timeout duration).
 
-**`acquire()` の直後に `get_vtcm_ptr()` を呼んでおり、
-`acquire_cached()` を経由していない。**
+**`if (combined_resource)` は正しい使い方。** 非ゼロ = 成功した context ID。
 
-### §46.3 これが `base` の正体を説明する
+**`HAP_compute_res_query_VTCM()` の意味**（doc）:
 
-SDK の要求を満たしていない場合、`get_vtcm_ptr()` が返す値は
-**VTCM のアドレスである保証がない**。
+> Returns the total and available VTCM sizes and page layouts for the given
+> application type.
 
-実測した `base` = `0x02080000` は:
+引数は `total_block_size` / `total_block_layout` / `avail_block_size` /
+`avail_block_layout`。**サイズとページレイアウトのみで、VA は返さない。**
+したがって **VA 範囲の照合には使えない。**
 
-- VTCM のマップ範囲（通常 `0x08000000` 付近）ではない
-- **skel の `.bss` のベースと一致する**（`base+0x20` = `0xA320` = `ahi_local`）
+### §46.3 「VTCM は通常 `0x08000000` 付近」は出典がない
 
-**`get_vtcm_ptr()` が未初期化の属性構造体から読んだ値、
-または別のフィールドを返している可能性が高い。**
+§43.5 / §44.3 / §46.3 で私が書いた「VTCM は通常 `0x08000000` 付近に
+マップされる」は**出典のない推測**だった。**取り下げる。**
 
-### §46.4 mode 43/44/45 で整合が取れていた理由（所有者の問い）
+### §46.4 生きている 2 つの仮説
 
-**これらのモードも同じ `acquire()` → `get_vtcm_ptr()` の順序を使っている。**
-したがって同じ問題を抱えているはずである。
+`get_vtcm_ptr()` は非ゼロを返しており、v1 doc の契約上「割り当て済み」を
+意味する。したがって:
 
-しかし mode 43/44/45 は**スカラー書きと `mxmem` 読みの両方**を VTCM に
-対して行い、両者が一致していた。これは:
+**(A) unsigned PD / framework 側で VTCM が実際には付与されず、
+無効値が返った。**
 
-- **両方が同じ（誤った）アドレスを見ていれば、互いに整合する**
-- mode 43/44/45 の検証は「VTCM に書いた値が VTCM から読めるか」であり、
-  **「そのアドレスが本当に VTCM か」を検証していない**
+**(B) `0x02080000` は正当な割り当て VA だが、スカラー視点で skel イメージの
+マッピングと衝突している。**
 
-**つまり mode 43/44/45 の PASS は、VTCM のアドレス正当性を保証しない。**
-これは重要な発見である。
+(B) は「`base` = ロードバイアス + `0xA300` がイメージに錨定している」点を
+説明できる必要がある。
 
-### §46.5 誰も VTCM 実値を記録していなかった
+**どちらかを確定するには、`get_vtcm_ptr_v2` の status と size、
+および自己イメージとの距離の実測が要る。**
 
-`metadata[2]` は `vtcm_bytes`（12,288）であり、**ポインタの実値ではない**。
+### §46.5 確定している発見（原因がどちらでも成立）
+
+**mode 43/44/45 の PASS は VTCM アドレスの正当性を保証しない。**
+
+彼らの検証は「スカラー書きした値が `mxmem` 読みで一致するか」であり、
+**両方が同じ（誤った）アドレスを見ていれば互いに整合する。**
+
+**これは原因が (A) でも (B) でも独立に成立する。**
+
+### §46.6 実値の常設エコー
+
+`metadata[2]` は `vtcm_bytes`（12,288）で、**ポインタの実値ではない**。
 `base` の実値を記録したのは診断 2 号が初めてである。
-
-**今後は `vtcm` の実値を常設でエコーする。**
-
-### §46.6 rev7 の設計方針
-
-**`run()` レベルで VTCM ポインタ検証ゲートを追加する**（D8 登録対象の外）:
-
-1. `acquire()` → **`acquire_cached()`** → `get_vtcm_ptr()` の正しい順序に直す
-2. `get_vtcm_ptr()` の戻り値が VTCM の VA 範囲に入っているか照合
-3. 複数オフセット（`+0` / `+2048` / `+4096` / `+6144`）で
-   スカラー書き→読み戻しを確認
-4. 失敗なら**未消費で停止**（`HMX_ERR_VTCM`）
-
-**登録 4 定数は不変の見込み。** これは VTCM の取得方法の修正であり、
-D8 の検証対象（順序・オフセット・fill 形式・`Rs`）には触れない。
+**今後は `vtcm` の実値・status・size を常設でエコーする。**
 
 ### §46.7 ラベル（不変）
 
