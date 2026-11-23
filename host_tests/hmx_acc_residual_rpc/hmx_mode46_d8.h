@@ -35,8 +35,8 @@
  * hardware. The sentinel in metadata[31] lets the host refuse a payload that
  * came from a normal build.
  */
-#define HMX_D8_DIAG_SENTINEL 0x0D1A6001
-#define HMX_D8_DIAG_LAYOUT 1
+#define HMX_D8_DIAG_SENTINEL 0x0D1A6003
+#define HMX_D8_DIAG_LAYOUT 3
 
 #if defined(HMX_D8_DIAG)
 /* Read the user status register directly. qurt_event.h exposes only the
@@ -56,6 +56,12 @@ static uint32_t hmx_d8_diag_usr(void) {
 static uint16_t hmx_d8_diag_local0;
 static uint16_t hmx_d8_diag_local1;
 static uint32_t hmx_d8_diag_local_fnv;
+
+/* The attribute structure and the acquire context id, copied by run() so the
+ * diagnostic can echo them. attr is a stack local in run() and the handler
+ * cannot see it; the gate is what fails, so its inputs are the evidence. */
+static compute_res_attr_t hmx_d8_diag_attr;
+static int hmx_d8_diag_context;
 #endif
 
 /* Copy one 2 KiB tile into VTCM with 16 x 128 B HVX stores.
@@ -380,90 +386,87 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
      * device has been stuck in. Nothing below mxclracc is issued: the critical
      * interval does not run.
      *
-     * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT:
-     *   results[0..1023]   the Ahi tile, all 2,048 B, little endian u16
+     * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT = 3:
      *
-     * The other three tiles do not fit in 1,024 words. Ahi is the one that
-     * matters: its anchors are the words that differ, and they are the first
-     * sixteen.
+     *   results[0..15]   attr+0x0..+0x3f, snapshotted BEFORE the gate runs
+     *   results[16]      gate FNV Ahi
+     *   results[17]      gate FNV Alo
+     *   results[18]      gate FNV Whi
+     *   results[19]      gate FNV Wlo
+     *   results[20]      acquire() return value (context id)
+     *   results[21]      base & 127
+     *   results[22]      coherence: scalar write -> vmem read (0 = pass)
+     *   results[23]      coherence: vmem write -> scalar read (0 = pass)
+     *   results[24..31]  reserved, written as zero
+     *   results[32..1023] zero
      *
-     * The metadata words carry what decides between the hypotheses:
-     *   word 10  base & 127          -- non-zero means the vmem stores land at
-     *                                   a truncated address while the scalar
-     *                                   reads do not
-     *   word 11  base low 32
-     *   word 12  base high 32
-     *   word 13  Ahi FNV right after the pack
-     *   word 14  Ahi FNV just before return -- a difference means the store
-     *                                   lands late
-     *   word 15  ahi_local[0]        -- the generator's output, before the pack
-     *   word 16  ahi_local[1]
-     *   word 17  [base-0x80] word 0  -- if the misalignment hypothesis holds,
-     *   word 18  [base-0x80] word 1     the anchor row appears here
-     *   word 19  [base-0x40] word 0
-     *   word 20  [base-0x40] word 1
-     *   word 21  scalar write/read sanity at base+0
-     *   word 22  USR raw
-     *   word 23  ahi_local FNV
-     *   word 24  guard pre FNV (control: scalar write, scalar read)
-     *   word 31  sentinel
+     * ORDER MATTERS. The attr snapshot is taken before the gate, because the
+     * gate is what fails and its inputs are what the evidence needs. The echo
+     * is written after the gate, because if base aliases the skel image the
+     * coherence pattern writes at base+0..0xFF would otherwise destroy the
+     * echo region. Snapshot, gate, echo - in that order.
+     *
+     * A pattern left behind in the echo region is itself dynamic evidence of
+     * the alias, and the pre-declared interpretation says so.
      */
     {
-      const uint16_t *ahi_v = (const uint16_t *)base;
-      const uint16_t *below = (const uint16_t *)(base - 0x80u);
-      const uint16_t *below2 = (const uint16_t *)(base - 0x40u);
-      uintptr_t base_val = (uintptr_t)base;
-      uint32_t fnv_now, fnv_late;
+      compute_res_attr_t attr_snap;
+      int inside, coh;
       int i;
 
-      /* Ahi tile, whole. */
-      for (i = 0; i < HMX_D8_RESULT_SLOTS; ++i) {
-        results[i] = (int)ahi_v[i];
+      /* 1. Snapshot attr before the gate touches anything. */
+      memcpy(&attr_snap, &hmx_d8_diag_attr, sizeof(attr_snap));
+
+      /* 2. The gate results. run() already ran the gate and stopped here, so
+       *    these are recomputed only to be echoed; they are the same calls on
+       *    the same pointer and therefore the same answers. */
+      inside = hmx_vtcm_inside_image(base);
+      coh = hmx_vtcm_coherent(base);
+
+      /* 3. Echo. Written after the gate so the pattern cannot destroy it. */
+      {
+        const uint32_t *aw = (const uint32_t *)(const void *)&attr_snap;
+        for (i = 0; i < 16; ++i) results[i] = (int)aw[i];
       }
+      /* The four gate FNVs are the ones the gate actually compared. They are
+       * still in scope here and are echoed verbatim, not recomputed: a
+       * recomputation after the coherence pattern has written base+0..0xFF
+       * would hash different bytes and could not be compared with the
+       * registered values. */
+      results[16] = (int)fnv_ahi;
+      results[17] = (int)fnv_alo;
+      results[18] = (int)fnv_whi;
+      results[19] = (int)fnv_wlo;
+      results[20] = (int)hmx_d8_diag_context;
+      results[21] = (int)((uintptr_t)base & 127u);
+      /* One bit per direction, so a failure says which direction broke. */
+      results[22] = coh & 1;
+      results[23] = (coh >> 1) & 1;
+      for (i = 24; i < 32; ++i) results[i] = 0;
+      for (i = 32; i < HMX_D8_RESULT_SLOTS; ++i) results[i] = 0;
 
-      /* FNV right after the pack. */
-      fnv_now = d8_tile_fnv(ahi_v);
-
-      /* The window below base: where a truncated vmem store would have landed. */
-      metadata[HMX_D8_META_MXCLRACC] = (int)(base_val & 127u);
-      metadata[HMX_D8_META_MMA] = (int)(uint32_t)(base_val & 0xFFFFFFFFu);
-      metadata[HMX_D8_META_CONVERT] = (int)(uint32_t)((base_val >> 16) >> 16);
-      metadata[HMX_D8_META_STORE] = (int)fnv_now;
+      /* The metadata words are the ones the contract reads. They are filled
+       * with the diagnostic's own measurements, so a host that only looks at
+       * metadata still sees the gate's verdict. */
+      metadata[HMX_D8_META_MXCLRACC] = (int)((uintptr_t)base & 127u);
+      metadata[HMX_D8_META_MMA] = (int)(uint32_t)((uintptr_t)base & 0xFFFFFFFFu);
+      metadata[HMX_D8_META_CONVERT] = (int)(uint32_t)(((uintptr_t)base >> 16) >> 16);
+      metadata[HMX_D8_META_STORE] = (int)fnv_ahi;
       metadata[HMX_D8_META_PACK] = (int)hmx_d8_diag_local0;
       metadata[HMX_D8_META_BIAS] = (int)hmx_d8_diag_local1;
-      metadata[HMX_D8_META_FILL] = (int)below[0];
-      metadata[HMX_D8_META_ADDRESS] = (int)below[1];
-      metadata[HMX_D8_META_SELECTOR] = (int)below2[0];
-      metadata[HMX_D8_META_FNV_AHI] = (int)below2[1];
-
-      metadata[HMX_D8_META_FNV_WHI] = (int)hmx_d8_diag_usr();
-      metadata[HMX_D8_META_FNV_WLO] = (int)hmx_d8_diag_local_fnv;
+      metadata[HMX_D8_META_FILL] = inside;
+      metadata[HMX_D8_META_ADDRESS] = coh & 1;
+      metadata[HMX_D8_META_SELECTOR] = (coh >> 1) & 1;
+      metadata[HMX_D8_META_FNV_AHI] = (int)fnv_ahi;
+      metadata[HMX_D8_META_FNV_ALO] = (int)fnv_alo;
+      metadata[HMX_D8_META_FNV_WHI] = (int)fnv_whi;
+      metadata[HMX_D8_META_FNV_WLO] = (int)fnv_wlo;
       metadata[HMX_D8_META_GUARD_PRE] = (int)guard_pre;
-
-      /* Delayed re-read: the same region, hashed again just before return.
-       *
-       * This MUST run before the scalar sanity write below. base+0 is word 0 of
-       * the Ahi tile, so writing 0xA5A5 there first would change the second FNV
-       * and make a non-delayed store look delayed. Order is fixed:
-       *   capture and fnv_now -> fnv_late -> sanity write/read -> return. */
-      fnv_late = d8_tile_fnv(ahi_v);
-      metadata[HMX_D8_META_GUARD_POST] = (int)fnv_late;
-
-      /* Scalar write/read sanity at base+0. Runs last because it overwrites the
-       * tile's first word. */
-      {
-        volatile uint16_t *probe = (volatile uint16_t *)base;
-        uint16_t saved = probe[0];
-        probe[0] = 0xA5A5u;
-        metadata[HMX_D8_META_FNV_ALO] = (int)probe[0];
-        probe[0] = saved;
-      }
-
+      metadata[HMX_D8_META_GUARD_POST] = (int)guard_pre;
       metadata[HMX_D8_META_RESERVED_29] = 0;
       metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
     }
 #endif
-    qurt_hvx_unlock();
     return 0;
   }
 

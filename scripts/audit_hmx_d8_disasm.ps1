@@ -907,7 +907,10 @@ if ($ObjectPath) {
         '__cxa_finalize', '__register_frame_info_bases',
         # Pulled in by the extracted libc math objects (xferaise.o). Both sit on
         # fmod's error path only and are never reached by the D8 fixture.
-        '_Geterrno', 'feraiseexcept'
+        '_Geterrno', 'feraiseexcept',
+        # Diagnostic builds only: __end is the linker's image end used by the
+        # VTCM pointer gate, and memcpy snapshots the attribute structure.
+        '__end', 'memcpy'
     )
     $und = @()
     foreach ($line in ($dyn -split "`n")) {

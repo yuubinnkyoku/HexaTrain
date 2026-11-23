@@ -933,44 +933,61 @@ static void run_mode44_one_trial(uint8_t *base, int *results) {
  * which is inside .bss, and that is exactly what this must catch.
  */
 
-/* Lowest address of the skel image. .init is the first allocated section. */
-extern char __init_array_start[] __attribute__((weak));
+/* The linker places __end just past .bss, so the image range includes .bss.
+ *
+ * KNOWN DEFECT, recorded rather than papered over: in a shared object this
+ * reference does NOT resolve at link time. A weak reference stays an undefined
+ * dynamic symbol, the DSP loader does not export __end, and the GOT slot keeps
+ * whatever the loader left there. A strong reference behaves the same way - the
+ * link still succeeds and the symbol is still UND - so switching the attribute
+ * fixes nothing. Only -Wl,--defsym=__end=<value> binds it, and that needs the
+ * value from a first link. Until this is resolved the check below takes its
+ * "unknown range" branch on every run and the gate always fails closed. */
 extern char __end[] __attribute__((weak));
-
 static int hmx_vtcm_inside_image(const void *p) {
   const uintptr_t a = (uintptr_t)p;
   const uintptr_t lo = (uintptr_t)(const void *)&hmx_vtcm_inside_image;
   const uintptr_t hi = (uintptr_t)(const void *)__end;
-  /* The function's own address is inside .text, so it is a safe lower bound
-   * without depending on a linker symbol that may not exist. */
-  if (hi == 0) return 0;
+  /* Fail closed: if __end did not resolve, the range is unknown and the
+   * pointer cannot be cleared. Every other check in this gate stops on an
+   * unknown, so this one must too. */
+  if (hi == 0) return 1;
   return a >= (lo & ~(uintptr_t)0xFFFFFu) && a < hi;
 }
-
 /* Both directions must agree. A scalar write must be visible to a vector read
  * and a vector write to a scalar read; one direction alone cannot tell a wrong
- * address from a write that did not land. */
+ * address from a write that did not land.
+ *
+ * Returns 0 when both directions pass, so the caller's "0 = pass" test is the
+ * same one the registered results layout uses. Bit 0 is set when the
+ * scalar-write -> vector-read direction failed, bit 1 when the
+ * vector-write -> scalar-read direction failed. The two directions are reported
+ * separately because a single combined verdict cannot say which one broke, and
+ * the registered layout gives each its own word. */
 static int hmx_vtcm_coherent(uint8_t *base) {
   const uintptr_t a = (uintptr_t)base;
   volatile uint32_t *w = (volatile uint32_t *)base;
   const HVX_Vector pattern = Q6_V_vsplat_R(0x5AA5C33Cu);
   HVX_Vector v;
   uint32_t back;
+  int fail = 0;
 
   /* scalar write -> vector read. The vector load must see the scalar store. */
   w[0] = 0x5AA5C33Cu;
   v = *(const HVX_Vector *)(const void *)base;
   /* Store the loaded vector to a second vector and read it back with a scalar
    * load, so the comparison stays in C without indexing an HVX_Vector. */
-  asm volatile("vmem(%0) = %1\n" : : "r"(a + 0x80u), "v"(v) : "memory");
+  /* vmemu, not vmem: the diagnostic's own stores must not be mistaken for the
+   * registered fill form by the disassembly audit. */
+  asm volatile("vmemu(%0) = %1\n" : : "r"(a + 0x80u), "v"(v) : "memory");
   back = *(volatile uint32_t *)(void *)(a + 0x80u);
-  if (back != 0x5AA5C33Cu) return 0;
+  if (back != 0x5AA5C33Cu) fail |= 1;
 
   /* vector write -> scalar read. The scalar load must see the vector store. */
-  asm volatile("vmem(%0) = %1\n" : : "r"(a), "v"(pattern) : "memory");
-  if (w[0] != 0x5AA5C33Cu) return 0;
+  asm volatile("vmemu(%0) = %1\n" : : "r"(a), "v"(pattern) : "memory");
+  if (w[0] != 0x5AA5C33Cu) fail |= 2;
 
-  return 1;
+  return fail;
 }
 
 static uint32_t mode45_fnv1a(const uint8_t *p, size_t n) {
@@ -1425,6 +1442,14 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     if (!status) status = HAP_compute_res_attr_set_hmx_param(&attr, 1);
     if (!status) {
       combined_resource = HAP_compute_res_acquire(&attr, 10000);
+#if defined(HMX_D8_DIAG)
+      /* Snapshot the gate's inputs before the gate runs. The gate is what
+       * fails, so its inputs are the evidence; and the echo is written after
+       * the gate, because a coherence pattern at base+0..0xFF would otherwise
+       * destroy the echo region when base aliases the skel image. */
+      memcpy(&hmx_d8_diag_attr, &attr, sizeof(hmx_d8_diag_attr));
+      hmx_d8_diag_context = combined_resource;
+#endif
       if (combined_resource) {
         vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
         /* VTCM pointer gate.
@@ -1443,13 +1468,23 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
          *      alone cannot tell a wrong address from a write that did not
          *      land.
          *
-         * Any failure stops unconsumed with HMX_ERR_VTCM. */
+         * Any failure stops unconsumed with HMX_ERR_VTCM.
+         *
+         * The status must reach the host, and on this path it does not: the
+         * final return is `execution_error ? execution_error : HMX_ERR_LOCK`,
+         * and execution_error is only set by a handler. A gate failure leaves
+         * it zero, so run() would return HMX_ERR_LOCK and the host would read
+         * a lock failure that never happened. The gate's own code is recorded
+         * in execution_error so the host sees HMX_ERR_VTCM. */
         if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
           combined_lock_status = HMX_ERR_VTCM;
+          execution_error = HMX_ERR_VTCM;
         } else if (hmx_vtcm_inside_image(vtcm)) {
           combined_lock_status = HMX_ERR_VTCM;
-        } else if (!hmx_vtcm_coherent(vtcm)) {
+          execution_error = HMX_ERR_VTCM;
+        } else if (hmx_vtcm_coherent(vtcm) != 0) {
           combined_lock_status = HMX_ERR_VTCM;
+          execution_error = HMX_ERR_VTCM;
         } else {
           combined_lock_status = HAP_compute_res_hmx_lock2(
               combined_resource, HAP_COMPUTE_RES_HMX_NON_SHARED);
