@@ -1,0 +1,63 @@
+capability_status=0 raw_arch=0x8081
+unsigned_pd_status=0
+open_status=0
+identity_status=0 dsp_revision=3 dsp_q=6 dsp_mode=30 dsp_arch=81
+identity_meta=0x484d5831 arch=81 hmx_executed=0 trials=0
+build_id=0x0d1a6004 dsp_build_id=0x0d1a6004 build_id_status=MATCH
+dsp_identity=MATCH
+rpc_status=0 magic=0x484d5831 dsp_arch=81 vtcm_bytes=12288 kernel_us=1225 power=0 modeA_lock=0 modeB_lock=0 hmx_executed=1 trials=1
+q=6 mode=46 a=1.015625 scale=64 oracle=1.031494140625
+extra4=0 trial=0 hi_bits=0x0300 residual_bits=0x3000 hi=4.57763671875e-05 residual=0.125 basic=7.152557373046875e-07 scale=64 reconstruction=N/A reconstruction_valid=0 recovered_error=N/A oracle=1.031494140625 basic_error=1.0314934253692627
+oracle=NO_ORACLE
+extra4=1 trial=1 hi_bits=0x0000 residual_bits=0x0000 hi=0 residual=0 basic=0 scale=64 reconstruction=N/A reconstruction_valid=0 recovered_error=N/A oracle=1.031494140625 basic_error=1.031494140625
+oracle=NO_ORACLE
+close_status=0
+d8_rpc_status=0
+d8_capture=1
+d8_host_class=D8_CONTRACT_FAILED
+d8_contract=FAIL first_bad=selector
+d8_selector condition=0 q_echo=0
+d8_counts mxclracc=0 mma=-34340864 convert=0 store=-448633665 pack=15360 bias=48128
+d8_fill mask=0 word=0x0000 form=0
+d8_address=0x00000000
+d8_fnv ahi=e54264bf alo=d0e0c444 whi=9c9fe034 wlo=29a90a5c
+d8_guard pre=f5ebd5c5 post=f5ebd5c5 status=0x011fff00
+d8_failure=16 name=FNV
+d8_schema=0x0d8a5003 expected=0x0d8a5003
+d8_readback=0x00200004
+d8_cleanup=0
+d8_build_id dsp=0x0d1a6004 host_expected=0x0d1a6004
+d8_results_ok=0
+d8_observed_sha256=ee12e5bab5b2b95dc11295a7134ab9703a20e60ee3a3556c8ec0b1945817f8e5
+d8_matched=none
+d8_contract_fail=selector
+d8_contract_fail=mxclracc
+d8_contract_fail=mma
+d8_contract_fail=convert
+d8_contract_fail=store
+d8_contract_fail=pack
+d8_contract_fail=bias
+d8_contract_fail=fill_mask
+d8_contract_fail=fill_word
+d8_contract_fail=fill_form
+d8_contract_fail=address
+d8_contract_fail=operand_fnv
+d8_contract_fail=guard_digest
+d8_contract_fail=guard_status
+d8_contract_fail=failure_code
+d8_contract_fail=readback
+d8_contract_fail=cleanup
+d8_contract_fail=reserved
+d8_contract_fail=results_range
+d8_label=D8_CONTRACT_FAILED
+d8_scope=one_build_one_distance_one_run no_proven_no_full_tile no_performance
+d8_slots=16777984,12288,-34340864,0,0,16777217,0,0,262144,0,0,0,0,0,0,0,-448633665,-790576060,-1667243980,698944092,1946584976,0,0,0,0,-33852480,-33828072,-34340864,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+d8_meta=1213028401,81,12288,1225,0,0,0,1,1,219832324,0,-34340864,0,-448633665,15360,48128,0,0,0,-448633665,-790576060,-1667243980,698944092,-169093691,-169093691,18874112,16,227168259,2097156,0,0,219832324
+RPC_OK=PASS rpc_status=0 dsp_status=OK
+IDENTITY_OK=PASS
+HMX_EXECUTED=PASS hmx_executed=1 trials=1
+RESOURCE_CLEANUP_OK=PASS close_status=0 dsp_status=OK
+OBSERVED_REGRESSION_MATCH=NO_ORACLE
+MATH_ORACLE_MATCH=NO_ORACLE
+DYNAMIC_FEEDBACK_CONFIRMED=NOT_CONFIRMED
+exit_code=8 exit_code_description=cleanup/verdict failure after execution | legend: 0=verdict pass+cleanup ok; 8=cleanup/verdict failure after execution; 9=identity fail; 7=rpcmem; 6=open; 5=uri; 4=pd; 3=arch; 2=args

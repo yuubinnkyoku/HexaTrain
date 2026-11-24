@@ -21,6 +21,7 @@ export MSYS_NO_PATHCONV=1
 WT="D:/ghq/github.com/yuubinnkyoku/HexaTrain-mode46-20261118"
 SKEL="$WT/build/d8skel/diag3-0x0D1A6004.so"
 HOSTEXE="$WT/build/d8host/hexatrain_hmx_acc_residual_test"
+STUB="$WT/build/d8host/libhexatrain_hmx_acc_residual.so"
 EXPECT_SHA="5e00082c0d449a66f96833f82641cdc2ad50fb639aaa66a2c12883e7aafa3490"
 STAMP="0x0D1A6004"
 EVID="$WT/docs/evidence/diag3-0x0D1A6004"
@@ -52,6 +53,7 @@ echo "D8_DIAG3_DEVICE_OK serialno=$SER"
 echo "=== 2. deploy ==="
 adb -s "$EP" shell "mkdir -p $DEVDIR $DEV_EVID"
 adb -s "$EP" push "$SKEL" "$DEVDIR/libhexatrain_hmx_acc_residual_skel.so" 2>&1 | tail -1
+adb -s "$EP" push "$STUB" "$DEVDIR/libhexatrain_hmx_acc_residual.so" 2>&1 | tail -1
 adb -s "$EP" push "$HOSTEXE" "$DEVDIR/hexatrain_hmx_acc_residual_test" 2>&1 | tail -1
 adb -s "$EP" shell "chmod 755 $DEVDIR/hexatrain_hmx_acc_residual_test"
 
