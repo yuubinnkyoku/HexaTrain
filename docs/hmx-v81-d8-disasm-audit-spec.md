@@ -521,3 +521,57 @@ here because none of it is on the D8 path:
 `run_mode46_d8_one_trial` contains **no heap call at all**, so no pointer
 allocated statically is ever handed to the dynamic `realloc`. The mix is
 recorded here so a later reader does not have to re-derive it.
+
+### A.13 Fourth extension — does the failure path leave evidence? (2026-11-24)
+
+**This is a different kind of check from A.1–A.12, and it exists because of a
+defect those checks could not see.**
+
+Revision 7 of the diagnostic passed every gate in this document and still could
+not have produced a measurement. The gate ran in `run()`, before the handler;
+on failure the handler never ran, `results[]` stayed zeroed, `run()` returned
+non-zero, and the registered FastRPC contract discards `rout` data on a non-zero
+return. **The diagnostic recorded nothing about the failure it existed to
+catch, and every gate said PASS.**
+
+The lesson, stated as a rule:
+
+> **A gate that checks agreement with the registration does not check whether
+> the registration can produce a measurement.** Both must be checked, and the
+> second cannot be inferred from the first.
+
+**A.13.1 The rule.**
+
+For every diagnostic build, the failure path that the diagnostic exists to
+measure must be shown to deliver its payload to the host. Concretely:
+
+1. identify the path the diagnostic is meant to observe;
+2. determine what `run()` returns on that path;
+3. if the return is non-zero, the payload is discarded — **the diagnostic is
+   blind on that path**, whatever the gates say;
+4. a diagnostic whose payload cannot survive its own trigger is a design
+   defect, not an implementation defect, and needs a new registration.
+
+**A.13.2 The check.**
+
+| Check | Requirement |
+| --- | --- |
+| Return value on the diagnostic path | must be 0, or the payload is discarded |
+| Payload written before the return | the words the host reads must be written on that path |
+| Payload source not destroyed by the measurement | a snapshot held in memory the measurement writes to is not a snapshot |
+| Lock balance on every return after the lock | every path that took the HVX lock must give it back |
+| Runtime-vs-runtime address comparison | a runtime pointer must not be compared against a link-time constant |
+
+**A.13.3 Why these are audit items and not code review.**
+
+Each of the five is mechanically checkable from the object and the source, and
+each was missed by reading the code alone. The return-value check is a
+reachability question over the emitted control flow. The lock-balance check is
+a count of `qurt_hvx_lock` against `qurt_hvx_unlock` on every path. The
+address-space check is a question about which operands of a comparison are
+link-time constants.
+
+**A.13.4 What this does not do.**
+
+It does not make the audit able to decide whether a diagnostic is *worth*
+running. It only refuses to call a blind diagnostic verified.

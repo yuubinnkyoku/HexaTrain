@@ -467,6 +467,12 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
       metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
     }
 #endif
+    /* The HVX context was taken at the top of this function and every path
+     * below the FNV gate must give it back. This return is one of them: it is
+     * reached on the operand-FNV mismatch, which is the state the device has
+     * been stuck in, so leaving the lock held here leaks the context on the
+     * most frequently taken failure path. */
+    qurt_hvx_unlock();
     return 0;
   }
 
