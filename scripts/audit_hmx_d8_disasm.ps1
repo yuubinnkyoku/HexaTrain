@@ -845,6 +845,59 @@ if ($mxIdx.Count -eq 1 -and $storeIdx.Count -eq 1) {
     }
 }
 
+# ------------------------------------------------- image-window constants
+# The D8 diagnostic's self-image exclusion compares the VTCM pointer against the
+# runtime address of a .bss anchor, using two offsets that the build script
+# derives from the object. A wrong pair silently measures the wrong window, and
+# a wrong window reads as "outside" - the false all-clear the check exists to
+# prevent. So the pair is re-derived here from the final object and compared
+# with what was compiled in.
+#
+# The compiled values are read back from the object rather than from the source:
+# they are immediates in the comparison, so the object is the authority.
+if ($ObjectPath) {
+    $nmOut = & hexagon-nm -S $ObjectPath 2>&1
+    $anchorLine = @($nmOut | Where-Object { $_ -match '\bhmx_d8_diag_attr\s*$' })
+    if ($anchorLine.Count -ne 1) {
+        Fail "window_anchor: expected 1 hmx_d8_diag_attr, found $($anchorLine.Count)"
+    } else {
+        $anchor = [Convert]::ToInt32(($anchorLine[0].Trim() -split '\s+')[0], 16)
+        $hdrOut = & $objdump -h $ObjectPath 2>&1
+        $bssLine = @($hdrOut | Where-Object { $_ -match '^\s+\d+\s+\.bss\s' })
+        if ($bssLine.Count -ne 1) {
+            Fail "window_bss: expected 1 .bss section, found $($bssLine.Count)"
+        } else {
+            $parts = $bssLine[0].Trim() -split '\s+'
+            $bssSize = [Convert]::ToInt32($parts[2], 16)
+            $bssAddr = [Convert]::ToInt32($parts[3], 16)
+            $imageEnd = $bssAddr + $bssSize
+            $wantLo = 0 - $anchor
+            $wantHi = $imageEnd - $anchor
+            Write-Host ("d8_disasm_audit_window anchor=0x{0:X} image_end=0x{1:X} lo={2} hi=0x{3:X}" -f `
+                $anchor, $imageEnd, $wantLo, $wantHi)
+
+            # The two bounds are immediates in a comparison, and the compiler
+            # folds them: the lower bound appears as the magnitude of the
+            # anchor offset in an add, and the upper as (anchor + hi - 1) in a
+            # cmp.gtu. Both folded forms are derived here and required to be
+            # present, so a wrong pair cannot pass.
+            $dis = & $objdump -d --no-show-raw-insn --disassemble-symbols=hmx_vtcm_inside_image $ObjectPath 2>&1
+            $text = ($dis -join "`n")
+            $loMag = 0 - $wantLo                      # 0xA318
+            $hiFolded = $anchor + $wantHi - 1         # 0xC3C7
+            $loHex = ('0x{0:x}' -f $loMag)
+            $hiHex = ('0x{0:x}' -f $hiFolded)
+            $loOk = ($text.ToLower() -match [regex]::Escape($loHex))
+            $hiOk = ($text.ToLower() -match [regex]::Escape($hiHex))
+            Write-Host ("d8_disasm_audit_window_folded lo_mag=0x{0:X} hi_folded=0x{1:X}" -f $loMag, $hiFolded)
+            if (-not $loOk) { Fail "window_lo_not_embedded: expected 0x$('{0:X}' -f $loMag) in hmx_vtcm_inside_image" }
+            if (-not $hiOk) { Fail "window_hi_not_embedded: expected 0x$('{0:X}' -f $hiFolded) in hmx_vtcm_inside_image" }
+            if ($loOk -and $hiOk) {
+                Write-Host "d8_disasm_audit_window_bounds=PASS"
+            }
+        }
+    }
+}
 if ($script:Failed -gt 0) {
     Write-Host "d8_disasm_audit=FAIL checks_failed=$($script:Failed)"
     exit 1
@@ -923,6 +976,7 @@ if ($ObjectPath) {
     }
     Write-Host "d8_disasm_audit_link=math_plt=0 math_und=0 und=$($und.Count)/$($allow.Count)"
 }
+
 
 Write-Host "d8_disasm_audit=PASS packs=64 guard=12 fills=$($fillStores.Count) mma=3 convert=1 store=1"
 Write-Host "d8_disasm_audit_scope=text_rules_only_no_real_v81_binary"

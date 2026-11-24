@@ -933,27 +933,57 @@ static void run_mode44_one_trial(uint8_t *base, int *results) {
  * which is inside .bss, and that is exactly what this must catch.
  */
 
-/* The linker places __end just past .bss, so the image range includes .bss.
+/* ---- skel self-image exclusion -------------------------------------------
  *
- * KNOWN DEFECT, recorded rather than papered over: in a shared object this
- * reference does NOT resolve at link time. A weak reference stays an undefined
- * dynamic symbol, the DSP loader does not export __end, and the GOT slot keeps
- * whatever the loader left there. A strong reference behaves the same way - the
- * link still succeeds and the symbol is still UND - so switching the attribute
- * fixes nothing. Only -Wl,--defsym=__end=<value> binds it, and that needs the
- * value from a first link. Until this is resolved the check below takes its
- * "unknown range" branch on every run and the gate always fails closed. */
-extern char __end[] __attribute__((weak));
-static int hmx_vtcm_inside_image(const void *p) {
-  const uintptr_t a = (uintptr_t)p;
-  const uintptr_t lo = (uintptr_t)(const void *)&hmx_vtcm_inside_image;
-  const uintptr_t hi = (uintptr_t)(const void *)__end;
-  /* Fail closed: if __end did not resolve, the range is unknown and the
-   * pointer cannot be cleared. Every other check in this gate stops on an
-   * unknown, so this one must too. */
-  if (hi == 0) return 1;
-  return a >= (lo & ~(uintptr_t)0xFFFFFu) && a < hi;
-}
+ * The device has been reading the skel's own image through the VTCM pointer, so
+ * the pointer must be checked against the image before it is used.
+ *
+ * The check compares two RUNTIME addresses and embeds no absolute value. The
+ * anchor is the address of a .bss static the D8 handler owns; it moves with the
+ * load base exactly as the image does, so the subtraction is valid at any load
+ * base. Revision 7 compared a runtime pointer against the link-time __end,
+ * which is not the same address space once the load base is non-zero, and
+ * __end does not even resolve in a shared object.
+ *
+ * The two bounds are the anchor's offset from the image start and end, taken
+ * from the linked object:
+ *
+ *   .init (image start)  0x0FE0   offset -0x5338
+ *   address 0            0x0000   offset -0x6318
+ *   .bss start           0x6310   offset -0x0008
+ *   anchor               0x6318   offset  0
+ *   .bss end / image end 0xC3D0   offset +0x60B8
+ *
+ * The lower bound is -0x6318, the offset to address 0, not -0x5338, the offset
+ * to .init. That is deliberate and strictly safer: it also covers the ELF
+ * header and any padding below the first section, so a stale pointer anywhere
+ * below the image is caught. Using -0x5338 would leave [0, 0x0FE0) reading as
+ * "outside", and a stale pointer there would pass the gate while the coherence
+ * test - ordinary RAM in both directions - also passed, producing a false
+ * all-clear. That is the worst failure mode this diagnostic has.
+ *
+ * The definitions live after the handler include because the anchor is declared
+ * there.
+ *
+ * THE TWO BOUNDS ARE NOT HARDCODED. They are the anchor's offsets from address
+ * 0 and from the image end, and both depend on the link: the anchor moved from
+ * 0x6318 to 0xA318 between two builds of the same source when the diagnostic
+ * block stopped using a stack local. A hardcoded pair would silently measure
+ * the wrong window after any layout change, and a wrong window reads as
+ * "outside" - the false all-clear this whole check exists to prevent.
+ *
+ * The build script links once with placeholders, reads the real layout from the
+ * object, and relinks with the measured values, then confirms the layout did
+ * not move between the two passes. The audit script re-derives both from the
+ * final object and fails if they disagree with what was compiled in. */
+#ifndef HMX_D8_IMAGE_LO_OFFSET
+/* No build-provided bound. Fail closed: a window that cannot be measured must
+ * not report "outside", because that is the answer that reads as all-clear. */
+#define HMX_D8_IMAGE_LO_OFFSET 0
+#define HMX_D8_IMAGE_HI_OFFSET 0
+#define HMX_D8_IMAGE_BOUNDS_UNMEASURED 1
+#endif
+
 /* Both directions must agree. A scalar write must be visible to a vector read
  * and a vector write to a scalar read; one direction alone cannot tell a wrong
  * address from a write that did not land.
@@ -1249,7 +1279,28 @@ static int run_mode45_one_trial(uint8_t *base, int *results, int *metadata) {
 
 /* D8 (mode 46) handler. Included here so it can use init_bias20, e3c1_* and
  * the fp16 helpers defined above. It writes metadata[9..31] only. */
+/* Forward declaration: the handler calls this, and the definition must follow
+ * the include because its anchor is the handler's own .bss static. */
+static int hmx_vtcm_inside_image(const void *p);
 #include "hmx_mode46_d8.h"
+
+/* The image-window test. It lives here, after the handler include, because its
+ * anchor is the handler's own .bss static. See the comment block above
+ * hmx_vtcm_coherent for why the bounds are what they are. */
+static int hmx_vtcm_inside_image(const void *p) {
+#ifdef HMX_D8_IMAGE_BOUNDS_UNMEASURED
+  /* The window could not be measured at build time. Every other check in this
+   * gate stops on an unknown, so this one does too: report "inside" so the
+   * caller refuses the pointer. Reporting "outside" would be the false
+   * all-clear. */
+  (void)p;
+  return 1;
+#else
+  const intptr_t delta =
+      (intptr_t)(uintptr_t)p - (intptr_t)(uintptr_t)(const void *)&hmx_d8_diag_attr;
+  return delta >= HMX_D8_IMAGE_LO_OFFSET && delta < HMX_D8_IMAGE_HI_OFFSET;
+#endif
+}
 
 int hexatrain_hmx_acc_residual_open(const char *uri, remote_handle64 *handle) {
   (void)uri;
@@ -1393,6 +1444,13 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
   uint8_t *vtcm = NULL;
   int combined_resource = 0;
   int hmx_only_resource = 0;
+#if defined(HMX_D8_DIAG)
+  /* Set when the diagnostic has already written its payload into results[] and
+   * the run must return 0 so the host receives it. See the acquire()==0 path
+   * below: that path is one of the two answers the diagnostic exists to
+   * distinguish, and a non-zero return would discard it. */
+  int d8_diag_payload = 0;
+#endif
   const uint64_t start = HAP_perf_get_time_us();
 
   /* Mode A: HMX-only resource (htp-ops-lib style).
@@ -1443,46 +1501,35 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
     if (!status) {
       combined_resource = HAP_compute_res_acquire(&attr, 10000);
 #if defined(HMX_D8_DIAG)
-      /* Snapshot the gate's inputs before the gate runs. The gate is what
-       * fails, so its inputs are the evidence; and the echo is written after
-       * the gate, because a coherence pattern at base+0..0xFF would otherwise
-       * destroy the echo region when base aliases the skel image. */
-      memcpy(&hmx_d8_diag_attr, &attr, sizeof(hmx_d8_diag_attr));
-      hmx_d8_diag_context = combined_resource;
+      /* Transport the gate's inputs to the host BEFORE anything can fail.
+       *
+       * Revision 7 copied attr into a .bss static and read it back in the
+       * handler. That fails under the alias hypothesis: the pack's vector
+       * stores land inside the image, and a snapshot held in memory the
+       * measurement writes to is not a snapshot. results[] is host shared
+       * memory and is not affected by writes into the base window, so the
+       * attribute words and the context id go there directly.
+       *
+       * This runs on the acquire()==0 path too, which is the point: that path
+       * is one of the two answers the diagnostic exists to distinguish, and
+       * revision 7 could not report it because run() returned non-zero and the
+       * contract discards rout data on a non-zero return. */
+      {
+        const uint32_t *aw = (const uint32_t *)(const void *)&attr;
+        int i;
+        for (i = 0; i < 16; ++i) results[i] = (int)aw[i];
+        results[20] = combined_resource;
+      }
 #endif
       if (combined_resource) {
         vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&attr);
-        /* VTCM pointer gate.
+        /* The VTCM pointer gate is NOT here. It runs in the handler's
+         * diagnostic block, where the HVX lock is held and where a failure can
+         * still return 0 so the payload survives. See hmx_mode46_d8.h.
          *
-         * The device has been reading the skel's own .bss through this pointer,
-         * so the checks below are the main defence: a pointer that is non-NULL
-         * and 128 B aligned is not enough.
-         *
-         *   1. non-NULL and 128 B aligned (the original check);
-         *   2. outside the skel's own image. The image runs from the first
-         *      section to __end, which the linker places just past .bss, so
-         *      .bss is inside the range. The observed failure pointed at
-         *      0xA300, inside .bss, and this is what catches it.
-         *   3. bidirectional coherence: a scalar write must be visible to a
-         *      vector read and a vector write to a scalar read. One direction
-         *      alone cannot tell a wrong address from a write that did not
-         *      land.
-         *
-         * Any failure stops unconsumed with HMX_ERR_VTCM.
-         *
-         * The status must reach the host, and on this path it does not: the
-         * final return is `execution_error ? execution_error : HMX_ERR_LOCK`,
-         * and execution_error is only set by a handler. A gate failure leaves
-         * it zero, so run() would return HMX_ERR_LOCK and the host would read
-         * a lock failure that never happened. The gate's own code is recorded
-         * in execution_error so the host sees HMX_ERR_VTCM. */
+         * Only the two checks that need no HVX context stay here: the pointer
+         * must be non-NULL and 128 B aligned. */
         if (!vtcm || ((uintptr_t)vtcm & (TILE_BYTES - 1u))) {
-          combined_lock_status = HMX_ERR_VTCM;
-          execution_error = HMX_ERR_VTCM;
-        } else if (hmx_vtcm_inside_image(vtcm)) {
-          combined_lock_status = HMX_ERR_VTCM;
-          execution_error = HMX_ERR_VTCM;
-        } else if (hmx_vtcm_coherent(vtcm) != 0) {
           combined_lock_status = HMX_ERR_VTCM;
           execution_error = HMX_ERR_VTCM;
         } else {
@@ -1553,6 +1600,20 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
       } else {
         combined_lock_status = -1;
         metadata[6] = combined_lock_status;
+#if defined(HMX_D8_DIAG)
+        /* acquire() returned 0: allocation failed. This is one of the two
+         * answers the diagnostic exists to distinguish, and the payload
+         * written above is the evidence for it. Returning non-zero here would
+         * discard that payload under the registered FastRPC contract, so the
+         * run returns 0 and carries the reason in metadata[26].
+         *
+         * metadata[7] stays 0: the handler did not run, so no D8 observation
+         * exists. The host reads metadata[26] == HMX_D8_FAIL_VTCM and
+         * metadata[6] == -1 and classifies accordingly. */
+        metadata[HMX_D8_META_FAILURE] = HMX_D8_FAIL_VTCM;
+        metadata[HMX_D8_META_RESERVED_31] = (int)HMX_D8_DIAG_SENTINEL;
+        d8_diag_payload = 1;
+#endif
       }
     } else {
       combined_lock_status = status;
@@ -1623,8 +1684,19 @@ int hexatrain_hmx_acc_residual_run(remote_handle64 handle,
       metadata[HMX_D8_META_CLEANUP] = cleanup_error;
       return 0;
     }
+#if defined(HMX_D8_DIAG)
+    /* The diagnostic payload is already in results[] and is the only evidence
+     * this run can produce. A cleanup failure must not discard it. */
+    if (mode == HMX_MODE46_MODE && d8_diag_payload) {
+      metadata[HMX_D8_META_CLEANUP] = cleanup_error;
+      return 0;
+    }
+#endif
     return cleanup_error;
   }
   if (metadata[7] == 1) return 0;
+#if defined(HMX_D8_DIAG)
+  if (mode == HMX_MODE46_MODE && d8_diag_payload) return 0;
+#endif
   return execution_error ? execution_error : HMX_ERR_LOCK;
 }

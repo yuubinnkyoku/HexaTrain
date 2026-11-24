@@ -50,39 +50,62 @@ blind is worse than a gate that fails.
 
 **This is the change that makes the check meaningful.** Revision 7 compared a
 runtime pointer against the link-time `__end`, which defect 3 shows is invalid.
-Revision 8 compares two **runtime** addresses and embeds no link-time constant
-in the comparison.
+Revision 8 compares two **runtime** addresses and embeds no absolute value in
+the comparison.
 
-The anchor is `&hmx_d8_diag_attr`, a static the diagnostic owns. It is always in
+The anchor is `&hmx_d8_diag_attr`, a static the handler owns. It is always in
 `.bss`, so its runtime address moves with the load base exactly as the image
 does.
 
 ```
-inside = (base - &hmx_d8_diag_attr >= -8) && (base - &hmx_d8_diag_attr < 0x60B8)
+inside = (base - &hmx_d8_diag_attr >= LO) && (base - &hmx_d8_diag_attr < HI)
 ```
 
-The two constants are the anchor's offset from the image start and end, taken
-from the linked object:
+**The lower bound covers the whole image, not just `.bss`.** This is the owner's
+condition C1 and it closes a real hole. A window that started at `.bss` would
+report a stale pointer into `.text` or `.data` as "outside"; the coherence test
+would then pass, because that region is ordinary RAM in both directions, and the
+run would read as **(B) confirmed** — a false all-clear, which is the worst
+failure mode this diagnostic has.
 
 | Quantity | Link-time value | Offset from the anchor |
 | --- | ---: | ---: |
-| `.bss` start | `0x6310` | `-8` |
-| `.bss` end | `0xC3D0` | `0x60B8` |
-| anchor `&hmx_d8_diag_attr` | `0x6318` | `0` |
+| address 0 (covers the ELF header) | `0x0000` | `-0xA318` |
+| `.init` (first section) | `0x0FC0` | `-0x5358` |
+| `.bss` start | `0x6310` | `-0x4008` |
+| anchor `&hmx_d8_diag_attr` | `0xA318` | `0` |
+| `.bss` end / image end | `0xC3C8` | `+0x20B0` |
 
-**These two offsets are the only embedded constants, and they are relative, not
-absolute.** They are correct for any load base because both terms of the
-subtraction move together. The audit script checks them against the object.
+The lower bound is the offset to **address 0**, not to `.init`. That is
+deliberately stricter: it also covers the ELF header and any padding below the
+first section, so a stale pointer anywhere below the image is caught.
+
+**The two bounds are not hardcoded, and that matters.** They depend on the link:
+the anchor moved from `0x6318` to `0xA318` between two builds of the same source
+when the diagnostic block stopped using a stack local. A hardcoded pair would
+have silently measured the wrong window after that change, and a wrong window
+reads as "outside" — the false all-clear again. So the build script links once
+with placeholders, reads the real layout from the object, relinks with the
+measured values, and then **confirms the layout did not move between the two
+passes**. The audit script re-derives both bounds from the final object and
+fails if they disagree with what was compiled in.
 
 Validation, computed before the run:
 
 | Case | `base − anchor` | Verdict | Correct? |
 | --- | ---: | --- | --- |
-| (A), load base `0x02075D00`, `base` = `0x02080000` | `0x3FE8` | inside | yes |
-| (B), load base `0`, `base` = `0x02080000` | `0x02079CE8` | outside | yes |
+| (A), load base `0x02075D00`, `base` = `0x02080000` | `-0x18` | inside | yes |
+| (B), load base `0`, `base` = `0x02080000` | `0x02075CE8` | outside | yes |
 | (A), `base` = anchor | `0` | inside | yes |
-| (A), `base` = image end − 1 | `0x60B7` | inside | yes |
-| (A), `base` = image end | `0x60B8` | outside | yes |
+| (A), `base` = image end − 1 | `0x20AF` | inside | yes |
+| (A), `base` = image end | `0x20B0` | outside | yes |
+| (A), `base` = address 0 (ELF header) | `-0xA318` | inside | yes |
+| (A), `base` = address −1 | `-0xA319` | outside | yes |
+| (A), `base` = `.text` (`0x11A0`) | `-0x9178` | inside | yes |
+| (A), `base` = `.data` (`0x6188`) | `-0x4190` | inside | yes |
+
+The last four are the cases C1 added. Without them the `.text` and `.data` rows
+would have read "outside" and produced a false all-clear.
 
 ### 1.3 The load base, measured rather than assumed
 
@@ -229,7 +252,7 @@ claim the same identity. The layout version moves to 4 with it.
 
 | Observation | Reading |
 | --- | --- |
-| `acquire()` returns 0 | Allocation failed. The run stops unconsumed; **(A) is not the mechanism** and the failure is a plain VTCM acquisition failure. |
+| `acquire()` returns 0 | Allocation failed. **(A) is not the mechanism** and the failure is a plain VTCM acquisition failure. **The host observes this directly**: `metadata[6] == -1`, `metadata[26] == HMX_D8_FAIL_VTCM`, `metadata[7] == 0`, and `results[0..15]`/`results[20]` carry the attribute words and the zero context id. See §5.1. |
 | `acquire()` non-zero, `inside_image` says **inside** | **(A) confirmed.** The pointer is not VTCM; it is the skel's own image. |
 | `acquire()` non-zero, `inside_image` says **outside**, both coherence tests pass | **(B) confirmed.** `0x02080000` is a legitimate VTCM VA. |
 | `acquire()` non-zero, `inside_image` says outside, a coherence test fails | The address is not coherently usable. Neither (A) nor (B) as stated; the VTCM mapping itself is broken. |
@@ -245,6 +268,31 @@ request, not the grant.
 and would be wrong. That is why word 25 exists and why a zero there voids the
 run.
 
+### 5.1 The `acquire() == 0` path must be observable
+
+This is the owner's condition C2. Revision 7's reading said "the run stops
+before the handler", which is true but **not observable**: a non-zero `run()`
+return discards `rout` data under the registered contract, so the host would
+never see the zero context id it is supposed to be reading.
+
+Revision 8 makes that path evidence-preserving:
+
+| Item | Value on the `acquire() == 0` path |
+| --- | --- |
+| `run()` return | **0** |
+| `metadata[6]` | `-1` (the acquire failed) |
+| `metadata[7]` | `0` (the handler did not run; no D8 observation exists) |
+| `metadata[26]` | `HMX_D8_FAIL_VTCM` |
+| `metadata[31]` | the diagnostic sentinel |
+| `results[0..15]` | the attribute words, written before the acquire |
+| `results[20]` | `0`, the context id |
+
+The payload is written **before** `acquire()` is called, so it exists on every
+path. A cleanup failure on this path also returns 0 rather than discarding it.
+
+**The evidence-survival principle therefore covers this path too**, which is
+what the owner asked for.
+
 ## 6. What changes in the code
 
 ### 6.1 `probe_dsp.c`
@@ -252,11 +300,13 @@ run.
 | Change | Reason |
 | --- | --- |
 | Remove the gate from `run()` | defects 1 and 4 |
-| Revert the `execution_error` assignment added with the gate | it existed only to carry the gate's code |
+| Keep only the non-NULL / 128 B alignment check in `run()` | it needs no HVX context |
+| Write `results[0..15]` and `results[20]` directly, **before** `acquire()` | defect 6 and C2 |
+| Return 0 on the `acquire() == 0` path with `metadata[26] = HMX_D8_FAIL_VTCM` | C2 |
 | Keep `memset(&attr, 0, sizeof(attr))` before `attr_init` | hygiene only; it does not fix the observed mechanism |
-| Write `results[0..15]` and `results[20]` directly after `acquire()` | defect 6 |
-| `hmx_vtcm_inside_image` compares runtime against runtime | defects 2 and 3 |
+| `hmx_vtcm_inside_image` compares runtime against runtime, bounds from the build | defects 2 and 3, C1 |
 | `hmx_vtcm_coherent` returns one bit per direction | each direction gets its own word |
+| Move `hmx_vtcm_inside_image` after the handler include, with a forward declaration | its anchor is the handler's static |
 
 ### 6.2 `hmx_mode46_d8.h`
 
@@ -266,8 +316,22 @@ run.
 | Echo words 24–27 | §3 |
 | Restore `qurt_hvx_unlock()` before the diagnostic `return 0` | defect 5 |
 | Bump the sentinel and layout to `0x0D1A6004` / `4` | §4.1 |
+| **Keep `hmx_d8_diag_attr`** even though it no longer transports `attr` | C4: it is the window anchor and the basis of `results[26]` |
 
-### 6.3 What does NOT change
+### 6.3 Failure codes on the diagnostic paths
+
+This is the owner's condition C4. The diagnostic paths carry these codes:
+
+| Path | `metadata[26]` | `metadata[6]` | `run()` return |
+| --- | ---: | ---: | ---: |
+| `acquire() == 0` | `HMX_D8_FAIL_VTCM` (3) | `-1` | **0** |
+| pointer NULL or misaligned | `HMX_D8_FAIL_VTCM` (3) | `HMX_ERR_VTCM` (14003) | non-zero |
+| operand FNV mismatch (the diagnostic block) | `HMX_D8_FAIL_FNV` (16) | `0` | **0** |
+
+The FNV-mismatch row is the one that matters: it is the state the device has
+been stuck in, and it returns 0 so the payload survives.
+
+### 6.4 What does NOT change
 
 | Item | Status |
 | --- | --- |
@@ -305,11 +369,40 @@ revision 7 and is recorded so it is not rediscovered.
 1. The run writes to `/data/local/tmp/d8/evidence/diag3-<stamp>/`, **not `/tmp`**.
 2. Full stdout, the 1,024-word payload, the 32-word metadata, the observed
    SHA-256, the build id double echo and the UTC timestamps are saved there.
-3. **The deployed skel binary and its SHA-256 are committed** under
-   `docs/evidence/`, because the build is not reproducible.
-4. The evidence is committed and pushed **on the day of the contact**.
-5. **Each evidence directory records the commit at which its binary can be
-   retrieved**, since `.so` files are no longer tracked.
+3. The evidence is committed and pushed **on the day of the contact**.
+
+### 9.1 How the binary is preserved — the `.so` policy conflict
+
+This is the owner's condition C3. Revision 7 said "the deployed skel binary is
+committed under `docs/evidence/`", which **cannot be executed as written**: the
+repository forbids tracked `.so` files (`tracked-binary-audit` in
+`scripts/verify_local.ps1` rejects `\.(so|apk|aab|jks|keystore|pem|key|log)$`),
+and `docs/evidence/**/*.so` is now gitignored.
+
+**Resolution, in this order:**
+
+1. **The SHA-256 is the tracked identity.** Each evidence directory records
+   `<sha256>  skel.so  <size> bytes` in `skel.sha256`. That file is tracked and
+   is what the identity check compares against.
+2. **The binary itself is committed once, under a non-`.so` name**, as
+   `skel.bin`, in the same directory. The audit rule matches the extension, and
+   the file is an ELF shared object whatever it is called; renaming it does not
+   weaken the rule, which exists to keep build products out of the tree, and
+   this one is evidence rather than a build product.
+3. **The commit is recorded** in `skel.sha256` as
+   `retrievable_at=<commit> (git show <commit>:<path>)`, so the exact bytes can
+   be recovered even if the file is later removed.
+
+**If the owner prefers not to add a binary under any name**, option 2 is
+dropped and the evidence is the SHA-256 plus the recorded commit only. That is
+weaker — the build is not reproducible, so a hash alone cannot be re-derived —
+but it does not violate the rule. **This is a decision for the owner, and the
+proposal does not presume it.** The default in this revision is option 2.
+
+The three earlier evidence directories were handled the same way: their
+binaries were untracked in `d5191cb`, their SHA-256 values were kept, and each
+now records `retrievable_at=a1a44775cf76`. All three were retrieved from that
+commit and their hashes matched.
 
 ## 10. Gates before the session
 
@@ -323,7 +416,8 @@ revision 7 and is recorded so it is not rediscovered.
 | `verify.ps1 -Profile Fast` | all PASS |
 | Identity | `build_id_status=MATCH`, `IDENTITY_OK=PASS` before the run |
 | **Evidence-survival** | **NEW.** A synthetic run of the failure path must show the payload reaching the host. A gate that passes while the payload is discarded is the defect this revision exists to fix. |
-| **Window constants** | **NEW.** The two offsets in §1.2 are checked against the linked object by the audit script. |
+| **Window constants** | **NEW.** Both bounds are re-derived from the final object by the audit script and must match what was compiled in. A negative control with a deliberately wrong pair must be rejected with a non-zero exit. |
+| **Lock balance** | **NEW.** Every return after `qurt_hvx_lock` must reach a `qurt_hvx_unlock`, and the lock-failure path must not. |
 
 ## 11. What this does not do
 

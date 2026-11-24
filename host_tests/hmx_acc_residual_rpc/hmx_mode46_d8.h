@@ -35,8 +35,8 @@
  * hardware. The sentinel in metadata[31] lets the host refuse a payload that
  * came from a normal build.
  */
-#define HMX_D8_DIAG_SENTINEL 0x0D1A6003
-#define HMX_D8_DIAG_LAYOUT 3
+#define HMX_D8_DIAG_SENTINEL 0x0D1A6004
+#define HMX_D8_DIAG_LAYOUT 4
 
 #if defined(HMX_D8_DIAG)
 /* Read the user status register directly. qurt_event.h exposes only the
@@ -57,9 +57,19 @@ static uint16_t hmx_d8_diag_local0;
 static uint16_t hmx_d8_diag_local1;
 static uint32_t hmx_d8_diag_local_fnv;
 
-/* The attribute structure and the acquire context id, copied by run() so the
- * diagnostic can echo them. attr is a stack local in run() and the handler
- * cannot see it; the gate is what fails, so its inputs are the evidence. */
+/* The image-window anchor. This static is NOT a transport for the attribute
+ * structure any more: revision 7 copied attr here and read it back in the
+ * handler, which fails under the alias hypothesis because the pack's vector
+ * stores land inside the image and can overwrite the snapshot before it is
+ * echoed. run() now writes attr straight into results[0..15], which is host
+ * shared memory and is not affected by writes into the base window.
+ *
+ * The static stays because it is the anchor the image-window test measures
+ * against: it is in .bss, so its runtime address moves with the load base
+ * exactly as the image does, and the two offsets in probe_dsp.c are relative to
+ * it. Removing it would remove the only runtime-vs-runtime reference the gate
+ * has. Its address is echoed in results[26] so the host can recompute the
+ * window test independently. */
 static compute_res_attr_t hmx_d8_diag_attr;
 static int hmx_d8_diag_context;
 #endif
@@ -386,63 +396,65 @@ static int run_mode46_d8_one_trial(uint8_t *base, int *results, int *metadata,
      * device has been stuck in. Nothing below mxclracc is issued: the critical
      * interval does not run.
      *
-     * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT = 3:
+     * THE GATE RUNS HERE, not in run(). Revision 7 put it in run(), before the
+     * handler; on failure the handler never ran, results[] stayed zeroed,
+     * run() returned non-zero, and the registered FastRPC contract discards
+     * rout data on a non-zero return. The diagnostic therefore recorded nothing
+     * about the failure it exists to catch. Running it here fixes that and the
+     * HVX-lock problem at once: this function took the lock at its top, so the
+     * coherence test's vector stores are issued with the lock held.
      *
-     *   results[0..15]   attr+0x0..+0x3f, snapshotted BEFORE the gate runs
+     * Layout, fixed and versioned by HMX_D8_DIAG_LAYOUT = 4:
+     *
+     *   results[0..15]   attr+0x0..+0x3f, written by run() before the handler
      *   results[16]      gate FNV Ahi
      *   results[17]      gate FNV Alo
      *   results[18]      gate FNV Whi
      *   results[19]      gate FNV Wlo
-     *   results[20]      acquire() return value (context id)
+     *   results[20]      acquire() return value (context id), written by run()
      *   results[21]      base & 127
      *   results[22]      coherence: scalar write -> vmem read (0 = pass)
      *   results[23]      coherence: vmem write -> scalar read (0 = pass)
-     *   results[24..31]  reserved, written as zero
+     *   results[24]      inside_image verdict (0 = outside, 1 = inside)
+     *   results[25]      &hmx_vtcm_inside_image at run time
+     *   results[26]      &hmx_d8_diag_attr at run time
+     *   results[27]      base low 32 bits
+     *   results[28..31]  reserved, written as zero
      *   results[32..1023] zero
      *
-     * ORDER MATTERS. The attr snapshot is taken before the gate, because the
-     * gate is what fails and its inputs are what the evidence needs. The echo
-     * is written after the gate, because if base aliases the skel image the
-     * coherence pattern writes at base+0..0xFF would otherwise destroy the
-     * echo region. Snapshot, gate, echo - in that order.
+     * results[25] is what makes the load base measurable rather than assumed:
+     * the host computes load_base = results[25] - (link-time address of
+     * hmx_vtcm_inside_image). A zero there means the load base could not be
+     * measured and the run is inconclusive - no reading is permitted.
+     * results[26] lets the host recompute the window test independently of this
+     * function's own arithmetic.
      *
-     * A pattern left behind in the echo region is itself dynamic evidence of
-     * the alias, and the pre-declared interpretation says so.
+     * ORDER MATTERS. The gate is evaluated first, then the echo is written,
+     * because the coherence pattern writes base+0..0xFF and would otherwise
+     * destroy the echo region when base aliases the image.
      */
     {
-      compute_res_attr_t attr_snap;
       int inside, coh;
       int i;
 
-      /* 1. Snapshot attr before the gate touches anything. */
-      memcpy(&attr_snap, &hmx_d8_diag_attr, sizeof(attr_snap));
-
-      /* 2. The gate results. run() already ran the gate and stopped here, so
-       *    these are recomputed only to be echoed; they are the same calls on
-       *    the same pointer and therefore the same answers. */
+      /* 1. The gate. Both calls are safe here: the HVX lock is held. */
       inside = hmx_vtcm_inside_image(base);
       coh = hmx_vtcm_coherent(base);
 
-      /* 3. Echo. Written after the gate so the pattern cannot destroy it. */
-      {
-        const uint32_t *aw = (const uint32_t *)(const void *)&attr_snap;
-        for (i = 0; i < 16; ++i) results[i] = (int)aw[i];
-      }
-      /* The four gate FNVs are the ones the gate actually compared. They are
-       * still in scope here and are echoed verbatim, not recomputed: a
-       * recomputation after the coherence pattern has written base+0..0xFF
-       * would hash different bytes and could not be compared with the
-       * registered values. */
+      /* 2. Echo. */
       results[16] = (int)fnv_ahi;
       results[17] = (int)fnv_alo;
       results[18] = (int)fnv_whi;
       results[19] = (int)fnv_wlo;
-      results[20] = (int)hmx_d8_diag_context;
       results[21] = (int)((uintptr_t)base & 127u);
       /* One bit per direction, so a failure says which direction broke. */
       results[22] = coh & 1;
       results[23] = (coh >> 1) & 1;
-      for (i = 24; i < 32; ++i) results[i] = 0;
+      results[24] = inside;
+      results[25] = (int)(uintptr_t)(const void *)&hmx_vtcm_inside_image;
+      results[26] = (int)(uintptr_t)(const void *)&hmx_d8_diag_attr;
+      results[27] = (int)(uint32_t)((uintptr_t)base & 0xFFFFFFFFu);
+      for (i = 28; i < 32; ++i) results[i] = 0;
       for (i = 32; i < HMX_D8_RESULT_SLOTS; ++i) results[i] = 0;
 
       /* The metadata words are the ones the contract reads. They are filled
