@@ -259,6 +259,7 @@ claim the same identity. The layout version moves to 4 with it.
 | `inside_image` says inside **and** a coherence test fails | Consistent with (A): the region is ordinary writable RAM, so a coherence failure would mean the vector and scalar views disagree even within the image. Recorded, not interpreted further. |
 | `attr+0x4` != 12,288 | The attribute structure was not populated as requested. **Corroboration only, not proof of grant.** |
 | word 25 is 0 | The load base could not be measured. **The run is inconclusive** and no reading is permitted. |
+| `get_vtcm_ptr` returns NULL or a misaligned pointer | `run()` returns `HMX_ERR_VTCM` (14003) non-zero, and neither the handler nor the diagnostic block runs (`metadata[7] == 0`, so there is no D8 observation). **The only observation channel is the return value**; the values written to `results[0..15]`/`[20]` are discarded by the contract. This observation is consistent with (A) but cannot be distinguished from (B). Reading: **"complete failure to acquire the VTCM pointer"**, and no further interpretation. |
 
 **`attr+0x4` is deliberately not a primary discriminator.** It records the
 request, not the grant.
